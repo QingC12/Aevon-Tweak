@@ -96,6 +96,19 @@ jobs:
           fi
           echo "崩溃捕获: 已编入；启动期 hook: 已移除"
 
+          # V0.0.7：入口必须是悬浮球（零 hook），且绝不能残留 SBIconView 快捷菜单 hook
+          if strings "$DYLIB" | grep -q 'applicationShortcutItems'; then
+            echo "::error::仍存在 SBIconView 快捷菜单 hook（会造成长按图标注销）"
+            exit 1
+          fi
+          strings "$DYLIB" | grep -q 'AevonBubble' \
+            || { echo "::error::主插件缺少悬浮球入口（AevonBubble）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonAppPickerView' \
+            || { echo "::error::主插件缺少应用选择面板（AevonAppPickerView）"; exit 1; }
+          strings "$DYLIB" | grep -q 'launchApplicationWithIdentifier:suspended:' \
+            || { echo "::error::主插件缺少拉起 App 的调用"; exit 1; }
+          echo "入口校验: 悬浮球 + 应用选择面板 已编入；图标长按 hook 已移除"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -124,12 +137,15 @@ jobs:
             || { echo "::error::设置 bundle 缺少 _specifiers 写回逻辑（设置页会空白）"; exit 1; }
           echo "设置 bundle 控制器类: 已编入；specifier 构建与写回: 已编入"
 
-          # Root.plist 必须随包，且开关项不少于 4 个
+          # Root.plist 必须随包，且开关项不少于 6 个
           ICON_DIR="$(dirname "$PREFS_BIN")"
           [ -s "$ICON_DIR/Root.plist" ] || { echo "::error::bundle 缺少 Root.plist"; exit 1; }
           SWITCH_COUNT="$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c 'PSSwitchCell' || true)"
           echo "Root.plist 开关项: $SWITCH_COUNT"
-          [ "$SWITCH_COUNT" -ge 4 ] || { echo "::error::Root.plist 开关项不足 4 个（实际 $SWITCH_COUNT）"; exit 1; }
+          [ "$SWITCH_COUNT" -ge 6 ] || { echo "::error::Root.plist 开关项不足 6 个（实际 $SWITCH_COUNT）"; exit 1; }
+          # 悬浮球开关必须在 Root.plist 里（否则入口关不掉/开不了）
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'BubbleEnabled' \
+            || { echo "::error::Root.plist 缺少 BubbleEnabled 开关"; exit 1; }
 
           # 图标三档必须在 bundle 根目录
           ICON_DIR="$(dirname "$PREFS_BIN")"

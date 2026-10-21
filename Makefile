@@ -17,6 +17,10 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonCrashCatcher.swift \
     Sources/AevonPrefs.swift \
     Sources/AevonCrashGuard.swift \
+    Sources/AevonBootstrap.swift \
+    Sources/AevonBubble.swift \
+    Sources/AevonAppList.swift \
+    Sources/AevonAppPickerView.swift \
     Sources/AevonRuntime.swift \
     Sources/AevonSwizzle.swift \
     Sources/AevonForegroundManager.swift \

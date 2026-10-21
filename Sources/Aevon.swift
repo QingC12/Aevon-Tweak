@@ -1,10 +1,10 @@
 import Foundation
 import UIKit
 
-/// Aevon 版本号（与 control 保持一致）。
-let AevonVersion = "0.0.6"
+/// Aevon 版本号（与 control 保持一致；CI 会按 tag 覆盖本行）。
+let AevonVersion = "0.0.7"
 
-/// dyld 构造函数入口（由 ctor.m 以 C 符号调用）。
+/// dyld 构造函数入口（由 AevonAssertionShim.m 以 C 符号调用）。
 /// 约定：本函数绝不抛出、绝不强制解包失败；任何异常路径只记录日志。
 @_cdecl("AevonInitialize")
 func aevonInitialize() {
@@ -14,61 +14,49 @@ func aevonInitialize() {
 private func initializeAevon() {
     AevonLog.info("Aevon \(AevonVersion) 开始加载 (iOS \(UIDevice.current.systemVersion), 进程 \(ProcessInfo.processInfo.processName))")
 
-    // 1) 崩溃捕获最先安装：后面任何一行代码崩了都能留下原因
+    // 1) 崩溃捕获最先安装：后续任何一行崩了都能留下原因
     AevonCrashCatcher.install()
     AevonCrashCatcher.harvestPreviousCrash()
 
-    // 2) 开机崩溃守卫（上次是否没跑稳 → 自动禁用）
+    // 2) 开机崩溃守卫（上次没跑稳 → 自动禁用）
     let safeToContinue = AevonCrashGuard.install()
     guard safeToContinue else { return }
 
     // 3) 总开关（默认关闭）
-    let enabled = AevonPrefs.bool("Enabled", default: false)
-    if !enabled {
+    guard AevonPrefs.bool("Enabled", default: false) else {
         AevonLog.info("Aevon 未启用（默认关闭）。请在 设置 → Aevon 打开「启用插件」后注销生效。")
         return
     }
 
     /*
-     * V0.0.6 关键改动：不再在启动瞬间装 hook、也不再在启动瞬间创建宿主窗口。
+     * V0.0.7 的关键改动（针对 V0.0.6「长按桌面图标 → 自动注销」）：
      *
-     * V0.0.5 的现象是：开启后注销 → SpringBoard 启动约 10 秒内崩溃 → 安全模式。
-     * 日志最后一条停在「宿主窗口已创建」，说明崩溃发生在启动阶段的窗口/hook 路径上。
-     * 现在把安装动作整体推迟到启动完成之后，开机阶段系统路径上没有任何 Aevon 代码，
-     * 即使后续仍出问题，也不会再让手机起不来，而且崩溃原因会被 crash.log 记录下来。
+     * V0.0.6 用 hook 往 SBIconView 的长按菜单里塞「Open in Window」，
+     * 日志显示 applicationShortcutItems 首次被调用后约 220ms SpringBoard 收到
+     * SIGBUS 退出 —— 伪造的 SBSApplicationShortcutItem 触发了 SpringBoard
+     * 内部对快捷菜单项的约束。
+     *
+     * 现在入口换成「悬浮球」：
+     *   - 启动阶段零 hook，只注册两个 UIApplication 生命周期通知；
+     *   - 桌面稳定后在自己创建的穿透窗口里放一个圆球，点它选 App 即可开窗；
+     *   - 系统类（SBIconView / SBIconModel 等）完全不碰，长按图标恢复原样。
      */
-    let delay: TimeInterval = 8
-    AevonLog.info("[启动] 将在 \(Int(delay)) 秒后安装 hook（先让 SpringBoard 完成启动）")
+    AevonBootstrap.start()
+
+    // 4) 实验性 hook 一律延迟 10 秒，且必须用户显式打开对应开关
+    let delay: TimeInterval = 10
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-        // 延迟期间用户可能在设置里关掉了开关，这里再确认一次
         guard AevonPrefs.bool("Enabled", default: false) else {
-            AevonLog.info("[启动] 延迟期间插件被关闭，放弃安装 hook")
+            AevonLog.info("[启动] 延迟期间插件被关闭，不安装实验 hook")
             return
         }
-        AevonLog.info("[启动] 开始安装 hook")
-        installHooks()
-        AevonLog.info("Aevon \(AevonVersion) 加载完成，hook 已安装。")
+        installExperimentalHooks()
+        AevonLog.info("Aevon \(AevonVersion) 加载完成（悬浮球入口已就绪）")
     }
 }
 
-private func installHooks() {
-    /*
-     * V0.0.6 默认只安装「主屏图标长按 → Open in Window」这一条入口的 hook。
-     * 其余 hook 全部改为设置里的实验开关，默认不装 —— 这是本次避免安全模式的核心。
-     */
-
-    // 入口一（默认启用）：主屏图标长按快捷菜单
-    AevonSwizzle.install(targetClassName: "SBIconView",
-                         original: Selector(("applicationShortcutItems")),
-                         replacementClass: AevonIconViewHooks.self,
-                         replacement: Selector(("sk_iconview_applicationShortcutItems")))
-    AevonSwizzle.install(targetClassName: "SBIconView",
-                         original: Selector(("activateShortcut:withBundleIdentifier:forIconView:")),
-                         replacementClass: AevonIconViewHooks.self,
-                         replacement: #selector(AevonIconViewHooks.sk_iconview_activateShortcut(_:withBundleIdentifier:forIconView:)),
-                         isClassMethod: true)
-
-    // 入口二（实验，默认关）：多任务卡片长按开窗
+private func installExperimentalHooks() {
+    // 实验入口：多任务卡片长按开窗（默认关）
     if AevonPrefs.bool("SwitcherLongPress", default: false) {
         AevonSwizzle.install(targetClassName: "SBAppSwitcherPageView",
                              original: Selector(("initWithFrame:")),
@@ -77,7 +65,7 @@ private func installHooks() {
         AevonLog.info("[启动] 已安装「多任务卡片长按」hook（实验）")
     }
 
-    // 前台保持（实验，默认关）：会改写系统场景状态，风险最高，只在用户显式开启时才装
+    // 实验功能：强制前台保持（默认关，风险最高）
     if AevonPrefs.bool("ForceForeground", default: false) {
         AevonSwizzle.install(targetClassName: "FBScene",
                              original: Selector(("updateSettings:withTransitionContext:completion:")),

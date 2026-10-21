@@ -206,30 +206,34 @@ static NSArray *AevonBuildFallback(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
-                              @"V0.0.6 稳定优先版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。日志文件：/var/mobile/Aevon.log（Filza 可见）。若 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。");
+                              @"V0.0.7 悬浮球版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
+                              @"用法：打开「启用插件」和「显示悬浮球」→ 注销 → 桌面右侧出现蓝色圆球 → 点圆球选 App。"
+                              @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
     if (s1 != nil) [result addObject:s1];
-    id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @YES);
-    if (s2 != nil) [result addObject:s2];
+    id s1b = AevonNewSwitch(@"显示悬浮球（唯一入口）", target, @"BubbleEnabled", @YES);
+    if (s1b != nil) [result addObject:s1b];
 
-    id group1b = AevonNewGroup(@"入口",
-                               @"主屏图标长按菜单默认可用。「多任务卡片长按」为实验入口，开启后需注销。");
-    if (group1b != nil) [result addObject:group1b];
+    id group2 = AevonNewGroup(@"窗口",
+                              @"「多任务卡片长按」是实验入口，开启后需注销才生效；若开启后进入安全模式，请把它关掉。");
+    if (group2 != nil) [result addObject:group2];
+    id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @NO);
+    if (s2 != nil) [result addObject:s2];
     id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
     if (s2b != nil) [result addObject:s2b];
 
-    id group2 = AevonNewGroup(@"安全与日志",
+    id group3 = AevonNewGroup(@"安全与日志",
                               @"「开机崩溃保护」：每次加载写入 loading 状态，SpringBoard 稳定 20 秒后标记 healthy；若下次启动发现上次仍是 loading，则自动禁用插件，阻断崩溃死循环。");
-    if (group2 != nil) [result addObject:group2];
+    if (group3 != nil) [result addObject:group3];
     id s3 = AevonNewSwitch(@"开机崩溃保护", target, @"CrashGuard", @YES);
     if (s3 != nil) [result addObject:s3];
     id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
     if (s4 != nil) [result addObject:s4];
 
-    id group3 = AevonNewGroup(@"实验功能",
+    id group4 = AevonNewGroup(@"实验功能",
                               @"「强制前台保持」会改写系统场景状态，风险最高：若开启后注销进入安全模式，请先关闭本项。");
-    if (group3 != nil) [result addObject:group3];
+    if (group4 != nil) [result addObject:group4];
     id s5 = AevonNewSwitch(@"强制前台保持（实验）", target, @"ForceForeground", @NO);
     if (s5 != nil) [result addObject:s5];
 

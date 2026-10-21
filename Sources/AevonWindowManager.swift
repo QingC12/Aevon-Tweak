@@ -62,6 +62,53 @@ enum AevonWindowManager {
         }
     }
 
+    /// 悬浮球入口：必要时先把目标 App 的场景拉起来，再开窗。
+    ///
+    /// `launchApplicationWithIdentifier:suspended:` 只在 SpringBoard 里存在，
+    /// 拉起的是「挂起态」，不会整屏盖住桌面；随后由 AevonSceneHelper 把场景推前台
+    /// 并挂到我们的浮窗上。全程任何一步失败都只记日志，不做强制解包。
+    static func launchAndOpen(bundleID: String) {
+        guard AevonPrefs.bool("Enabled", default: false) else {
+            AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
+            return
+        }
+        if isWindowed(bundleID) {
+            AevonLog.info("[窗口] \(bundleID) 已在窗口中，忽略重复请求")
+            return
+        }
+
+        if AevonSceneHelper.scene(for: bundleID) != nil {
+            AevonLog.info("[窗口] \(bundleID) 已有场景，直接开窗")
+            open(bundleID: bundleID, sceneID: nil)
+            return
+        }
+
+        let application = UIApplication.shared
+        let launchSelector = Selector(("launchApplicationWithIdentifier:suspended:"))
+        guard application.responds(to: launchSelector) else {
+            AevonLog.warn("[窗口] 当前进程不支持 launchApplicationWithIdentifier:suspended:，无法拉起 \(bundleID)")
+            return
+        }
+        AevonLog.info("[窗口] 正在拉起 \(bundleID)")
+        AevonRuntime.sendVoid(application, launchSelector, bundleID as NSString, true)
+
+        var attempts = 0
+        let timer = Timer(timeInterval: 0.4, repeats: true) { timer in
+            attempts += 1
+            if attempts > 25 {
+                AevonLog.warn("[窗口] 等待 \(bundleID) 场景超时（10 秒）")
+                timer.invalidate()
+                return
+            }
+            if AevonSceneHelper.scene(for: bundleID) != nil {
+                timer.invalidate()
+                AevonLog.info("[窗口] \(bundleID) 场景已就绪（等待 \(attempts) 次）")
+                open(bundleID: bundleID, sceneID: nil)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     /// 关窗并清理全部相关状态。
     static func close(bundleID: String) {
         guard let windowView = windows.removeValue(forKey: bundleID) else { return }
