@@ -1,7 +1,7 @@
 import UIKit
 
 /// 单个 App 的浮窗外壳：标题栏（拖动 + 关闭）+ 内容（App 场景）+ 缩放手柄。
-final class SKWindowView: UIView {
+final class AEWindowView: UIView {
     let bundleID: String
 
     private let titleBarHeight: CGFloat = 40
@@ -74,7 +74,7 @@ final class SKWindowView: UIView {
         let resize = UIPanGestureRecognizer(target: self, action: #selector(handleResize(_:)))
         resizeHandle.addGestureRecognizer(resize)
 
-        SKLog.info("[窗口] 浮窗外壳已创建 \(bundleID)")
+        AELog.info("[窗口] 浮窗外壳已创建 \(bundleID)")
     }
 
     required init?(coder: NSCoder) {
@@ -132,7 +132,7 @@ final class SKWindowView: UIView {
     // MARK: - 关闭
 
     @objc private func closeTapped() {
-        SKWindowManager.close(bundleID: bundleID)
+        AEWindowManager.close(bundleID: bundleID)
     }
 
     func teardown() {

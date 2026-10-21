@@ -7,9 +7,9 @@ import Foundation
 /// 3. 若本次加载时发现上次状态仍是 `loading`，说明上次加载后 SpringBoard 崩溃了，
 ///    立即自动禁用插件（Enabled=NO）并恢复 healthy，从而阻断「崩溃→重启→再崩溃」的死循环。
 ///
-/// 用户可在 设置 → SplitKit 中重新打开开关。
-enum SKCrashGuard {
-    private static let stateKey = "SKGuardState"
+/// 用户可在 设置 → Aevon 中重新打开开关。
+enum AECrashGuard {
+    private static let stateKey = "AEGuardState"
     private static let enabledKey = "Enabled"
     private static let guardKey = "CrashGuard"
 
@@ -20,7 +20,7 @@ enum SKCrashGuard {
     }
 
     private static var current: State {
-        let raw = SKPrefs.rawValue(stateKey) as? NSNumber
+        let raw = AEPrefs.rawValue(stateKey) as? NSNumber
         return State(rawValue: raw?.intValue ?? 0) ?? .unknown
     }
 
@@ -31,24 +31,24 @@ enum SKCrashGuard {
 
         if previous == .loading {
             // 上次加载后 SpringBoard 未能稳定运行 → 判定为插件导致崩溃，自动禁用。
-            SKPrefs.set(enabledKey, false)
-            SKPrefs.set(stateKey, State.healthy.rawValue)
-            SKLog.warn("[崩溃保护] 检测到上次加载后 SpringBoard 未稳定运行，已自动禁用 SplitKit；如需重新启用请前往 设置 → SplitKit。")
+            AEPrefs.set(enabledKey, false)
+            AEPrefs.set(stateKey, State.healthy.rawValue)
+            AELog.warn("[崩溃保护] 检测到上次加载后 SpringBoard 未稳定运行，已自动禁用 Aevon；如需重新启用请前往 设置 → Aevon。")
             return false
         }
 
-        guard SKPrefs.bool(guardKey, default: true) else {
-            SKPrefs.set(stateKey, State.healthy.rawValue)
+        guard AEPrefs.bool(guardKey, default: true) else {
+            AEPrefs.set(stateKey, State.healthy.rawValue)
             return true
         }
 
-        SKPrefs.set(stateKey, State.loading.rawValue)
+        AEPrefs.set(stateKey, State.loading.rawValue)
 
         // 主队列延迟执行：若 20 秒内 SpringBoard 崩溃，状态停留在 loading，
         // 下一次加载就会触发自动禁用。
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-            SKPrefs.set(stateKey, State.healthy.rawValue)
-            SKLog.info("[崩溃保护] 本次加载已标记为健康。")
+            AEPrefs.set(stateKey, State.healthy.rawValue)
+            AELog.info("[崩溃保护] 本次加载已标记为健康。")
         }
         return true
     }

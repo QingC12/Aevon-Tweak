@@ -8,9 +8,9 @@ import Foundation
 ///
 /// 说明：不用 OSLog 的 Swift 字符串插值 API（`Logger` + `\(x, privacy:)`），
 /// 该插值 API 在部分 SDK 版本上存在兼容问题；NSLog 在各版本 SDK 上行为一致。
-enum SKLog {
+enum AELog {
     static let filePath = "/var/mobile/PullOverMF.log"
-    private static let tag = "SplitKit"
+    private static let tag = "Aevon"
     private static let maxBytes: UInt64 = 512 * 1024
     private static let lock = NSLock()
     /// 写盘不可用时置 false，避免每次写日志都重复失败（例如权限异常）。
@@ -30,7 +30,7 @@ enum SKLog {
 
     private static func emit(_ level: String, _ message: String) {
         NSLog("[%@][%@] %@", tag as NSString, level as NSString, message as NSString)
-        guard SKPrefs.bool("LogEnabled", default: true) else { return }
+        guard AEPrefs.bool("LogEnabled", default: true) else { return }
         append("[\(timestamp())] [\(level)] \(message)\r\n")
     }
 

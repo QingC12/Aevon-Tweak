@@ -11,27 +11,27 @@
  * 因此单独放在 ObjC 文件中用 @try/@catch 兜底，保证任何失败都不会影响主流程。
  */
 
-static CFStringRef SKPrefsAppID(void) {
-    return CFSTR("com.splitkit.tweak");
+static CFStringRef AEPrefsAppID(void) {
+    return CFSTR("com.aevon.tweak");
 }
 
-void SKPrefSetBool(NSString *key, BOOL value) {
+void AEPrefSetBool(NSString *key, BOOL value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,
                                  value ? kCFBooleanTrue : kCFBooleanFalse,
-                                 SKPrefsAppID());
-        CFPreferencesAppSynchronize(SKPrefsAppID());
+                                 AEPrefsAppID());
+        CFPreferencesAppSynchronize(AEPrefsAppID());
     } @catch (NSException *exception) {
         // 偏好写入失败不影响主流程
     }
 }
 
-void SKPrefSetInt(NSString *key, NSInteger value) {
+void AEPrefSetInt(NSString *key, NSInteger value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,
                                  (__bridge CFPropertyListRef)[NSNumber numberWithInteger:value],
-                                 SKPrefsAppID());
-        CFPreferencesAppSynchronize(SKPrefsAppID());
+                                 AEPrefsAppID());
+        CFPreferencesAppSynchronize(AEPrefsAppID());
     } @catch (NSException *exception) {
         // 偏好写入失败不影响主流程
     }
@@ -44,24 +44,24 @@ static NSMutableDictionary *_assertionsByPID = nil;
  * RBSAssertion / RBSTarget / RBSLegacyAttribute 均为私有框架类，无公开头文件，
  * 全部经 NSClassFromString 动态获取；这些声明挂在 NSObject 上只是为了通过类型检查。
  */
-@interface NSObject (SKRBSPrivate)
+@interface NSObject (AERBSPrivate)
 + (id)targetWithPid:(int)pid;
 + (id)attributeWithReason:(NSInteger)reason flags:(NSUInteger)flags;
 - (id)initWithExplanation:(NSString *)explanation target:(id)target attributes:(NSArray *)attributes;
 - (BOOL)acquireWithError:(NSError **)error;
 @end
 
-@interface SKAssertionShim : NSObject
+@interface AEAssertionShim : NSObject
 /// 为指定 pid 获取保活断言（阻止内核挂起 / 降频），并尝试 task_resume / SIGCONT。
 + (void)acquireKeepAliveForPID:(int)pid;
 /// 释放指定 pid 的保活断言。
 + (void)releaseKeepAliveForPID:(int)pid;
 @end
 
-@implementation SKAssertionShim
+@implementation AEAssertionShim
 
 + (void)initialize {
-    if (self == [SKAssertionShim class]) {
+    if (self == [AEAssertionShim class]) {
         _assertionsByPID = [NSMutableDictionary dictionary];
     }
 }
@@ -84,7 +84,7 @@ static NSMutableDictionary *_assertionsByPID = nil;
         id attribute = [attributeClass attributeWithReason:7 flags:flags]; // BKSProcessAssertionReasonBackgroundUI
         if (!attribute) return;
 
-        id assertion = [[assertionClass alloc] initWithExplanation:@"SplitKit keep-alive"
+        id assertion = [[assertionClass alloc] initWithExplanation:@"Aevon keep-alive"
                                                             target:target
                                                         attributes:@[attribute]];
         if (!assertion) return;
@@ -134,8 +134,8 @@ static NSMutableDictionary *_assertionsByPID = nil;
  * 保持极小：只转发到 Swift 侧的分屏初始化函数，Swift 内部全部有守卫，
  * 任何失败只记录日志，绝不把异常抛回 dyld。
  */
-extern void splitkit_initialize(void);
+extern void aevon_initialize(void);
 
-__attribute__((constructor)) static void splitkit_constructor(void) {
-    splitkit_initialize();
+__attribute__((constructor)) static void aevon_constructor(void) {
+    aevon_initialize();
 }

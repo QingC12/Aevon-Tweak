@@ -7,13 +7,13 @@
 		<key>cell</key>
 		<string>PSLinkCell</string>
 		<key>bundle</key>
-		<string>SplitKitPrefs</string>
+		<string>AevonPrefs</string>
 		<key>detail</key>
 		<string>PSListController</string>
 		<key>isController</key>
 		<true/>
 		<key>label</key>
-		<string>SplitKit</string>
+		<string>Aevon</string>
 	</dict>
 </dict>
 </plist>

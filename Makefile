@@ -9,29 +9,29 @@ THEOS_PACKAGE_SCHEME = roothide
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = SplitKit
+TWEAK_NAME = Aevon
 
-SplitKit_FILES = AssertionShim.m \
-    Sources/SplitKit.swift \
-    Sources/SKLog.swift \
-    Sources/SKPrefs.swift \
-    Sources/SKCrashGuard.swift \
-    Sources/SKRuntime.swift \
-    Sources/SKSwizzle.swift \
-    Sources/SKForegroundManager.swift \
-    Sources/SKAppInfo.swift \
-    Sources/SKAppLayout.swift \
-    Sources/SKSceneHelper.swift \
-    Sources/SKHostWindow.swift \
-    Sources/SKWindowView.swift \
-    Sources/SKWindowManager.swift \
-    Sources/SKGestureHandler.swift \
+Aevon_FILES = AEAssertionShim.m \
+    Sources/Aevon.swift \
+    Sources/AELog.swift \
+    Sources/AEPrefs.swift \
+    Sources/AECrashGuard.swift \
+    Sources/AERuntime.swift \
+    Sources/AESwizzle.swift \
+    Sources/AEForegroundManager.swift \
+    Sources/AEAppInfo.swift \
+    Sources/AEAppLayout.swift \
+    Sources/AESceneHelper.swift \
+    Sources/AEHostWindow.swift \
+    Sources/AEWindowView.swift \
+    Sources/AEWindowManager.swift \
+    Sources/AEGestureHandler.swift \
     Sources/Hooks.swift
 
-SplitKit_CFLAGS = -fobjc-arc
-SplitKit_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
+Aevon_CFLAGS = -fobjc-arc
+Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
 
-SUBPROJECTS += splitkitprefs
+SUBPROJECTS += aevonprefs
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/aggregate.mk

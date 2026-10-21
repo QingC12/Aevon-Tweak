@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>SplitKit</string>
+	<string>Aevon</string>
 	<key>CFBundleExecutable</key>
-	<string>SplitKitPrefs</string>
+	<string>AevonPrefs</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.splitkit.tweak.prefs</string>
+	<string>com.aevon.tweak.prefs</string>
 	<key>CFBundleName</key>
-	<string>SplitKit</string>
+	<string>Aevon</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleVersion</key>

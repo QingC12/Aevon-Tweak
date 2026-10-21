@@ -42,7 +42,7 @@ jobs:
           echo "构建版本: ${VERSION}"
           # 版本号统一注入 control 与 Swift 常量，避免多处手改漂移
           sed -i '' "s/^Version:.*/Version: ${VERSION}/" control
-          sed -i '' "s/^let SKVersion = .*/let SKVersion = \"${VERSION}\"/" Sources/SplitKit.swift
+          sed -i '' "s/^let AEVersion = .*/let AEVersion = \"${VERSION}\"/" Sources/Aevon.swift
 
       - name: 安装依赖（gnu-make / Procursus ldid / xz）
         run: |

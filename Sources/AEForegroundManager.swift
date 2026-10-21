@@ -3,8 +3,8 @@ import Foundation
 /// 前台保活管理：登记用户主动窗口化的 App / 场景。
 /// 只有登记在册的场景才会被 hook 强制前台或拦截停用；
 /// 未开窗时集合为空，hook 行为与原生生系统完全一致。
-final class SKForegroundManager {
-    static let shared = SKForegroundManager()
+final class AEForegroundManager {
+    static let shared = AEForegroundManager()
     private init() {}
 
     private let lock = NSLock()

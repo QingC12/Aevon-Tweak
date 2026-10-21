@@ -1,8 +1,8 @@
 import Foundation
 
 /// 偏好读写（CFPreferences，与设置界面 Preferences.framework 同一存储域）。
-enum SKPrefs {
-    static let domain = "com.splitkit.tweak" as CFString
+enum AEPrefs {
+    static let domain = "com.aevon.tweak" as CFString
 
     /// 读取原始值；键不存在时返回 nil。
     static func rawValue(_ key: String) -> Any? {
@@ -27,11 +27,11 @@ enum SKPrefs {
 
     /// 写入布尔值并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Bool) {
-        SKPrefSetBool(key, value)
+        AEPrefSetBool(key, value)
     }
 
     /// 写入整数并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Int) {
-        SKPrefSetInt(key, value)
+        AEPrefSetInt(key, value)
     }
 }
