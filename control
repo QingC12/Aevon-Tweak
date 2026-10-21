@@ -1,0 +1,9 @@
+Package: com.splitkit.tweak
+Name: SplitKit 分屏
+Version: 0.0.1
+Architecture: iphoneos-arm64
+Description: SplitKit — 从零实现的 Swift 越狱分屏插件。V0.0.1 安全骨架版：仅包含加载框架、偏好开关与开机崩溃保护，不 hook 任何系统类。
+Maintainer: SplitKit Dev <splitkit@local>
+Author: SplitKit Dev
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 16.0)

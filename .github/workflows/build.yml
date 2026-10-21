@@ -1,0 +1,87 @@
+name: Build SplitKit
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 deb (rootless / arm64+arm64e)
+    runs-on: macos-15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖 (make / ldid / xz)
+        run: |
+          brew install make ldid xz
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: 安装 Theos（含子模块）
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: 准备 iPhoneOS SDK
+        run: |
+          mkdir -p "$THEOS/sdks"
+          git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          if [ ! -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
+            echo "theos/sdks 缺少 iPhoneOS16.5.sdk，回退使用 Xcode 自带 SDK"
+            SDKVER="$(xcrun --sdk iphoneos --show-sdk-version)"
+            ln -s "$(xcrun --sdk iphoneos --show-sdk-path)" "$THEOS/sdks/iPhoneOS${SDKVER}.sdk"
+          fi
+
+      - name: 环境信息
+        run: |
+          xcodebuild -version
+          ls "$THEOS/sdks"
+
+      - name: 构建
+        run: |
+          make clean
+          make package FINALPACKAGE=1
+
+      - name: 校验产物（必须包含 arm64e）
+        run: |
+          set -e
+          ls -la packages/
+          rm -rf verify && mkdir verify && cd verify
+          ar x ../packages/*.deb
+          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar x; else tar xf data.tar.*; fi
+          DYLIB="$(find . -name 'SplitKit.dylib' | head -n1)"
+          echo "dylib: $DYLIB"
+          lipo -info "$DYLIB"
+          lipo -info "$DYLIB" | grep -q arm64e || { echo "::error::产物缺少 arm64e slice"; exit 1; }
+          find . -name "*.dylib" -o -name "*.bundle" | head -20
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: SplitKit-${{ github.ref_name }}
+          path: packages/*.deb
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release（仅 tag 触发）
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载 deb
+        uses: actions/download-artifact@v4
+        with:
+          name: SplitKit-${{ github.ref_name }}
+          path: dist
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SplitKit ${{ github.ref_name }}
+          files: dist/*.deb
+          generate_release_notes: false
