@@ -8,4 +8,6 @@ void AevonPrefSetInt(NSString *key, NSInteger value);
 @interface AevonAssertionShim : NSObject
 + (void)acquireKeepAliveForPID:(int)pid;
 + (void)releaseKeepAliveForPID:(int)pid;
+/// 仅恢复进程执行（不取断言）：suspended 拉起的 App 必须恢复才会渲染画面。
++ (void)resumePID:(int)pid;
 @end
