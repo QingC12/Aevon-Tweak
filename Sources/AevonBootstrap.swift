@@ -16,7 +16,7 @@ enum AevonBootstrap {
         let center = NotificationCenter.default
 
         // 启动完成 → 等 4 秒（让桌面把图标、Widget 都铺好）再挂悬浮球
-        _ = center.addObserver(forName: UIApplicationDidFinishLaunchingNotification,
+        _ = center.addObserver(forName: UIApplication.didFinishLaunchingNotification,
                                object: nil,
                                queue: .main) { _ in
             AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建悬浮球")
@@ -26,7 +26,7 @@ enum AevonBootstrap {
         }
 
         // 兜底：每次回到活跃态时检查一遍（悬浮球被系统回收/首次没有场景时补建）
-        _ = center.addObserver(forName: UIApplicationDidBecomeActiveNotification,
+        _ = center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                object: nil,
                                queue: .main) { _ in
             guard !AevonBubble.shared.isVisible else { return }
