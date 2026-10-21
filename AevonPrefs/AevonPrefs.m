@@ -41,11 +41,21 @@
 - (id)readPreferenceValue:(id)specifier;
 @end
 
-/* PSSpecifier 的属性读写（运行期用真实类，这里只为编译期类型检查） */
-@interface NSObject (AevonSpecifierProperties)
-- (void)setProperty:(id)value forKey:(NSString *)key;
-- (id)propertyForKey:(NSString *)key;
-@end
+/*
+ * PSSpecifier 的属性读写。
+ * 注意：不能在 NSObject 上声明 -setProperty:forKey: 类别 —— UIKit 里存在多个
+ * 同名不同签名的实现，clang 会报 -Wobjc-multiple-method-names（本工程 -Werror）。
+ * 这里全部走 runtime 直调，既避开重名解析，也不依赖私有头文件。
+ */
+static void AevonSetProperty(id spec, id value, NSString *key) {
+    if (spec == nil || key == nil) return;
+    SEL sel = sel_registerName("setProperty:forKey:");
+    if (![spec respondsToSelector:sel]) return;
+    typedef void (*SetPropertyFn)(id, SEL, id, NSString *);
+    SetPropertyFn fn = (SetPropertyFn)[spec methodForSelector:sel];
+    if (fn == NULL) return;
+    @try { fn(spec, sel, value, key); } @catch (NSException *exception) {}
+}
 
 static NSString *const AevonPrefsDomain = @"com.Aevon";
 /* PSSwitchCell 的 cell 类型值（Preferences 框架常量，多年未变） */
@@ -127,12 +137,12 @@ static id AevonNewGroup(NSString *title, NSString *footer) {
                 @try { spec = fn((id)specifierClass, empty); } @catch (NSException *e) { spec = nil; }
             }
             if (spec != nil && title.length > 0) {
-                @try { [spec setProperty:title forKey:@"label"]; } @catch (NSException *e) {}
+                AevonSetProperty(spec, title, @"label");
             }
         }
     }
     if (spec != nil && footer.length > 0) {
-        @try { [spec setProperty:footer forKey:@"footerText"]; } @catch (NSException *e) {}
+        AevonSetProperty(spec, footer, @"footerText");
     }
     return spec;
 }
@@ -146,11 +156,11 @@ static id AevonNewSwitch(NSString *label, id target, NSString *key, id defaultVa
     if (spec == nil) return nil;
     @try {
         if (key.length > 0) {
-            [spec setProperty:key forKey:@"key"];
-            [spec setProperty:key forKey:@"id"];
+            AevonSetProperty(spec, key, @"key");
+            AevonSetProperty(spec, key, @"id");
         }
-        [spec setProperty:AevonPrefsDomain forKey:@"defaults"];
-        if (defaultValue != nil) [spec setProperty:defaultValue forKey:@"default"];
+        AevonSetProperty(spec, AevonPrefsDomain, @"defaults");
+        if (defaultValue != nil) AevonSetProperty(spec, defaultValue, @"default");
     } @catch (NSException *exception) {
         return nil;
     }
