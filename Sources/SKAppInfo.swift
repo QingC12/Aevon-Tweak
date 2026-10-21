@@ -3,8 +3,7 @@ import Foundation
 /// App 信息查询（SBApplicationController）。
 enum SKAppInfo {
     static func applicationController() -> AnyObject? {
-        guard let cls = NSClassFromString("SBApplicationController") as? NSObject else { return nil }
-        return cls.perform(Selector(("sharedInstance")))?.takeUnretainedValue()
+        return SKRuntime.sendClass("SBApplicationController", Selector(("sharedInstance")))
     }
 
     static func application(bundleID: String) -> AnyObject? {

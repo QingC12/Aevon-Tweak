@@ -74,7 +74,10 @@ import UIKit
     @objc func sk_iconview_activateShortcut(_ item: Any,
                                             withBundleIdentifier bundleID: String,
                                             forIconView iconView: Any?) {
-        let type = (item as? AnyObject).flatMap { SKRuntime.send($0, Selector(("type"))) } as? String
+        let type: String? = {
+            guard let object = item as? NSObject else { return nil }
+            return SKRuntime.send(object, Selector(("type"))) as? String
+        }()
         if type == SKIconViewHooks.shortcutType {
             SKLog.info("[图标] 收到窗口化快捷指令: \(bundleID)")
             launchAndWindow(bundleID: bundleID)
@@ -130,7 +133,7 @@ import UIKit
                                          withTransitionContext ctx: Any?,
                                          completion: Any?) {
         var finalSettings: Any = settings
-        let identifier = sceneIdentifier(of: self)
+        let identifier = SKFBSceneHooks.sceneIdentifier(of: self)
 
         if SKForegroundManager.shared.shouldKeepForeground(identifier: identifier),
            let mutable = settings as? NSObject,

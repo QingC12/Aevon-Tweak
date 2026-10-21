@@ -4,11 +4,11 @@ import Foundation
 /// 覆盖 iOS 13–26 的多种内部结构（allItems / centerItem / rolesToLayoutItemsMap）。
 enum SKAppLayout {
     static func bundleID(_ layout: AnyObject) -> String? {
-        return items(layout).first.flatMap { itemString($0, "bundleIdentifier") }
+        return items(layout).first.flatMap { itemString($0, Selector(("bundleIdentifier"))) }
     }
 
     static func sceneID(_ layout: AnyObject) -> String? {
-        return items(layout).first.flatMap { itemString($0, "uniqueIdentifier") }
+        return items(layout).first.flatMap { itemString($0, Selector(("uniqueIdentifier"))) }
     }
 
     private static func items(_ layout: AnyObject) -> [AnyObject] {
@@ -23,8 +23,8 @@ enum SKAppLayout {
             result.append(center)
         }
         if result.isEmpty,
-           let map = SKRuntime.ivarObject(layout, "_rolesToLayoutItemsMap") as? [Any: AnyObject] {
-            result.append(contentsOf: map.values)
+           let map = SKRuntime.ivarObject(layout, "_rolesToLayoutItemsMap") as? NSDictionary {
+            result.append(contentsOf: map.allValues as? [AnyObject] ?? [])
         }
         return result
     }

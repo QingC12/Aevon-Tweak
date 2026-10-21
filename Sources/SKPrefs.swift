@@ -27,11 +27,11 @@ enum SKPrefs {
 
     /// 写入布尔值并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Bool) {
-        SKPrefSetBool(key as NSString, value)
+        SKPrefSetBool(key, value)
     }
 
     /// 写入整数并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Int) {
-        SKPrefSetInt(key as NSString, value)
+        SKPrefSetInt(key, value)
     }
 }

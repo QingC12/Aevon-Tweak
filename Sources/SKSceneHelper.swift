@@ -7,16 +7,15 @@ enum SKSceneHelper {
     // MARK: - 场景管理器
 
     private static func sceneManager() -> AnyObject? {
-        if let workspaceClass = NSClassFromString("SBMainWorkspace") as? NSObject,
-           workspaceClass.responds(to: Selector(("sharedInstance"))),
-           let workspace = workspaceClass.perform(Selector(("sharedInstance")))?.takeUnretainedValue(),
+        // 策略 1：SBMainWorkspace.sharedInstance.sceneManager
+        if let workspace = SKRuntime.sendClass("SBMainWorkspace", Selector(("sharedInstance"))),
            workspace.responds(to: Selector(("sceneManager"))),
            let manager = SKRuntime.send(workspace, Selector(("sceneManager"))) {
             return manager
         }
-        if let fbClass = NSClassFromString("FBSceneManager") as? NSObject,
-           fbClass.responds(to: Selector(("sharedInstance"))) {
-            return fbClass.perform(Selector(("sharedInstance")))?.takeUnretainedValue()
+        // 策略 2：FBSceneManager.sharedInstance
+        if let manager = SKRuntime.sendClass("FBSceneManager", Selector(("sharedInstance"))) {
+            return manager
         }
         return nil
     }
@@ -45,9 +44,15 @@ enum SKSceneHelper {
             }
         }
 
-        // 策略 3：allScenes
+        // 策略 3：allScenes（NSArray / NSSet 均可）
         if manager.responds(to: Selector(("allScenes"))),
-           let scenes = SKRuntime.send(manager, Selector(("allScenes"))) as? Set<AnyObject> {
+           let collection = SKRuntime.send(manager, Selector(("allScenes"))) {
+            var scenes: [AnyObject] = []
+            if let array = collection as? NSArray {
+                scenes = array as? [AnyObject] ?? []
+            } else if let set = collection as? NSSet {
+                scenes = set.allObjects as? [AnyObject] ?? []
+            }
             for scene in scenes {
                 if let sid = SKRuntime.send(scene, Selector(("identifier"))) as? String,
                    sid.contains(identifier) {
@@ -60,14 +65,12 @@ enum SKSceneHelper {
         if let scene = deepScan(manager, identifier: identifier) { return scene }
 
         // 策略 5：SBSceneManager 句柄查询
-        if let managerClass = NSClassFromString("SBSceneManager") as? NSObject,
-           managerClass.responds(to: Selector(("existingSceneHandleForSceneIdentity:"))),
-           let providerClass = NSClassFromString("SBSceneIdentityProvider") as? NSObject,
-           providerClass.responds(to: Selector(("identityForIdentifier:"))),
-           let identity = providerClass.perform(Selector(("identityForIdentifier:")),
-                                                with: identifier as NSString)?.takeUnretainedValue(),
-           let handle = managerClass.perform(Selector(("existingSceneHandleForSceneIdentity:")),
-                                             with: identity)?.takeUnretainedValue(),
+        if let identity = SKRuntime.sendClass("SBSceneIdentityProvider",
+                                              Selector(("identityForIdentifier:")),
+                                              argument: identifier as NSString),
+           let handle = SKRuntime.sendClass("SBSceneManager",
+                                            Selector(("existingSceneHandleForSceneIdentity:")),
+                                            argument: identity),
            let scene = SKRuntime.send(handle, Selector(("scene"))) {
             return scene
         }

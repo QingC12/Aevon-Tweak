@@ -46,9 +46,33 @@ enum SKRuntime {
     // MARK: - 消息发送（持有返回，适用于 alloc / init / mutableCopy）
 
     /// 对类对象发送 alloc，返回 +1 持有的新实例。
+    /// 注意：不能用 `NSClassFromString(...) as? NSObject`——元类型到 NSObject 的条件转换恒失败。
     static func allocate(_ className: String) -> AnyObject? {
-        guard let cls = NSClassFromString(className) as? NSObject else { return nil }
-        return cls.perform(Selector(("alloc")))?.takeRetainedValue()
+        guard let cls = NSClassFromString(className),
+              let method = class_getClassMethod(cls, Selector(("alloc"))) else { return nil }
+        typealias Fn = @convention(c) (AnyObject, Selector) -> Unmanaged<AnyObject>
+        let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        return fn(cls, Selector(("alloc"))).takeRetainedValue()
+    }
+
+    // MARK: - 类方法调用（+方法，接收者为类对象本身）
+
+    /// 调用无参类方法（+方法），返回 +0 对象。
+    static func sendClass(_ className: String, _ selector: Selector) -> AnyObject? {
+        guard let cls = NSClassFromString(className),
+              let method = class_getClassMethod(cls, selector) else { return nil }
+        typealias Fn = @convention(c) (AnyObject, Selector) -> AnyObject?
+        let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        return fn(cls, selector)
+    }
+
+    /// 调用带一个对象参数的类方法（+方法），返回 +0 对象。
+    static func sendClass(_ className: String, _ selector: Selector, argument: Any?) -> AnyObject? {
+        guard let cls = NSClassFromString(className),
+              let method = class_getClassMethod(cls, selector) else { return nil }
+        typealias Fn = @convention(c) (AnyObject, Selector, Any?) -> AnyObject?
+        let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        return fn(cls, selector, argument)
     }
 
     /// 发送无参且返回 +1 持有对象的消息（init / mutableCopy）。
@@ -113,7 +137,7 @@ enum SKRuntime {
     private static func implementation(_ target: AnyObject, _ selector: Selector) -> UnsafeMutableRawPointer? {
         guard target.responds(to: selector),
               let method = class_getInstanceMethod(object_getClass(target), selector) else { return nil }
-        return method_getImplementation(method)
+        return UnsafeMutableRawPointer(method_getImplementation(method))
     }
 
     /// 调用 void 方法（无参数）。

@@ -24,7 +24,16 @@ enum SKSwizzle {
             SKLog.warn("[hook] 类不存在，已跳过: \(targetClassName)")
             return false
         }
-        let owner: AnyClass = isClassMethod ? object_getClass(target) : target
+        let owner: AnyClass
+        if isClassMethod {
+            guard let metaclass = object_getClass(target) else {
+                SKLog.warn("[hook] 无法获取元类: \(targetClassName)")
+                return false
+            }
+            owner = metaclass
+        } else {
+            owner = target
+        }
         return install(on: owner,
                        original: original,
                        replacementClass: replacementClass,

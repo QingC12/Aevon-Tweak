@@ -22,7 +22,7 @@ enum SKHostWindow {
         let created = SKPassthroughWindow(windowScene: scene)
         created.frame = UIScreen.main.bounds
         created.backgroundColor = .clear
-        created.windowLevel = UIWindowLevelAlert - 1
+        created.windowLevel = UIWindow.Level.alert - 1
         created.isUserInteractionEnabled = true
         created.isHidden = false
         window = created

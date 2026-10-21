@@ -52,7 +52,7 @@ private func installHooks() {
     SKSwizzle.install(targetClassName: "SBIconView",
                       original: Selector(("applicationShortcutItems")),
                       replacementClass: SKIconViewHooks.self,
-                      replacement: #selector(SKIconViewHooks.sk_iconview_applicationShortcutItems()))
+                      replacement: Selector(("sk_iconview_applicationShortcutItems")))
     SKSwizzle.install(targetClassName: "SBIconView",
                       original: Selector(("activateShortcut:withBundleIdentifier:forIconView:")),
                       replacementClass: SKIconViewHooks.self,
