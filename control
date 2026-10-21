@@ -1,6 +1,6 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.4
+Version: 0.0.5
 Architecture: iphoneos-arm64e
 Description: Aevon 分屏插件（Swift 实现，A17 arm64e）。最小浮窗版：多任务卡片或主屏图标长按即可把 App 窗口化，支持拖动、缩放、关闭；含开机崩溃保护。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>

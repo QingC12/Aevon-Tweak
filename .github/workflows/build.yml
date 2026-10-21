@@ -107,7 +107,19 @@ jobs:
           [ "$PREFS_ARCHS" = "arm64e" ] || { echo "::error::设置 bundle 必须是纯 arm64e，实际: $PREFS_ARCHS"; exit 1; }
           strings "$PREFS_BIN" | grep -q 'AevonRootListController' \
             || { echo "::error::设置 bundle 缺少 AevonRootListController（点击设置项会闪退）"; exit 1; }
-          echo "设置 bundle 控制器类: 已编入"
+          # V0.0.5：设置页空白是因为 specifier 没写回 _specifiers。这里确认两条关键路径都编进去了
+          strings "$PREFS_BIN" | grep -q 'preferenceSpecifierNamed:target:set:get:detail:cell:edit:' \
+            || { echo "::error::设置 bundle 缺少 PSSpecifier 自行构建逻辑（设置页会空白）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q '_specifiers' \
+            || { echo "::error::设置 bundle 缺少 _specifiers 写回逻辑（设置页会空白）"; exit 1; }
+          echo "设置 bundle 控制器类: 已编入；specifier 构建与写回: 已编入"
+
+          # Root.plist 必须随包，且开关项不少于 4 个
+          ICON_DIR="$(dirname "$PREFS_BIN")"
+          [ -s "$ICON_DIR/Root.plist" ] || { echo "::error::bundle 缺少 Root.plist"; exit 1; }
+          SWITCH_COUNT="$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c 'PSSwitchCell' || true)"
+          echo "Root.plist 开关项: $SWITCH_COUNT"
+          [ "$SWITCH_COUNT" -ge 4 ] || { echo "::error::Root.plist 开关项不足 4 个（实际 $SWITCH_COUNT）"; exit 1; }
 
           # 图标三档必须在 bundle 根目录
           ICON_DIR="$(dirname "$PREFS_BIN")"
