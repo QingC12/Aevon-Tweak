@@ -22,8 +22,8 @@ enum SKHostWindow {
         let created = SKPassthroughWindow(windowScene: scene)
         created.frame = UIScreen.main.bounds
         created.backgroundColor = .clear
-        // UIWindowLevelAlert = 2000.0（UIKit 公开常量）；用数值而非符号名，兼容各版本 SDK 的更名
-        created.windowLevel = 1999.0
+        // 高于普通窗口、低于系统警告的层级（等价旧常量 UIWindowLevelStatusBar）
+        created.windowLevel = UIWindow.Level.statusBar
         created.isUserInteractionEnabled = true
         created.isHidden = false
         window = created
