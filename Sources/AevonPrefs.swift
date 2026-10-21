@@ -1,8 +1,8 @@
 import Foundation
 
 /// 偏好读写（CFPreferences，与设置界面 Preferences.framework 同一存储域）。
-enum AEPrefs {
-    static let domain = "com.aevon.tweak" as CFString
+enum AevonPrefs {
+    static let domain = "com.Aevon" as CFString
 
     /// 读取原始值；键不存在时返回 nil。
     static func rawValue(_ key: String) -> Any? {
@@ -27,11 +27,11 @@ enum AEPrefs {
 
     /// 写入布尔值并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Bool) {
-        AEPrefSetBool(key, value)
+        AevonPrefSetBool(key, value)
     }
 
     /// 写入整数并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Int) {
-        AEPrefSetInt(key, value)
+        AevonPrefSetInt(key, value)
     }
 }

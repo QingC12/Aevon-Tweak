@@ -1,11 +1,11 @@
-Package: com.aevon.tweak
+Package: com.Aevon
 Name: Aevon
-Version: 0.0.3
+Version: 0.0.4
 Architecture: iphoneos-arm64e
 Description: Aevon 分屏插件（Swift 实现，A17 arm64e）。最小浮窗版：多任务卡片或主屏图标长按即可把 App 窗口化，支持拖动、缩放、关闭；含开机崩溃保护。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks
 Depends: mobilesubstrate, firmware (>= 16.0)
-Conflicts: com.splitkit.tweak
-Replaces: com.splitkit.tweak
+Conflicts: com.aevon.tweak, com.splitkit.tweak
+Replaces: com.aevon.tweak, com.splitkit.tweak

@@ -2,7 +2,7 @@ import Foundation
 
 /// Objective-C 运行时消息工具（不依赖 Orion / Substrate / Logos）。
 /// 所有消息发送都先转换为 NSObject，再调用 perform / KVC，保证类型安全。
-enum AERuntime {
+enum AevonRuntime {
     // MARK: - 实例变量
 
     /// 读取对象类型（@ 编码）实例变量；非对象类型 / 不存在时返回 nil。

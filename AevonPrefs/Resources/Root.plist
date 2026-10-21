@@ -12,7 +12,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>V0.0.3 最小浮窗版（纯 arm64e / roothide）。用法：打开「启用插件」并注销；把目标 App 切到后台（留在多任务卡片）长按该卡片即可窗口化，也可长按主屏图标选「Open in Window」。所有功能只在本页开关，无需终端/SSH。日志文件：/var/mobile/PullOverMF.log（Filza 可见，出错请先看它）。若 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。</string>
+			<string>V0.0.4 最小浮窗版（纯 arm64e / roothide）。用法：打开「启用插件」并注销；把目标 App 切到后台（留在多任务卡片）长按该卡片即可窗口化，也可长按主屏图标选「Open in Window」。所有功能只在本页开关，无需终端/SSH。日志文件：/var/mobile/Aevon.log（Filza 可见，出错请先看它）。若 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -22,7 +22,7 @@
 			<key>key</key>
 			<string>Enabled</string>
 			<key>defaults</key>
-			<string>com.aevon.tweak</string>
+			<string>com.Aevon</string>
 			<key>default</key>
 			<false/>
 		</dict>
@@ -34,7 +34,7 @@
 			<key>key</key>
 			<string>KeepAlive</string>
 			<key>defaults</key>
-			<string>com.aevon.tweak</string>
+			<string>com.Aevon</string>
 			<key>default</key>
 			<true/>
 		</dict>
@@ -54,7 +54,7 @@
 			<key>key</key>
 			<string>CrashGuard</string>
 			<key>defaults</key>
-			<string>com.aevon.tweak</string>
+			<string>com.Aevon</string>
 			<key>default</key>
 			<true/>
 		</dict>
@@ -62,11 +62,11 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>label</key>
-			<string>写日志文件（/var/mobile/PullOverMF.log）</string>
+			<string>写日志文件（/var/mobile/Aevon.log）</string>
 			<key>key</key>
 			<string>LogEnabled</string>
 			<key>defaults</key>
-			<string>com.aevon.tweak</string>
+			<string>com.Aevon</string>
 			<key>default</key>
 			<true/>
 		</dict>

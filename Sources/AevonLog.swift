@@ -2,14 +2,13 @@ import Foundation
 
 /// 统一日志：系统日志 + 文件日志。
 ///
-/// 文件日志固定写入 `/var/mobile/PullOverMF.log`（Filza 直接可见，
+/// 文件日志固定写入 `/var/mobile/Aevon.log`（Filza 直接可见，
 /// 不受 roothide 路径重定向影响），超过 512 KB 自动轮转一个 `.old` 备份。
-/// 该路径为项目约定，不随插件改名而变化。
 ///
 /// 说明：不用 OSLog 的 Swift 字符串插值 API（`Logger` + `\(x, privacy:)`），
 /// 该插值 API 在部分 SDK 版本上存在兼容问题；NSLog 在各版本 SDK 上行为一致。
-enum AELog {
-    static let filePath = "/var/mobile/PullOverMF.log"
+enum AevonLog {
+    static let filePath = "/var/mobile/Aevon.log"
     private static let tag = "Aevon"
     private static let maxBytes: UInt64 = 512 * 1024
     private static let lock = NSLock()
@@ -30,7 +29,7 @@ enum AELog {
 
     private static func emit(_ level: String, _ message: String) {
         NSLog("[%@][%@] %@", tag as NSString, level as NSString, message as NSString)
-        guard AEPrefs.bool("LogEnabled", default: true) else { return }
+        guard AevonPrefs.bool("LogEnabled", default: true) else { return }
         append("[\(timestamp())] [\(level)] \(message)\r\n")
     }
 

@@ -8,8 +8,8 @@ import Foundation
 ///    立即自动禁用插件（Enabled=NO）并恢复 healthy，从而阻断「崩溃→重启→再崩溃」的死循环。
 ///
 /// 用户可在 设置 → Aevon 中重新打开开关。
-enum AECrashGuard {
-    private static let stateKey = "AEGuardState"
+enum AevonCrashGuard {
+    private static let stateKey = "AevonGuardState"
     private static let enabledKey = "Enabled"
     private static let guardKey = "CrashGuard"
 
@@ -20,7 +20,7 @@ enum AECrashGuard {
     }
 
     private static var current: State {
-        let raw = AEPrefs.rawValue(stateKey) as? NSNumber
+        let raw = AevonPrefs.rawValue(stateKey) as? NSNumber
         return State(rawValue: raw?.intValue ?? 0) ?? .unknown
     }
 
@@ -31,24 +31,24 @@ enum AECrashGuard {
 
         if previous == .loading {
             // 上次加载后 SpringBoard 未能稳定运行 → 判定为插件导致崩溃，自动禁用。
-            AEPrefs.set(enabledKey, false)
-            AEPrefs.set(stateKey, State.healthy.rawValue)
-            AELog.warn("[崩溃保护] 检测到上次加载后 SpringBoard 未稳定运行，已自动禁用 Aevon；如需重新启用请前往 设置 → Aevon。")
+            AevonPrefs.set(enabledKey, false)
+            AevonPrefs.set(stateKey, State.healthy.rawValue)
+            AevonLog.warn("[崩溃保护] 检测到上次加载后 SpringBoard 未稳定运行，已自动禁用 Aevon；如需重新启用请前往 设置 → Aevon。")
             return false
         }
 
-        guard AEPrefs.bool(guardKey, default: true) else {
-            AEPrefs.set(stateKey, State.healthy.rawValue)
+        guard AevonPrefs.bool(guardKey, default: true) else {
+            AevonPrefs.set(stateKey, State.healthy.rawValue)
             return true
         }
 
-        AEPrefs.set(stateKey, State.loading.rawValue)
+        AevonPrefs.set(stateKey, State.loading.rawValue)
 
         // 主队列延迟执行：若 20 秒内 SpringBoard 崩溃，状态停留在 loading，
         // 下一次加载就会触发自动禁用。
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-            AEPrefs.set(stateKey, State.healthy.rawValue)
-            AELog.info("[崩溃保护] 本次加载已标记为健康。")
+            AevonPrefs.set(stateKey, State.healthy.rawValue)
+            AevonLog.info("[崩溃保护] 本次加载已标记为健康。")
         }
         return true
     }

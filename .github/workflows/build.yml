@@ -42,7 +42,7 @@ jobs:
           echo "构建版本: ${VERSION}"
           # 版本号统一注入 control 与 Swift 常量，避免多处手改漂移
           sed -i '' "s/^Version:.*/Version: ${VERSION}/" control
-          sed -i '' "s/^let AEVersion = .*/let AEVersion = \"${VERSION}\"/" Sources/Aevon.swift
+          sed -i '' "s/^let AevonVersion = .*/let AevonVersion = \"${VERSION}\"/" Sources/Aevon.swift
 
       - name: 安装依赖（gnu-make / Procursus ldid / xz）
         run: |
@@ -89,6 +89,27 @@ jobs:
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
+
+          PKG="$(grep -i '^Package:' ctl/control | cut -d' ' -f2-)"
+          echo "deb Package: $PKG"
+          [ "$PKG" = "com.Aevon" ] || { echo "::error::包名应为 com.Aevon，实际: $PKG"; exit 1; }
+
+          # 设置 bundle：必须是纯 arm64e，且真的编进了控制器子类（否则点击设置项会闪退）
+          PREFS_BIN="$(find . -name 'AevonPrefs' -type f | head -n1)"
+          echo "prefs bin: $PREFS_BIN"
+          PREFS_ARCHS="$(lipo -archs "$PREFS_BIN")"
+          echo "prefs lipo -archs: $PREFS_ARCHS"
+          [ "$PREFS_ARCHS" = "arm64e" ] || { echo "::error::设置 bundle 必须是纯 arm64e，实际: $PREFS_ARCHS"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'AevonRootListController' \
+            || { echo "::error::设置 bundle 缺少 AevonRootListController（点击设置项会闪退）"; exit 1; }
+          echo "设置 bundle 控制器类: 已编入"
+
+          # 图标三档必须在 bundle 根目录
+          ICON_DIR="$(dirname "$PREFS_BIN")"
+          for i in icon.png icon@2x.png icon@3x.png; do
+            [ -s "$ICON_DIR/$i" ] || { echo "::error::缺少图标 $i"; exit 1; }
+          done
+          echo "图标: icon.png / icon@2x.png / icon@3x.png 均存在"
 
       - name: 手动运行时留存产物
         if: github.ref_type != 'tag'

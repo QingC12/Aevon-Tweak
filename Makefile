@@ -11,27 +11,27 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = Aevon
 
-Aevon_FILES = AEAssertionShim.m \
+Aevon_FILES = AevonAssertionShim.m \
     Sources/Aevon.swift \
-    Sources/AELog.swift \
-    Sources/AEPrefs.swift \
-    Sources/AECrashGuard.swift \
-    Sources/AERuntime.swift \
-    Sources/AESwizzle.swift \
-    Sources/AEForegroundManager.swift \
-    Sources/AEAppInfo.swift \
-    Sources/AEAppLayout.swift \
-    Sources/AESceneHelper.swift \
-    Sources/AEHostWindow.swift \
-    Sources/AEWindowView.swift \
-    Sources/AEWindowManager.swift \
-    Sources/AEGestureHandler.swift \
+    Sources/AevonLog.swift \
+    Sources/AevonPrefs.swift \
+    Sources/AevonCrashGuard.swift \
+    Sources/AevonRuntime.swift \
+    Sources/AevonSwizzle.swift \
+    Sources/AevonForegroundManager.swift \
+    Sources/AevonAppInfo.swift \
+    Sources/AevonAppLayout.swift \
+    Sources/AevonSceneHelper.swift \
+    Sources/AevonHostWindow.swift \
+    Sources/AevonWindowView.swift \
+    Sources/AevonWindowManager.swift \
+    Sources/AevonGestureHandler.swift \
     Sources/Hooks.swift
 
 Aevon_CFLAGS = -fobjc-arc
 Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
 
-SUBPROJECTS += aevonprefs
+SUBPROJECTS += AevonPrefs
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/aggregate.mk

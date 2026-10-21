@@ -9,7 +9,7 @@
 		<key>bundle</key>
 		<string>AevonPrefs</string>
 		<key>detail</key>
-		<string>PSListController</string>
+		<string>AevonRootListController</string>
 		<key>isController</key>
 		<true/>
 		<key>label</key>

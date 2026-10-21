@@ -1,5 +1,8 @@
 include $(THEOS)/makefiles/common.mk
 
+# 与主工程一致：只产 arm64e 切片（否则子工程会默认编成 arm64+arm64e fat）
+ARCHS = arm64e
+
 BUNDLE_NAME = AevonPrefs
 AevonPrefs_FILES = AevonPrefs.m
 AevonPrefs_FRAMEWORKS = UIKit
