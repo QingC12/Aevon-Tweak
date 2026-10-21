@@ -12,7 +12,7 @@
 			<key>label</key>
 			<string>SplitKit 分屏</string>
 			<key>footerText</key>
-			<string>V0.0.1 安全骨架版：仅包含加载框架与开机崩溃保护，不 hook 任何系统类。安装后如遇 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。</string>
+			<string>V0.0.2 最小浮窗版。用法：先在 设置 → SplitKit 打开「启用插件」并注销；然后把目标 App 切到后台（留在多任务卡片），长按该卡片即可窗口化；也可以长按主屏图标选择「Open in Window」。安装后如遇 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -24,7 +24,25 @@
 			<key>defaults</key>
 			<string>com.splitkit.tweak</string>
 			<key>default</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>窗口保活（保持前台）</string>
+			<key>key</key>
+			<string>KeepAlive</string>
+			<key>defaults</key>
+			<string>com.splitkit.tweak</string>
+			<key>default</key>
 			<true/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>安全</string>
 		</dict>
 		<dict>
 			<key>cell</key>
