@@ -35,3 +35,10 @@ SUBPROJECTS += AevonPrefs
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/aggregate.mk
+
+# 输出文件名约定：com.Aevon_<版本>_iphoneos-arm64e.deb
+# 注意：dpkg 强制要求 control 里的 Package 只能是小写字母/数字/+-.（大写会被
+# dpkg-deb 直接拒绝：package name has characters that aren't lowercase alphanums），
+# 因此 Package 保持 com.aevon，仅把「产物文件名」改成大写 A 的 com.Aevon。
+# 必须写在 include 之后，才能覆盖 deb.mk 里的默认定义。
+_THEOS_DEB_PACKAGE_FILENAME = $(THEOS_PACKAGE_DIR)/com.Aevon_$(_THEOS_INTERNAL_PACKAGE_VERSION)_$(THEOS_PACKAGE_ARCH).deb

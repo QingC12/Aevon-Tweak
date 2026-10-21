@@ -92,7 +92,12 @@ jobs:
 
           PKG="$(grep -i '^Package:' ctl/control | cut -d' ' -f2-)"
           echo "deb Package: $PKG"
-          [ "$PKG" = "com.Aevon" ] || { echo "::error::包名应为 com.Aevon，实际: $PKG"; exit 1; }
+          [ "$PKG" = "com.aevon" ] || { echo "::error::包名应为 com.aevon（dpkg 要求全小写），实际: $PKG"; exit 1; }
+
+          case "$(basename "$DEB")" in
+            com.Aevon_*_iphoneos-arm64e.deb) echo "产物文件名: 符合 com.Aevon_<版本>_iphoneos-arm64e.deb" ;;
+            *) echo "::error::产物文件名应以 com.Aevon_ 开头，实际: $(basename "$DEB")"; exit 1 ;;
+          esac
 
           # 设置 bundle：必须是纯 arm64e，且真的编进了控制器子类（否则点击设置项会闪退）
           PREFS_BIN="$(find . -name 'AevonPrefs' -type f | head -n1)"
