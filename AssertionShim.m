@@ -37,6 +37,18 @@ void SKPrefSetInt(NSString *key, NSInteger value) {
 
 static NSMutableDictionary *_assertionsByPID = nil;
 
+/*
+ * 私有框架 API 的编译期声明（仅让编译器接受选择子，运行时由真实类实现）。
+ * RBSAssertion / RBSTarget / RBSLegacyAttribute 均为私有框架类，无公开头文件，
+ * 全部经 NSClassFromString 动态获取；这些声明挂在 NSObject 上只是为了通过类型检查。
+ */
+@interface NSObject (SKRBSPrivate)
++ (id)targetWithPid:(int)pid;
++ (id)attributeWithReason:(NSInteger)reason flags:(NSUInteger)flags;
+- (id)initWithExplanation:(NSString *)explanation target:(id)target attributes:(NSArray *)attributes;
+- (BOOL)acquireWithError:(NSError **)error;
+@end
+
 @interface SKAssertionShim : NSObject
 /// 为指定 pid 获取保活断言（阻止内核挂起 / 降频），并尝试 task_resume / SIGCONT。
 + (void)acquireKeepAliveForPID:(int)pid;
