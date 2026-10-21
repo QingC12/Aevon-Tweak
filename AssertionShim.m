@@ -128,3 +128,14 @@ static NSMutableDictionary *_assertionsByPID = nil;
 }
 
 @end
+
+/*
+ * dyld 构造函数入口（与垫片同文件，省掉单独的 ctor.m）。
+ * 保持极小：只转发到 Swift 侧的分屏初始化函数，Swift 内部全部有守卫，
+ * 任何失败只记录日志，绝不把异常抛回 dyld。
+ */
+extern void splitkit_initialize(void);
+
+__attribute__((constructor)) static void splitkit_constructor(void) {
+    splitkit_initialize();
+}

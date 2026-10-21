@@ -11,7 +11,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = SplitKit
 
-SplitKit_FILES = ctor.m AssertionShim.m \
+SplitKit_FILES = AssertionShim.m \
     Sources/SplitKit.swift \
     Sources/SKLog.swift \
     Sources/SKPrefs.swift \
