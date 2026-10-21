@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <mach/mach.h>
+#import <signal.h>
 
 /*
  * RBSAssertion 保活垫片（Objective-C，异常安全）。
