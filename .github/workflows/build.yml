@@ -1,88 +1,107 @@
-name: Build SplitKit
+name: build
 
+# 触发策略（防止同一次推送触发两次构建）：
+#   1. 只监听版本 tag（v*），不监听分支推送 —— 以前同时监听 main 与 tags，
+#      推分支 + 推同名 tag 会各跑一次，导致「每次运行两次」。
+#   2. 手动运行请在 Actions 页面点 Run workflow（不产生 Release）。
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# 同一 ref 只保留最新一次构建，排队中的旧任务自动取消
+concurrency:
+  group: build-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  THEOS: ${{ github.workspace }}/../theos
+  # 钉住 roothide/theos 的提交，避免上游改动导致构建突然失败；取不到则回退默认分支
+  THEOS_PIN: cfba89a53a05b4a1b822121158acc3669c20602f
+  SDK_DIR: iPhoneOS16.5.sdk
+
 jobs:
   build:
-    name: 构建 deb (rootless / arm64+arm64e)
+    name: 构建 deb（roothide / arm64e）
     runs-on: macos-15
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装依赖 (make / ldid / xz)
+      - name: 解析版本号
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "构建版本: ${VERSION}"
+          # 版本号统一注入 control 与 Swift 常量，避免多处手改漂移
+          sed -i '' "s/^Version:.*/Version: ${VERSION}/" control
+          sed -i '' "s/^let SKVersion = .*/let SKVersion = \"${VERSION}\"/" Sources/SplitKit.swift
+
+      - name: 安装依赖（gnu-make / Procursus ldid / xz）
         run: |
           brew install make ldid xz
-          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          ldid -h 2>&1 | head -2 || true
 
-      - name: 安装 Theos（含子模块）
+      - name: 获取 Theos（roothide 分支）与 SDK
         run: |
-          git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/theos/theos.git "$HOME/theos"
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-
-      - name: 准备 iPhoneOS SDK
-        run: |
-          # theos 仓库自带非空 sdks/.keep，先移除再克隆 SDK 仓库
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/roothide/theos.git "$THEOS"
+          git -C "$THEOS" fetch --depth 1 origin "$THEOS_PIN" 2>/dev/null \
+            && git -C "$THEOS" checkout -q "$THEOS_PIN" \
+            || echo "钉住的提交不可用，回退默认分支"
           rm -rf "$THEOS/sdks"
           git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
-          if [ ! -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
-            echo "theos/sdks 缺少 iPhoneOS16.5.sdk，回退使用 Xcode 自带 SDK"
-            SDKVER="$(xcrun --sdk iphoneos --show-sdk-version)"
-            ln -s "$(xcrun --sdk iphoneos --show-sdk-path)" "$THEOS/sdks/iPhoneOS${SDKVER}.sdk"
-          fi
-
-      - name: 环境信息
-        run: |
-          xcodebuild -version
-          ls "$THEOS/sdks"
+          test -d "$THEOS/sdks/$SDK_DIR" || { echo "::error::缺少 $SDK_DIR"; exit 1; }
+          echo "THEOS_SHA=$(git -C "$THEOS" rev-parse --short HEAD)"
 
       - name: 构建
         run: |
           make clean
           make package FINALPACKAGE=1
 
-      - name: 校验产物（必须包含 arm64e）
+      - name: 校验产物（纯 arm64e + iphoneos-arm64e + 已签名）
         run: |
           set -e
-          ls -la packages/
+          DEB="$(ls packages/*.deb | head -n1)"
+          echo "deb: $DEB"
           rm -rf verify && mkdir verify && cd verify
-          ar x ../packages/*.deb
-          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar x; else tar xf data.tar.*; fi
-          DYLIB="$(find . -name 'SplitKit.dylib' | head -n1)"
-          echo "dylib: $DYLIB"
-          lipo -info "$DYLIB"
-          lipo -info "$DYLIB" | grep -q arm64e || { echo "::error::产物缺少 arm64e slice"; exit 1; }
-          find . -name "*.dylib" -o -name "*.bundle" | head -20
+          ar x "../$DEB"
+          if [ -f data.tar.lzma ]; then xz -dc data.tar.lzma | tar x;
+          elif [ -f data.tar.gz ]; then tar xzf data.tar.gz;
+          else tar xf data.tar.*; fi
+          for f in control.tar.*; do mkdir -p ctl && tar xf "$f" -C ctl; break; done
 
-      - name: 上传产物
+          DYLIB="$(find . -name '*.dylib' -path '*DynamicLibraries*' | head -n1)"
+          echo "dylib: $DYLIB"
+          ARCHS="$(lipo -archs "$DYLIB")"
+          echo "lipo -archs: $ARCHS"
+          [ "$ARCHS" = "arm64e" ] || { echo "::error::产物必须是纯 arm64e，实际: $ARCHS"; exit 1; }
+          codesign -d "$DYLIB" 2>&1 | head -3 || true
+
+          ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
+          echo "deb Architecture: $ARCH"
+          [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
+
+      - name: 手动运行时留存产物
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
-          name: SplitKit-${{ github.ref_name }}
+          name: deb-${{ env.VERSION }}
           path: packages/*.deb
           if-no-files-found: error
 
-  release:
-    name: 发布 Release（仅 tag 触发）
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: 下载 deb
-        uses: actions/download-artifact@v4
-        with:
-          name: SplitKit-${{ github.ref_name }}
-          path: dist
-
-      - name: 创建 Release
+      - name: 发布 Release（仅 tag）
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          name: SplitKit ${{ github.ref_name }}
-          files: dist/*.deb
+          name: ${{ github.ref_name }}
+          files: packages/*.deb
           generate_release_notes: false

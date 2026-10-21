@@ -3,6 +3,5 @@ packages/
 *.deb
 *.dylib
 *.o
-*.deb
 verify/
 .DS_Store

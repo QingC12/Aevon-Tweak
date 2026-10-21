@@ -12,7 +12,7 @@
 			<key>label</key>
 			<string>SplitKit 分屏</string>
 			<key>footerText</key>
-			<string>V0.0.2 最小浮窗版。用法：先在 设置 → SplitKit 打开「启用插件」并注销；然后把目标 App 切到后台（留在多任务卡片），长按该卡片即可窗口化；也可以长按主屏图标选择「Open in Window」。安装后如遇 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。</string>
+			<string>V0.0.2 最小浮窗版。用法：打开「启用插件」并注销；把目标 App 切到后台（留在多任务卡片）长按该卡片即可窗口化，也可长按主屏图标选「Open in Window」。所有功能只在本页开关，无需终端/SSH。日志文件：/var/mobile/PullOverMF.log（Filza 可见，出错请先看它）。若 SpringBoard 反复异常，插件会自动禁用，可在本页重新开启。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -42,7 +42,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>安全</string>
+			<string>安全与日志</string>
+			<key>footerText</key>
+			<string>「开机崩溃保护」：每次加载写入 loading 状态，SpringBoard 稳定 20 秒后标记 healthy；若下次启动发现上次仍是 loading，则自动禁用插件，阻断崩溃死循环。「写日志文件」关闭后仍保留系统日志（Console.app 可查）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -51,6 +53,18 @@
 			<string>开机崩溃保护</string>
 			<key>key</key>
 			<string>CrashGuard</string>
+			<key>defaults</key>
+			<string>com.splitkit.tweak</string>
+			<key>default</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>写日志文件（/var/mobile/PullOverMF.log）</string>
+			<key>key</key>
+			<string>LogEnabled</string>
 			<key>defaults</key>
 			<string>com.splitkit.tweak</string>
 			<key>default</key>
