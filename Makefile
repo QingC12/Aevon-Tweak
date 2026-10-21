@@ -14,6 +14,7 @@ TWEAK_NAME = Aevon
 Aevon_FILES = AevonAssertionShim.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
+    Sources/AevonCrashCatcher.swift \
     Sources/AevonPrefs.swift \
     Sources/AevonCrashGuard.swift \
     Sources/AevonRuntime.swift \

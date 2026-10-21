@@ -16,30 +16,12 @@ import UIKit
  * - 自定义逻辑全部放在原始实现之后（或按条件短路），保证系统行为不被破坏。
  */
 
-// MARK: - SpringBoard：安装宿主窗口
-
-@objc final class AevonSpringBoardHooks: NSObject {
-    @objc func sk_sb_applicationDidFinishLaunching(_ application: UIApplication) {
-        // 先执行原始实现（SpringBoard 启动流程必须完整走完）
-        AevonRuntime.sendVoid(self, Selector(("sk_sb_applicationDidFinishLaunching:")), application)
-        // 再创建承载窗口
-        AevonHostWindow.ensureInstalled()
-    }
-}
-
-// MARK: - 多任务卡片：长按开窗（SBAppSwitcherPageView / SBFluidSwitcherItemContainer）
+// MARK: - 多任务卡片：长按开窗（SBAppSwitcherPageView）
 
 @objc final class AevonSwitcherCardHooks: NSObject {
     @objc func sk_sbaspv_initWithFrame(_ frame: CGRect) -> Any? {
+        AevonTrace.once("sbaspv", "SBAppSwitcherPageView initWithFrame 首次调用")
         let view = AevonRuntime.sendInitFrame(self, Selector(("sk_sbaspv_initWithFrame:")), frame)
-        if let view = view as? UIView {
-            AevonGestureHandler.shared.attachLongPress(to: view)
-        }
-        return view
-    }
-
-    @objc func sk_sbfsic_initWithFrame(_ frame: CGRect) -> Any? {
-        let view = AevonRuntime.sendInitFrame(self, Selector(("sk_sbfsic_initWithFrame:")), frame)
         if let view = view as? UIView {
             AevonGestureHandler.shared.attachLongPress(to: view)
         }
@@ -53,6 +35,7 @@ import UIKit
     private static let shortcutType = "com.Aevon.openwindow"
 
     @objc func sk_iconview_applicationShortcutItems() -> [Any]? {
+        AevonTrace.once("iconshortcut.items", "SBIconView applicationShortcutItems 首次调用")
         let original = AevonRuntime.sendObject(self, Selector(("sk_iconview_applicationShortcutItems"))) as? [Any]
         guard AevonPrefs.bool("Enabled", default: false) else { return original }
         guard let appID = appBundleID(self) else { return original }
@@ -74,6 +57,7 @@ import UIKit
     @objc func sk_iconview_activateShortcut(_ item: Any,
                                             withBundleIdentifier bundleID: String,
                                             forIconView iconView: Any?) {
+        AevonTrace.once("iconshortcut.activate", "SBIconView activateShortcut 首次调用")
         let type: String? = {
             guard let object = item as? NSObject else { return nil }
             return AevonRuntime.send(object, Selector(("type"))) as? String
@@ -132,6 +116,7 @@ import UIKit
     @objc func sk_fbscene_updateSettings(_ settings: Any,
                                          withTransitionContext ctx: Any?,
                                          completion: Any?) {
+        AevonTrace.once("fbscene.update", "FBScene updateSettings 首次调用")
         var finalSettings: Any = settings
         let identifier = AevonFBSceneHooks.sceneIdentifier(of: self)
 
@@ -158,6 +143,7 @@ import UIKit
 
 @objc final class AevonSceneSettingsHooks: NSObject {
     @objc func sk_uimass_setDeactivationReasons(_ reasons: UInt64) {
+        AevonTrace.once("scenesettings.deactivation", "UIMutableApplicationSceneSettings setDeactivationReasons 首次调用")
         if reasons != 0 {
             let identifier = selfIdentifier()
             if AevonForegroundManager.shared.shouldBlockDeactivation(identifier: identifier) {
@@ -214,6 +200,7 @@ import UIKit
 
 @objc final class AevonSceneLayerManagerHooks: NSObject {
     @objc func sk_fbslm_setLayers(_ layers: Any) {
+        AevonTrace.once("layer.setLayers", "FBSceneLayerManager _setLayers 首次调用")
         AevonRuntime.sendVoid(self, Selector(("sk_fbslm_setLayers:")), layers)
         AevonWindowManager.notifyLayersUpdated()
     }

@@ -86,6 +86,16 @@ jobs:
           [ "$ARCHS" = "arm64e" ] || { echo "::error::产物必须是纯 arm64e，实际: $ARCHS"; exit 1; }
           codesign -d "$DYLIB" 2>&1 | head -3 || true
 
+          # V0.0.6：崩溃捕获必须编入（否则安全模式后拿不到原因）
+          strings "$DYLIB" | grep -q '/var/mobile/Aevon.crash.log' \
+            || { echo "::error::主插件缺少崩溃捕获（Aevon.crash.log 路径不存在）"; exit 1; }
+          # V0.0.6：启动阶段不得有遗留的 SpringBoard 启动 hook
+          if strings "$DYLIB" | grep -q 'sk_sb_applicationDidFinishLaunching'; then
+            echo "::error::仍存在启动期 hook（会造成安全模式）"
+            exit 1
+          fi
+          echo "崩溃捕获: 已编入；启动期 hook: 已移除"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }

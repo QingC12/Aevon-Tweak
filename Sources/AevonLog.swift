@@ -74,3 +74,20 @@ enum AevonLog {
         _ = manager.createFile(atPath: filePath, contents: nil)
     }
 }
+
+/// 关键路径首次触发记录：只写第一次，既能定位「崩溃前最后走到哪一步」，又不会刷屏。
+enum AevonTrace {
+    private static var seen = Set<String>()
+    private static let lock = NSLock()
+
+    static func once(_ key: String, _ message: @autoclosure () -> String) {
+        lock.lock()
+        if seen.contains(key) {
+            lock.unlock()
+            return
+        }
+        seen.insert(key)
+        lock.unlock()
+        AevonLog.info("[触发] \(message())")
+    }
+}

@@ -25,7 +25,6 @@ enum AevonWindowManager {
             AevonLog.warn("[窗口] 宿主窗口不可用，放弃开窗")
             return
         }
-
         // 登记前台保活，唤醒场景
         AevonForegroundManager.shared.add(bundleID: bundleID, sceneID: sceneID)
         AevonSceneHelper.wakeUp(bundleID)
@@ -55,7 +54,7 @@ enum AevonWindowManager {
             windows[bundleID] = windowView
 
             AevonSceneHelper.startKeepAlive(bundleID)
-            if AevonPrefs.bool("KeepAlive", default: true),
+            if AevonPrefs.bool("KeepAlive", default: false),
                let pid = AevonAppInfo.pid(bundleID: bundleID) {
                 AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
             }
