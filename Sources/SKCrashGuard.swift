@@ -5,7 +5,7 @@ import Foundation
 /// 1. 插件加载时把状态置为 `loading`；
 /// 2. SpringBoard 稳定运行 20 秒后把状态置为 `healthy`；
 /// 3. 若本次加载时发现上次状态仍是 `loading`，说明上次加载后 SpringBoard 崩溃了，
-///    立即自动禁用插件（Enabled=NO）并恢复 healthy，从而阻断“崩溃→重启→再崩溃”的死循环。
+///    立即自动禁用插件（Enabled=NO）并恢复 healthy，从而阻断「崩溃→重启→再崩溃」的死循环。
 ///
 /// 用户可在 设置 → SplitKit 中重新打开开关。
 enum SKCrashGuard {
@@ -20,7 +20,7 @@ enum SKCrashGuard {
     }
 
     private static var current: State {
-        let raw = CFPreferencesCopyAppValue(stateKey as CFString, SKPrefs.domain) as? NSNumber
+        let raw = SKPrefs.rawValue(stateKey) as? NSNumber
         return State(rawValue: raw?.intValue ?? 0) ?? .unknown
     }
 

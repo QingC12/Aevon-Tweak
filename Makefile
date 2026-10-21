@@ -6,9 +6,9 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = SplitKit
 
-SplitKit_FILES = ctor.m Sources/SplitKit.swift Sources/SKLog.swift Sources/SKPrefs.swift Sources/SKCrashGuard.swift
+SplitKit_FILES = ctor.m AssertionShim.m Sources/SplitKit.swift Sources/SKLog.swift Sources/SKPrefs.swift Sources/SKCrashGuard.swift
 SplitKit_CFLAGS = -fobjc-arc
-SplitKit_FRAMEWORKS = UIKit Foundation CoreGraphics
+SplitKit_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
 
 SUBPROJECTS += splitkitprefs
 
