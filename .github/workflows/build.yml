@@ -29,7 +29,8 @@ jobs:
 
       - name: 准备 iPhoneOS SDK
         run: |
-          mkdir -p "$THEOS/sdks"
+          # theos 仓库自带非空 sdks/.keep，先移除再克隆 SDK 仓库
+          rm -rf "$THEOS/sdks"
           git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
           if [ ! -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
             echo "theos/sdks 缺少 iPhoneOS16.5.sdk，回退使用 Xcode 自带 SDK"
