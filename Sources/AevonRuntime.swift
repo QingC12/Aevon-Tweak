@@ -21,6 +21,12 @@ enum AevonRuntime {
         return ivarObject(object, name) as? String
     }
 
+    /// 对象真实类名（用于日志诊断，取不到时返回 nil）。
+    static func className(_ object: AnyObject) -> String? {
+        guard let cls = object_getClass(object) else { return nil }
+        return NSStringFromClass(cls)
+    }
+
     // MARK: - 消息发送（非持有返回，适用于 getter / void 方法）
 
     /// 调用无参方法（getter）。返回非持有对象引用。

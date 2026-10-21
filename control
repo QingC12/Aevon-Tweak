@@ -1,8 +1,8 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.7
+Version: 0.0.8
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.7 悬浮球版：移除了「主屏图标长按」入口（该入口会触发 SpringBoard 崩溃），改为桌面悬浮球 + 应用选择面板，启动阶段完全没有任何系统 hook。含开机崩溃保护与崩溃日志。默认关闭，请在 设置 → Aevon 开启。
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.8：悬浮球入口不变，应用列表改为多来源枚举（SBApplicationController / SBIconModel / LSApplicationWorkspace），修掉「面板里 0 个 App」。启动阶段依然零 hook。含开机崩溃保护与崩溃日志。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks
