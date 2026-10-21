@@ -206,7 +206,7 @@ static NSArray *AevonBuildFallback(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
-                              @"V0.0.8 悬浮球版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
+                              @"V0.0.9 悬浮球版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
                               @"用法：打开「启用插件」和「显示悬浮球」→ 注销 → 桌面右侧出现蓝色圆球 → 点圆球选 App。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];

@@ -27,6 +27,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonAppInfo.swift \
     Sources/AevonAppLayout.swift \
     Sources/AevonSceneHelper.swift \
+    Sources/AevonSceneHost.swift \
     Sources/AevonHostWindow.swift \
     Sources/AevonWindowView.swift \
     Sources/AevonWindowManager.swift \

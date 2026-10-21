@@ -1,30 +1,36 @@
 import UIKit
 
-/// 单个 App 的浮窗外壳：标题栏（拖动 + 关闭）+ 内容（App 场景）+ 缩放手柄。
+/// 单个 App 的浮窗外壳：标题栏（拖动）+ 内容（App 场景，整体缩放）+ 缩放手柄。
+///
+/// V0.0.9 改动：App 场景按整屏尺寸渲染，浮窗只对承载容器做**等比缩放**。
+/// 以前直接把容器铺满内容区，等于要求系统把整屏画面塞进一个小框，
+/// 结果是外壳有、里面空。
 final class AevonWindowView: UIView {
     let bundleID: String
+    private let sceneHost: AevonSceneHost
 
     private let titleBarHeight: CGFloat = 40
-    private let contentView: UIView
+    private let contentClip = UIView()
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
     private let resizeHandle = UIView()
+    private let hintLabel = UILabel()
 
     private var moveOriginFrame: CGRect = .zero
     private var moveOriginPoint: CGPoint = .zero
     private var resizeOriginFrame: CGRect = .zero
     private var resizeOriginPoint: CGPoint = .zero
 
-    init(contentView: UIView, bundleID: String, title: String) {
+    init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
-        self.contentView = contentView
+        self.sceneHost = sceneHost
         super.init(frame: CGRect.zero)
 
         let screen = UIScreen.main.bounds
         let width = screen.width * 0.78
         let height = screen.height * 0.60
         frame = CGRect(x: (screen.width - width) / 2.0,
-                       y: screen.height * 0.15,
+                       y: screen.height * 0.12,
                        width: width,
                        height: height)
 
@@ -38,7 +44,7 @@ final class AevonWindowView: UIView {
         titleBar.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
         addSubview(titleBar)
 
-        titleLabel.frame = CGRect(x: 12, y: 0, width: width - 80, height: titleBarHeight)
+        titleLabel.frame = CGRect(x: 12, y: 0, width: width - 60, height: titleBarHeight)
         titleLabel.text = title
         titleLabel.textColor = .white
         titleLabel.font = UIFont.systemFont(ofSize: 15, weight: .semibold)
@@ -52,10 +58,30 @@ final class AevonWindowView: UIView {
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         titleBar.addSubview(closeButton)
 
-        // 内容（App 场景）
-        contentView.frame = CGRect(x: 0, y: titleBarHeight, width: width, height: height - titleBarHeight)
-        contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        addSubview(contentView)
+        // 内容区（裁剪 + 等比缩放）
+        contentClip.frame = CGRect(x: 0, y: titleBarHeight, width: width, height: height - titleBarHeight)
+        contentClip.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        contentClip.clipsToBounds = true
+        contentClip.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
+        addSubview(contentClip)
+
+        contentClip.addSubview(sceneHost.container)
+
+        // 等待画面提示（拿到第一帧后自动消失）
+        hintLabel.frame = contentClip.bounds
+        hintLabel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hintLabel.numberOfLines = 0
+        hintLabel.textAlignment = .center
+        hintLabel.textColor = UIColor(white: 0.85, alpha: 1.0)
+        hintLabel.font = UIFont.systemFont(ofSize: 13)
+        hintLabel.text = "正在等待 App 画面…\n若一直停在这里，请把 /var/mobile/Aevon.log 发给开发者"
+        contentClip.addSubview(hintLabel)
+
+        sceneHost.onFirstContent = { [weak self] in
+            DispatchQueue.main.async {
+                self?.hintLabel.isHidden = true
+            }
+        }
 
         // 缩放手柄
         let handleSize: CGFloat = 28
@@ -74,11 +100,36 @@ final class AevonWindowView: UIView {
         let resize = UIPanGestureRecognizer(target: self, action: #selector(handleResize(_:)))
         resizeHandle.addGestureRecognizer(resize)
 
-        AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)")
+        AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)（内容按屏幕等比缩放）")
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        contentClip.frame = CGRect(x: 0,
+                                   y: titleBarHeight,
+                                   width: bounds.width,
+                                   height: max(0, bounds.height - titleBarHeight))
+        applyContentScale()
+    }
+
+    /// 把整屏尺寸的容器等比缩放并居中放进内容区。
+    private func applyContentScale() {
+        let screen = UIScreen.main.bounds.size
+        guard screen.width > 0, screen.height > 0, contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
+
+        let scale = min(contentClip.bounds.width / screen.width,
+                        contentClip.bounds.height / screen.height)
+        let container = sceneHost.container
+
+        container.layer.anchorPoint = .zero
+        container.transform = CGAffineTransform(scaleX: scale, y: scale)
+        container.bounds = CGRect(origin: .zero, size: screen)
+        container.layer.position = CGPoint(x: (contentClip.bounds.width - screen.width * scale) / 2.0,
+                                           y: (contentClip.bounds.height - screen.height * scale) / 2.0)
     }
 
     // MARK: - 拖动
@@ -136,7 +187,11 @@ final class AevonWindowView: UIView {
     }
 
     func teardown() {
-        contentView.removeFromSuperview()
+        // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
+        // NSInternalInconsistencyException: Must be invalidated before deallocating
+        sceneHost.onFirstContent = nil
+        sceneHost.invalidate()
+        sceneHost.container.removeFromSuperview()
         removeFromSuperview()
     }
 }

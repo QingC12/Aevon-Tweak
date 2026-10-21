@@ -42,17 +42,28 @@ enum AevonWindowManager {
             }
 
             AevonSceneHelper.setForeground(scene, true)
-            guard let content = AevonSceneHelper.hostingView(for: scene) else {
-                AevonLog.warn("[窗口] 无法创建场景承载视图，放弃开窗")
+
+            // 关键：`launchApplicationWithIdentifier:suspended:` 拉起的进程是挂起态，
+            // 挂起的进程不会渲染，图层列表一直是空的 —— 必须显式恢复执行。
+            if let pid = AevonAppInfo.pid(bundleID: bundleID) {
+                AevonAssertionShim.resumePID(Int32(pid))
+                AevonLog.info("[窗口] 已恢复 \(bundleID) 进程执行（pid=\(pid)）")
+            }
+
+            let sceneIdentifier = (AevonRuntime.send(scene, Selector(("identifier"))) as? String) ?? sceneID ?? ""
+            guard let sceneHost = AevonSceneHost(scene: scene, sceneID: sceneIdentifier, bundleID: bundleID) else {
+                AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
                 AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: sceneID)
                 return
             }
 
             let title = AevonAppInfo.displayName(bundleID: bundleID) ?? bundleID
-            let windowView = AevonWindowView(contentView: content, bundleID: bundleID, title: title)
+            let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             windows[bundleID] = windowView
 
+            // 图层异步到达：容器自己轮询同步
+            sceneHost.startSyncing()
             AevonSceneHelper.startKeepAlive(bundleID)
             if AevonPrefs.bool("KeepAlive", default: false),
                let pid = AevonAppInfo.pid(bundleID: bundleID) {

@@ -1,16 +1,14 @@
 name: build
 
-# 触发策略（防止同一次推送触发两次构建）：
-#   1. 只监听版本 tag（v*），不监听分支推送 —— 以前同时监听 main 与 tags，
-#      推分支 + 推同名 tag 会各跑一次，导致「每次运行两次」。
-#   2. 手动运行请在 Actions 页面点 Run workflow（不产生 Release）。
+# 触发策略：
+#   只保留手动触发（Actions 页面 Run workflow，或 API dispatch）。
+#   V0.0.9 起不再监听 tag、不再发布 Release —— 构建产物只作为 artifact 上传，
+#   由开发者下载后本地交付。
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 # 同一 ref 只保留最新一次构建，排队中的旧任务自动取消
 concurrency:
@@ -31,18 +29,14 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 解析版本号
+      - name: 读取版本号
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.0.0-$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          fi
+          VERSION="$(grep -i '^Version:' control | awk '{print $2}')"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "构建版本: ${VERSION}"
-          # 版本号统一注入 control 与 Swift 常量，避免多处手改漂移
-          sed -i '' "s/^Version:.*/Version: ${VERSION}/" control
+          # 版本号以 control 为唯一来源，同步写进 Swift 常量，避免多处漂移
           sed -i '' "s/^let AevonVersion = .*/let AevonVersion = \"${VERSION}\"/" Sources/Aevon.swift
+          grep -n 'let AevonVersion' Sources/Aevon.swift
 
       - name: 安装依赖（gnu-make / Procursus ldid / xz）
         run: |
@@ -109,6 +103,15 @@ jobs:
             || { echo "::error::主插件缺少拉起 App 的调用"; exit 1; }
           echo "入口校验: 悬浮球 + 应用选择面板 已编入；图标长按 hook 已移除"
 
+          # V0.0.9：画面承载必须走 AevonSceneHost（异步图层同步 + 释放前 invalidate）
+          strings "$DYLIB" | grep -q 'AevonSceneHost' \
+            || { echo "::error::主插件缺少场景承载器（AevonSceneHost）"; exit 1; }
+          strings "$DYLIB" | grep -q '_createHostViewForLayer:' \
+            || { echo "::error::主插件缺少图层宿主视图创建逻辑"; exit 1; }
+          strings "$DYLIB" | grep -q '_UISceneLayerHostContainerView' \
+            || { echo "::error::主插件缺少 _UISceneLayerHostContainerView"; exit 1; }
+          echo "画面承载: AevonSceneHost + 图层同步 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -154,18 +157,17 @@ jobs:
           done
           echo "图标: icon.png / icon@2x.png / icon@3x.png 均存在"
 
-      - name: 手动运行时留存产物
-        if: github.ref_type != 'tag'
+      # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
+      - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4
         with:
-          name: deb-${{ env.VERSION }}
+          name: Aevon-deb
           path: packages/*.deb
           if-no-files-found: error
 
-      - name: 发布 Release（仅 tag）
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}
-          files: packages/*.deb
-          generate_release_notes: false
+      - name: 输出产物信息到日志
+        run: |
+          DEB="$(ls packages/*.deb | head -n1)"
+          echo "产物: $(basename "$DEB")"
+          echo "大小: $(wc -c < "$DEB") 字节"
+          echo "MD5: $(md5 -q "$DEB")"

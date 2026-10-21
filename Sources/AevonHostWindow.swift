@@ -45,6 +45,26 @@ enum AevonHostWindow {
 
     static var hostView: UIView? { window }
 
+    /// 外部图层（键盘、系统浮层）专用窗口：层级最高、完全透明、不接管触摸。
+    /// 这类宿主视图不能嵌进浮窗里，只能单独挂一个窗口，否则不显示。
+    static func makeOverlayWindow() -> UIWindow? {
+        guard let scene = firstWindowScene() else {
+            AevonLog.warn("[窗口] 创建外部图层窗口失败：没有可用的前台场景")
+            return nil
+        }
+        let overlay = AevonPassthroughWindow(windowScene: scene)
+        overlay.frame = UIScreen.main.bounds
+        overlay.backgroundColor = .clear
+        overlay.windowLevel = UIWindow.Level.alert + 1000
+
+        let root = UIViewController()
+        root.view.backgroundColor = .clear
+        root.view.isUserInteractionEnabled = false
+        overlay.rootViewController = root
+        overlay.isHidden = false
+        return overlay
+    }
+
     /// 只挑「当前确实在前台/非激活」的窗口场景，优先主屏。
     static func firstWindowScene() -> UIWindowScene? {
         var active: [UIWindowScene] = []

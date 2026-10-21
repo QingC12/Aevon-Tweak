@@ -56,6 +56,8 @@ static NSMutableDictionary *_assertionsByPID = nil;
 + (void)acquireKeepAliveForPID:(int)pid;
 /// 释放指定 pid 的保活断言。
 + (void)releaseKeepAliveForPID:(int)pid;
+/// 仅恢复进程执行（不取断言）：suspended 拉起的 App 必须恢复才会渲染画面。
++ (void)resumePID:(int)pid;
 @end
 
 @implementation AevonAssertionShim
@@ -66,9 +68,29 @@ static NSMutableDictionary *_assertionsByPID = nil;
     }
 }
 
++ (void)resumePID:(int)pid {
+    if (pid <= 0) return;
+    @try {
+        mach_port_t task = MACH_PORT_NULL;
+        kern_return_t kr = task_for_pid(mach_task_self(), pid, &task);
+        if (kr == KERN_SUCCESS && task != MACH_PORT_NULL) {
+            task_resume(task);
+            mach_port_deallocate(mach_task_self(), task);
+        } else {
+            kill(pid, SIGCONT);
+        }
+    } @catch (NSException *exception) {
+        // 恢复失败不影响主流程
+    }
+}
+
 + (void)acquireKeepAliveForPID:(int)pid {
     @try {
         if (pid <= 0) return;
+
+        @synchronized (self) {
+            if (_assertionsByPID[@(pid)] != nil) return;
+        }
 
         Class targetClass = NSClassFromString(@"RBSTarget");
         Class attributeClass = NSClassFromString(@"RBSLegacyAttribute");
@@ -90,21 +112,21 @@ static NSMutableDictionary *_assertionsByPID = nil;
         if (!assertion) return;
 
         NSError *error = nil;
-        if (![assertion acquireWithError:&error]) return;
+        if (![assertion acquireWithError:&error]) {
+            // 必须 invalidate 后再释放：否则 autorelease pool 回收时 dealloc 会抛
+            // NSInternalInconsistencyException: Must be invalidated before deallocating
+            if ([assertion respondsToSelector:@selector(invalidate)]) {
+                [assertion invalidate];
+            }
+            return;
+        }
 
         @synchronized (self) {
             _assertionsByPID[@(pid)] = assertion;
         }
 
         // 进程可能已被内核挂起：立即恢复执行
-        mach_port_t task = MACH_PORT_NULL;
-        kern_return_t kr = task_for_pid(mach_task_self(), pid, &task);
-        if (kr == KERN_SUCCESS && task != MACH_PORT_NULL) {
-            task_resume(task);
-            mach_port_deallocate(mach_task_self(), task);
-        } else {
-            kill(pid, SIGCONT);
-        }
+        [self resumePID:pid];
     } @catch (NSException *exception) {
         // 保活是尽力而为：任何失败静默忽略
     }

@@ -103,50 +103,6 @@ enum AevonSceneHelper {
         return nil
     }
 
-    // MARK: - 场景承载视图
-
-    /// 用 _UISceneLayerHostContainerView 承载场景（iOS 15–26）。
-    static func hostingView(for scene: AnyObject) -> UIView? {
-        guard let allocated = AevonRuntime.allocate("_UISceneLayerHostContainerView") else {
-            AevonLog.warn("[场景] _UISceneLayerHostContainerView 不存在")
-            return nil
-        }
-
-        let container: AnyObject?
-        if allocated.responds(to: Selector(("initWithScene:debugDescription:"))) {
-            container = AevonRuntime.sendInit(allocated, Selector(("initWithScene:debugDescription:")),
-                                           first: scene, second: "Aevon" as NSString)
-        } else if allocated.responds(to: Selector(("initWithScene:"))) {
-            container = AevonRuntime.sendInit(allocated, Selector(("initWithScene:")), argument: scene)
-        } else {
-            container = nil
-        }
-
-        guard let view = container as? UIView else {
-            AevonLog.warn("[场景] 无法创建 _UISceneLayerHostContainerView")
-            return nil
-        }
-
-        // iOS 15/16：为场景的每个 layer 手动创建 host view
-        if let containerScene = AevonRuntime.send(view, Selector(("scene"))),
-           containerScene.responds(to: Selector(("layerManager"))),
-           let layerManager = AevonRuntime.send(containerScene, Selector(("layerManager"))),
-           layerManager.responds(to: Selector(("layers"))),
-           let layers = AevonRuntime.send(layerManager, Selector(("layers"))) as? [AnyObject] {
-            for layer in layers {
-                if view.responds(to: Selector(("_createHostViewForLayer:"))),
-                   let hostView = AevonRuntime.send(view, Selector(("_createHostViewForLayer:")),
-                                                 argument: layer) as? UIView {
-                    hostView.frame = view.bounds
-                    view.addSubview(hostView)
-                }
-            }
-        }
-
-        view.frame = UIScreen.main.bounds
-        return view
-    }
-
     // MARK: - 场景前台控制
 
     static func setForeground(_ scene: AnyObject, _ foreground: Bool) {
