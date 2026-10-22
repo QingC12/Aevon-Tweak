@@ -124,6 +124,15 @@ jobs:
           fi
           echo "画面承载: presenter 路径已编入；旧容器/旧兜底已清除"
 
+          # V0.0.14：真分屏 —— 吸附几何、左右分屏流程、已开窗口条必须都在
+          strings "$DYLIB" | grep -q 'AevonSnap' \
+            || { echo "::error::主插件缺少吸附几何（AevonSnap）"; exit 1; }
+          strings "$DYLIB" | grep -q '左右分屏已选定右侧' \
+            || { echo "::error::面板缺少左右分屏的第二次选择流程"; exit 1; }
+          strings "$DYLIB" | grep -q '吸附到' \
+            || { echo "::error::缺少吸附落地日志（snap(to:) 未编入）"; exit 1; }
+          echo "分屏校验: 吸附几何 + 左右分屏流程 + 已开窗口条 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -161,6 +170,9 @@ jobs:
           # 悬浮球开关必须在 Root.plist 里（否则入口关不掉/开不了）
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'BubbleEnabled' \
             || { echo "::error::Root.plist 缺少 BubbleEnabled 开关"; exit 1; }
+          # V0.0.14 新增：吸附开关必须在 Root.plist 里
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'SnapEnabled' \
+            || { echo "::error::Root.plist 缺少 SnapEnabled（边缘吸附）开关"; exit 1; }
 
           # 图标三档必须在 bundle 根目录
           ICON_DIR="$(dirname "$PREFS_BIN")"

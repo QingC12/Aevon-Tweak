@@ -1,8 +1,8 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.13
+Version: 0.0.14
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.13：浮窗内的 App 现在可以直接触摸操作（可在设置里关闭）；窗口大小与位置按 App 记忆；双击标题栏快速放大/缩小；触摸自动置顶。画面比例仍锁定屏幕比例，缩放流畅。入口为悬浮球，启动阶段零 hook。默认关闭，请在 设置 → Aevon 开启。
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.14：真分屏 —— 面板新增「单窗 / 左右分屏」，连选两个 App 自动并排；拖动标题栏到屏幕左右边缘自动吸附成半屏，拖到顶部放大；面板顶部列出已开窗口，点名称置顶、✕ 关闭；应用列表按拼音首字母分组并带右侧索引条。画面比例仍锁定屏幕比例，缩放流畅、可直接触摸操作。入口为悬浮球，启动阶段零 hook。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks

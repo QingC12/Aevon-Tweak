@@ -8,6 +8,8 @@ import UIKit
 ///          抬手那一下才提交真实 frame，并且关掉手势期间的圆角裁剪（避免离屏合成）。
 /// V0.0.13：可用性 —— ①窗口大小/位置按 App 记住，下次开窗还原；
 ///          ②双击标题栏在「小窗 / 大窗」两档之间切换；③触摸时把窗口提到最前（多窗重叠时）。
+/// V0.0.14：分屏 —— ①支持以吸附槽位（左半屏 / 右半屏 / 顶部放大）创建；
+///          ②拖动标题栏到屏幕边缘松手自动吸附；③对外暴露 `snap(to:)` 供分屏流程调用。
 final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
@@ -45,7 +47,10 @@ final class AevonWindowView: UIView {
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
 
-    init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
+    /// 当前吸附槽位（自由位置 / 左半屏 / 右半屏 / 顶部放大）
+    private var currentSlot: AevonSnapSlot = .free
+
+    init(sceneHost: AevonSceneHost, bundleID: String, title: String, slot: AevonSnapSlot = .free) {
         self.bundleID = bundleID
         self.sceneHost = sceneHost
         super.init(frame: CGRect.zero)
@@ -61,8 +66,20 @@ final class AevonWindowView: UIView {
                                   y: max(60, screen.height * 0.10),
                                   width: defaultContentWidth,
                                   height: defaultContentWidth / aspect + AevonWindowView.titleBarHeightValue)
-        // 恢复这个 App 上次的窗口大小与位置
-        let restored = AevonWindowView.rememberedFrame(bundleID: bundleID, fallback: defaultFrame)
+
+        // 分屏时用吸附槽位算位置，否则恢复这个 App 上次的窗口大小与位置
+        var sizeSource = "默认尺寸"
+        let restored: CGRect
+        if slot != .free {
+            restored = AevonSnap.frame(for: slot)
+            currentSlot = slot
+            sizeSource = "吸附\(AevonSnap.describe(slot))"
+        } else {
+            let memorized = AevonWindowView.rememberedFrame(bundleID: bundleID, fallback: defaultFrame)
+            restored = memorized
+            if memorized != defaultFrame { sizeSource = "已恢复上次尺寸" }
+        }
+
         let width = restored.width
         let contentHeight = restored.height - titleBarHeight
         frame = restored
@@ -148,7 +165,7 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（比例锁定屏幕 \(String(format: "%.3f", aspect))，"
             + "内容 \(Int(width))x\(Int(contentHeight))，"
-            + "\(restored == defaultFrame ? "默认尺寸" : "已恢复上次尺寸")）")
+            + "\(sizeSource)）")
     }
 
     required init?(coder: NSCoder) {
@@ -232,6 +249,13 @@ final class AevonWindowView: UIView {
             // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
             self.center = center
         case .ended, .cancelled, .failed:
+            // 松手时若贴着屏幕边缘，就吸附成左半屏 / 右半屏 / 顶部放大。
+            if gesture.state == .ended,
+               AevonPrefs.bool("SnapEnabled", default: true),
+               let slot = AevonSnap.slot(for: frame) {
+                snap(to: slot)
+                return
+            }
             persistFrame()
         default:
             break
@@ -340,6 +364,41 @@ final class AevonWindowView: UIView {
         setNeedsLayout()
         persistFrame()
         AevonLog.info("[窗口] 双击切换尺寸 \(Int(target))x\(Int(targetHeight))")
+    }
+
+    // MARK: - 吸附
+
+    /// 吸附到指定槽位。分屏流程（选两个 App 自动并排）和拖动吸附都走这里。
+    func snap(to slot: AevonSnapSlot) {
+        guard slot != .free, !isLiveResizing else { return }
+        let target = AevonSnap.frame(for: slot)
+        guard target.width >= AevonSnap.minContentWidth, target.height > titleBarHeight else { return }
+
+        // 目标与当前几乎一致就不折腾了（拖动松手时已经贴在位置上的情况）
+        if abs(target.minX - frame.minX) < 0.5,
+           abs(target.minY - frame.minY) < 0.5,
+           abs(target.width - frame.width) < 0.5 {
+            currentSlot = slot
+            persistFrame()
+            return
+        }
+
+        currentSlot = slot
+        UIView.animate(withDuration: 0.22,
+                       delay: 0,
+                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
+            self.frame = target
+        } completion: { _ in
+            self.setNeedsLayout()
+            self.persistFrame()
+        }
+        AevonLog.info("[窗口] 吸附到\(AevonSnap.describe(slot)) \(Int(target.width))x\(Int(target.height))（内容 \(Int(target.width))x\(Int(target.height - titleBarHeight))）")
+    }
+
+    /// 把窗口提到最前（面板里的「已开窗口」点名称时用）。
+    func bringToFront() {
+        guard let superview = superview else { return }
+        superview.bringSubviewToFront(self)
     }
 
     // MARK: - 窗口尺寸记忆
