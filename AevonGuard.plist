@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  AevonGuard 是极小的纯 ObjC dylib（几 KB），必须注入到**前台 App 进程**，
+	  才能在 App 内部把手势掐断（SpringBoard 侧吞事件挡不住 App 自己的横向手势）。
+
+	  Mode = Any：不筛选进程。构造函数第一步就判断：
+	    · 进程名是 SpringBoard → 直接返回（由 Aevon.dylib 负责）；
+	    · 没有 UIApplication 类（守护进程 / launchd / backboardd）→ 直接返回；
+	  所以除 GUI App 外不会有任何行为。
+	-->
+	<key>Filter</key>
+	<dict>
+		<key>Mode</key>
+		<string>Any</string>
+	</dict>
+</dict>
+</plist>

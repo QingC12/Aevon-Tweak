@@ -62,6 +62,8 @@ static NSString *const AevonPrefsDomain = @"com.Aevon";
 #define AEVON_CELL_SWITCH 6
 /* PSSliderCell 的 cell 类型值（V0.0.25 新增：圆盘触发区域的位置 / 宽度 / 高度） */
 #define AEVON_CELL_SLIDER 5
+/* PSButtonCell 的 cell 类型值（V0.0.27 新增：「编辑圆盘 App」入口按钮） */
+#define AEVON_CELL_BUTTON 13
 
 #pragma mark - _specifiers 读写（runtime，不依赖 ivar 声明）
 
@@ -245,6 +247,17 @@ static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle) {
             if (maxValue <= minValue) maxValue = minValue + 1;
             id spec = AevonNewSlider(label, target, key, minValue, maxValue, defaultValue);
             if (spec != nil) [result addObject:spec];
+        } else if ([cell isEqualToString:@"PSButtonCell"]) {
+            /* V0.0.27：按钮式入口（用来推入自建的「圆盘 App」编辑器） */
+            NSString *actionName = item[@"action"];
+            SEL action = actionName.length > 0 ? NSSelectorFromString(actionName) : NULL;
+            id spec = AevonNewSpecifier(label, target, action, nil, AEVON_CELL_BUTTON);
+            if (spec != nil) {
+                if (actionName.length > 0) {
+                    AevonSetProperty(spec, actionName, @"buttonAction");
+                }
+                [result addObject:spec];
+            }
         }
     }
     return result.count > 0 ? result : nil;
@@ -264,18 +277,41 @@ static NSArray *AevonBuildFallback(id target) {
     if (s1 != nil) [result addObject:s1];
     id s1a = AevonNewSwitch(@"右侧边缘左滑呼出圆盘（主入口）", target, @"EdgeGestureEnabled", @YES);
     if (s1a != nil) [result addObject:s1a];
-    id s1b = AevonNewSwitch(@"显示桌面悬浮球（备用入口）", target, @"BubbleEnabled", @NO);
-    if (s1b != nil) [result addObject:s1b];
 
-    id groupZone = AevonNewGroup(@"圆盘触发区域",
-                                 @"只有贴着右边缘的这块区域里的左滑 / 长按才能呼出圆盘。"
-                                 @"位置 = 区域中心在屏幕高度的百分比（75 与圆盘圆心对齐；贴底部用 95~98，贴顶部用 2~5）。"
-                                 @"宽度 = 从右边缘往里多少 pt（越小越不容易误触）。高度 = 上下多高。改完立即生效。");
-    if (groupZone != nil) [result addObject:groupZone];
+    /* V0.0.27：圆盘 App 编辑入口（悬浮球已删除，不再有 BubbleEnabled） */
+    id groupRing = AevonNewGroup(@"圆盘 App",
+                                 @"圆盘里放哪些 App、按什么顺序排，都在这里改。"
+                                 @"进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入。");
+    if (groupRing != nil) [result addObject:groupRing];
+    id ringButton = AevonNewSpecifier(@"编辑圆盘 App（添加 / 排序）",
+                                      target,
+                                      NSSelectorFromString(@"aevonOpenRingEditor"),
+                                      nil,
+                                      AEVON_CELL_BUTTON);
+    if (ringButton != nil) {
+        AevonSetProperty(ringButton, @"aevonOpenRingEditor", @"buttonAction");
+        [result addObject:ringButton];
+    }
+
+    id groupZone1 = AevonNewGroup(@"① 触发位置（纵向）",
+                                  @"热区中心在屏幕高度的百分比。75 = 与圆盘圆心对齐（默认）；"
+                                  @"想贴着屏幕底部就拉到 95~98，贴着顶部就拉到 2~5。"
+                                  @"拖动时屏幕右侧那条提示条会实时上下移动，松手即生效。");
+    if (groupZone1 != nil) [result addObject:groupZone1];
     id z1 = AevonNewSlider(@"触发位置（屏幕高度 %）", target, @"RingTriggerY", 0, 100, 75);
     if (z1 != nil) [result addObject:z1];
+
+    id groupZone2 = AevonNewGroup(@"② 触发宽度（横向）",
+                                  @"热区从屏幕右边缘往左有多宽（pt）。数值越小越不容易误触，但也越难划出；"
+                                  @"默认 48，建议 30~60。拖动时提示条会实时变粗 / 变细。");
+    if (groupZone2 != nil) [result addObject:groupZone2];
     id z2 = AevonNewSlider(@"触发宽度（pt）", target, @"RingTriggerWidth", 18, 140, 48);
     if (z2 != nil) [result addObject:z2];
+
+    id groupZone3 = AevonNewGroup(@"③ 触发高度（纵向）",
+                                  @"热区上下有多高（pt）。数值越大，能呼出圆盘的纵向范围越大；"
+                                  @"默认 320（约占屏幕 1/3），建议 240~420。拖动时提示条会实时变长 / 变短。");
+    if (groupZone3 != nil) [result addObject:groupZone3];
     id z3 = AevonNewSlider(@"触发高度（pt）", target, @"RingTriggerHeight", 80, 900, 320);
     if (z3 != nil) [result addObject:z3];
 
@@ -385,6 +421,86 @@ static NSArray *AevonBuildFallback(id target) {
         }
     } @catch (NSException *exception) {
     }
+}
+
+#pragma mark - V0.0.27：滑杆拖动时实时生效
+
+static char AevonSliderTagKey;
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self aevonHookSliders];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self aevonHookSliders];
+}
+
+/* 递归找所有 UISlider（PSSliderCell 内部的控件），每个只挂一次 valueChanged */
+- (void)aevonHookSliders {
+    [self aevonWalkSliders:self.view depth:0];
+}
+
+- (void)aevonWalkSliders:(UIView *)view depth:(NSInteger)depth {
+    if (view == nil || depth > 16) return;
+    if ([view isKindOfClass:[UISlider class]]) {
+        UISlider *slider = (UISlider *)view;
+        if (objc_getAssociatedObject(slider, &AevonSliderTagKey) == nil) {
+            objc_setAssociatedObject(slider, &AevonSliderTagKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [slider addTarget:self
+                       action:@selector(aevonSliderValueChanged:)
+             forControlEvents:UIControlEventValueChanged];
+        }
+        return;
+    }
+    for (UIView *sub in view.subviews) {
+        [self aevonWalkSliders:sub depth:depth + 1];
+    }
+}
+
+/*
+ * 拖动过程中每一帧：写回偏好 + 广播 com.aevon.prefschanged。
+ * SpringBoard 收到后 synchronize + 比对指纹 + 重排触发条 —— 视觉上就是"跟手"。
+ * PSSliderCell 自己只在某些系统版本上「松手才提交」，所以这里必须自己写。
+ */
+- (void)aevonSliderValueChanged:(UISlider *)slider {
+    NSString *key = nil;
+    UIView *node = slider;
+    while (node != nil && ![node isKindOfClass:[UITableViewCell class]]) {
+        node = node.superview;
+    }
+    if (node != nil && [node respondsToSelector:@selector(specifier)]) {
+        id spec = [node performSelector:@selector(specifier)];
+        if ([spec respondsToSelector:@selector(propertyForKey:)]) {
+            id value = [spec performSelector:@selector(propertyForKey:) withObject:@"key"];
+            if ([value isKindOfClass:[NSString class]]) key = (NSString *)value;
+        }
+    }
+
+    CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
+    if (key.length > 0) {
+        CFPreferencesSetAppValue((__bridge CFStringRef)key,
+                                 (__bridge CFPropertyListRef)@(slider.value),
+                                 domain);
+        CFPreferencesAppSynchronize(domain);
+    }
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.aevon.prefschanged"),
+                                         NULL, NULL, true);
+}
+
+#pragma mark - V0.0.27：圆盘 App 编辑器入口
+
+- (void)aevonOpenRingEditor {
+    Class cls = NSClassFromString(@"AevonRingEditorController");
+    if (cls == Nil) {
+        return;
+    }
+    UIViewController *editor = [[cls alloc] init];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    [self presentViewController:nav animated:YES completion:nil];
 }
 
 @end

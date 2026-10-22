@@ -351,7 +351,7 @@ enum AevonEdgeEntry {
         // V0.0.26：触发区配置实时生效（Darwin 通知 + 0.35 秒轮询兜底）
         AevonEdgeEntry.startTriggerZoneWatch()
         let rootBounds = root.bounds
-        AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 或 长按\(Int(AevonEdgeStripView.holdDuration * 1000))ms）（AevonEdgeTouch AevonTriggerZoneV25）")
+        AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 或 长按\(Int(AevonEdgeStripView.holdDuration * 1000))ms）（AevonEdgeTouch AevonTriggerZoneV25 AevonRingListLiveV27 AevonAppGuardSideV27）")
 
         // 圆盘的默认内容：首次使用时用应用列表预填，保证呼出不是空盘
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -393,8 +393,9 @@ enum AevonEdgeEntry {
             AevonLog.info("[边缘] 已监听设置变更通知（com.aevon.prefschanged）（AevonPrefsLiveV26）")
         }
         guard zoneTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.35, repeats: true) { _ in
+        let timer = Timer(timeInterval: 0.2, repeats: true) { _ in
             AevonPrefs.synchronize()
+            AevonRingStore.invalidateCache()
             checkTriggerZoneChange()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -737,11 +738,9 @@ enum AevonEdgeEntry {
         panel.frame = root.bounds
         root.addSubview(panel)
         picker = panel
-        // 面板全屏覆盖，把备用悬浮球提到最上层，保持「点球收起」的手感
-        AevonBubble.shared.bringBallToFront()
     }
 
-    /// 供悬浮球（备用入口）复用同一套面板。
+    /// 供其它入口复用同一套面板。
     static func hostRootView() -> UIView? {
         return AevonEntryHost.activeRoot
     }
@@ -781,6 +780,8 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
                                       _ userInfo: CFDictionary?) {
     AevonPrefs.synchronize()
     DispatchQueue.main.async {
+        // 设置里可能刚改过圆盘 App 列表 / 顺序，先清缓存再比对热区
+        AevonRingStore.invalidateCache()
         AevonEdgeEntry.checkTriggerZoneChange()
     }
 }

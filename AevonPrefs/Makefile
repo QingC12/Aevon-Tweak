@@ -4,7 +4,8 @@ include $(THEOS)/makefiles/common.mk
 ARCHS = arm64e
 
 BUNDLE_NAME = AevonPrefs
-AevonPrefs_FILES = AevonPrefs.m
+AevonPrefs_FILES = AevonPrefs.m AevonRingEditorController.m
+AevonPrefs_CFLAGS = -fobjc-arc
 AevonPrefs_FRAMEWORKS = UIKit
 AevonPrefs_PRIVATE_FRAMEWORKS = Preferences
 AevonPrefs_INSTALL_PATH = /Library/PreferenceBundles

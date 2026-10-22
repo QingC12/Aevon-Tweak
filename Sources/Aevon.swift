@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 /// Aevon 版本号（与 control 保持一致；CI 会按 tag 覆盖本行）。
-let AevonVersion = "0.0.26"
+let AevonVersion = "0.0.27"
 
 /// dyld 构造函数入口（由 AevonAssertionShim.m 以 C 符号调用）。
 /// 约定：本函数绝不抛出、绝不强制解包失败；任何异常路径只记录日志。
@@ -51,7 +51,7 @@ private func initializeAevon() {
             return
         }
         installExperimentalHooks()
-        AevonLog.info("Aevon \(AevonVersion) 加载完成（悬浮球入口已就绪）")
+        AevonLog.info("Aevon \(AevonVersion) 加载完成（边缘圆盘入口已就绪）")
     }
 }
 

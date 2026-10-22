@@ -40,6 +40,12 @@ enum AevonRingStore {
         AevonLog.info("[圆盘] 已保存 \(out.count) 个 App：\(out.joined(separator: ", "))")
     }
 
+    /// V0.0.27：设置页改完圆盘列表后会广播 com.aevon.prefschanged，
+    /// SpringBoard 这边必须清掉进程内缓存，否则圆盘永远显示旧顺序。
+    static func invalidateCache() {
+        cached = nil
+    }
+
     static func contains(_ bundleID: String) -> Bool {
         return bundleIDs().contains(bundleID)
     }

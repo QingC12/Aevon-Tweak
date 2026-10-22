@@ -1,5 +1,26 @@
 import UIKit
 
+/// 入口窗口的根视图：命中自身时返回 nil，让触摸穿透到下层。
+///
+/// V0.0.27：原 `AevonBubbleRootView`（备用悬浮球）已被删除，这里保留一个等价的
+/// 穿透根视图，入口窗口仍需要一个命中测试可穿透的根视图承载容器。
+final class AevonEntryRootView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event) else { return nil }
+        return hit === self ? nil : hit
+    }
+}
+
+/// 入口窗口的根控制器（只负责给出上面那个穿透视图）。
+final class AevonEntryRootController: UIViewController {
+    override func loadView() {
+        let root = AevonEntryRootView()
+        root.backgroundColor = .clear
+        root.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view = root
+    }
+}
+
 /// 入口窗口（全局唯一）。
 ///
 /// V0.0.18 的结构性调整，依据是 V0.0.17 的真机日志：
@@ -95,7 +116,7 @@ enum AevonEntryHost {
         host.windowLevel = AevonWindowLevels.entry
 
         // 根视图命中自身返回 nil：未命中即穿透到下层
-        let controller = AevonBubbleController()
+        let controller = AevonEntryRootController()
         host.rootViewController = controller
         host.isHidden = false
         // 立刻走一次布局：保证根视图 bounds 不是 0
@@ -138,9 +159,8 @@ enum AevonEntryHost {
         box.frame = host.bounds
         host.addSubview(box)
         host.bringSubviewToFront(box)
-        // 父视图换了，手势条 / 悬浮球按新 bounds 重新落位
+        // 父视图换了，手势条按新 bounds 重新落位
         AevonEdgeEntry.refreshLayoutIfNeeded()
-        AevonBubble.shared.refreshLayoutIfNeeded()
         AevonLog.info("[入口] 容器已搬家 \(from) → \(AevonRuntime.className(host) ?? "\(type(of: host))")（\(Int(host.bounds.width))x\(Int(host.bounds.height))，原因=\(reason)）")
     }
 
@@ -203,7 +223,6 @@ enum AevonEntryHost {
         guard let box = container else { return }
         box.layoutIfNeeded()
         AevonEdgeEntry.refreshLayoutIfNeeded()
-        AevonBubble.shared.refreshLayoutIfNeeded()
         let bounds = box.bounds
         if bounds.width < 1 || bounds.height < 1 {
             AevonLog.warn("[入口] 容器尺寸异常（\(Int(bounds.width))x\(Int(bounds.height))，\(reason)）")
@@ -280,7 +299,6 @@ enum AevonEntryHost {
         // 入口视图按最新配置重新落位（V0.0.25：设置里改了热区位置/宽高要立即生效，
         // 不能等下次注销 —— 这里每 3 秒对一次，代价可以忽略）
         AevonEdgeEntry.refreshLayoutIfNeeded()
-        AevonBubble.shared.refreshLayoutIfNeeded()
 
         // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
         if tickCount <= 60, tickCount % 10 == 0 {

@@ -77,7 +77,8 @@ jobs:
           else tar xf data.tar.*; fi
           for f in control.tar.*; do mkdir -p ctl && tar xf "$f" -C ctl; break; done
 
-          DYLIB="$(find . -name '*.dylib' -path '*DynamicLibraries*' | head -n1)"
+          # V0.0.27：包里现在有两个 dylib（Aevon + AevonGuard），必须精确定位主插件
+          DYLIB="$(find . -name 'Aevon.dylib' -path '*DynamicLibraries*' | head -n1)"
           echo "dylib: $DYLIB"
           ARCHS="$(lipo -archs "$DYLIB")"
           echo "lipo -archs: $ARCHS"
@@ -99,8 +100,11 @@ jobs:
             echo "::error::仍存在 SBIconView 快捷菜单 hook（会造成长按图标注销）"
             exit 1
           fi
-          strings "$DYLIB" | grep -q 'AevonBubble' \
-            || { echo "::error::主插件缺少悬浮球入口（AevonBubble）"; exit 1; }
+          # V0.0.27：悬浮球已彻底移除（用户要求），绝不允许残留
+          if strings "$DYLIB" | grep -q 'AevonBubble'; then
+            echo "::error::主插件里仍残留悬浮球代码（AevonBubble）"
+            exit 1
+          fi
           strings "$DYLIB" | grep -q 'AevonAppPickerView' \
             || { echo "::error::主插件缺少应用选择面板（AevonAppPickerView）"; exit 1; }
           strings "$DYLIB" | grep -q 'launchApplicationWithIdentifier:suspended:' \
@@ -238,6 +242,32 @@ jobs:
             || { echo "::error::逆时针旋转没有「半圈解锁」（缺 AevonRingRotateArmV26）—— 选图标时会误触发旋转"; exit 1; }
           echo "V0.0.26 校验: 触发区实时生效 + 触发条明暗自适应 + 无提示文字 + 旋转半圈解锁 已编入"
 
+          # ── V0.0.27：App 侧触摸拦截（独立小 dylib，注入前台 App 进程）──
+          # 用户 Aevon(20)：SpringBoard 里吞事件挡不住 QQ 左滑删除会话 / 抖音左滑进主页，
+          # 那些是 App 进程收到触摸后自己判定的。所以必须有 AevonGuard。
+          GUARD_DYLIB="$(find . -name 'AevonGuard.dylib' -path '*DynamicLibraries*' | head -n1)"
+          echo "guard dylib: $GUARD_DYLIB"
+          [ -n "$GUARD_DYLIB" ] || { echo "::error::缺少 AevonGuard.dylib（App 侧手势拦截，缺了 App 左滑照样触发）"; exit 1; }
+          GUARD_ARCHS="$(lipo -archs "$GUARD_DYLIB")"
+          echo "AevonGuard lipo -archs: $GUARD_ARCHS"
+          [ "$GUARD_ARCHS" = "arm64e" ] || { echo "::error::AevonGuard 必须是纯 arm64e，实际: $GUARD_ARCHS"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'AevonAppGuardV27' \
+            || { echo "::error::AevonGuard 没有编入热区拦截逻辑（缺 AevonAppGuardV27）"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
+            || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
+          GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
+          echo "guard plist: $GUARD_PLIST"
+          [ -n "$GUARD_PLIST" ] || { echo "::error::缺少 AevonGuard.plist（注入范围）"; exit 1; }
+          plutil -convert xml1 -o - "$GUARD_PLIST" | grep -q '<key>Mode</key>' \
+            || { echo "::error::AevonGuard.plist 缺少 Mode 键（不会注入 App 进程）"; exit 1; }
+          echo "V0.0.27 校验: App 侧触摸拦截 dylib 已编入"
+
+          # V0.0.27：圆盘列表实时同步 + 悬浮球移除
+          strings "$DYLIB" | grep -q 'AevonRingListLiveV27' \
+            || { echo "::error::圆盘列表没有实时同步标记（缺 AevonRingListLiveV27）"; exit 1; }
+          strings "$DYLIB" | grep -q 'invalidateCache' \
+            || { echo "::error::SpringBoard 侧没有清理 RingApps 缓存（设置里改完圆盘不更新）"; exit 1; }
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -265,6 +295,16 @@ jobs:
           strings "$PREFS_BIN" | grep -q '_specifiers' \
             || { echo "::error::设置 bundle 缺少 _specifiers 写回逻辑（设置页会空白）"; exit 1; }
           echo "设置 bundle 控制器类: 已编入；specifier 构建与写回: 已编入"
+          strings "$PREFS_BIN" | grep -q 'AevonRingEditorController' \
+            || { echo "::error::设置 bundle 缺少圆盘 App 编辑器（AevonRingEditorController）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'AevonRingAddController' \
+            || { echo "::error::设置 bundle 缺少圆盘 App 添加页（AevonRingAddController）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'aevonOpenRingEditor' \
+            || { echo "::error::设置页没有「编辑圆盘 App」入口动作（aevonOpenRingEditor）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'moveRowAtIndexPath' \
+            || { echo "::error::圆盘 App 编辑器不支持拖动排序（缺 moveRowAtIndexPath）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'aevonSliderValueChanged' \
+            || { echo "::error::设置页滑杆没有拖动实时回调（缺 aevonSliderValueChanged）"; exit 1; }
 
           # Root.plist 必须随包，且开关项不少于 6 个
           ICON_DIR="$(dirname "$PREFS_BIN")"
@@ -272,9 +312,11 @@ jobs:
           SWITCH_COUNT="$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c 'PSSwitchCell' || true)"
           echo "Root.plist 开关项: $SWITCH_COUNT"
           [ "$SWITCH_COUNT" -ge 6 ] || { echo "::error::Root.plist 开关项不足 6 个（实际 $SWITCH_COUNT）"; exit 1; }
-          # 悬浮球开关必须在 Root.plist 里（否则入口关不掉/开不了）
-          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'BubbleEnabled' \
-            || { echo "::error::Root.plist 缺少 BubbleEnabled 开关"; exit 1; }
+          # V0.0.27：悬浮球已删除，设置里不应再有 BubbleEnabled
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'BubbleEnabled'; then
+            echo "::error::Root.plist 仍残留 BubbleEnabled（悬浮球已移除）"
+            exit 1
+          fi
           # V0.0.14 新增：吸附开关必须在 Root.plist 里
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'SnapEnabled' \
             || { echo "::error::Root.plist 缺少 SnapEnabled（边缘吸附）开关"; exit 1; }

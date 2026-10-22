@@ -9,7 +9,7 @@ THEOS_PACKAGE_SCHEME = roothide
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = Aevon
+TWEAK_NAME = Aevon AevonGuard
 
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
@@ -22,7 +22,6 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonCrashGuard.swift \
     Sources/AevonBootstrap.swift \
     Sources/AevonEntryHost.swift \
-    Sources/AevonBubble.swift \
     Sources/AevonEdgeEntry.swift \
     Sources/AevonRingMenu.swift \
     Sources/AevonRingStore.swift \
@@ -45,6 +44,15 @@ Aevon_FILES = AevonAssertionShim.m \
 
 Aevon_CFLAGS = -fobjc-arc
 Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
+
+# ─────────────────────────────────────────────────────────────────────
+# AevonGuard：只注入前台 App 进程的极小程序（纯 ObjC，不含 Swift）。
+# 职责单一：把圆盘热区内按下的那根手指的整条触摸事件丢弃，
+# 让 App 自己的横向手势（QQ 左滑删除、抖音左滑进主页）不可能被触发。
+# ─────────────────────────────────────────────────────────────────────
+AevonGuard_FILES = Sources/AevonAppGuard.m
+AevonGuard_CFLAGS = -fobjc-arc
+AevonGuard_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation QuartzCore
 
 SUBPROJECTS += AevonPrefs
 

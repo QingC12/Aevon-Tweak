@@ -23,7 +23,7 @@ enum AevonBootstrap {
         _ = center.addObserver(forName: UIApplication.didFinishLaunchingNotification,
                                object: nil,
                                queue: .main) { _ in
-            AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势 / 备用悬浮球）")
+            AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势条 / 圆盘）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                 installEntries(reason: "didFinishLaunching")
             }
@@ -34,10 +34,8 @@ enum AevonBootstrap {
                                object: nil,
                                queue: .main) { _ in
             let wantEdge = AevonPrefs.bool("EdgeGestureEnabled", default: true)
-            let wantBall = AevonPrefs.bool("BubbleEnabled", default: false)
             let missingEdge = wantEdge && !AevonEdgeEntry.isVisible
-            let missingBall = wantBall && !AevonBubble.shared.isVisible
-            guard missingEdge || missingBall || !AevonEntryHost.isInstalled else {
+            guard missingEdge || !AevonEntryHost.isInstalled else {
                 AevonEntryHost.refreshLayout(reason: "didBecomeActive")
                 AevonEntryHost.raise(reason: "回到桌面")
                 diagnose("回到桌面")
@@ -88,7 +86,7 @@ enum AevonBootstrap {
         AevonEntryHost.dumpWindowStack(tag)
     }
 
-    /// 建唯一入口窗口 → 挂手势条 → 挂备用悬浮球（顺序：先条后球，球在最上层便于拖动）
+    /// 建唯一入口窗口 → 挂边缘手势条（V0.0.27：备用悬浮球已全部移除）
     private static func installEntries(reason: String) {
         guard AevonPrefs.bool("Enabled", default: false) else { return }
         guard AevonEntryHost.ensureInstalled(reason: reason) != nil else {
@@ -96,7 +94,6 @@ enum AevonBootstrap {
             return
         }
         AevonEdgeEntry.install(attempt: 1, reason: reason)
-        AevonBubble.shared.install(attempt: 1, reason: reason)
         installSceneHookIfNeeded()
         // V0.0.23：App 前台时视图层收不到边缘触摸（被 App 画面命中测试截走），
         // 补一条不经过命中测试的全局通道。
