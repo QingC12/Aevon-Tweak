@@ -43,7 +43,7 @@ final class AevonSceneHost {
     init?(scene: AnyObject, sceneID: String, bundleID: String) {
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
         // 用同一个 id 会撞车。
-        let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))" as NSString
+        let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))"
         guard let presenter = AevonPresenterCreate(scene, identifier) else {
             AevonLog.warn("[场景] 无法为 \(bundleID) 创建 presenter（uiPresentationManager 不可用）")
             return nil
@@ -65,7 +65,8 @@ final class AevonSceneHost {
         host.isUserInteractionEnabled = false
         host.clipsToBounds = true
         view.frame = host.bounds
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.autoresizingMask = [UIView.AutoresizingMask.flexibleWidth,
+                                 UIView.AutoresizingMask.flexibleHeight]
         view.isUserInteractionEnabled = false
         host.addSubview(view)
         self.container = host
