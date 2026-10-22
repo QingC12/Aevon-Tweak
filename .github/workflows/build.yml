@@ -389,9 +389,10 @@ jobs:
             || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
           # V0.0.29：PSSliderCell 只认 min/max —— 缺了量程退化成 0~1，一拖就写回 0.x，
           # 触发条永远贴在屏幕顶部（用户 Aevon(22) 复现的「自动跑到顶部」根因）
+          # V0.0.30：滑杆在二级 Detail.plist
           for K in '<key>min</key>' '<key>max</key>'; do
-            plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -qF "$K" \
-              || { echo "::error::Root.plist 滑杆缺少 $K（量程会退化成 0~1，触发条会跑到顶部）"; exit 1; }
+            plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -qF "$K" \
+              || { echo "::error::Detail.plist 滑杆缺少 $K（量程会退化成 0~1，触发条会跑到顶部）"; exit 1; }
           done
           strings "$PREFS_BIN" | grep -q 'PSSliderCell' \
             || { echo "::error::设置 bundle 没有滑杆构建逻辑（PSSliderCell）"; exit 1; }
