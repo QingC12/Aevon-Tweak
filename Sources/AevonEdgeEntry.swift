@@ -751,14 +751,15 @@ enum AevonEdgeEntry {
         swallowDeadline = CACurrentMediaTime() + swallowLimit
         // V0.0.29：告诉 AevonGuard（App 进程）圆盘已展开 —— 它会在自己的进程里
         // 把下半屏的触摸整条吞掉，前台 App 在圆盘开着期间彻底收不到下半屏输入。
-        postRingState(CFSTR("com.aevon.ringopen"))
+        postRingState("com.aevon.ringopen")
         if source == "global" {
             AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
         }
     }
 
     /// V0.0.29：跨进程广播圆盘开 / 关（Darwin 通知无载荷，Guard 收到后自行计时兜底）。
-    private static func postRingState(_ name: CFString) {
+    private static func postRingState(_ rawName: String) {
+        let name = CFNotificationName(rawName as CFString)
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                                              name, nil, nil, true)
     }
@@ -774,7 +775,7 @@ enum AevonEdgeEntry {
         ringExtraTouchID = 0
         ringExtraDeadline = 0
         cancelGlobalHold()
-        postRingState(CFSTR("com.aevon.ringclose"))
+        postRingState("com.aevon.ringclose")
     }
 
     /// `AevonTouchHook.m` 逐帧询问：这根触摸要不要吞掉（不投递给 App）。
