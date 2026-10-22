@@ -1,6 +1,12 @@
 import UIKit
 
-/// 单个 App 的浮窗外壳：标题栏（拖动 / 双击放大）+ 内容（App 场景，整体缩放）+ 缩放手柄。
+/// 缩放热区（V0.0.36）：带方向标记的透明视图，挂在浮窗四边 / 四角。
+final class AevonEdgeHandleView: UIView {
+    /// 这个手柄负责哪些边（角手柄是两个边的组合）
+    var edges: UIRectEdge = []
+}
+
+/// 单个 App 的浮窗外壳：标题栏（拖动 / 双击放大）+ 内容（App 场景，整体缩放）+ 四周缩放热区。
 ///
 /// V0.0.9：App 场景按整屏尺寸渲染，浮窗只对承载容器做等比缩放。
 /// V0.0.11：内容区宽高比锁定屏幕比例（修掉两侧黑边）＋ 手柄锁比例（修掉细长条）。
@@ -33,13 +39,18 @@ final class AevonWindowView: UIView {
     private let contentClip = UIView()
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
-    private let resizeHandle = UIView()
+    /// 右下角的视觉提示圆点（真正的缩放手势在四周 8 向热区上，V0.0.36）
+    private let cornerDot = UIView()
     private let hintLabel = UILabel()
 
     private var moveOriginFrame: CGRect = .zero
     private var moveOriginPoint: CGPoint = .zero
     private var resizeOriginFrame: CGRect = .zero
     private var resizeOriginPoint: CGPoint = .zero
+    /// 本次缩放抓的是哪几条边（V0.0.36 四周 8 向手势）
+    private var resizeOriginEdges: UIRectEdge = []
+    /// 缩放锚点（unit 坐标）：对边/对角的固定点，缩放时它不动
+    private var resizeAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
 
     /// 手势进行中（此时只允许改 transform，不允许改 frame）
     private var isLiveResizing = false
@@ -48,7 +59,7 @@ final class AevonWindowView: UIView {
     private var lastAppliedScale: CGFloat = 0
 
     /// 当前吸附槽位（自由位置 / 左半屏 / 右半屏 / 顶部放大）
-    private var currentSlot: AevonSnapSlot = .free
+    private(set) var currentSlot: AevonSnapSlot = .free
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String, slot: AevonSnapSlot = .free) {
         self.bundleID = bundleID
@@ -57,13 +68,16 @@ final class AevonWindowView: UIView {
 
         let screen = UIScreen.main.bounds
         let aspect = AevonWindowView.contentAspect
-        // 默认宽度取屏宽 66%，并保证加上标题栏后不超屏高 72%
-        let preferred = screen.width * 0.66
+        // V0.0.36（AevonFloatPrefV36）：默认宽度 / 顶部位置可在设置「细节调整」里改。
+        // FloatWindowWidth = 屏宽百分比（30~95，默认 66）；FloatWindowY = 屏高百分比（2~60，默认 10）。
+        let widthPct = max(30.0, min(95.0, AevonPrefs.double("FloatWindowWidth", default: 66.0)))
+        let yPct = max(2.0, min(60.0, AevonPrefs.double("FloatWindowY", default: 10.0)))
+        let preferred = screen.width * widthPct / 100.0
         let maxByHeight = screen.height * 0.72 * aspect
         let defaultContentWidth = max(AevonWindowView.minContentWidth,
                                       min(preferred, maxByHeight))
         let defaultFrame = CGRect(x: (screen.width - defaultContentWidth) / 2.0,
-                                  y: max(60, screen.height * 0.10),
+                                  y: max(24, screen.height * yPct / 100.0),
                                   width: defaultContentWidth,
                                   height: defaultContentWidth / aspect + AevonWindowView.titleBarHeightValue)
 
@@ -134,33 +148,23 @@ final class AevonWindowView: UIView {
             }
         }
 
-        // 缩放手柄：视觉圆点 28pt，触摸热区 44pt（热区留在窗口内，否则被裁剪后点不到）
-        let dotSize: CGFloat = 28
-        let touchSize: CGFloat = 44
-        resizeHandle.frame = CGRect(x: width - touchSize - 2,
-                                    y: restored.height - touchSize - 2,
-                                    width: touchSize,
-                                    height: touchSize)
-        resizeHandle.backgroundColor = .clear
-        resizeHandle.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
-        let dot = UIView(frame: CGRect(x: touchSize - dotSize - 6,
-                                       y: touchSize - dotSize - 6,
-                                       width: dotSize,
-                                       height: dotSize))
-        dot.backgroundColor = UIColor.white.withAlphaComponent(0.35)
-        dot.layer.cornerRadius = dotSize / 2
-        dot.isUserInteractionEnabled = false
-        resizeHandle.addSubview(dot)
-        addSubview(resizeHandle)
+        // V0.0.36（AevonEdgeResizeV36）：四周 8 向缩放热区（四边 + 三角，右上角留给关闭按钮）
+        installEdgeResizeHandles(width: width, height: restored.height)
 
-        // 手势
+        // 右下角保留一颗淡淡的圆点，提示「这个窗口可以缩放」
+        cornerDot.frame = CGRect(x: width - 34, y: restored.height - 34, width: 28, height: 28)
+        cornerDot.backgroundColor = UIColor.white.withAlphaComponent(0.30)
+        cornerDot.layer.cornerRadius = 14
+        cornerDot.isUserInteractionEnabled = false
+        cornerDot.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
+        addSubview(cornerDot)
+
+        // 手势：标题栏拖动 / 双击切换大小档；缩放全在边缘热区上
         let move = UIPanGestureRecognizer(target: self, action: #selector(handleMove(_:)))
         titleBar.addGestureRecognizer(move)
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleTitleDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
         titleBar.addGestureRecognizer(doubleTap)
-        let resize = UIPanGestureRecognizer(target: self, action: #selector(handleResize(_:)))
-        resizeHandle.addGestureRecognizer(resize)
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（比例锁定屏幕 \(String(format: "%.3f", aspect))，"
@@ -262,84 +266,157 @@ final class AevonWindowView: UIView {
         }
     }
 
-    // MARK: - 缩放（锁定宽高比，手势期间只改矩阵）
+    // MARK: - 四周 8 向缩放（V0.0.36，AevonEdgeResizeV36）
 
-    @objc private func handleResize(_ gesture: UIPanGestureRecognizer) {
-        guard let superview = superview else { return }
+    /// 安装四周缩放热区：四个角（左上 / 左下 / 右下）+ 四条边。
+    /// 右上角**故意不放**手柄 —— 那里是关闭按钮的地盘，热区放上去会抢 ✕ 的点击。
+    /// 手柄全部在窗口内部（clipsToBounds 之内），拖边 = 沿该边缩放，拖角 = 双向等比。
+    private func installEdgeResizeHandles(width: CGFloat, height: CGFloat) {
+        let c: CGFloat = 40      // 角手柄边长
+        let b: CGFloat = 14      // 边手柄厚度
+        let closeGuard: CGFloat = 44  // 顶部热区给关闭按钮让出的宽度
+        let handles: [(UIRectEdge, CGRect, UIView.AutoresizingMask)] = [
+            ([.top, .left],     CGRect(x: 0, y: 0, width: c, height: c),
+             []),
+            ([.bottom, .left],  CGRect(x: 0, y: height - c, width: c, height: c),
+             [.flexibleTopMargin]),
+            ([.bottom, .right], CGRect(x: width - c, y: height - c, width: c, height: c),
+             [.flexibleLeftMargin, .flexibleTopMargin]),
+            ([.top],            CGRect(x: c, y: 0, width: max(0, width - c - closeGuard), height: b),
+             [.flexibleWidth]),
+            ([.bottom],         CGRect(x: c, y: height - b, width: max(0, width - 2 * c), height: b),
+             [.flexibleWidth, .flexibleTopMargin]),
+            ([.left],           CGRect(x: 0, y: c, width: b, height: max(0, height - 2 * c)),
+             []),
+            ([.right],          CGRect(x: width - b, y: c, width: b, height: max(0, height - 2 * c)),
+             [.flexibleLeftMargin]),
+        ]
+        for (edges, rect, mask) in handles {
+            guard rect.width > 0, rect.height > 0 else { continue }
+            let handle = AevonEdgeHandleView(frame: rect)
+            handle.edges = edges
+            handle.backgroundColor = .clear
+            if !mask.isEmpty { handle.autoresizingMask = mask }
+            addSubview(handle)
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handleEdgeResize(_:)))
+            handle.addGestureRecognizer(pan)
+        }
+    }
+
+    /// 边缘热区的统一手势入口。
+    ///
+    /// 缩放锚点 = 对边 / 对角的固定点（拖右边 → 左边不动），手势期间只改
+    /// 外层 `transform`（V0.0.12 的零布局思路），抬手才提交真实 frame。
+    @objc private func handleEdgeResize(_ gesture: UIPanGestureRecognizer) {
+        guard let handle = gesture.view as? AevonEdgeHandleView, superview != nil else { return }
         let point = gesture.location(in: superview)
         switch gesture.state {
         case .began:
             resizeOriginFrame = frame
             resizeOriginPoint = point
-            beginLiveResize()
+            resizeOriginEdges = handle.edges
+            // 锚点取「不动的那些边」的交点：拖右 → 锚在左（x=0）；拖左 → 锚在右（x=1）；
+            // 只拖上下 → x 居中；y 同理。
+            let ax: CGFloat = handle.edges.contains(.left) ? 1.0
+                : (handle.edges.contains(.right) ? 0.0 : 0.5)
+            let ay: CGFloat = handle.edges.contains(.top) ? 1.0
+                : (handle.edges.contains(.bottom) ? 0.0 : 0.5)
+            beginLiveResize(anchor: CGPoint(x: ax, y: ay))
 
         case .changed:
             let dx = point.x - resizeOriginPoint.x
             let dy = point.y - resizeOriginPoint.y
-            let width = clampedContentWidth(dx: dx, dy: dy, base: resizeOriginFrame)
+            let horizontal = resizeOriginEdges.contains(.left) || resizeOriginEdges.contains(.right)
+            let vertical = resizeOriginEdges.contains(.top) || resizeOriginEdges.contains(.bottom)
+            let width = clampedEdgeWidth(dx: dx, dy: dy,
+                                         base: resizeOriginFrame,
+                                         horizontal: horizontal, vertical: vertical)
             let factor = max(0.05, width / max(1, resizeOriginFrame.width))
-            // 关键：只动外层矩阵，内部的 App 画面图层树完全不碰
+            // 只动外层矩阵，内部的 App 画面图层树完全不碰
             transform = CGAffineTransform(scaleX: factor, y: factor)
 
         case .ended, .cancelled, .failed:
-            finishLiveResize()
+            finishEdgeResize()
 
         default:
             break
         }
     }
 
-    /// 手柄只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例 + 标题栏。
-    /// 拖动方向取 |dx| 与 |dy| 里大的那个来定，斜着拖也跟手，但拖不出细长条。
-    private func clampedContentWidth(dx: CGFloat, dy: CGFloat, base: CGRect) -> CGFloat {
+    /// 只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例 + 标题栏。
+    /// 横向边按 dx（拖左边缘时反向），纵向边按 dy（拖顶边时反向）；
+    /// 角手柄横竖都在动，取变化更明显的那个方向，斜拖也跟手，拖不出细长条。
+    private func clampedEdgeWidth(dx: CGFloat, dy: CGFloat, base: CGRect,
+                                  horizontal: Bool, vertical: Bool) -> CGFloat {
         let aspect = AevonWindowView.contentAspect
         let screen = UIScreen.main.bounds
         let originContentHeight = max(1, base.height - titleBarHeight)
 
-        let widthFromX = base.width + dx
-        let widthFromY = (originContentHeight + dy) * aspect
-        var width = abs(dx) >= abs(dy) ? widthFromX : widthFromY
-
-        // 上限：不超出屏幕右侧、也不超出屏幕底部
-        let maxByScreenWidth = screen.width - base.minX - 8
-        let maxByScreenHeight = (screen.height - base.minY - 8 - titleBarHeight) * aspect
+        var width: CGFloat? = nil
+        if horizontal {
+            let signed = resizeOriginEdges.contains(.left) ? -dx : dx
+            width = base.width + signed
+        }
+        if vertical {
+            let signed = resizeOriginEdges.contains(.top) ? -dy : dy
+            let widthFromY = (originContentHeight + signed) * aspect
+            width = width.map { current in
+                abs(dx) >= abs(dy) ? current : widthFromY
+            } ?? widthFromY
+        }
+        var result = width ?? base.width
+        // 上限：内容区不超屏高 92%，宽度不超屏宽 95%
         let maxWidth = max(AevonWindowView.minContentWidth,
-                           min(maxByScreenWidth, maxByScreenHeight))
-        width = max(AevonWindowView.minContentWidth, min(width, maxWidth))
-        return width
+                           min(screen.width * 0.95, (screen.height * 0.92 - titleBarHeight) * aspect))
+        result = max(AevonWindowView.minContentWidth, min(result, maxWidth))
+        return result
     }
 
-    /// 进入「实时缩放」：锚点挪到左上角，关掉圆角裁剪，内部一个属性都不动。
-    private func beginLiveResize() {
+    /// 进入「实时缩放」：锚点挪到固定点，关掉圆角裁剪，内部一个属性都不动。
+    private func beginLiveResize(anchor: CGPoint) {
         isLiveResizing = true
-        let topLeft = frame.origin
-        layer.anchorPoint = .zero
-        layer.position = topLeft          // 改锚点后必须立刻补位置，否则会跳
+        resizeAnchor = anchor
+        // 改锚点后必须立刻补位置，否则窗口会跳：position = 固定点在父视图的坐标
+        let fixed = CGPoint(x: frame.origin.x + anchor.x * frame.width,
+                            y: frame.origin.y + anchor.y * frame.height)
+        layer.anchorPoint = anchor
+        layer.position = fixed
         layer.cornerRadius = 0
         clipsToBounds = false             // 圆角 + 裁剪 + 缩放会走离屏合成
         contentClip.clipsToBounds = false
     }
 
     /// 抬手：把矩阵换成真实 frame，只在这一下做一次完整布局。
-    private func finishLiveResize() {
+    private func finishEdgeResize() {
         guard isLiveResizing else { return }
+        let factor = max(0.05, transform.a)
         isLiveResizing = false
 
-        let factor = max(0.05, transform.a)
+        let anchor = resizeAnchor
         transform = .identity
         layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         layer.cornerRadius = AevonWindowView.cornerRadius
         clipsToBounds = true
 
-        let width = max(AevonWindowView.minContentWidth, resizeOriginFrame.width * factor)
-        let height = width / AevonWindowView.contentAspect + titleBarHeight
-        frame = CGRect(x: resizeOriginFrame.minX,
-                       y: resizeOriginFrame.minY,
-                       width: width,
-                       height: height)
+        let screen = UIScreen.main.bounds
+        let aspect = AevonWindowView.contentAspect
+        var width = max(AevonWindowView.minContentWidth,
+                        min(resizeOriginFrame.width * factor, screen.width * 0.95))
+        width = min(width, (screen.height * 0.92 - titleBarHeight) * aspect)
+        let height = width / aspect + titleBarHeight
+
+        // 固定点 = 原始 frame 里锚点对应的那一点；新 frame 以它为基准反推 origin
+        let fixed = CGPoint(x: resizeOriginFrame.minX + anchor.x * resizeOriginFrame.width,
+                            y: resizeOriginFrame.minY + anchor.y * resizeOriginFrame.height)
+        var origin = CGPoint(x: fixed.x - anchor.x * width,
+                             y: fixed.y - anchor.y * height)
+        // 夹回屏幕：窗口至少留 60pt 在屏内，顶部至少 24pt 可见
+        origin.x = max(60 - width, min(origin.x, screen.width - 60))
+        origin.y = max(24 - height + 60, min(origin.y, screen.height - 60))
+        frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
         setNeedsLayout()
         persistFrame()
-        AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（内容 \(Int(width))x\(Int(height - titleBarHeight))）")
+        AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（内容 \(Int(width))x\(Int(height - titleBarHeight))）（AevonEdgeResizeV36）")
     }
 
     // MARK: - 双击标题栏：小窗 / 大窗 两档
@@ -399,6 +476,39 @@ final class AevonWindowView: UIView {
     func bringToFront() {
         guard let superview = superview else { return }
         superview.bringSubviewToFront(self)
+    }
+
+    // MARK: - 按设置应用默认几何（V0.0.36，AevonFloatPrefV36）
+
+    /// 把窗口挪到设置里的「浮窗默认宽度 / 顶部位置」。只对自由位置的窗口有意义。
+    /// 返回是否真的动了。
+    @discardableResult
+    func applyDefaultGeometry() -> Bool {
+        guard !isLiveResizing else { return false }
+        let screen = UIScreen.main.bounds
+        let aspect = AevonWindowView.contentAspect
+        let widthPct = max(30.0, min(95.0, AevonPrefs.double("FloatWindowWidth", default: 66.0)))
+        let yPct = max(2.0, min(60.0, AevonPrefs.double("FloatWindowY", default: 10.0)))
+        let width = max(AevonWindowView.minContentWidth,
+                        min(screen.width * widthPct / 100.0,
+                            (screen.height * 0.92 - titleBarHeight) * aspect))
+        let height = width / aspect + titleBarHeight
+        let target = CGRect(x: (screen.width - width) / 2.0,
+                            y: max(24, screen.height * yPct / 100.0),
+                            width: width,
+                            height: height)
+        guard abs(target.minX - frame.minX) > 0.5
+            || abs(target.minY - frame.minY) > 0.5
+            || abs(target.width - frame.width) > 0.5 else { return false }
+        UIView.animate(withDuration: 0.22,
+                       delay: 0,
+                       options: [.beginFromCurrentState, .curveEaseOut]) {
+            self.frame = target
+        } completion: { _ in
+            self.setNeedsLayout()
+            self.persistFrame()
+        }
+        return true
     }
 
     // MARK: - 窗口尺寸记忆

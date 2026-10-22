@@ -46,6 +46,11 @@ __attribute__((used)) static const char AevonGuardUIKitV35Marker[] = "AevonGuard
 __attribute__((used)) static const char AevonGuardAckV35Marker[] = "AevonGuardAckV35";
 __attribute__((used)) static const char AevonRingHopV35Marker[] = "AevonRingHopV35";
 
+/* V0.0.36 CI 标记：浮窗外壳搬进入口容器（单窗口化）+ 四周 8 向缩放手势 + 浮窗设置项 */
+__attribute__((used)) static const char AevonFloatInEntryV36Marker[] = "AevonFloatInEntryV36";
+__attribute__((used)) static const char AevonEdgeResizeV36Marker[] = "AevonEdgeResizeV36";
+__attribute__((used)) static const char AevonFloatPrefV36Marker[] = "AevonFloatPrefV36";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能

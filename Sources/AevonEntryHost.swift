@@ -46,6 +46,22 @@ final class AevonEntryWindow: AevonPassthroughWindow {
     }
 }
 
+/// 浮窗层（V0.0.36，AevonFloatInEntryV36）：入口容器里的专属子视图，只承载浮窗外壳。
+///
+/// 为什么要有它：旧架构浮窗挂在独立宿主窗口（level 9,999,990）上，而 App 前台时
+/// 画面在 `SBDeviceApplicationSceneViewController.view` 里（不是窗口），层级压不过，
+/// 浮窗在全屏 App 里直接消失。现在浮窗跟着入口容器一起搬家，App 前台照样可见。
+///
+/// 单独一层而不是直接塞容器，是为了层级秩序：浮窗永远在容器最底部，
+/// 手势条 / 圆盘 / 面板等入口控件（后加入容器）永远在浮窗之上。
+/// 命中自身返回 nil：没点到浮窗时触摸穿透到下层（App / 桌面）。
+final class AevonWindowLayerView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event) else { return nil }
+        return hit === self ? nil : hit
+    }
+}
+
 /// 唯一入口容器（V0.0.22）。
 ///
 /// 手势条、悬浮球、圆盘、应用面板全部挂在这**一个**视图里，而它本身可以被整体搬家：
@@ -68,8 +84,24 @@ final class AevonEntryContainerView: UIView {
 enum AevonEntryHost {
     private static var window: AevonEntryWindow?
     private static var container: AevonEntryContainerView?
+    /// 浮窗层（V0.0.36）：容器内专门承载浮窗外壳的子视图，永远在入口控件之下。
+    private static var floatLayer: AevonWindowLayerView?
     /// 当前 App 场景的容器视图（弱引用；App 关掉后自动失效）
     private static weak var appSceneView: UIView?
+
+    /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
+    static var floatHost: UIView? { return floatLayer ?? container }
+
+    /// 该点是否落在某个已开浮窗上（V0.0.36）。
+    /// 入口探针据此区分「摸浮窗」与「摸边缘热区」：浮窗和入口共用一个窗口之后，
+    /// 不加这道判断，浮窗压住热区时拖浮窗就会误呼圆盘。
+    static func pointHitsFloatingWindow(at point: CGPoint) -> Bool {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return false }
+        for win in layer.subviews where !win.isHidden && win.alpha > 0.01 {
+            if win.frame.contains(point) { return true }
+        }
+        return false
+    }
 
     /// 入口视图的统一挂载点（手势条 / 悬浮球 / 圆盘 / 面板都往这里加）
     static var activeRoot: UIView? { return container }
@@ -129,13 +161,22 @@ enum AevonEntryHost {
         box.isUserInteractionEnabled = true
         controller.view.addSubview(box)
 
+        // V0.0.36（AevonFloatInEntryV36）：容器最底部放浮窗层。
+        // 之后手势条 / 圆盘 / 面板 add 进容器都在它上面，层级秩序天然成立。
+        let floatView = AevonWindowLayerView(frame: box.bounds)
+        floatView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        floatView.backgroundColor = .clear
+        floatView.isUserInteractionEnabled = true
+        box.addSubview(floatView)
+        floatLayer = floatView
+
         window = host
         container = box
         AevonEdgeEntry.attachProbe(to: host)
         startWatchdog()
 
         let bounds = box.bounds
-        AevonLog.info("[入口] 入口窗口与容器已创建（level=\(Int(host.windowLevel.rawValue))，场景 \(type(of: scene))，容器 \(Int(bounds.width))x\(Int(bounds.height))，原因=\(reason)）（AevonEntryHost AevonSingleContainerV22）")
+        AevonLog.info("[入口] 入口窗口与容器已创建（level=\(Int(host.windowLevel.rawValue))，场景 \(type(of: scene))，容器 \(Int(bounds.width))x\(Int(bounds.height))，浮窗层已就位，原因=\(reason)）（AevonEntryHost AevonSingleContainerV22 AevonFloatInEntryV36）")
 
         // 万一创建时已经有 App 场景在场（热启动 / 重新初始化），优先挂上去
         if let sceneView = appSceneView, isUsableHost(sceneView) {

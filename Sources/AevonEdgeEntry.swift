@@ -423,7 +423,14 @@ enum AevonEdgeEntry {
                                            "com.aevon.guardack" as CFString,
                                            nil,
                                            .deliverImmediately)
-            AevonLog.info("[边缘] 已监听设置变更通知（com.aevon.prefschanged）（AevonPrefsLiveV26）")
+            // V0.0.36（AevonFloatPrefV36）：设置页「应用到已开浮窗」按钮 → 套用浮窗默认几何
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonFloatApplyHandler,
+                                           "com.aevon.floatapply" as CFString,
+                                           nil,
+                                           .deliverImmediately)
+            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged / guardack / floatapply）（AevonPrefsLiveV26 AevonFloatPrefV36）")
         }
         guard zoneTimer == nil else { return }
         syncGuardConfig()
@@ -561,6 +568,11 @@ enum AevonEdgeEntry {
     static func attachProbe(to window: AevonEntryWindow) {
         window.eventProbe = { point, phase in
             guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return }
+
+            // V0.0.36（AevonFloatInEntryV36）：落点在浮窗上就整个交给浮窗 ——
+            // 浮窗搬进入口窗口后与探针同窗，浮窗压住热区时若不做这道短路，
+            // 拖浮窗 / 缩放浮窗会被当成边缘手势误呼圆盘。
+            if AevonEntryHost.pointHitsFloatingWindow(at: point) { return }
 
             // 圆盘已展开：这根手指继续驱动圆盘（旋转 / 选定 / 松手开窗）
             if let ring = AevonRingMenu.presented {
@@ -721,6 +733,9 @@ enum AevonEdgeEntry {
             // 不再像 V0.0.24 那样「右侧一大片 + 下半屏」都能划出来。
             let zone = AevonTriggerZone.rect(in: screen)
             guard zone.contains(point) else { return }
+            // V0.0.36（AevonFloatInEntryV36）：落点在浮窗上 = 用户在操作浮窗，
+            // 绝不能当成热区触摸接管（浮窗压住右缘热区时，拖浮窗会误呼圆盘）。
+            if AevonEntryHost.pointHitsFloatingWindow(at: point) { return }
             globalTouchID = touchID
             globalStart = point
             globalFired = false
@@ -1004,5 +1019,16 @@ private func aevonGuardAckHandler(_ center: CFNotificationCenter?,
                                   _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
         aevonGuardAckCount += 1
+    }
+}
+
+/// V0.0.36（AevonFloatPrefV36）：设置页「应用到已开浮窗」→ 套用浮窗默认宽度 / 顶部位置。
+private func aevonFloatApplyHandler(_ center: CFNotificationCenter?,
+                                    _ observer: UnsafeMutableRawPointer?,
+                                    _ name: CFNotificationName?,
+                                    _ object: UnsafeRawPointer?,
+                                    _ userInfo: CFDictionary?) {
+    DispatchQueue.main.async {
+        AevonWindowManager.applyDefaultGeometryToOpenWindows()
     }
 }

@@ -46,11 +46,23 @@ enum AevonWindowManager {
             return
         }
 
-        AevonHostWindow.ensureInstalled()
-        guard let host = AevonHostWindow.hostView else {
-            AevonLog.warn("[窗口] 宿主窗口不可用，放弃开窗")
-            completion?(false)
-            return
+        // V0.0.36（AevonFloatInEntryV36）：浮窗外壳直接挂进唯一入口容器的浮窗层。
+        // 旧路：独立宿主窗口 level 9,999,990 —— App 前台时画面在
+        // SBDeviceApplicationSceneViewController.view（不是窗口），层级压不过，
+        // 浮窗在全屏 App 里直接消失。入口容器会搬进 App 画面容器，
+        // 浮窗作为浮窗层的子视图自然跟着走，App 前台也可见。
+        // 宿主窗口保留为兜底（容器尚不存在时）。
+        let host: UIView
+        if let floatHost = AevonEntryHost.floatHost {
+            host = floatHost
+        } else {
+            AevonHostWindow.ensureInstalled()
+            guard let fallback = AevonHostWindow.hostView else {
+                AevonLog.warn("[窗口] 入口容器与宿主窗口都不可用，放弃开窗")
+                completion?(false)
+                return
+            }
+            host = fallback
         }
         // 登记前台保活，唤醒场景
         AevonForegroundManager.shared.add(bundleID: bundleID, sceneID: sceneID)
@@ -89,6 +101,7 @@ enum AevonWindowManager {
             let title = AevonWindowManager.title(for: bundleID)
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title, slot: slot)
             host.addSubview(windowView)
+            host.bringSubviewToFront(windowView)
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)
@@ -205,6 +218,19 @@ enum AevonWindowManager {
         for bundleID in Array(windows.keys) {
             close(bundleID: bundleID)
         }
+    }
+
+    /// V0.0.36（AevonFloatPrefV36）：把设置里的「浮窗默认宽度 / 顶部位置」一键应用到已开窗口。
+    ///
+    /// 只动自由位置的窗口；吸附槽位（半屏 / 顶部放大）的窗口保持吸附几何不动。
+    /// 由设置页的「应用到已开浮窗」按钮经 Darwin 通知 com.aevon.floatapply 触发。
+    static func applyDefaultGeometryToOpenWindows() {
+        var applied = 0
+        for windowView in windows.values {
+            guard windowView.currentSlot == .free else { continue }
+            if windowView.applyDefaultGeometry() { applied += 1 }
+        }
+        AevonLog.info("[窗口] 已按设置应用浮窗尺寸位置（\(applied)/\(windows.count) 个）（AevonFloatPrefV36）")
     }
 
     /// App 的图层列表更新时通知浮窗重排。
