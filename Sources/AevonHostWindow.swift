@@ -130,7 +130,7 @@ enum AevonHostWindow {
         var score = 0
         if scene.activationState == .foregroundActive { score += 20 }
         if scene.screen === UIScreen.main { score += 5 }
-        let role = scene.session.role.lowercased()
+        let role = scene.session.role.rawValue.lowercased()
         if role.contains("system") || role.contains("shell") { score += 100 }
         if scene.windows.contains(where: { $0.windowLevel.rawValue >= UIWindow.Level.alert.rawValue }) {
             score += 10

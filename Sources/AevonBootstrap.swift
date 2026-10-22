@@ -65,11 +65,11 @@ enum AevonBootstrap {
         // 只做两件事：把场景激活/失活写进日志（判断「App 前台时是不是换了场景」），
         // 以及顺手把入口窗口重顶一次。
         let activateName = UIScene.didActivateNotification
-        let deactivateName = UIScene.didDeactivateNotification
+        let deactivateName = UIScene.willDeactivateNotification
         for (name, label) in [(activateName, "激活"), (deactivateName, "失活")] {
             _ = center.addObserver(forName: name, object: nil, queue: .main) { note in
                 guard let scene = note.object as? UIScene else { return }
-                AevonLog.info("[场景] \(label) \(type(of: scene)) 角色 \(scene.session.role) 状态 \(scene.activationState.rawValue)")
+                AevonLog.info("[场景] \(label) \(type(of: scene)) 角色 \(scene.session.role.rawValue) 状态 \(scene.activationState.rawValue)")
                 guard AevonEntryHost.isInstalled else { return }
                 AevonEntryHost.raise(reason: "场景\(label)")
                 diagnose("场景\(label)")

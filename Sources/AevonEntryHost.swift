@@ -118,7 +118,7 @@ enum AevonEntryHost {
                 host.windowScene = preferred
                 host.windowLevel = AevonWindowLevels.entry
                 host.isHidden = false
-                AevonLog.info("[入口] 场景切换 → \(type(of: preferred))（角色 \(preferred.session.role)，状态 \(preferred.activationState.rawValue)，得分 \(currentScore) → \(preferredScore)）")
+                AevonLog.info("[入口] 场景切换 → \(type(of: preferred))（角色 \(preferred.session.role.rawValue)，状态 \(preferred.activationState.rawValue)，得分 \(currentScore) → \(preferredScore)）")
                 dumpWindowStack("场景切换")
                 return
             }
@@ -170,7 +170,7 @@ enum AevonEntryHost {
                 items.append("\(Int(w.windowLevel.rawValue)):\(type(of: w))\(w.isHidden ? "(h)" : "")")
             }
             let mine = (scene === window?.windowScene) ? "*" : ""
-            parts.append("#\(index)\(mine)\(type(of: scene))<\(scene.session.role)>状态\(scene.activationState.rawValue)·\(scene.windows.count)窗[\(items.joined(separator: " "))]")
+            parts.append("#\(index)\(mine)\(type(of: scene))<\(scene.session.role.rawValue)>状态\(scene.activationState.rawValue)·\(scene.windows.count)窗[\(items.joined(separator: " "))]")
             index += 1
         }
         if parts.isEmpty { parts.append("没有任何 UIWindowScene") }

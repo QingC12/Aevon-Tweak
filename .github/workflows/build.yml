@@ -31,7 +31,8 @@ jobs:
 
       - name: 读取版本号
         run: |
-          VERSION="$(grep -i '^Version:' control | awk '{print $2}')"
+          # tr -d '\r'：防止 control 带 CRLF 时版本号里混进回车，把 Swift 字符串写断
+          VERSION="$(grep -i '^Version:' control | tr -d '\r' | awk '{print $2}')"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "构建版本: ${VERSION}"
           # 版本号以 control 为唯一来源，同步写进 Swift 常量，避免多处漂移
