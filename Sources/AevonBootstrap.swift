@@ -98,6 +98,9 @@ enum AevonBootstrap {
         AevonEdgeEntry.install(attempt: 1, reason: reason)
         AevonBubble.shared.install(attempt: 1, reason: reason)
         installSceneHookIfNeeded()
+        // V0.0.23：App 前台时视图层收不到边缘触摸（被 App 画面命中测试截走），
+        // 补一条不经过命中测试的全局通道。
+        AevonEdgeEntry.installGlobalTouch()
     }
 
     /// V0.0.22：装 App 画面容器钩子（只 hook viewDidAppear / viewDidDisappear 两个方法）。

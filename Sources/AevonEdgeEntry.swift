@@ -391,6 +391,115 @@ enum AevonEdgeEntry {
         probeHoldTimer = nil
     }
 
+    // MARK: - 全局触摸通道（V0.0.23）
+
+    /// 全局通道状态（与手势条 / 窗口探针完全独立，互不干扰）
+    private static var globalInstalled = false
+    private static var globalTouchID: UInt = 0
+    private static var globalStart: CGPoint = .zero
+    private static var globalFired = false
+    private static var globalHoldTimer: Timer?
+    private static var globalLastLogAt: CFTimeInterval = 0
+
+    /// 装全局触摸通道（hook `UIApplication -sendEvent:`）。
+    ///
+    /// Aevon(16) 日志证明：App 前台时白条可见、但触摸永远进不到手势条 ——
+    /// `SBDeviceApplicationSceneViewController.view` 的命中测试把靠右边缘的触摸
+    /// 直接交给了 App 画面。视图层的任何几何/层级调整都解决不了，
+    /// 只能从事件总入口（UIApplication）拿触摸。
+    /// 返回 false 表示这条通道不可用，视图层通道照旧兜底。
+    @discardableResult
+    static func installGlobalTouch() -> Bool {
+        if globalInstalled { return true }
+        guard AevonPrefs.bool("Enabled", default: false) else { return false }
+        guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
+        let ok = AevonTouchHookInstall()
+        globalInstalled = ok
+        if ok {
+            AevonLog.info("[边缘] 全局触摸通道已安装（App 前台也能呼出圆盘）（AevonGlobalTouchV23）")
+        } else {
+            AevonLog.warn("[边缘] 全局触摸通道不可用，退回视图层通道")
+        }
+        return ok
+    }
+
+    /// 全局触摸分发（由 `AevonTouchHook.m` 在 `UIApplication -sendEvent:` 里回调）。
+    static func handleGlobal(phase: UITouch.Phase, point: CGPoint, touchID: UInt) {
+        guard AevonPrefs.bool("Enabled", default: false),
+              AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return }
+        let screen = UIScreen.main.bounds
+        switch phase {
+        case .began:
+            // 圆盘已经开着时不再跟踪边缘：此时用户的触摸是在操作圆盘（点图标 / 点空白）
+            guard !AevonRingMenu.isPresented else { return }
+            // 宽容区：右边 60pt、纵向下半 70%。贴最边缘 20pt 会被系统手势门控吞掉，
+            // 用户手指落在 370~430 之间都算数。
+            guard AevonEdgeStripView.looseRect(in: screen).contains(point) else { return }
+            globalTouchID = touchID
+            globalStart = point
+            globalFired = false
+            lastTouchPoint = point
+            scheduleGlobalHold()
+            let now = CACurrentMediaTime()
+            if now - globalLastLogAt > 2.0 {
+                globalLastLogAt = now
+                AevonLog.info("[边缘] 全局通道收到边缘触摸 (x=\(Int(point.x)), y=\(Int(point.y)))（AevonGlobalTouchV23）")
+            }
+
+        case .moved:
+            guard touchID == globalTouchID else { return }
+            lastTouchPoint = point
+            // 圆盘已展开：这根手指继续驱动它（旋转 / 选定 / 松手开窗）
+            if let ring = AevonRingMenu.presented {
+                cancelGlobalHold()
+                ring.remoteMoved(to: point, source: "global")
+                return
+            }
+            let dx = point.x - globalStart.x
+            let dy = point.y - globalStart.y
+            if abs(dx) > 12 || abs(dy) > 12 { cancelGlobalHold() }
+            if !globalFired, dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
+                globalFired = true
+                attemptTrigger("全局左滑 \(Int(dx))pt", source: "global")
+            }
+
+        case .ended:
+            guard touchID == globalTouchID else { return }
+            cancelGlobalHold()
+            if let ring = AevonRingMenu.presented {
+                ring.remoteEnded(at: point, source: "global")
+            }
+            globalTouchID = 0
+            globalFired = false
+
+        case .cancelled:
+            guard touchID == globalTouchID else { return }
+            cancelGlobalHold()
+            AevonRingMenu.presented?.remoteCancelled(source: "global")
+            globalTouchID = 0
+            globalFired = false
+
+        default:
+            break
+        }
+    }
+
+    private static func scheduleGlobalHold() {
+        cancelGlobalHold()
+        let timer = Timer(timeInterval: AevonEdgeStripView.holdDuration, repeats: false) { _ in
+            guard globalTouchID != 0, !globalFired else { return }
+            globalFired = true
+            attemptTrigger("全局长按", source: "global")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        globalHoldTimer = timer
+    }
+
+    private static func cancelGlobalHold() {
+        globalHoldTimer?.invalidate()
+        globalHoldTimer = nil
+    }
+
     /// 呼出圆盘。圆心固定在屏幕 65% 高处（V0.0.20），不再跟随触发点。
     static func presentRing(source: String) {
         guard let root = AevonEntryHost.activeRoot else {
@@ -436,4 +545,21 @@ enum AevonEdgeEntry {
     static func hostRootView() -> UIView? {
         return AevonEntryHost.activeRoot
     }
+}
+
+// MARK: - C 入口（供 AevonTouchHook.m 调用）
+
+/// 全局触摸回调。`phase` 是 `UITouchPhase` 的原始值：
+/// 0 = began，1 = moved，3 = ended，4 = cancelled（2 = stationary 不会传进来）。
+@_cdecl("AevonGlobalTouchPhase")
+public func AevonGlobalTouchPhase(_ phase: Int, _ touchID: UInt, _ x: CGFloat, _ y: CGFloat) {
+    let mapped: UITouch.Phase
+    switch phase {
+    case 0: mapped = .began
+    case 1: mapped = .moved
+    case 3: mapped = .ended
+    case 4: mapped = .cancelled
+    default: return
+    }
+    AevonEdgeEntry.handleGlobal(phase: mapped, point: CGPoint(x: x, y: y), touchID: touchID)
 }

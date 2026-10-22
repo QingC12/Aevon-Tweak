@@ -185,6 +185,18 @@ jobs:
             || { echo "::error::图标取图缺少 SBIconModel 通道（iconImageWithInfo:）"; exit 1; }
           echo "V0.0.22 校验: 唯一容器 + App 画面容器钩子 + 原生图标 已编入"
 
+          # V0.0.23：全局触摸通道（不依赖命中测试）+ 圆盘面积 75% / 外多内少 / 逆时针旋转
+          # 标记串一律 ≥16 字节，避免被 Swift 小字符串内联优化掉。
+          strings "$DYLIB" | grep -q 'AevonGlobalTouchV23' \
+            || { echo "::error::缺少全局触摸通道（AevonGlobalTouchV23）—— App 前台仍会划不出圆盘"; exit 1; }
+          strings "$DYLIB" | grep -q 'sendEvent:' \
+            || { echo "::error::全局触摸通道没编进二进制（找不到 sendEvent: 选择器）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingLayoutFitV23' \
+            || { echo "::error::圆盘不是 75% 面积 / 外多内少版本（缺 AevonRingLayoutFitV23）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingCounterClockV23' \
+            || { echo "::error::圆盘手势没有对调成逆时针旋转（缺 AevonRingCounterClockV23）"; exit 1; }
+          echo "V0.0.23 校验: 全局触摸通道 + 圆盘 75% 面积 + 逆时针旋转 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }

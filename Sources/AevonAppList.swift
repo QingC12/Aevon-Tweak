@@ -51,6 +51,13 @@ enum AevonAppList {
         var systemIncluded = 0
         var noIDSkipped = 0
         var samples: [String] = []
+        // V0.0.23：系统 App 的准入白名单 = 桌面图标模型里真实存在的那些。
+        // 上一版把所有 `com.apple.*` 都收了，结果面板里塞满一堆「不在桌面、打不开、
+        // 图标还是白的」内部 .app（诊断、凭据共享、各种 Service）。
+        // 桌面有图标的系统 App（设置 / 相机 / 照片 / 时钟 / 文件 / App Store…）
+        // 一定在内，用户点名要的「系统 App」全都还在。
+        let homeApps = homeBundleIDs()
+        AevonLog.info("[应用列表] 桌面图标模型里有 \(homeApps.count) 个 App（系统 App 只收这批）")
 
         for (sourceName, objects) in sources {
             AevonLog.info("[应用列表] 来源 \(sourceName): 读到 \(objects.count) 个对象")
@@ -62,10 +69,14 @@ enum AevonAppList {
                     }
                     continue
                 }
-                // V0.0.22：系统 App 也要出现在列表里（设置 / 相机 / 照片 / 时钟…都会用到），
                 // 只排除「不是 App 的东西」：插件、小组件、扩展、后台守护进程等。
                 if !isUserFacingApp(object, bundleID: bundleID) {
                     if bundleID.hasPrefix("com.apple.") { systemSkipped += 1 }
+                    continue
+                }
+                // 系统 App：不在桌面图标模型里的一律不收（这些就是无法启动的白图标项）
+                if bundleID.hasPrefix("com.apple."), !homeApps.contains(bundleID) {
+                    systemSkipped += 1
                     continue
                 }
                 if seen.contains(bundleID) { continue }
@@ -78,7 +89,7 @@ enum AevonAppList {
             }
         }
 
-        AevonLog.info("[应用列表] 系统 App 收录 \(systemIncluded) 个，排除非 App 对象 \(systemSkipped) 个，"
+        AevonLog.info("[应用列表] 系统 App 收录 \(systemIncluded) 个（仅桌面可见），排除非 App / 桌面不可见的 \(systemSkipped) 个，"
                       + "取不到 bundleID \(noIDSkipped) 个"
                       + (samples.isEmpty ? "" : "（示例类名：\(samples.joined(separator: ", "))）"))
 
@@ -91,8 +102,14 @@ enum AevonAppList {
 
     /// 是否「用户能看到、能点开的 App」。
     ///
-    /// 判定顺序（任何一步能确定就返回）：系统禁启动 / 隐藏 → 否；bundle 不是 .app → 否；
-    /// 名字里带 widget / extension / appex / plugin 等 → 否；其余都收（含系统 App）。
+    /// 判定顺序：bundleID 含 widget / extension 等关键字 → 否；
+    /// 任一关联对象声明禁启动 / 隐藏 / 占位 / 受限 → 否；
+    /// 最后才用 bundle 路径确认「是 .app」。
+    ///
+    /// V0.0.23 修正：旧实现在第一个能取到路径的对象上 `return`，
+    /// 于是 `isLaunchProhibited` 只对「路径取不到的那个对象」生效 ——
+    /// 禁启动的 App 只要自己有 .app 路径就混进来了。
+    /// 现在先把所有对象的布尔位查完，再判路径。
     private static func isUserFacingApp(_ object: AnyObject, bundleID: String) -> Bool {
         let lower = bundleID.lowercased()
         for banned in ["widget", "extension", "appex", "plugin", "watchkit", "watchapp",
@@ -108,12 +125,25 @@ enum AevonAppList {
             if boolValue(target, "isLaunchProhibited") == true { return false }
             if boolValue(target, "isHidden") == true { return false }
             if boolValue(target, "isPlaceholder") == true { return false }
+            if boolValue(target, "isRestricted") == true { return false }
+        }
+        for target in targets {
             if let path = bundlePath(of: target) {
                 // 有路径就以路径说话：只认 .app
                 return path.hasSuffix(".app")
             }
         }
         return true
+    }
+
+    /// 桌面图标模型里的 bundleID 集合（含系统 App，也含 App 资源库里的用户 App）。
+    private static func homeBundleIDs() -> Set<String> {
+        var set = Set<String>()
+        for object in fromIconModel() {
+            guard let id = bundleID(of: object), !id.isEmpty else { continue }
+            set.insert(id)
+        }
+        return set
     }
 
     /// 直接调用返回 BOOL 的 getter（不走 KVC —— 私有类上 KVC 有可能抛未定义键异常，

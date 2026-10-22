@@ -88,40 +88,39 @@ final class AevonRingIcon: UIView {
     }
 }
 
-/// 径向圆盘选择器（V0.0.21：贴手跟动 + 顺时针旋转 / 逆时针选定 + 纯文字）。
+/// 径向圆盘选择器（V0.0.23：整体缩到原来的 75% 面积 + 外圈多于内圈 + 手势对调）。
 ///
 /// 形态：
-///   · 圆心固定在屏幕水平中央、纵向 **75%**（用户两轮要求：65% → 再下移 10%）；
-///   · App 按「由内到外」依次放到第 1/2/3 圈，每圈容量 8 / 12 / 16，圈数随数量自动增加；
+///   · 圆心固定在屏幕水平中央、纵向 **75%**；
+///   · 圈数按数量自动增加（≤8 一圈 / 9~20 两圈 / ≥21 三圈），
+///     **每圈容量按半径递增**（内圈少、外圈多），相邻圈错开半个步进，视觉更自然；
+///   · 半径整体 ×0.866（面积 = 原来的 75%），图标 40pt、圆心按钮 48pt；
 ///   · 圆心按钮是蓝色圆 + 四宫格图标，点它打开完整应用选择面板。
 ///
-/// 交互（用户 2026-10-22 第 14 号日志后定稿）：
+/// 交互（用户 2026-10-22 第 16 号日志后定稿：**与上一版对调**）：
 ///   1. 右边缘拉出圆盘后**立刻可用**，手指不离开屏幕：
-///      **顺时针**滑动 → 图标跟着转（解压感），绝不打开任何 App；
-///      **逆时针**滑动 → 停止旋转，进入「等待选择」，手指下的图标放大高亮；
+///      **逆时针**滑动 → 图标跟着转（解压感），绝不打开任何 App；
+///      **顺时针**滑动 → 停止旋转，进入「等待选择」，手指下的图标放大高亮；
 ///      原地停住 0.18 秒 → 同样进入「等待选择」。
 ///   2. 松手：处于「等待选择」且落在图标上 → 用浮窗打开该 App 并收起圆盘；
 ///      落在空白 → 收起；仍在旋转 → 直接收起（不误开）。
 ///   3. 圆盘停留期间可以再用手指点图标 / 点圆心 / 点空白。
 ///
-/// 触摸来源去重：唤出圆盘的那根手指可能同时被「边缘手势条」和「窗口 sendEvent 探针」
-/// 看到，两条通道都会转发同一个点。这里用 `remoteSource` 只认最先开始的那一条，
-/// 避免同一次滑动把旋转角度算两遍。
+/// 触摸来源去重：唤出圆盘的那根手指可能同时被「边缘手势条」「窗口 sendEvent 探针」
+/// 「全局触摸通道」看到，三条通道都会转发同一个点。这里用 `remoteSource`
+/// 只认最先开始的那一条，避免同一次滑动把旋转角度算两遍。
 final class AevonRingMenu: UIView {
     private static var current: AevonRingMenu?
 
-    /// 由内到外的每圈容量；总容量 = 36
-    static let ringCapacities = [8, 12, 16]
-
-    private static let iconSize: CGFloat = 46
-    private static let centerSize: CGFloat = 56
+    private static let iconSize: CGFloat = 40
+    private static let centerSize: CGFloat = 48
     /// 命中半径系数
     private static let hitFactor: CGFloat = 0.95
     /// 判定为「拖动旋转」的最小角度（度）
     private static let dragThreshold: CGFloat = 6
     /// 手指停住多久算「等待选择」
     private static let armDelay: TimeInterval = 0.18
-    /// 圆心纵向位置（占屏幕高度比例）——V0.0.21 从 0.65 下移到 0.75
+    /// 圆心纵向位置（占屏幕高度比例）
     private static let verticalRatio: CGFloat = 0.75
 
     private let dimView = UIView()
@@ -197,7 +196,7 @@ final class AevonRingMenu: UIView {
         layer.addSublayer(trackLayer)
 
         hintLabel.frame = CGRect(x: 0, y: 0, width: 340, height: 20)
-        hintLabel.text = "顺时针转 · 逆时针选定 · 停住松手开窗"
+        hintLabel.text = "逆时针转 · 顺时针选定 · 停住松手开窗"
         hintLabel.textColor = UIColor(white: 1.0, alpha: 0.55)
         hintLabel.font = UIFont.systemFont(ofSize: 11.5)
         hintLabel.textAlignment = .center
@@ -212,7 +211,7 @@ final class AevonRingMenu: UIView {
         centerButton.layer.shadowRadius = 12
         centerButton.layer.shadowOffset = CGSize(width: 0, height: 3)
         // 圆心图标：四宫格（表示「应用列表 / 面板」）
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 24, weight: .semibold)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 21, weight: .semibold)
         if let symbol = UIImage(systemName: "square.grid.2x2.fill", withConfiguration: symbolConfig) {
             centerButton.setImage(symbol, for: .normal)
             centerButton.tintColor = .white
@@ -258,16 +257,51 @@ final class AevonRingMenu: UIView {
         let byWidth = bounds.width / 2 - AevonRingMenu.iconSize / 2 - 6
         let verticalRoom = min(ringCenter.y, bounds.height - ringCenter.y)
         let byHeight = verticalRoom - AevonRingMenu.iconSize / 2 - 12
-        return max(70, min(byWidth, byHeight))
+        return max(64, min(byWidth, byHeight))
     }
 
+    /// 各圈半径。V0.0.23：整体缩到原面积的 75%（半径 ×0.866），
+    /// 基准 68（原 78）、两圈间距 48（原 56），三圈时间距收到 42 免得外圈顶到边。
     private func radii(forRingCount count: Int) -> [CGFloat] {
         guard count > 0 else { return [] }
         let limit = maxRadius
-        if count == 1 { return [min(120, limit)] }
-        let base: CGFloat = 78
-        let spacing = min(56, max(34, (limit - base) / CGFloat(count - 1)))
+        if count == 1 { return [min(92, limit)] }
+        let base: CGFloat = 68
+        let spacing: CGFloat = count >= 3 ? 42 : 48
         return (0..<count).map { min(base + CGFloat($0) * spacing, limit) }
+    }
+
+    /// 按总数决定每圈放几个（V0.0.23：**外圈一定比内圈多**）。
+    ///
+    /// 旧的固定容量 [8, 12, 16] 在 20 个 App 时会排成 8 + 12，
+    /// 视觉上内圈挤、外圈松，用户反馈「外圈应该比内圈多」。
+    /// 现在按总数动态分配：
+    ///   · ≤ 8  ：一圈
+    ///   · 9~20 ：两圈，内圈约 38%（20 个 → 8 + 12）
+    ///   · ≥ 21 ：三圈，权重 1 : 1.5 : 2（36 个 → 8 + 12 + 16）
+    /// 余数优先补给外圈，保证「越外越多」。
+    static func distribution(for total: Int) -> [Int] {
+        guard total > 0 else { return [] }
+        if total <= 8 { return [total] }
+        if total <= 20 {
+            var inner = Int((CGFloat(total) * 0.38).rounded())
+            inner = min(max(inner, 3), 8)
+            return [inner, total - inner]
+        }
+        let weights: [CGFloat] = [1, 1.5, 2]
+        var parts = weights.map { Int((CGFloat(total) * $0 / 4.5).rounded(.down)) }
+        parts[0] = max(parts[0], 3)
+        var rest = total - parts.reduce(0, +)
+        // 余数先给外圈，再给中圈
+        while rest > 0 {
+            parts[2] += 1
+            rest -= 1
+            if rest > 0 {
+                parts[1] += 1
+                rest -= 1
+            }
+        }
+        return parts
     }
 
     private func reload() {
@@ -281,20 +315,16 @@ final class AevonRingMenu: UIView {
 
         let bundleIDs = AevonRingStore.bundleIDs()
 
-        // 由内到外依次填圈：8 / 12 / 16
-        var remaining = bundleIDs.count
-        for cap in AevonRingMenu.ringCapacities {
-            let take = min(remaining, cap)
-            if take > 0 { ringCounts.append(take) }
-            remaining -= take
-            if remaining <= 0 { break }
-        }
+        // 由内到外依次填圈：容量按总数动态分配（外圈一定比内圈多）
+        ringCounts = AevonRingMenu.distribution(for: bundleIDs.count)
         ringRadii = radii(forRingCount: ringCounts.count)
 
         var cursor = 0
         for (ringIndex, count) in ringCounts.enumerated() {
             let radius = ringRadii[ringIndex]
             let step = 360 / CGFloat(max(count, 1))
+            // 相邻圈错开半个步进：图标不会在上下方向连成一条直线，视觉更自然
+            let offset: CGFloat = (ringIndex % 2 == 1) ? step / 2 : 0
             for i in 0..<count {
                 guard cursor < bundleIDs.count else { break }
                 let bundleID = bundleIDs[cursor]
@@ -304,7 +334,7 @@ final class AevonRingMenu: UIView {
                 addSubview(icon)
                 icons.append(icon)
                 iconRadii.append(radius)
-                iconBaseAngles.append(-90 + CGFloat(i) * step)
+                iconBaseAngles.append(-90 + offset + CGFloat(i) * step)
             }
         }
 
@@ -313,7 +343,8 @@ final class AevonRingMenu: UIView {
 
         centerTitle.text = icons.isEmpty ? "点圆心添加 App" : "共 \(icons.count) 个"
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，原生图标 75% 锚点）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21）")
+        let countsText = ringCounts.map(String.init).joined(separator: "/")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23）")
     }
 
     private func drawRingTracks() {
@@ -421,8 +452,9 @@ final class AevonRingMenu: UIView {
         if delta < -180 { delta += 360 }
 
         // iOS 屏幕坐标 y 向下：角度递增 = 顺时针。
-        // 顺时针（用户原话：「只要手指顺时针滑动，那么就会触发圆盘内应用旋转」）→ 旋转
-        if delta > 1.0 {
+        // V0.0.23 用户要求把两者**对调**：逆时针转、顺时针停转并选定。
+        // 逆时针（delta < 0）→ 图标跟着手指转（解压感），不会打开任何 App
+        if delta < -1.0 {
             rotation += delta
             layoutIcons()
             if remoteSelecting {
@@ -433,8 +465,8 @@ final class AevonRingMenu: UIView {
             scheduleArm()
             return
         }
-        // 逆时针 → 停止旋转，进入「等待选择」
-        if delta < -1.0 {
+        // 顺时针（delta > 0）→ 立刻停转，进入「等待选择」
+        if delta > 1.0 {
             remoteLastAngle = currentAngle
             cancelArm()
             enterSelecting(at: point)
