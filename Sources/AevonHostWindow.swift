@@ -1,5 +1,24 @@
 import UIKit
 
+/// 全局窗口层级表（V0.0.19）。
+///
+/// 依据 V0.0.18 真机日志：桌面能呼出圆盘，全屏 App 里连右侧触发条都看不见 ——
+/// 窗口没被销毁、触摸也没进窗口，说明整层被前景 App 的画面盖住了。
+/// SpringBoard 里前台 App 的画面同样挂在窗口树上（我们自己的浮窗就是证据），
+/// 只是层级高于原来的 alert − 1 = 1999。这里不再猜「App 承载窗口是第几级」，
+/// 直接占住 1e7 这一段：系统常规窗口最高只到 alert(2000)，1e7 只在极端场景才被占用。
+///
+/// 三个档位保持相对关系：浮窗外壳 < 入口（手势条/圆盘/面板） < 外部图层（键盘）。
+/// 窗口本身是穿透的（hitTest 未命中就返回 nil），高层级不会吞掉系统触摸。
+enum AevonWindowLevels {
+    /// 浮窗外壳（App 画面载体）
+    static let floating = UIWindow.Level(rawValue: 9_999_990)
+    /// 入口窗口：手势条 / 圆盘 / 应用面板
+    static let entry = UIWindow.Level(rawValue: 10_000_000)
+    /// 键盘等外部图层
+    static let overlay = UIWindow.Level(rawValue: 10_000_100)
+}
+
 /// 穿透窗口：未命中的触摸直接交给下层，不吞掉系统手势。
 /// 非 final：`AevonEntryWindow` 需要继承它并重写 `sendEvent` 做触摸探针。
 class AevonPassthroughWindow: UIWindow {
@@ -30,8 +49,8 @@ enum AevonHostWindow {
         let created = AevonPassthroughWindow(windowScene: scene)
         created.frame = UIScreen.main.bounds
         created.backgroundColor = .clear
-        // 高于普通窗口、低于系统警告的层级（等价旧常量 UIWindowLevelStatusBar）
-        created.windowLevel = UIWindow.Level.statusBar
+        // V0.0.19：提到前景 App 画面之上（旧值 statusBar=1000 会被 App 盖住）
+        created.windowLevel = AevonWindowLevels.floating
 
         let root = UIViewController()
         root.view.backgroundColor = .clear
@@ -56,7 +75,7 @@ enum AevonHostWindow {
         let overlay = AevonPassthroughWindow(windowScene: scene)
         overlay.frame = UIScreen.main.bounds
         overlay.backgroundColor = .clear
-        overlay.windowLevel = UIWindow.Level.alert + 1000
+        overlay.windowLevel = AevonWindowLevels.overlay
 
         let root = UIViewController()
         root.view.backgroundColor = .clear

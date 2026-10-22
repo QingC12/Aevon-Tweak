@@ -82,12 +82,16 @@ final class AevonRingIcon: UIView {
 final class AevonRingMenu: UIView {
     private static var current: AevonRingMenu?
 
-    private static let iconSize: CGFloat = 54
-    private static let centerSize: CGFloat = 64
-    /// 触摸命中半径系数（图标半径 27pt，取 0.82 让相邻图标之间不留死区）
+    private static let iconSize: CGFloat = 44
+    private static let centerSize: CGFloat = 58
+    /// 触摸命中半径系数（图标半径 22pt，取 0.82 让相邻图标之间不留死区）
     private static let hitFactor: CGFloat = 0.82
     /// 判定为「拖动旋转」的最小角度（度）。低于它的位移一律当点击。
     private static let dragThreshold: CGFloat = 7
+    /// 圆盘半径的基准值（V0.0.19 从 168 收到 124）
+    private static let baseRadius: CGFloat = 124
+    /// 圆盘贴着屏幕右侧留的边距
+    private static let sideMargin: CGFloat = 14
 
     private let dimView = UIView()
     private let trackLayer = CAShapeLayer()
@@ -107,16 +111,19 @@ final class AevonRingMenu: UIView {
     private var longPressTimer: Timer?
 
     private var ringCenter: CGPoint = .zero
-    private var radius: CGFloat = 170
+    private var radius: CGFloat = 124
+    /// 触发点纵坐标：圆盘跟随手指落点上下浮动，但始终靠右（V0.0.19）
+    private var anchorY: CGFloat?
 
     // MARK: - 呼出 / 收起
 
-    static func present(in host: UIView) {
+    static func present(in host: UIView, anchorY: CGFloat? = nil) {
         if let existing = current {
             existing.dismiss()
             return
         }
         let menu = AevonRingMenu(frame: host.bounds)
+        menu.anchorY = anchorY
         host.addSubview(menu)
         host.bringSubviewToFront(menu)
         current = menu
@@ -140,7 +147,7 @@ final class AevonRingMenu: UIView {
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         isUserInteractionEnabled = true
 
-        dimView.backgroundColor = UIColor(white: 0, alpha: 0.46)
+        dimView.backgroundColor = UIColor(white: 0, alpha: 0.32)
         dimView.frame = bounds
         dimView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         dimView.isUserInteractionEnabled = false
@@ -191,16 +198,28 @@ final class AevonRingMenu: UIView {
     }
 
     private func computeGeometry() {
-        // 整圆居中：圆心在屏幕中心略偏上，给底部提示留位置
-        ringCenter = CGPoint(x: bounds.midX, y: bounds.midY - bounds.height * 0.02)
-        // 半径：既不超出左右边界，也不顶到状态栏/底部
-        let byWidth = bounds.width / 2 - AevonRingMenu.iconSize / 2 - 20
-        let byHeight = bounds.height / 2 - AevonRingMenu.iconSize / 2 - 96
-        radius = max(96, min(byWidth, byHeight, 200))
+        // V0.0.19 布局：圆心贴右侧、纵向跟随触发点。
+        // 旧版是「屏幕正中 + 半径 168」——单手大拇指要横跨半个屏幕才够得到；
+        // 现在圆心固定在右边距一侧，纵向跟着手指落点走（并夹在安全范围内），
+        // 半径收到 124，整圈只占右侧约 250pt 宽，拇指原地画半圈就能选中。
+        let byWidth = (bounds.width - AevonRingMenu.sideMargin * 2 - AevonRingMenu.iconSize) / 2
+        let byHeight = (bounds.height - 180) / 2
+        radius = max(96, min(AevonRingMenu.baseRadius, byWidth, byHeight))
+
+        let centerX = bounds.width - AevonRingMenu.sideMargin - radius
+        // 默认落点：屏幕 62% 高处（右手拇指自然位置）
+        let preferredY = anchorY ?? (bounds.height * 0.62)
+        // 上边留状态栏 + 提示，下边留底部安全区
+        let minY = radius + 96
+        let maxY = bounds.height - radius - 74
+        let centerY = min(max(preferredY, minY), max(maxY, minY))
+
+        ringCenter = CGPoint(x: centerX, y: centerY)
 
         centerButton.center = ringCenter
-        centerTitle.center = CGPoint(x: ringCenter.x, y: ringCenter.y + AevonRingMenu.centerSize / 2 + 15)
-        hintLabel.center = CGPoint(x: bounds.midX, y: bounds.maxY - 46)
+        centerTitle.center = CGPoint(x: ringCenter.x, y: ringCenter.y + AevonRingMenu.centerSize / 2 + 14)
+        // 提示文字放屏幕底部居中（圆盘靠右，提示不跟过去，避免压住图标）
+        hintLabel.center = CGPoint(x: bounds.midX, y: bounds.maxY - 40)
 
         let path = UIBezierPath(arcCenter: ringCenter,
                                 radius: radius,
@@ -227,7 +246,7 @@ final class AevonRingMenu: UIView {
         hintLabel.isHidden = false
         centerTitle.text = icons.isEmpty ? "点圆盘打开面板添加 App" : "共 \(icons.count) 个"
         layoutIcons()
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，整圆半径 \(Int(radius))，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))）（AevonRingFullCircle）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，整圆半径 \(Int(radius))，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))）（AevonRingFullCircle AevonRingRightAnchor）")
     }
 
     /// 圆周上的等角步进（整圆 360°）

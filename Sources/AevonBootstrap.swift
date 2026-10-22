@@ -1,4 +1,5 @@
 import UIKit
+import QuartzCore
 
 /// 启动引导：只用通知监听，不做任何系统方法交换。
 ///
@@ -38,6 +39,8 @@ enum AevonBootstrap {
             let missingBall = wantBall && !AevonBubble.shared.isVisible
             guard missingEdge || missingBall || !AevonEntryHost.isInstalled else {
                 AevonEntryHost.refreshLayout(reason: "didBecomeActive")
+                AevonEntryHost.raise(reason: "回到桌面")
+                diagnose("回到桌面")
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -45,7 +48,30 @@ enum AevonBootstrap {
             }
         }
 
+        // V0.0.19：App 进入前台时 SpringBoard 可能新建了更高的窗口把入口压住，
+        // 这里监听 SpringBoard 自己的通知（只观察，不做任何 hook），收到就重新顶一次。
+        // 通知名是 SpringBoard 内部字符串，拿不到也无害 —— 只是少一次主动重设。
+        for name in ["SBApplicationDidBecomeActiveNotification",
+                     "SBApplicationWillActivateNotification",
+                     "SBApplicationDidLaunchNotification"] {
+            _ = center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { _ in
+                guard AevonEntryHost.isInstalled else { return }
+                AevonEntryHost.raise(reason: "App 激活")
+                diagnose("App 激活")
+            }
+        }
+
         AevonLog.info("[引导] 已注册启动通知（入口不依赖任何 hook）")
+    }
+
+    /// 窗口栈诊断（限流 8 秒，避免刷爆日志）
+    private static var lastDiagnoseAt: CFTimeInterval = 0
+    private static func diagnose(_ tag: String) {
+        guard AevonPrefs.bool("LogEnabled", default: true) else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastDiagnoseAt > 8.0 else { return }
+        lastDiagnoseAt = now
+        AevonEntryHost.dumpWindowStack(tag)
     }
 
     /// 建唯一入口窗口 → 挂手势条 → 挂备用悬浮球（顺序：先条后球，球在最上层便于拖动）

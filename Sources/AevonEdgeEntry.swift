@@ -24,6 +24,8 @@ final class AevonEdgeStripView: UIView {
     static let holdDuration: TimeInterval = 0.42
 
     var onTrigger: (() -> Void)?
+    /// 触摸落点（屏幕坐标 y）：供圆盘贴着手指展开
+    var onTouchBegan: ((CGFloat) -> Void)?
 
     private let indicator = UIView()
     private var touchStart: CGPoint = .zero
@@ -101,6 +103,7 @@ final class AevonEdgeStripView: UIView {
         touchStart = point
         touchBeganAt = CACurrentMediaTime()
         fired = false
+        onTouchBegan?(convert(point, to: nil).y)
 
         let now = CACurrentMediaTime()
         if now - lastTouchLogAt > 0.8 {
@@ -185,6 +188,8 @@ enum AevonEdgeEntry {
     private static var probeStart: CGPoint?
     private static var lastTriggerAt: CFTimeInterval = 0
     private static var loggedProbeBegan = false
+    /// 最近一次边缘触摸的纵向落点（屏幕坐标），圆盘据此贴手指展开
+    private static var lastTouchY: CGFloat?
 
     /// 手势条是否已挂上（不代表手势一定能触发，触发靠系统触摸分发）
     static var isVisible: Bool { return strip != nil }
@@ -207,6 +212,7 @@ enum AevonEdgeEntry {
 
         let view = AevonEdgeStripView(frame: .zero)
         view.onTrigger = { attemptTrigger("手势条") }
+        view.onTouchBegan = { y in lastTouchY = y }
         root.addSubview(view)
         view.layoutInParent()
 
@@ -233,7 +239,7 @@ enum AevonEdgeEntry {
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
         AevonLog.info("[边缘] 触发（\(reason)），呼出圆盘")
-        presentRing()
+        presentRing(anchorY: lastTouchY)
     }
 
     /// 触摸探针 + 窗口层兜底判定。
@@ -254,6 +260,7 @@ enum AevonEdgeEntry {
             switch phase {
             case .began:
                 probeStart = inside ? point : nil
+                if inside { lastTouchY = point.y }
                 // 关键诊断：任何落点都记一次（限流），用来判断触摸到底有没有进我们的窗口
                 let now = CACurrentMediaTime()
                 if now - lastProbeLogAt > 3.0 {
@@ -277,13 +284,14 @@ enum AevonEdgeEntry {
         }
     }
 
-    /// 呼出圆盘。
-    static func presentRing() {
+    /// 呼出圆盘（anchorY = 触发点纵坐标，圆盘贴着手指展开）。
+    static func presentRing(anchorY: CGFloat? = nil) {
         guard let root = AevonEntryHost.rootView else {
             AevonLog.warn("[圆盘] 入口窗口不可用，无法呼出")
             return
         }
-        AevonRingMenu.present(in: root)
+        AevonEntryHost.raise(reason: "呼出圆盘")
+        AevonRingMenu.present(in: root, anchorY: anchorY)
     }
 
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。

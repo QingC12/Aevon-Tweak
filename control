@@ -1,8 +1,8 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.18
+Version: 0.0.19
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.18：修掉「只有在悬浮球面板打开时才能呼出圆盘」——把边缘手势条和悬浮球合并进同一个入口窗口（V0.0.17 日志显示两个同级窗口表现不一致，手势条所在窗口在桌面/App 前台收不到任何触摸），手势条几何改为按父视图实时落位并自愈，热区加宽到 34pt；并新增触摸探针，日志可区分「事件没到窗口」与「到了但没命中」。圆盘仍为屏幕正中整圆，点图标开窗、拖动旋转、长按移除、点空白收起。浮窗可触摸操作，支持左右分屏与边缘吸附。默认关闭，请在 设置 → Aevon 开启。
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.19：修掉「全屏 App 里呼不出圆盘、连右侧触发条都看不见」——把入口窗口层级从 1999 抬到 1e7（前台 App 画面在 SpringBoard 窗口树上压着旧层级），并在 App 激活时重新顶一次层级；圆盘改为贴右侧、跟随手指落点展开，半径从 168 收到 124，单手拇指原地即可选中；圆盘容量从 10 个提到 16 个，图标缩到 44pt 仍可点准。新增窗口栈诊断日志，便于定位「被更高窗口压住」的情况。圆盘点图标开窗、拖动旋转、长按移除、点空白收起。浮窗可触摸操作，支持左右分屏与边缘吸附。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks

@@ -6,8 +6,9 @@ import Foundation
 /// `TrashAppState` 这套数据模型 —— 圆盘里的 App 是一份用户自选的列表，可增可删。
 /// 我们只做「有序列表 + 上限」，存在偏好域 com.Aevon 的 `RingApps` 键里。
 enum AevonRingStore {
-    /// 圆盘上最多放几个（再多图标就会挤在一起，且 180° 弧放不下）
-    static let maxCount = 10
+    /// 圆盘上最多放几个（V0.0.19 从 10 提到 16：用户反馈「显示的应用太少了」）。
+    /// 半径 124 的整圆周长约 780pt，16 个图标间隔 48pt ≈ 图标 44pt + 4pt 缝隙，还是能点准。
+    static let maxCount = 16
 
     private static let key = "RingApps"
     private static let suite = "com.Aevon"
@@ -72,7 +73,7 @@ enum AevonRingStore {
     /// 首次使用：用候选 App 填几个，保证呼出圆盘时不是空的。
     static func seedIfNeeded(from apps: [AevonAppEntry]) {
         guard bundleIDs().isEmpty, !apps.isEmpty else { return }
-        let seed = Array(apps.prefix(8)).map { $0.bundleID }
+        let seed = Array(apps.prefix(10)).map { $0.bundleID }
         save(seed)
         AevonLog.info("[圆盘] 首次使用，已用 \(seed.count) 个 App 预填（可在面板「编辑圆盘」里改）")
     }
