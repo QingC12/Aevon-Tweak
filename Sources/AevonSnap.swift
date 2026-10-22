@@ -1,11 +1,16 @@
 import UIKit
 
 /// 吸附槽位：把窗口拖到屏幕边缘松手、或轻点左右侧条时，对齐到的位置。
+///
+/// V0.0.45（AevonNoTopDockV45）：`.top` 已删除。
+/// Aevon(38) 用户：「浮窗会吸附到桌面顶部，我不知道原因（这不应该出现）」——
+/// 日志里确有 `停靠到靠顶停靠 19,5`（拖侧条时被顶边判定抢走）。
+/// Stheno 只有 `leftPecent` / `rightPecent` 两个横向停靠位，**从来不存在顶部停靠**，
+/// 顶边手势本身在 V0.0.43 也已全部删除，所以这里连枚举值一起删掉，杜绝任何路径再产生。
 enum AevonSnapSlot: String {
     case free
     case left
     case right
-    case top
 }
 
 /// 吸附与安全区几何（V0.0.44，AevonSthenoDockV44）。
@@ -22,6 +27,13 @@ enum AevonSnapSlot: String {
 /// 那 59pt 在浮窗里就是一条纯空白，且把整个窗口拉高成细长条。
 /// 现在内容按「屏宽 ×（屏高 − 顶部安全区）」计量，场景整体上移那条高度，
 /// 窗口顶部就是 App 真正的第一行内容。
+///
+/// V0.0.45（AevonNoTopDockV45 / AevonDockSizeV45）：
+///   · 槽位只剩 left / right —— Stheno 只有 `leftPecent` / `rightPecent`，
+///     顶边吸附是 Aevon 自己多出来的东西（Aevon(38) 明确要求不要）；
+///   · 停靠宽度 42% → 30%（Stheno 的贴边态就是一根窄条），并给停靠单独的
+///     宽度下限 `dockMinWidth`，不再被主窗的 `minContentWidth` 抬回去；
+///   · 新增 `avoidVertical`：停靠小窗只上下让位，绝不被横向推离所在的那一侧。
 enum AevonSnap {
     /// 贴边距离（Stheno `edgeWidth` 对应物）。用户要求 5pt。
     static let edgeInset: CGFloat = 5
@@ -29,12 +41,19 @@ enum AevonSnap {
     static let edgeThreshold: CGFloat = 22
     /// V0.0.37：浮窗无标题栏，高度就是纯内容高
     static let titleBarHeight: CGFloat = 0
-    static let minContentWidth: CGFloat = 150
+    static let minContentWidth: CGFloat = 118
 
     /// 默认新开窗的宽度比例（屏宽百分比）V0.0.44：0.55 → 0.60（不再那么细）
     static let defaultWidthRatio: CGFloat = 0.60
-    /// 停靠（吸附到某一侧）时的宽度比例 V0.0.44：0.50 → 0.42（用户要求再小一点）
-    static let dockWidthRatio: CGFloat = 0.42
+    /// 停靠（吸附到某一侧）时的宽度比例。
+    ///
+    /// V0.0.45（AevonDockSizeV45）：0.42 → 0.30。用户 Aevon(38)：「吸附后的小窗还是大」。
+    /// Stheno 的停靠尺寸由 `leftHeightPecent` / `rightHeightPecent` 独立按百分比记忆
+    /// （高度和宽度不是一个自由度），所以贴边状态就是一个窄条 —— 0.30 × 430 ≈ 129pt 宽。
+    static let dockWidthRatio: CGFloat = 0.30
+    /// 停靠档的宽度下限：**不能**沿用 `minContentWidth`，
+    /// 否则 430 × 0.30 = 129 会被 150 抬回去，看起来「收不小」（V0.0.44 的隐形坑）。
+    static let dockMinWidth: CGFloat = 96
     /// 读历史几何时的宽度上限：旧版本可能存着 66%~94% 的巨窗，读出来必须收回来
     static let maxRestoredRatio: CGFloat = 0.62
     /// 自动避让时和别的浮窗之间留的缝
@@ -83,7 +102,7 @@ enum AevonSnap {
     /// 停靠档宽度（轻点侧条后的小窗）
     static var dockWidth: CGFloat {
         let screen = UIScreen.main.bounds
-        return max(minContentWidth, min(screen.width * dockWidthRatio, maxWidth))
+        return max(dockMinWidth, min(screen.width * dockWidthRatio, maxWidth))
     }
 
     /// 默认新开窗的 frame：屏宽 60%，水平居中，顶边 12% 屏高
@@ -143,7 +162,7 @@ enum AevonSnap {
         var height = height(forWidth: width)
         if height > maxHeight {
             height = maxHeight
-            width = max(minContentWidth, height * aspect)
+            width = max(dockMinWidth, height * aspect)
         }
         var f = CGRect(x: 0, y: 0, width: width, height: height)
         switch slot {
@@ -155,22 +174,23 @@ enum AevonSnap {
         case .right:
             f.origin.x = screen.width - edgeInset - width
             f.origin.y = base.midY - height / 2.0
-        case .top:
-            f.origin.x = base.midX - width / 2.0
-            f.origin.y = edgeInset
         }
         return clamped(f)
     }
 
     /// 松手时按窗口位置判断想吸附到哪一格；不需要吸附时返回 nil。
+    ///
+    /// V0.0.45：只剩左右两个横向停靠位（Stheno 同款）。顶边 / 底边一律不吸附 ——
+    /// 用户 Aevon(38) 明确「浮窗会吸附到桌面顶部，这不应该出现」。
     static func slot(for frame: CGRect) -> AevonSnapSlot? {
         let screen = UIScreen.main.bounds
         guard screen.width > 0, screen.height > 0, frame.width > 0 else { return nil }
         let trigger = edgeInset + edgeThreshold
-        if frame.minX <= trigger { return .left }
-        if screen.maxX - frame.maxX <= trigger { return .right }
-        if frame.minY <= trigger { return .top }
-        return nil
+        // 两侧都够近时，往更近的那侧吸；这样拖到角落也不会乱跳
+        let leftGap = frame.minX
+        let rightGap = screen.maxX - frame.maxX
+        if leftGap > trigger && rightGap > trigger { return nil }
+        return leftGap <= rightGap ? .left : .right
     }
 
     /// 自动避让（V0.0.44）：把 frame 推开，别压住别的浮窗（尤其是已停靠的小窗）。
@@ -198,15 +218,51 @@ enum AevonSnap {
                 t.origin.x = max(edgeInset, min(t.origin.x, screen.width - edgeInset - t.width))
                 t.origin.y = max(edgeInset, min(t.origin.y, screen.height - edgeInset - t.height))
                 guard !obstacles.contains(where: { t.intersects($0) }) else { continue }
-                let score = abs(c.x) + abs(c.y)
+                // V0.0.45（AevonNoTopDockV45）：优先横向让位，且**别贴到屏顶/屏底**。
+                // Aevon(38) 真机：小窗一停靠，主窗就被推到 79,5（顶到屏幕上边），
+                // 用户看起来就是「浮窗吸附到桌面顶部」——其实是被避让算法顶上去了。
+                var score = abs(c.x) + abs(c.y) * 1.5
+                if t.origin.y <= edgeInset + 44
+                    || t.origin.y >= screen.height - edgeInset - t.height - 44 {
+                    score += 260
+                }
                 if score < bestScore { bestScore = score; best = c }
             }
             if best == nil {
-                // 四边都放不下（屏幕被占满）：往上推，至少不压在同一块上
-                best = CGPoint(x: 0, y: hit.minY - gap - f.maxY)
+                // 四边都放不下（屏幕被占满）：优先横向推，别往屏顶/屏底顶（V0.0.45）
+                best = CGPoint(x: hit.minX - gap - f.maxX, y: 0)
             }
             guard let offset = best else { break }
             f = f.offsetBy(dx: offset.x, dy: offset.y)
+        }
+        return clamped(f)
+    }
+
+    /// 只上下让位（V0.0.45，AevonDockKeepSideV45）。
+    ///
+    /// Aevon(38) 日志铁证：`停靠到靠右停靠 19,92 180x366` —— 明明吸到右边，x 却是 19。
+    /// 根因是 `avoid()` 会往左右推，把刚贴到右边缘的小窗又推到左边去（语义直接错乱）。
+    /// 停靠小窗的位置由 `frame(for:from:)` 决定，让位只允许在纵向做。
+    static func avoidVertical(_ frame: CGRect, obstacles: [CGRect]) -> CGRect {
+        var f = frame
+        guard !obstacles.isEmpty else { return f }
+        let screen = UIScreen.main.bounds
+        for _ in 0..<3 {
+            guard let hit = obstacles.first(where: { f.intersects($0) }) else { break }
+            let gap = obstacleGap
+            let up = hit.minY - gap - f.maxY
+            let down = hit.maxY + gap - f.minY
+            // 选位移更小、且推完不撞别人的那一边
+            var applied = false
+            for dy in [up, down] {
+                var t = f.offsetBy(dx: 0, dy: dy)
+                t.origin.y = max(edgeInset, min(t.origin.y, screen.height - edgeInset - t.height))
+                guard !obstacles.contains(where: { t.intersects($0) }) else { continue }
+                f = t
+                applied = true
+                break
+            }
+            if !applied { break }
         }
         return clamped(f)
     }
@@ -216,7 +272,6 @@ enum AevonSnap {
         case .free: return "自由位置"
         case .left: return "靠左停靠"
         case .right: return "靠右停靠"
-        case .top: return "靠顶停靠"
         }
     }
 }

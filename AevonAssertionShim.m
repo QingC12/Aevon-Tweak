@@ -107,6 +107,21 @@ __attribute__((used)) static const char AevonDockAvoidV44Marker[] = "AevonDockAv
 __attribute__((used)) static const char AevonFloatEdgeGlowV44Marker[] = "AevonFloatEdgeGlowV44";
 __attribute__((used)) static const char AevonTopBlankCropV44Marker[] = "AevonTopBlankCropV44";
 
+/* V0.0.45 CI 标记（AevonFloatSmoothV45）：
+ * AevonFloatSmoothV45 = 缩放/拖动改 CADisplayLink 合帧 + 拖动期间圆角与避让不再逐帧重算
+ *                       （治「画面一卡一卡」）；
+ * AevonDockSizeV45    = 停靠小窗收到屏宽 30%（原 42%，不再被 minContentWidth 抬回去）；
+ * AevonNoTopDockV45   = 顶部停靠彻底删除（Stheno 只有 leftPecent / rightPecent）；
+ * AevonDockKeepSideV45= 停靠小窗只上下让位，不再被横向推离所在那一侧；
+ * AevonEdgeThinV45    = 白描边 0.9pt/34% → 0.5pt/26%；
+ * AevonCornerHotV45   = 下角块 36 → 48pt + 10pt 命中外扩（右下角缩放不好按）。 */
+__attribute__((used)) static const char AevonFloatSmoothV45Marker[] = "AevonFloatSmoothV45";
+__attribute__((used)) static const char AevonDockSizeV45Marker[] = "AevonDockSizeV45";
+__attribute__((used)) static const char AevonNoTopDockV45Marker[] = "AevonNoTopDockV45";
+__attribute__((used)) static const char AevonDockKeepSideV45Marker[] = "AevonDockKeepSideV45";
+__attribute__((used)) static const char AevonEdgeThinV45Marker[] = "AevonEdgeThinV45";
+__attribute__((used)) static const char AevonCornerHotV45Marker[] = "AevonCornerHotV45";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
