@@ -745,7 +745,7 @@ final class AevonWindowView: UIView {
         persistFrame()
         AevonLog.info("[窗口] 缩放到 \(Int(frame.width))x\(Int(frame.height))"
             + "（圆角 \(Int(contentClip.layer.cornerRadius)) · 全程实时渲染"
-            + " · 合帧 \(resizeStepCount) 次）（AevonLiveResizeV44 AevonFloatSmoothV45）")
+            + " · 拖动合帧已生效 \(resizeStepCount) 帧）（AevonLiveResizeV44 AevonFloatSmoothV45）")
     }
 
     // MARK: - 停靠 / 吸附

@@ -454,7 +454,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["合帧"]
+          need = ["拖动合帧已生效"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.45 日志串: " + ", ".join(miss))
