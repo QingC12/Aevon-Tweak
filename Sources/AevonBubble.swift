@@ -17,56 +17,40 @@ final class AevonBubbleController: UIViewController {
     }
 }
 
-/// 悬浮球入口：不依赖任何系统 hook 的唯一切入点。
+/// 备用入口：一个可以拖动的小圆球。
 ///
-/// 为什么改成悬浮球：
+/// V0.0.18：不再自己建窗口，改为挂在 `AevonEntryHost` 的统一入口窗口里
+/// （那个窗口的触摸在真机上一直是好的，边缘手势条也搬进去了）。
+///
+/// 为什么当初改成悬浮球（历史原因，保留说明）：
 ///   V0.0.6 通过 hook `SBIconView -applicationShortcutItems` 往长按菜单里塞一项，
-///   实测长按图标约 220ms 后 SpringBoard 直接收到 SIGBUS 退出（日志停在
-///   「SBIconView applicationShortcutItems 首次调用」）。伪造 SpringBoard 的
-///   快捷菜单项要依赖未公开类的内部约束，代价是把整个桌面拖下水。
-///   悬浮球只是「我们自己窗口里的一个按钮」，系统路径上零改动。
+///   实测长按图标约 220ms 后 SpringBoard 直接收到 SIGBUS 退出。桌面快捷菜单这条路
+///   依赖未公开类的内部约束，代价是把整个桌面拖下水，所以入口一律走「自己的窗口 + 自己的视图」。
 final class AevonBubble {
     static let shared = AevonBubble()
     private init() {}
 
-    private var window: AevonPassthroughWindow?
     private var ball: UIButton?
     private var picker: AevonAppPickerView?
     private var panStart: CGPoint = .zero
     private var ballOrigin: CGPoint = .zero
+    private var loggedDisabled = false
 
-    var isVisible: Bool { window != nil }
+    var isVisible: Bool { return ball != nil }
 
     // MARK: - 创建
 
     func install(attempt: Int, reason: String) {
         guard AevonPrefs.bool("Enabled", default: false) else { return }
         guard AevonPrefs.bool("BubbleEnabled", default: false) else {
-            AevonLog.info("[悬浮球] 开关已关闭，不创建")
-            return
-        }
-        if window != nil { return }
-        guard attempt <= 12 else {
-            AevonLog.warn("[悬浮球] 多次尝试仍没有可用场景，放弃本次创建（原因：\(reason)）")
-            return
-        }
-        guard let scene = AevonHostWindow.firstWindowScene() else {
-            AevonLog.info("[悬浮球] 暂无前台场景，1.5 秒后重试（第 \(attempt) 次，\(reason)）")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.install(attempt: attempt + 1, reason: reason)
+            if !loggedDisabled {
+                loggedDisabled = true
+                AevonLog.info("[悬浮球] 开关已关闭，不创建（备用入口）")
             }
             return
         }
-
-        let host = AevonPassthroughWindow(windowScene: scene)
-        host.frame = UIScreen.main.bounds
-        host.backgroundColor = .clear
-        // 比普通窗口高、比系统弹窗低（UIWindowLevelAlert = 2000）
-        host.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue - 1)
-
-        let root = AevonBubbleController()
-        host.rootViewController = root
-        host.isHidden = false
+        if ball != nil { return }
+        guard let root = AevonEntryHost.ensureInstalled(attempt: attempt, reason: reason) else { return }
 
         let size: CGFloat = 54
         let screen = UIScreen.main.bounds
@@ -87,18 +71,33 @@ final class AevonBubble {
         button.addTarget(self, action: #selector(ballTapped), for: .touchUpInside)
         button.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(ballPanned(_:))))
 
-        root.view.addSubview(button)
-
-        window = host
+        root.addSubview(button)
         ball = button
-        AevonLog.info("[悬浮球] 已创建（level=\(host.windowLevel.rawValue)，scene=\(scene.activationState.rawValue)，原因=\(reason)）")
+        AevonLog.info("[悬浮球] 已挂到入口窗口（level=\(Int(root.window?.windowLevel.rawValue ?? 0))，原因=\(reason)）")
+    }
+
+    /// 把球提到最上层（面板 / 圆盘都是全屏视图，会把球盖住）。
+    func bringBallToFront() {
+        guard let button = ball, let parent = button.superview else { return }
+        parent.bringSubviewToFront(button)
+    }
+
+    /// 尺寸变化后校正球的位置（保持在屏内）。
+    func refreshLayoutIfNeeded() {
+        guard let button = ball, let parent = button.superview else { return }
+        let bounds = parent.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        var frame = button.frame
+        frame.origin.x = min(max(4, frame.origin.x), bounds.width - frame.width - 4)
+        frame.origin.y = min(max(50, frame.origin.y), bounds.height - frame.height - 40)
+        button.frame = frame
     }
 
     // MARK: - 交互
 
     @objc private func ballTapped() {
         AevonLog.info("[悬浮球] 点击，打开应用选择面板")
-        guard let root = window?.rootViewController else { return }
+        guard let root = AevonEntryHost.rootView else { return }
         if let existing = picker {
             existing.removeFromSuperview()
             picker = nil
@@ -108,9 +107,10 @@ final class AevonBubble {
         let panel = AevonAppPickerView(apps: apps) { [weak self] in
             self?.picker = nil
         }
-        panel.frame = root.view.bounds
-        root.view.addSubview(panel)
+        panel.frame = root.bounds
+        root.addSubview(panel)
         picker = panel
+        bringBallToFront()
     }
 
     @objc private func ballPanned(_ gesture: UIPanGestureRecognizer) {

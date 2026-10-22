@@ -3,9 +3,12 @@ import UIKit
 /// 启动引导：只用通知监听，不做任何系统方法交换。
 ///
 /// V0.0.7 的核心安全设计：
-/// 入口（悬浮球）完全靠 UIApplication 的生命周期通知驱动，
-/// 启动阶段 SpringBoard 的系统方法上一个 hook 都没有，
+/// 入口完全靠 UIApplication 的生命周期通知驱动，启动阶段 SpringBoard 的系统方法上一个 hook 都没有，
 /// 因此不可能再出现「长按图标 → 注销」这类系统路径崩溃。
+///
+/// V0.0.18：入口从「两个窗口」收敛成「一个统一窗口」——
+/// `AevonEntryHost` 先建好唯一窗口，再把边缘手势条和备用悬浮球挂进去。
+/// 之前两个同级窗口的表现不一致（悬浮球能收触摸、手势条收不到），合并后从结构上消除差异。
 enum AevonBootstrap {
     private static var started = false
 
@@ -15,31 +18,44 @@ enum AevonBootstrap {
 
         let center = NotificationCenter.default
 
-        // 启动完成 → 等 4 秒（让桌面把图标、Widget 都铺好）再挂悬浮球
+        // 启动完成 → 等 4 秒（让桌面把图标、Widget 都铺好）再挂入口
         _ = center.addObserver(forName: UIApplication.didFinishLaunchingNotification,
                                object: nil,
                                queue: .main) { _ in
             AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势 / 备用悬浮球）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-                // 顺序有意义：先建悬浮球窗口、后建边缘窗口，
-                // 让「边缘窗口（圆盘的宿主）」处于同级窗口的最上层，
-                // 否则悬浮球窗口连同它的面板会盖住圆盘，造成"呼不出/点了没反应"。
-                AevonBubble.shared.install(attempt: 1, reason: "didFinishLaunching")
-                AevonEdgeEntry.install(attempt: 1, reason: "didFinishLaunching")
+                installEntries(reason: "didFinishLaunching")
             }
         }
 
-        // 兜底：每次回到活跃态时检查一遍（悬浮球被系统回收/首次没有场景时补建）
+        // 兜底：每次回到活跃态时检查一遍（首次没有场景 / 被系统回收 / 屏幕尺寸变化时补建与校正）
         _ = center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                object: nil,
                                queue: .main) { _ in
-            guard !AevonEdgeEntry.isVisible || !AevonBubble.shared.isVisible else { return }
+            let wantEdge = AevonPrefs.bool("EdgeGestureEnabled", default: true)
+            let wantBall = AevonPrefs.bool("BubbleEnabled", default: false)
+            let missingEdge = wantEdge && !AevonEdgeEntry.isVisible
+            let missingBall = wantBall && !AevonBubble.shared.isVisible
+            guard missingEdge || missingBall || !AevonEntryHost.isInstalled else {
+                AevonEntryHost.refreshLayout(reason: "didBecomeActive")
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                AevonBubble.shared.install(attempt: 1, reason: "didBecomeActive")
-                AevonEdgeEntry.install(attempt: 1, reason: "didBecomeActive")
+                installEntries(reason: "didBecomeActive")
             }
         }
 
         AevonLog.info("[引导] 已注册启动通知（入口不依赖任何 hook）")
+    }
+
+    /// 建唯一入口窗口 → 挂手势条 → 挂备用悬浮球（顺序：先条后球，球在最上层便于拖动）
+    private static func installEntries(reason: String) {
+        guard AevonPrefs.bool("Enabled", default: false) else { return }
+        guard AevonEntryHost.ensureInstalled(reason: reason) != nil else {
+            AevonLog.info("[引导] 入口窗口暂不可用，等待下一次活跃态重试（\(reason)）")
+            return
+        }
+        AevonEdgeEntry.install(attempt: 1, reason: reason)
+        AevonBubble.shared.install(attempt: 1, reason: reason)
     }
 }

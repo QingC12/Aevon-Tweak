@@ -120,8 +120,10 @@ final class AevonRingMenu: UIView {
         host.addSubview(menu)
         host.bringSubviewToFront(menu)
         current = menu
-        // 圆盘展开期间关掉边缘手势条，避免从右边滑进来时又被它抢走触摸
-        AevonEdgeEntry.setStripInteraction(false)
+        // V0.0.18：不再需要「展开期间关掉边缘手势条」——
+        // 圆盘和手势条现在在同一个根视图里，圆盘最后添加、在最上层，
+        // hitTest 天然先命中圆盘，手势条拿不到触摸。
+        // 旧版靠开关 isUserInteractionEnabled 反而留下了「收起时忘记恢复就再也呼不出」的风险。
         menu.reload()
         menu.animateIn()
     }
@@ -300,7 +302,6 @@ final class AevonRingMenu: UIView {
             self.centerButton.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
         }, completion: { _ in
             self.removeFromSuperview()
-            AevonEdgeEntry.setStripInteraction(true)
         })
     }
 

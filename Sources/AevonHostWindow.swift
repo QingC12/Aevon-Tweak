@@ -1,7 +1,8 @@
 import UIKit
 
 /// 穿透窗口：未命中的触摸直接交给下层，不吞掉系统手势。
-final class AevonPassthroughWindow: UIWindow {
+/// 非 final：`AevonEntryWindow` 需要继承它并重写 `sendEvent` 做触摸探针。
+class AevonPassthroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
         return hit === self ? nil : hit

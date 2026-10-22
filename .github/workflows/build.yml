@@ -147,7 +147,13 @@ jobs:
           # V0.0.17：边缘条自己接管原生触摸（不再用 UIScreenEdgePanGestureRecognizer）
           strings "$DYLIB" | grep -q 'AevonEdgeTouch' \
             || { echo "::error::边缘入口仍是手势识别器版本（缺少 AevonEdgeTouch 标记）"; exit 1; }
-          echo "圆盘校验: 边缘入口（原生触摸）+ 整圆形态 + 图标单元 已编入"
+          # V0.0.18：入口合并为唯一窗口（悬浮球 + 手势条同窗口）+ 触摸探针
+          # 注意：strings 只输出可打印 ASCII，中文日志串查不到，这里只校验 ASCII 符号名
+          strings "$DYLIB" | grep -q 'AevonEntryHost' \
+            || { echo "::error::入口没有合并到统一窗口（缺少 AevonEntryHost 标记）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonEntryWindow' \
+            || { echo "::error::缺少统一入口窗口类（AevonEntryWindow）"; exit 1; }
+          echo "圆盘校验: 边缘入口（原生触摸）+ 整圆形态 + 图标单元 + 统一入口窗口 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"

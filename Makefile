@@ -19,6 +19,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonPrefs.swift \
     Sources/AevonCrashGuard.swift \
     Sources/AevonBootstrap.swift \
+    Sources/AevonEntryHost.swift \
     Sources/AevonBubble.swift \
     Sources/AevonEdgeEntry.swift \
     Sources/AevonRingMenu.swift \
