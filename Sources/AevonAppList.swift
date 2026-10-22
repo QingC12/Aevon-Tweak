@@ -105,15 +105,26 @@ enum AevonAppList {
             if let nested = AevonRuntime.send(object, Selector(name)) { targets.append(nested) }
         }
         for target in targets {
-            if let prohibited = AevonRuntime.bool(target, key: "isLaunchProhibited"), prohibited { return false }
-            if let hidden = AevonRuntime.bool(target, key: "isHidden"), hidden { return false }
-            if let placeholder = AevonRuntime.bool(target, key: "isPlaceholder"), placeholder { return false }
+            if boolValue(target, "isLaunchProhibited") == true { return false }
+            if boolValue(target, "isHidden") == true { return false }
+            if boolValue(target, "isPlaceholder") == true { return false }
             if let path = bundlePath(of: target) {
                 // 有路径就以路径说话：只认 .app
                 return path.hasSuffix(".app")
             }
         }
         return true
+    }
+
+    /// 直接调用返回 BOOL 的 getter（不走 KVC —— 私有类上 KVC 有可能抛未定义键异常，
+    /// 在 SpringBoard 里那就是直接注销）。
+    private static func boolValue(_ object: AnyObject, _ selectorName: String) -> Bool? {
+        let selector = Selector(selectorName)
+        guard let ns = object as? NSObject, ns.responds(to: selector) else { return nil }
+        guard let method = class_getInstanceMethod(object_getClass(object), selector) else { return nil }
+        typealias Fn = @convention(c) (AnyObject, Selector) -> Bool
+        let function = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        return function(object, selector)
     }
 
     /// 读 App 的 .app 路径（不同来源的对象属性名不同，逐个试）
