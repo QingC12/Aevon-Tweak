@@ -19,8 +19,9 @@ enum AevonBootstrap {
         _ = center.addObserver(forName: UIApplication.didFinishLaunchingNotification,
                                object: nil,
                                queue: .main) { _ in
-            AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建悬浮球")
+            AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势 / 备用悬浮球）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                AevonEdgeEntry.install(attempt: 1, reason: "didFinishLaunching")
                 AevonBubble.shared.install(attempt: 1, reason: "didFinishLaunching")
             }
         }
@@ -29,8 +30,9 @@ enum AevonBootstrap {
         _ = center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                object: nil,
                                queue: .main) { _ in
-            guard !AevonBubble.shared.isVisible else { return }
+            guard !AevonEdgeEntry.isVisible || !AevonBubble.shared.isVisible else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                AevonEdgeEntry.install(attempt: 1, reason: "didBecomeActive")
                 AevonBubble.shared.install(attempt: 1, reason: "didBecomeActive")
             }
         }

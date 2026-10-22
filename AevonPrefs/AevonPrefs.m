@@ -206,15 +206,16 @@ static NSArray *AevonBuildFallback(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
-                              @"V0.0.14 悬浮球版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：打开「启用插件」和「显示悬浮球」→ 注销 → 桌面出现蓝色圆球 → 点圆球选 App。"
-                              @"面板可切「单窗 / 左右分屏」；拖标题栏到屏幕左右边缘自动吸附成半屏；"
-                              @"点已开窗口名称可置顶，✕ 可单独关闭。"
+                              @"V0.0.15 边缘圆盘版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
+                              @"用法：打开「启用插件」→ 注销 → 从屏幕右边下半边缘向左滑呼出圆盘 → 点图标开窗。"
+                              @"圆盘可拖动旋转，长按图标移除，点圆心打开完整面板（单窗 / 左右分屏 / 编辑圆盘）。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
     if (s1 != nil) [result addObject:s1];
-    id s1b = AevonNewSwitch(@"显示悬浮球（唯一入口）", target, @"BubbleEnabled", @YES);
+    id s1a = AevonNewSwitch(@"右侧边缘左滑呼出圆盘（主入口）", target, @"EdgeGestureEnabled", @YES);
+    if (s1a != nil) [result addObject:s1a];
+    id s1b = AevonNewSwitch(@"显示桌面悬浮球（备用入口）", target, @"BubbleEnabled", @NO);
     if (s1b != nil) [result addObject:s1b];
 
     id group2 = AevonNewGroup(@"窗口",

@@ -2,6 +2,8 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <mach/mach.h>
 #import <signal.h>
+#import <UIKit/UIKit.h>
+#import <objc/message.h>
 
 /*
  * RBSAssertion 保活垫片（Objective-C，异常安全）。
@@ -150,6 +152,36 @@ static NSMutableDictionary *_assertionsByPID = nil;
 }
 
 @end
+
+/*
+ * App 图标垫片。
+ *
+ * Stheno 逆向证据（Stheno.dylib 符号表）：它取图标走的是
+ * `-applicationIconImageForBundleIdentifier:format:scale:`，宿主类为 SBIconController。
+ * format 在不同 iOS 版本上取值不一致（0/2 都用过），所以两个都试一遍再放弃。
+ * 全部失败时返回 nil，由 Swift 侧画首字母圆形兜底。
+ */
+UIImage *AevonIconImage(NSString *bundleID, CGFloat scale) {
+    if (bundleID.length == 0) return nil;
+    @try {
+        Class ctlClass = NSClassFromString(@"SBIconController");
+        if (ctlClass == Nil) return nil;
+        id ctl = ((id (*)(id, SEL))objc_msgSend)(ctlClass, @selector(sharedInstance));
+        if (ctl == nil) return nil;
+
+        SEL sel = @selector(applicationIconImageForBundleIdentifier:format:scale:);
+        if (![ctl respondsToSelector:sel]) return nil;
+
+        CGFloat useScale = scale > 0 ? scale : 3.0;
+        for (int format = 0; format <= 2; format++) {
+            id image = ((id (*)(id, SEL, id, int, CGFloat))objc_msgSend)(ctl, sel, bundleID, format, useScale);
+            if ([image isKindOfClass:[UIImage class]]) return (UIImage *)image;
+        }
+    } @catch (NSException *exception) {
+        // 私有接口，任何异常都当"没有图标"
+    }
+    return nil;
+}
 
 /*
  * dyld 构造函数入口（与垫片同文件，省掉单独的 ctor.m）。

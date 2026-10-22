@@ -41,7 +41,7 @@ final class AevonBubble {
 
     func install(attempt: Int, reason: String) {
         guard AevonPrefs.bool("Enabled", default: false) else { return }
-        guard AevonPrefs.bool("BubbleEnabled", default: true) else {
+        guard AevonPrefs.bool("BubbleEnabled", default: false) else {
             AevonLog.info("[悬浮球] 开关已关闭，不创建")
             return
         }

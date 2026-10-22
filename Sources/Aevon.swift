@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 /// Aevon 版本号（与 control 保持一致；CI 会按 tag 覆盖本行）。
-let AevonVersion = "0.0.14"
+let AevonVersion = "0.0.15"
 
 /// dyld 构造函数入口（由 AevonAssertionShim.m 以 C 符号调用）。
 /// 约定：本函数绝不抛出、绝不强制解包失败；任何异常路径只记录日志。

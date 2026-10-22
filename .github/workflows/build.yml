@@ -134,6 +134,17 @@ jobs:
             || { echo "::error::主插件缺少左右分屏流程（AevonSplitFlow）"; exit 1; }
           echo "分屏校验: 吸附几何 + 左右分屏流程 已编入"
 
+          # V0.0.15：边缘手势入口 + 圆盘选择器
+          strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
+            || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingMenu' \
+            || { echo "::error::缺少圆盘选择器（AevonRingMenu）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingStore' \
+            || { echo "::error::缺少圆盘收藏存储（AevonRingStore）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonIconImage' \
+            || { echo "::error::缺少 App 图标获取（AevonIconImage）"; exit 1; }
+          echo "圆盘校验: 边缘入口 + 径向菜单 + 收藏存储 + 图标接口 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -174,6 +185,9 @@ jobs:
           # V0.0.14 新增：吸附开关必须在 Root.plist 里
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'SnapEnabled' \
             || { echo "::error::Root.plist 缺少 SnapEnabled（边缘吸附）开关"; exit 1; }
+          # V0.0.15 新增：边缘手势主入口开关必须在
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'EdgeGestureEnabled' \
+            || { echo "::error::Root.plist 缺少 EdgeGestureEnabled（边缘圆盘入口）开关"; exit 1; }
 
           # 图标三档必须在 bundle 根目录
           ICON_DIR="$(dirname "$PREFS_BIN")"
