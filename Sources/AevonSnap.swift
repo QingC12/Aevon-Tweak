@@ -8,21 +8,22 @@ enum AevonSnapSlot: String {
     case top
 }
 
-/// 吸附与安全区几何（V0.0.43，AevonSthenoDockV43）。
+/// 吸附与安全区几何（V0.0.44，AevonSthenoDockV44）。
 ///
-/// 按 Stheno 主浮窗的百分比几何模型重做（逆向键：`leftPecent` / `rightPecent` /
+/// 按 Stheno 主浮窗的百分比几何模型（逆向键：`leftPecent` / `rightPecent` /
 /// `leftHeightPecent` / `rightHeightPecent` / `edgeWidth` / `medusaFrameLast`）：
 ///   · 位置与大小都存屏幕百分比，换机型按比例还原；
-///   · `edgeWidth` 只表示「贴边留多薄的一层」——Stheno 的浮窗是贴着屏幕边缘的，
-///     不存在 34pt 那种空白安全区（Aevon(36) 用户反馈：留太宽很丑）。
-///   · 停靠（left/right）是**贴边 + 换成停靠档的小尺寸**，不会留下巨窗。
+///   · `edgeWidth` 只表示「贴边留多薄的一层」，没有大安全区（用户指定 5pt）；
+///   · 停靠 = 贴边 + 换成停靠档的小尺寸。
 ///
-/// 尺寸三档（屏 430x932 时的实际值）：
-///   · 默认新开窗 55% 屏宽 → 约 236x512（V0.0.42 是 70% / 301x652，偏大）
-///   · 停靠小窗   50% 屏宽 → 约 215x466
-///   · 手动缩放的上下限由 `maxWidth` / `maxHeight` 兜住
+/// V0.0.44 关键修正：**内容可视区去掉顶部状态栏那条空白**。
+/// Aevon(37) 用户反馈「主悬浮窗顶部的空白区域很大，成了竖的细长条」——
+/// 浮窗承载的是一个整屏场景（430x932），宿主的 App 自己不画状态栏，
+/// 那 59pt 在浮窗里就是一条纯空白，且把整个窗口拉高成细长条。
+/// 现在内容按「屏宽 ×（屏高 − 顶部安全区）」计量，场景整体上移那条高度，
+/// 窗口顶部就是 App 真正的第一行内容。
 enum AevonSnap {
-    /// 贴边距离（Stheno `edgeWidth` 对应物）。用户要求从 34pt 收到 5pt。
+    /// 贴边距离（Stheno `edgeWidth` 对应物）。用户要求 5pt。
     static let edgeInset: CGFloat = 5
     /// 距离屏幕边缘多少点以内算「想吸附」
     static let edgeThreshold: CGFloat = 22
@@ -30,14 +31,38 @@ enum AevonSnap {
     static let titleBarHeight: CGFloat = 0
     static let minContentWidth: CGFloat = 150
 
-    /// 默认新开窗的宽度比例（屏宽百分比）
-    static let defaultWidthRatio: CGFloat = 0.55
-    /// 停靠（吸附到某一侧）时的宽度比例
-    static let dockWidthRatio: CGFloat = 0.50
+    /// 默认新开窗的宽度比例（屏宽百分比）V0.0.44：0.55 → 0.60（不再那么细）
+    static let defaultWidthRatio: CGFloat = 0.60
+    /// 停靠（吸附到某一侧）时的宽度比例 V0.0.44：0.50 → 0.42（用户要求再小一点）
+    static let dockWidthRatio: CGFloat = 0.42
     /// 读历史几何时的宽度上限：旧版本可能存着 66%~94% 的巨窗，读出来必须收回来
-    static let maxRestoredRatio: CGFloat = 0.58
+    static let maxRestoredRatio: CGFloat = 0.62
+    /// 自动避让时和别的浮窗之间留的缝
+    static let obstacleGap: CGFloat = 8
 
-    static var aspect: CGFloat { return AevonWindowView.contentAspect }
+    /// 顶部安全区（状态栏那条空白）在设备上的高度。
+    /// 优先读真实 safeAreaInsets；SpringBoard 里的入口容器是整屏视图，能拿到 59。
+    static var visualTopInset: CGFloat {
+        if let root = AevonEntryHost.activeRoot {
+            let top = root.safeAreaInsets.top
+            if top > 1 { return top }
+        }
+        if let host = AevonEntryHost.floatHost {
+            let top = host.safeAreaInsets.top
+            if top > 1 { return top }
+        }
+        let height = UIScreen.main.bounds.height
+        return height > 800 ? 59 : 20
+    }
+
+    /// 内容可视区的宽高比 = 屏宽 ÷（屏高 − 顶部状态栏空白）。
+    /// iPhone 15 Pro Max：430 ÷ (932 − 59) ≈ 0.4925（原来 0.461，细长条的来源）。
+    static var aspect: CGFloat {
+        let screen = UIScreen.main.bounds
+        guard screen.width > 1, screen.height > 1 else { return 9.0 / 19.5 }
+        let usableHeight = max(screen.height * 0.6, screen.height - visualTopInset)
+        return screen.width / usableHeight
+    }
 
     static func height(forWidth width: CGFloat) -> CGFloat {
         return width / max(0.2, aspect) + titleBarHeight
@@ -55,7 +80,13 @@ enum AevonSnap {
         return max(minContentWidth / max(0.2, aspect), screen.height - edgeInset * 2)
     }
 
-    /// 默认新开窗的 frame：屏宽 55%，水平居中，顶边 12% 屏高
+    /// 停靠档宽度（轻点侧条后的小窗）
+    static var dockWidth: CGFloat {
+        let screen = UIScreen.main.bounds
+        return max(minContentWidth, min(screen.width * dockWidthRatio, maxWidth))
+    }
+
+    /// 默认新开窗的 frame：屏宽 60%，水平居中，顶边 12% 屏高
     static func defaultFrame() -> CGRect {
         let screen = UIScreen.main.bounds
         let width = max(minContentWidth, min(screen.width * defaultWidthRatio, maxWidth))
@@ -65,7 +96,7 @@ enum AevonSnap {
         return clamped(CGRect(x: x, y: y, width: width, height: height))
     }
 
-    /// 按宽度与安全区求一个合规 frame（宽高比锁定屏幕比例）
+    /// 按宽度与安全区求一个合规 frame（宽高比锁定内容可视区比例）
     static func fitted(width: CGFloat) -> CGRect {
         let screen = UIScreen.main.bounds
         var w = max(minContentWidth, min(width, maxWidth))
@@ -108,7 +139,7 @@ enum AevonSnap {
     static func frame(for slot: AevonSnapSlot, from base: CGRect) -> CGRect {
         let screen = UIScreen.main.bounds
         guard slot != .free else { return clamped(base) }
-        var width = max(minContentWidth, min(screen.width * dockWidthRatio, maxWidth))
+        var width = dockWidth
         var height = height(forWidth: width)
         if height > maxHeight {
             height = maxHeight
@@ -140,6 +171,44 @@ enum AevonSnap {
         if screen.maxX - frame.maxX <= trigger { return .right }
         if frame.minY <= trigger { return .top }
         return nil
+    }
+
+    /// 自动避让（V0.0.44）：把 frame 推开，别压住别的浮窗（尤其是已停靠的小窗）。
+    ///
+    /// 用户 Aevon(37)：停靠小窗会盖住主窗边缘的手势条，主窗就拖不动了。
+    /// `obstacles` 是已外扩过手柄厚度的小窗矩形；这里选「位移最小且推完不撞别人」的方向。
+    static func avoid(_ frame: CGRect, obstacles: [CGRect]) -> CGRect {
+        var f = frame
+        guard !obstacles.isEmpty else { return f }
+        let screen = UIScreen.main.bounds
+
+        for _ in 0..<3 {
+            guard let hit = obstacles.first(where: { f.intersects($0) }) else { break }
+            let gap = obstacleGap
+            let candidates: [CGPoint] = [
+                CGPoint(x: 0, y: hit.minY - gap - f.maxY),
+                CGPoint(x: 0, y: hit.maxY + gap - f.minY),
+                CGPoint(x: hit.minX - gap - f.maxX, y: 0),
+                CGPoint(x: hit.maxX + gap - f.minX, y: 0),
+            ]
+            var best: CGPoint?
+            var bestScore = CGFloat.greatestFiniteMagnitude
+            for c in candidates {
+                var t = f.offsetBy(dx: c.x, dy: c.y)
+                t.origin.x = max(edgeInset, min(t.origin.x, screen.width - edgeInset - t.width))
+                t.origin.y = max(edgeInset, min(t.origin.y, screen.height - edgeInset - t.height))
+                guard !obstacles.contains(where: { t.intersects($0) }) else { continue }
+                let score = abs(c.x) + abs(c.y)
+                if score < bestScore { bestScore = score; best = c }
+            }
+            if best == nil {
+                // 四边都放不下（屏幕被占满）：往上推，至少不压在同一块上
+                best = CGPoint(x: 0, y: hit.minY - gap - f.maxY)
+            }
+            guard let offset = best else { break }
+            f = f.offsetBy(dx: offset.x, dy: offset.y)
+        }
+        return clamped(f)
     }
 
     static func describe(_ slot: AevonSnapSlot) -> String {

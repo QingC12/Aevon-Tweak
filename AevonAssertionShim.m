@@ -93,6 +93,20 @@ __attribute__((used)) static const char AevonFloatLookV42Marker[] = "AevonFloatL
  *   · 贴边时手柄自动改挂到窗内侧，避免 5pt 缝隙下抓不到。 */
 __attribute__((used)) static const char AevonSthenoGestureV43Marker[] = "AevonSthenoGestureV43";
 
+/* V0.0.44 CI 标记（AevonSthenoGestureV44）：
+ * AevonSthenoGestureV44 = 侧条拖动移动 / 轻点停靠或还原 + 底边条加宽（拖动移动、双击关闭）；
+ * AevonLiveResizeV44    = 缩放改成每帧改 frame（不再 transform），圆角全程保留、画面实时；
+ * AevonDockRestoreV44   = 轻点已停靠小窗还原主悬浮窗；
+ * AevonDockAvoidV44     = 浮窗之间自动避让（小窗不再压住主窗手势条）；
+ * AevonFloatEdgeGlowV44 = 四周 0.9pt 浅白描边（深色模式下能看清边界）；
+ * AevonTopBlankCropV44  = 内容裁掉顶部状态栏空白（消除窗口顶部大片空白 / 竖长条）。 */
+__attribute__((used)) static const char AevonSthenoGestureV44Marker[] = "AevonSthenoGestureV44";
+__attribute__((used)) static const char AevonLiveResizeV44Marker[] = "AevonLiveResizeV44";
+__attribute__((used)) static const char AevonDockRestoreV44Marker[] = "AevonDockRestoreV44";
+__attribute__((used)) static const char AevonDockAvoidV44Marker[] = "AevonDockAvoidV44";
+__attribute__((used)) static const char AevonFloatEdgeGlowV44Marker[] = "AevonFloatEdgeGlowV44";
+__attribute__((used)) static const char AevonTopBlankCropV44Marker[] = "AevonTopBlankCropV44";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

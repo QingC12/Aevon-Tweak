@@ -427,6 +427,23 @@ jobs:
               sys.exit(1)
           print("V0.0.43 校验: 贴边 5pt + 侧条轻点停靠 + 侧条长按移动 + 底边双击关闭 已编入")
           PY
+
+          # ── V0.0.44：观感与交互修正（去顶部空白 / 实时缩放保圆角 / 轻点还原 / 互相避让 / 描边）──
+          for m in AevonSthenoGestureV44 AevonLiveResizeV44 AevonDockRestoreV44 \
+                   AevonDockAvoidV44 AevonFloatEdgeGlowV44 AevonTopBlankCropV44; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.44 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["底边条拖动", "还原主悬浮窗", "自动避让停靠小窗", "全程实时渲染"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.44 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.44 校验: 去顶部空白 + 实时缩放保圆角 + 轻点还原 + 互相避让 + 描边 已编入")
+          PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

@@ -98,12 +98,38 @@ enum AevonEntryHost {
     /// V0.0.37（AevonSthenoEdgeBarV37）：手势区伸到浮窗外侧 barThickness pt，
     /// 判定矩形同步外扩，防止拖边条 / 缩放时被当成热区触摸接管。
     static func pointHitsFloatingWindow(at point: CGPoint) -> Bool {
-        let margin = AevonWindowView.barThickness
+        let margin = AevonWindowView.maxHandleMargin
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return false }
         for win in layer.subviews where !win.isHidden && win.alpha > 0.01 {
             if win.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return true }
         }
         return false
+    }
+
+    /// 已停靠小窗的占位矩形（V0.0.44，AevonDockAvoidV44）。
+    ///
+    /// 用户 Aevon(37)：停靠小窗会压在主窗的手势条上，主窗就拖不动了。
+    /// 这里把每个「已停靠」的窗按其 frame 外扩手势厚度后返回，别人改动几何时先避让。
+    static func dockedObstacles(excluding window: AevonWindowView?) -> [CGRect] {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return [] }
+        let margin = AevonWindowView.maxHandleMargin
+        var rects: [CGRect] = []
+        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+            guard let win = view as? AevonWindowView else { continue }
+            if win === window { continue }
+            guard win.isDocked else { continue }
+            rects.append(win.frame.insetBy(dx: -margin, dy: -margin))
+        }
+        return rects
+    }
+
+    /// 某个窗刚改变停靠状态：通知其它窗重新避让一次（V0.0.44，AevonDockAvoidV44）。
+    static func avoidDockedWindow(_ window: AevonWindowView) {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
+        for view in layer.subviews {
+            guard let win = view as? AevonWindowView, win !== window else { continue }
+            win.avoidDockedWindows()
+        }
     }
 
     /// 屏幕点 → 命中的浮窗与抓取目标（V0.0.41，AevonFloatGlobalV41）。

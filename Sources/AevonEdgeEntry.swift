@@ -826,13 +826,13 @@ enum AevonEdgeEntry {
         hit.window.grabBegin(hit.grab, at: hit.layerPoint)
         switch hit.grab {
         case .side:
-            // 先不移动：到底是「轻点停靠」还是「长按移动」，要等抬手/阈值才知道
-            AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点停靠）（AevonSthenoGestureV43）")
+            // 先不移动：到底是「轻点停靠 / 还原」还是「长按移动」，要等抬手/阈值才知道
+            AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点停靠/还原）（AevonSthenoGestureV44）")
         case .corner:
             floatEngaged = true
             AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
         case .bottom:
-            AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（双击关闭）（AevonSthenoGestureV43）")
+            AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
         }
         return true
     }
@@ -852,19 +852,18 @@ enum AevonEdgeEntry {
         }
         floatDeadline = now + floatDragLimit      // 手指还在动就续期
 
-        // 底边条只认双击，不参与拖动 —— 但事件必须继续吞住，不能落回 App
-        if let grab = floatGrab {
-            if case .bottom = grab { return true }
-        }
-
         if !floatEngaged {
-            // 侧条：越过阈值才算拖动，之前都只是「可能的轻点」
+            // 侧条 / 底边条：越过阈值才算拖动，之前都只是「可能的轻点」
             let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
             guard moved > floatMoveSlop else { return true }
             floatEngaged = true
             // 基准点重设到当前点，否则第一帧会瞬移一个阈值距离，手感发跳
             win.rebaseGrab(at: AevonEntryHost.floatLayerPoint(fromScreen: point))
-            AevonLog.info("[窗口] 侧条开始移动 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV43）")
+            if case .some(.bottom) = floatGrab {
+                AevonLog.info("[窗口] 底边条拖动 → 移动窗口 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV44）")
+            } else {
+                AevonLog.info("[窗口] 侧条开始移动 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV44）")
+            }
         }
         win.grabUpdate(to: AevonEntryHost.floatLayerPoint(fromScreen: point))
         return true
@@ -890,12 +889,12 @@ enum AevonEdgeEntry {
                     // 拖过 = 正常结束（贴边松手会自动吸附）
                     win.grabEnd(at: layerPoint, commit: true)
                 } else if isTap {
-                    // 轻点侧条 = 停靠到该侧 + 变成小窗
+                    // 轻点侧条：未停靠 → 停靠到该侧变小窗；已停靠在同一侧 → 还原主窗
                     win.grabCancel()   // 丢掉这段「只按下没移动」的抓取
                     let slot: AevonSnapSlot = edges.contains(.left) ? .left : .right
                     win.dock(to: slot)
-                    AevonLog.info("[窗口] 侧条轻点 → \(AevonSnap.describe(slot)) + 小窗"
-                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）（AevonSthenoGestureV43）")
+                    AevonLog.info("[窗口] 侧条轻点 → \(AevonSnap.describe(slot))"
+                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）（AevonSthenoGestureV44）")
                 } else {
                     // 按住太久又没动：既不算轻点也没拖动，原样恢复
                     win.grabCancel()
@@ -903,19 +902,25 @@ enum AevonEdgeEntry {
             case .corner:
                 win.grabEnd(at: layerPoint, commit: true)
             case .bottom:
-                win.grabCancel()
-                if isTap {
+                if floatEngaged {
+                    // V0.0.44：底边条拖动 = 移动窗口（用户 Aevon(37) 指定）
+                    win.grabEnd(at: layerPoint, commit: true)
+                } else if isTap {
+                    // 轻点：丢掉这次「按下但没动」的抓取（frame 未变，等于无操作）
+                    win.grabCancel()
                     let now = CACurrentMediaTime()
                     if now - floatBottomLastTapAt <= floatDoubleTapGap,
                        floatBottomLastTapWindow === win {
                         floatBottomLastTapAt = 0
                         floatBottomLastTapWindow = nil
-                        AevonLog.info("[窗口] 底边双击 → 关闭 \(win.bundleID)（AevonSthenoGestureV43）")
+                        AevonLog.info("[窗口] 底边双击 → 关闭 \(win.bundleID)（AevonSthenoGestureV44）")
                         win.closeSelf()
                     } else {
                         floatBottomLastTapAt = now
                         floatBottomLastTapWindow = win
                     }
+                } else {
+                    win.grabCancel()
                 }
             }
         }
