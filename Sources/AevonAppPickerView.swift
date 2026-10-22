@@ -20,7 +20,6 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
-    private let modeControl = UISegmentedControl(items: ["单窗", "左右分屏", "编辑圆盘"])
     private let openScroll = UIScrollView()
     private let openEmptyLabel = UILabel()
     private let table = UITableView(frame: .zero, style: .plain)
@@ -29,14 +28,12 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
     private var apps: [AevonAppEntry] = []
     private var sections: [AevonAppSection] = []
     private var chips: [UIView] = []
-    /// 分屏档下已选中的左侧 App
-    private var splitFirst: AevonAppEntry?
 
     private let onClose: () -> Void
 
     private let dimHeight: CGFloat = 30
 
-    init(apps: [AevonAppEntry], initialMode: Int = 0, onClose: @escaping () -> Void) {
+    init(apps: [AevonAppEntry], onClose: @escaping () -> Void) {
         self.apps = apps
         self.onClose = onClose
         super.init(frame: UIScreen.main.bounds)
@@ -67,18 +64,6 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         closeButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         panel.addSubview(closeButton)
-
-        modeControl.selectedSegmentIndex = min(max(0, initialMode), 2)
-        modeControl.selectedSegmentTintColor = UIColor(red: 0.20, green: 0.45, blue: 0.92, alpha: 1.0)
-        modeControl.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
-        modeControl.setTitleTextAttributes([NSAttributedString.Key.foregroundColor: UIColor.white], for: .selected)
-        modeControl.setTitleTextAttributes([NSAttributedString.Key.foregroundColor: UIColor(white: 0.75, alpha: 1.0)],
-                                           for: .normal)
-        let segmentFont = UIFont.systemFont(ofSize: 13, weight: .medium)
-        modeControl.setTitleTextAttributes([NSAttributedString.Key.font: segmentFont], for: .normal)
-        modeControl.setTitleTextAttributes([NSAttributedString.Key.font: segmentFont], for: .selected)
-        modeControl.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
-        panel.addSubview(modeControl)
 
         openScroll.showsHorizontalScrollIndicator = false
         openScroll.backgroundColor = .clear
@@ -112,7 +97,7 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         refreshChips()
         updateHeaders()
         AevonLog.info("[面板] 应用选择面板已创建（\(apps.count) 项，\(sections.count) 个字母分组，"
-            + "已开窗口 \(AevonWindowManager.openBundleIDs.count) 个）")
+            + "已开窗口 \(AevonWindowManager.openBundleIDs.count) 个）（AevonPanelSimpleV30）")
     }
 
     required init?(coder: NSCoder) {
@@ -133,16 +118,14 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         titleLabel.frame = CGRect(x: 18, y: 12, width: width - 100, height: 22)
         subtitleLabel.frame = CGRect(x: 18, y: 34, width: width - 100, height: 16)
         closeButton.frame = CGRect(x: width - 76, y: 10, width: 60, height: 40)
-        modeControl.frame = CGRect(x: 16, y: 56, width: width - 32, height: 32)
-
         let hasOpen = !chips.isEmpty
         openScroll.isHidden = !hasOpen
         openEmptyLabel.isHidden = hasOpen
-        openScroll.frame = CGRect(x: 16, y: 96, width: width - 32, height: dimHeight)
-        openEmptyLabel.frame = CGRect(x: 18, y: 96, width: width - 36, height: dimHeight)
+        openScroll.frame = CGRect(x: 16, y: 56, width: width - 32, height: dimHeight)
+        openEmptyLabel.frame = CGRect(x: 18, y: 56, width: width - 36, height: dimHeight)
         layoutChips()
 
-        let tableTop: CGFloat = 132
+        let tableTop: CGFloat = 92
         table.frame = CGRect(x: 0, y: tableTop, width: width, height: max(0, height - tableTop))
         emptyLabel.frame = CGRect(x: 20, y: height / 2 - 40, width: width - 40, height: 80)
     }
@@ -150,33 +133,10 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
     // MARK: - 头部文案
 
     private func updateHeaders() {
-        if modeControl.selectedSegmentIndex == 2 {
-            titleLabel.text = "编辑圆盘"
-            subtitleLabel.text = "圆盘已加入 \(AevonRingStore.bundleIDs().count) 个 / 最多 \(AevonRingStore.maxCount) 个　点一行加入或移出"
-            table.reloadData()
-            return
-        }
-        if modeControl.selectedSegmentIndex == 1 {
-            if let first = splitFirst {
-                titleLabel.text = "左右分屏：选右边的 App"
-                subtitleLabel.text = "左边：\(first.name)　再点一个 App 完成分屏（再点自己不取消）"
-            } else {
-                titleLabel.text = "左右分屏：先选左边的 App"
-                subtitleLabel.text = "共 \(apps.count) 个 App（含系统 App）　选好后会自动再开右边"
-            }
-        } else {
-            titleLabel.text = "选择要浮窗打开的 App"
-            subtitleLabel.text = "共 \(apps.count) 个 App（含系统 App）"
-        }
+        // V0.0.30（AevonPanelSimpleV30）：面板只保留「选 App 开浮窗」一件事
+        titleLabel.text = "选择要浮窗打开的 App"
+        subtitleLabel.text = "共 \(apps.count) 个 App（含系统 App）"
         table.reloadData()
-    }
-
-    @objc private func modeChanged() {
-        splitFirst = nil
-        let names = ["单窗", "左右分屏", "编辑圆盘"]
-        let index = min(max(0, modeControl.selectedSegmentIndex), names.count - 1)
-        AevonLog.info("[面板] 切换到\(names[index])模式")
-        updateHeaders()
     }
 
     // MARK: - 已开窗口条
@@ -374,26 +334,8 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         selected.backgroundColor = UIColor(white: 0.25, alpha: 1.0)
         cell.selectedBackgroundView = selected
 
-        // 编辑圆盘档：成员打星
-        if modeControl.selectedSegmentIndex == 2 {
-            cell.accessoryType = .none
-            let star = UILabel(frame: CGRect(x: 0, y: 0, width: 28, height: 22))
-            star.text = AevonRingStore.contains(entry.bundleID) ? "★" : "☆"
-            star.textColor = AevonRingStore.contains(entry.bundleID)
-                ? UIColor(red: 1.0, green: 0.78, blue: 0.25, alpha: 1.0)
-                : UIColor(white: 0.42, alpha: 1.0)
-            star.font = UIFont.systemFont(ofSize: 17)
-            star.textAlignment = .right
-            cell.accessoryView = star
-            return cell
-        }
-
-        // 分屏档：已选中的左侧 App 打勾，已开窗的 App 显示「已开」
-        if let first = splitFirst, first.bundleID == entry.bundleID {
-            cell.accessoryType = .checkmark
-            cell.accessoryView = nil
-            cell.tintColor = UIColor(red: 0.35, green: 0.62, blue: 1.0, alpha: 1.0)
-        } else if AevonWindowManager.isWindowed(entry.bundleID) {
+        // V0.0.30：面板只有单窗模式 —— 已开窗的 App 显示「已开」标签
+        if AevonWindowManager.isWindowed(entry.bundleID) {
             cell.accessoryType = .none
             let tag = UILabel(frame: CGRect(x: 0, y: 0, width: 40, height: 20))
             tag.text = "已开"
@@ -412,18 +354,6 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         tableView.deselectRow(at: indexPath, animated: true)
         guard let entry = entry(at: indexPath) else { return }
 
-        if modeControl.selectedSegmentIndex == 2 {
-            let added = AevonRingStore.toggle(entry.bundleID)
-            AevonLog.info("[面板] \(added ? "加入" : "移出")圆盘：\(entry.name) (\(entry.bundleID))")
-            updateHeaders()
-            return
-        }
-
-        if modeControl.selectedSegmentIndex == 1 {
-            handleSplitSelection(entry)
-            return
-        }
-
         AevonLog.info("[面板] 选中 \(entry.name) (\(entry.bundleID))")
         closeTapped()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -431,29 +361,4 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         }
     }
 
-    /// 分屏档：第一次点选左边，第二次点选右边并立即开成并排。
-    private func handleSplitSelection(_ entry: AevonAppEntry) {
-        guard let first = splitFirst else {
-            splitFirst = entry
-            AevonLog.info("[面板] 左右分屏已选定左侧 \(entry.name) (\(entry.bundleID))")
-            updateHeaders()
-            return
-        }
-        if first.bundleID == entry.bundleID {
-            // 再点自己 = 取消选择
-            splitFirst = nil
-            AevonLog.info("[面板] 已取消左侧选择")
-            updateHeaders()
-            return
-        }
-
-        AevonLog.info("[面板] 左右分屏已选定右侧 \(entry.name) (\(entry.bundleID))")
-        let left = first.bundleID
-        let right = entry.bundleID
-        splitFirst = nil
-        closeTapped()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            AevonWindowManager.openSplit(left: left, right: right)
-        }
-    }
 }

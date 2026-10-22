@@ -265,6 +265,19 @@ jobs:
             || { echo "::error::没有广播圆盘展开状态（缺 com.aevon.ringopen）"; exit 1; }
           echo "V0.0.29 校验: 下半屏拦截 + 间距均匀布局 + 圆盘状态广播 已编入"
 
+          # ── V0.0.30：底边锚定热区 + 圆形图标 + 弹簧阻尼动画 + 简化面板 ──
+          strings "$DYLIB" | grep -q 'AevonTriggerBottomV30' \
+            || { echo "::error::触发区不是底边锚定语义（缺 AevonTriggerBottomV30）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingCircleV30' \
+            || { echo "::error::圆盘图标没有改圆形（缺 AevonRingCircleV30）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingSpringV30' \
+            || { echo "::error::圆盘没有弹簧出入场动画（缺 AevonRingSpringV30）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingDampV30' \
+            || { echo "::error::圆盘旋转没有阻尼跟手（缺 AevonRingDampV30）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonPanelSimpleV30' \
+            || { echo "::error::面板没有简化为单窗模式（缺 AevonPanelSimpleV30）"; exit 1; }
+          echo "V0.0.30 校验: 底边锚定 + 圆形图标 + 弹簧阻尼动画 + 简化面板 已编入"
+
           # ── V0.0.27：App 侧触摸拦截（独立小 dylib，注入前台 App 进程）──
           # 用户 Aevon(20)：SpringBoard 里吞事件挡不住 QQ 左滑删除会话 / 抖音左滑进主页，
           # 那些是 App 进程收到触摸后自己判定的。所以必须有 AevonGuard。
@@ -334,9 +347,14 @@ jobs:
           strings "$PREFS_BIN" | grep -q 'aevonResetTriggerZone' \
             || { echo "::error::设置页缺少「恢复默认触发区域」按钮动作（aevonResetTriggerZone）"; exit 1; }
           PREFS_DIR_TMP="$(dirname "$PREFS_BIN")"
-          plutil -convert xml1 -o - "$PREFS_DIR_TMP/Root.plist" | grep -q 'aevonResetTriggerZone' \
-            || { echo "::error::Root.plist 缺少「恢复默认触发区域」按钮"; exit 1; }
-          echo "V0.0.28 设置侧校验: 滑条按存储值校正 + 恢复默认按钮 已编入"
+          # V0.0.30：恢复默认按钮在二级 Detail.plist；Root 一级页必须有二级页入口
+          plutil -convert xml1 -o - "$PREFS_DIR_TMP/Detail.plist" | grep -q 'aevonResetTriggerZone' \
+            || { echo "::error::Detail.plist 缺少「恢复默认触发区域」按钮"; exit 1; }
+          plutil -convert xml1 -o - "$PREFS_DIR_TMP/Root.plist" | grep -q 'aevonOpenDetail' \
+            || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'AevonDetailPageV30' \
+            || { echo "::error::二级细节调整页逻辑没有编入（缺 AevonDetailPageV30）"; exit 1; }
+          echo "V0.0.30 设置侧校验: 一级只放开关 + Detail.plist 二级页 + 恢复默认 已编入"
 
           # Root.plist 必须随包，且开关项不少于 6 个
           ICON_DIR="$(dirname "$PREFS_BIN")"
@@ -355,11 +373,20 @@ jobs:
           # V0.0.15 新增：边缘手势主入口开关必须在
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'EdgeGestureEnabled' \
             || { echo "::error::Root.plist 缺少 EdgeGestureEnabled（边缘圆盘入口）开关"; exit 1; }
-          # V0.0.25 新增：触发区域三个滑杆必须在（位置 / 宽度 / 高度）
+          # V0.0.25 新增：触发区域三个滑杆必须在「细节调整」二级页（V0.0.30 起 Root 只放开关）
           for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
-            plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q "$K" \
-              || { echo "::error::Root.plist 缺少触发区域设置项 $K"; exit 1; }
+            plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q "$K" \
+              || { echo "::error::Detail.plist 缺少触发区域设置项 $K"; exit 1; }
           done
+          # V0.0.30：一级 Root.plist 只允许开关（滑杆全部在 Detail.plist）
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'PSSliderCell'; then
+            echo "::error::Root.plist 里还有滑杆（V0.0.30 起一级页只放开关，滑杆在 Detail.plist）"; exit 1
+          fi
+          [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q 'aevonResetTriggerZone' \
+            || { echo "::error::Detail.plist 缺少「恢复默认触发区域」按钮"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenDetail' \
+            || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
           # V0.0.29：PSSliderCell 只认 min/max —— 缺了量程退化成 0~1，一拖就写回 0.x，
           # 触发条永远贴在屏幕顶部（用户 Aevon(22) 复现的「自动跑到顶部」根因）
           for K in '<key>min</key>' '<key>max</key>'; do

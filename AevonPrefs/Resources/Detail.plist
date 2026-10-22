@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>圆盘 App</string>
+			<key>footerText</key>
+			<string>圆盘里放哪些 App、按什么顺序排，都在这里改。进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入（最多 36 个）。改完立即生效，下次呼出圆盘就是新顺序。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>编辑圆盘 App（添加 / 排序）</string>
+			<key>action</key>
+			<string>aevonOpenRingEditor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>① 触发位置（底边锚定）</string>
+			<key>footerText</key>
+			<string>触发区底边在屏幕高度的百分比。100% = 区底边永远贴住屏幕底部 —— 这时候无论怎么改「触发高度」，触发条都贴底不动，只会向上伸展。拖动时屏幕右侧的触发条实时跟随。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>RingTriggerY</string>
+			<key>label</key>
+			<string>触发位置：0% = 区底边在屏顶，100% = 区底边贴屏底</string>
+			<key>minValue</key>
+			<integer>0</integer>
+			<key>maxValue</key>
+			<integer>100</integer>
+			<!-- V0.0.29：PSSliderCell 只认 min/max（不是 minValue/maxValue），
+			     缺了这两个键滑杆量程会退化成默认 0~1，一拖就写回 0.x -->
+			<key>min</key>
+			<integer>0</integer>
+			<key>max</key>
+			<integer>100</integer>
+			<key>default</key>
+			<integer>75</integer>
+			<key>footerText</key>
+			<string>触发区底边落在屏幕高度的百分比，默认 75。拉到 100 就是贴底（最顺手）；拖动时触发条实时跟手。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>② 触发宽度（横向）</string>
+			<key>footerText</key>
+			<string>热区从屏幕右边缘往左有多宽（pt）。数值越小越不容易误触，但也越难划出；默认 48，建议范围 30~60。拖动时触发条会实时变粗 / 变细。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>RingTriggerWidth</string>
+			<key>label</key>
+			<string>触发宽度：贴着右边缘的厚度（pt）</string>
+			<key>minValue</key>
+			<integer>18</integer>
+			<key>maxValue</key>
+			<integer>140</integer>
+			<key>min</key>
+			<integer>18</integer>
+			<key>max</key>
+			<integer>140</integer>
+			<key>default</key>
+			<integer>48</integer>
+			<key>footerText</key>
+			<string>热区从右边缘往左有多厚。数值越小越不容易误触，也越难划出；默认 48，建议 30~60。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>③ 触发高度（纵向）</string>
+			<key>footerText</key>
+			<string>热区从底边向上伸展的高度（pt）。数值越大，能呼出圆盘的纵向范围越大；底边位置由「触发位置」决定，位置拉到 100% 时改高度永远贴底。默认 320（约屏幕 1/3），建议 240~420。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>RingTriggerHeight</string>
+			<key>label</key>
+			<string>触发高度：热区从底边向上的总高度（pt）</string>
+			<key>minValue</key>
+			<integer>80</integer>
+			<key>maxValue</key>
+			<integer>900</integer>
+			<key>min</key>
+			<integer>80</integer>
+			<key>max</key>
+			<integer>900</integer>
+			<key>default</key>
+			<integer>320</integer>
+			<key>footerText</key>
+			<string>热区纵向总长，默认 320。拖动时触发条会实时变长 / 变短（贴底时只向上长）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>如果触发条位置乱了，点下面按钮一键恢复：位置 75%、宽 48pt、高 320pt（底边语义）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>恢复默认触发区域（75% / 48pt / 320pt）</string>
+			<key>action</key>
+			<string>aevonResetTriggerZone</string>
+		</dict>
+	</array>
+	<key>title</key>
+	<string>细节调整</string>
+</dict>
+</plist>

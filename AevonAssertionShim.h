@@ -5,6 +5,7 @@
 /// 读写域与设置界面（Preferences.framework）一致：com.Aevon。
 void AevonPrefSetBool(NSString *key, BOOL value);
 void AevonPrefSetInt(NSString *key, NSInteger value);
+void AevonPrefSetDouble(NSString *key, double value);
 
 @interface AevonAssertionShim : NSObject
 + (void)acquireKeepAliveForPID:(int)pid;

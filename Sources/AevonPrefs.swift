@@ -55,4 +55,9 @@ enum AevonPrefs {
     static func set(_ key: String, _ value: Int) {
         AevonPrefSetInt(key, value)
     }
+
+    /// 写入浮点并立即同步（V0.0.30：触发区底边语义迁移用）。
+    static func set(_ key: String, _ value: Double) {
+        AevonPrefSetDouble(key, value)
+    }
 }

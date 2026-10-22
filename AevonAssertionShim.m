@@ -28,6 +28,17 @@ void AevonPrefSetBool(NSString *key, BOOL value) {
     }
 }
 
+void AevonPrefSetDouble(NSString *key, double value) {
+    @try {
+        CFPreferencesSetAppValue((CFStringRef)key,
+                                 (__bridge CFPropertyListRef)[NSNumber numberWithDouble:value],
+                                 AevonPrefsAppID());
+        CFPreferencesAppSynchronize(AevonPrefsAppID());
+    } @catch (NSException *exception) {
+        // 偏好写入失败不影响主流程
+    }
+}
+
 void AevonPrefSetInt(NSString *key, NSInteger value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,

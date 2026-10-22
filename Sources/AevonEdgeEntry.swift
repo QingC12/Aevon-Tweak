@@ -3,8 +3,12 @@ import QuartzCore
 
 /// 圆盘触发热区（V0.0.25）。
 ///
-/// 用户可在 设置 → Aevon → 「圆盘触发区域」调整三项：
-///   · `RingTriggerY`      热区**中心**在屏幕高度的百分比（0~100，默认 75，正好是圆盘圆心）
+/// 用户可在 设置 → Aevon → 「细节调整」调整三项：
+///   · `RingTriggerY`      热区**底边**在屏幕高度的百分比（0~100，默认 75）。
+///                         V0.0.30 起改为底边锚定：100% = 区底边贴住屏幕底，
+///                         再怎么改高度，条也永远贴底不跑（用户 Aevon(23) 的核心诉求）；
+///                         旧版是「中心」语义 —— 高度一大中心被钳制，显示的 % 和
+///                         实际位置对不上，滑杆拉满也感觉「回不到底部」。
 ///   · `RingTriggerWidth`  热区横向宽度（pt，从右边缘往左，默认 48）
 ///   · `RingTriggerHeight` 热区纵向高度（pt，默认 320）
 ///
@@ -12,13 +16,34 @@ import QuartzCore
 /// 保证「设置里调的那块区域」就是实际能呼出的区域 —— V0.0.24 的问题是全局通道用了
 /// 固定的「右 60pt × 下半屏 70%」，结果右侧一大片都能划出圆盘。
 enum AevonTriggerZone {
-    static let defaultCenterRatio: Double = 75
+    static let defaultBottomRatio: Double = 75
     static let defaultWidth: Double = 48
     static let defaultHeight: Double = 320
 
-    static var centerRatio: CGFloat {
-        let value = AevonPrefs.double("RingTriggerY", default: defaultCenterRatio)
+    /// 是否已完成「中心 → 底边」语义迁移（一次性，写回偏好）
+    private static var bottomMigrationDone = false
+
+    static var bottomRatio: CGFloat {
+        migrateBottomSemanticsIfNeeded()
+        let value = AevonPrefs.double("RingTriggerY", default: defaultBottomRatio)
         return CGFloat(min(max(value, 0), 100)) / 100
+    }
+
+    /// V0.0.30：旧存的 RingTriggerY 是「中心 %」，换算成「底边 %」并打标记（AevonTriggerBottomV30）。
+    private static func migrateBottomSemanticsIfNeeded() {
+        guard !bottomMigrationDone else { return }
+        bottomMigrationDone = true
+        guard !AevonPrefs.bool("RingTriggerYBottomSemantics", default: false) else { return }
+        let old = AevonPrefs.double("RingTriggerY", default: -999)
+        AevonPrefs.set("RingTriggerYBottomSemantics", true)
+        guard old >= 0, old <= 100 else { return }   // 没存过值：直接用新默认 75
+        let h = AevonPrefs.double("RingTriggerHeight", default: defaultHeight)
+        let screenH = UIScreen.main.bounds.height
+        guard screenH > 1 else { return }
+        let newBottom = ((old / 100 * screenH) + h / 2) / screenH * 100
+        AevonPrefs.set("RingTriggerY", min(max(newBottom, 0), 100))
+        AevonPrefs.synchronize()
+        AevonLog.info("[边缘] 触发位置切换为底边锚定：\(Int(old))%（中心）→ \(Int(min(max(newBottom, 0), 100)))%（底边）（AevonTriggerBottomV30）")
     }
 
     static var width: CGFloat {
@@ -31,25 +56,25 @@ enum AevonTriggerZone {
         return CGFloat(min(max(value, 80), 900))
     }
 
-    /// 屏幕坐标下的热区（贴右边缘；纵向以 centerRatio 为中心，并夹紧在屏内）
+    /// 屏幕坐标下的热区（贴右边缘；纵向以 bottomRatio 为**底边**，向上伸展并夹紧在屏内）
     static func rect(in bounds: CGRect) -> CGRect {
         guard bounds.width > 1, bounds.height > 1 else { return .zero }
         let w = min(width, bounds.width)
         let h = min(height, bounds.height)
-        let centerY = bounds.height * centerRatio
-        let y = min(max(centerY - h / 2, 0), bounds.height - h)
+        let bottomY = bounds.height * bottomRatio
+        let y = min(max(bottomY - h, 0), bounds.height - h)
         return CGRect(x: bounds.maxX - w, y: y, width: w, height: h)
     }
 
     /// 日志用的一行摘要
     static func summary(in bounds: CGRect) -> String {
         let r = rect(in: bounds)
-        return "位置 \(Int(centerRatio * 100))% · 宽 \(Int(r.width))pt · 高 \(Int(r.height))pt（区 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
+        return "位置 \(Int(bottomRatio * 100))%（底边）· 宽 \(Int(r.width))pt · 高 \(Int(r.height))pt（区 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
     }
 
     /// 当前配置的指纹。设置里改了任意一项，指纹就变，SpringBoard 侧据此重排触发条。
     static func signature() -> String {
-        return "\(Int((centerRatio * 100).rounded()))|\(Int(width.rounded()))|\(Int(height.rounded()))"
+        return "\(Int((bottomRatio * 100).rounded()))|\(Int(width.rounded()))|\(Int(height.rounded()))"
     }
 }
 
@@ -812,8 +837,8 @@ enum AevonEdgeEntry {
         strip?.isUserInteractionEnabled = enabled
     }
 
-    /// 打开完整应用面板。
-    static func openPanel(preferRingEditing: Bool = false) {
+    /// 打开完整应用面板（V0.0.30 起只有单窗模式）。
+    static func openPanel() {
         guard let root = AevonEntryHost.activeRoot else {
             AevonLog.warn("[面板] 入口窗口不可用，无法打开面板")
             return
@@ -824,8 +849,7 @@ enum AevonEdgeEntry {
             return
         }
         let apps = AevonAppList.userApps(forceReload: true)
-        let panel = AevonAppPickerView(apps: apps,
-                                       initialMode: preferRingEditing ? 2 : 0) {
+        let panel = AevonAppPickerView(apps: apps) {
             AevonEdgeEntry.picker = nil
         }
         panel.frame = root.bounds

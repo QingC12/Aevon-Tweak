@@ -259,9 +259,10 @@ static id AevonNewSlider(NSString *label,
 }
 
 #pragma mark - 来源 2：从包内 Root.plist 构建
-static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle) {
+static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle, NSString *plistName) {
     if (bundle == nil) return nil;
-    NSString *path = [bundle pathForResource:@"Root" ofType:@"plist"];
+    NSString *name = plistName.length > 0 ? plistName : @"Root";
+    NSString *path = [bundle pathForResource:name ofType:@"plist"];
     if (path.length == 0) return nil;
 
     NSDictionary *root = [NSDictionary dictionaryWithContentsOfFile:path];
@@ -332,10 +333,44 @@ static NSArray *AevonBuildFallback(id target) {
     id s1a = AevonNewSwitch(@"右侧边缘左滑呼出圆盘（主入口）", target, @"EdgeGestureEnabled", @YES);
     if (s1a != nil) [result addObject:s1a];
 
-    /* V0.0.27：圆盘 App 编辑入口（悬浮球已删除，不再有 BubbleEnabled） */
+    /* V0.0.30：一级页只放开关 + 细节入口；滑杆 / 圆盘 App 编辑在二级页 */
+    id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @NO);
+    if (s2 != nil) [result addObject:s2];
+    id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作", target, @"TouchEnabled", @YES);
+    if (s2a != nil) [result addObject:s2a];
+    id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
+    if (s2c != nil) [result addObject:s2c];
+    id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
+    if (s2b != nil) [result addObject:s2b];
+    id s3 = AevonNewSwitch(@"开机崩溃保护", target, @"CrashGuard", @YES);
+    if (s3 != nil) [result addObject:s3];
+    id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
+    if (s4 != nil) [result addObject:s4];
+    id s5 = AevonNewSwitch(@"强制前台保持（实验）", target, @"ForceForeground", @NO);
+    if (s5 != nil) [result addObject:s5];
+
+    id groupDetail = AevonNewGroup(@"细节调整",
+                                   @"触发条位置 / 宽度 / 高度、圆盘 App 编辑等都在二级页（AevonDetailPageV30）。");
+    if (groupDetail != nil) [result addObject:groupDetail];
+    id detailButton = AevonNewSpecifier(@"触发条 / 圆盘细节调整",
+                                        target,
+                                        NSSelectorFromString(@"aevonOpenDetail"),
+                                        nil,
+                                        AEVON_CELL_BUTTON);
+    if (detailButton != nil) {
+        AevonSetProperty(detailButton, @"aevonOpenDetail", @"buttonAction");
+        [result addObject:detailButton];
+    }
+
+    return result.count > 0 ? result : nil;
+}
+
+/* V0.0.30：二级「细节调整」页的代码兜底（Detail.plist 读不到时用） */
+static NSArray *AevonBuildFallbackDetail(id target) {
+    NSMutableArray *result = [NSMutableArray array];
+
     id groupRing = AevonNewGroup(@"圆盘 App",
-                                 @"圆盘里放哪些 App、按什么顺序排，都在这里改。"
-                                 @"进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入。");
+                                 @"圆盘里放哪些 App、按什么顺序排，都在这里改。");
     if (groupRing != nil) [result addObject:groupRing];
     id ringButton = AevonNewSpecifier(@"编辑圆盘 App（添加 / 排序）",
                                       target,
@@ -347,55 +382,34 @@ static NSArray *AevonBuildFallback(id target) {
         [result addObject:ringButton];
     }
 
-    id groupZone1 = AevonNewGroup(@"① 触发位置（纵向）",
-                                  @"热区中心在屏幕高度的百分比。75 = 与圆盘圆心对齐（默认）；"
-                                  @"想贴着屏幕底部就拉到 95~98，贴着顶部就拉到 2~5。"
-                                  @"拖动时屏幕右侧那条提示条会实时上下移动，松手即生效。");
+    id groupZone1 = AevonNewGroup(@"① 触发位置（底边锚定）",
+                                  @"热区底边在屏幕高度的百分比。100% = 区底边贴住屏幕底部，"
+                                  @"此时改「触发高度」触发条永远贴底、只向上伸展。");
     if (groupZone1 != nil) [result addObject:groupZone1];
-    id z1 = AevonNewSlider(@"触发位置（屏幕高度 %）", target, @"RingTriggerY", 0, 100, 75);
+    id z1 = AevonNewSlider(@"触发位置（区底边在屏幕高度 %）", target, @"RingTriggerY", 0, 100, 75);
     if (z1 != nil) [result addObject:z1];
 
     id groupZone2 = AevonNewGroup(@"② 触发宽度（横向）",
-                                  @"热区从屏幕右边缘往左有多宽（pt）。数值越小越不容易误触，但也越难划出；"
-                                  @"默认 48，建议 30~60。拖动时提示条会实时变粗 / 变细。");
+                                  @"热区从屏幕右边缘往左有多宽（pt）。默认 48，建议 30~60。");
     if (groupZone2 != nil) [result addObject:groupZone2];
     id z2 = AevonNewSlider(@"触发宽度（pt）", target, @"RingTriggerWidth", 18, 140, 48);
     if (z2 != nil) [result addObject:z2];
 
     id groupZone3 = AevonNewGroup(@"③ 触发高度（纵向）",
-                                  @"热区上下有多高（pt）。数值越大，能呼出圆盘的纵向范围越大；"
-                                  @"默认 320（约占屏幕 1/3），建议 240~420。拖动时提示条会实时变长 / 变短。");
+                                  @"热区从底边向上伸展的高度（pt）。默认 320，建议 240~420。");
     if (groupZone3 != nil) [result addObject:groupZone3];
     id z3 = AevonNewSlider(@"触发高度（pt）", target, @"RingTriggerHeight", 80, 900, 320);
     if (z3 != nil) [result addObject:z3];
 
-    id group2 = AevonNewGroup(@"窗口",
-                              @"「浮窗内可直接触摸操作」默认开；若怀疑触摸引起异常，关掉后浮窗只显示画面。"
-                              @"「拖到屏幕边缘自动吸附」：标题栏拖到左/右边缘松手即变半屏，拖到顶部放大。"
-                              @"窗口大小与位置按 App 记住，下次开窗恢复。");
-    if (group2 != nil) [result addObject:group2];
-    id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @NO);
-    if (s2 != nil) [result addObject:s2];
-    id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作", target, @"TouchEnabled", @YES);
-    if (s2a != nil) [result addObject:s2a];
-    id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
-    if (s2c != nil) [result addObject:s2c];
-    id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
-    if (s2b != nil) [result addObject:s2b];
-
-    id group3 = AevonNewGroup(@"安全与日志",
-                              @"「开机崩溃保护」：每次加载写入 loading 状态，SpringBoard 稳定 20 秒后标记 healthy；若下次启动发现上次仍是 loading，则自动禁用插件，阻断崩溃死循环。");
-    if (group3 != nil) [result addObject:group3];
-    id s3 = AevonNewSwitch(@"开机崩溃保护", target, @"CrashGuard", @YES);
-    if (s3 != nil) [result addObject:s3];
-    id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
-    if (s4 != nil) [result addObject:s4];
-
-    id group4 = AevonNewGroup(@"实验功能",
-                              @"「强制前台保持」会改写系统场景状态，风险最高：若开启后注销进入安全模式，请先关闭本项。");
-    if (group4 != nil) [result addObject:group4];
-    id s5 = AevonNewSwitch(@"强制前台保持（实验）", target, @"ForceForeground", @NO);
-    if (s5 != nil) [result addObject:s5];
+    id resetButton = AevonNewSpecifier(@"恢复默认触发区域（75% / 48pt / 320pt）",
+                                       target,
+                                       NSSelectorFromString(@"aevonResetTriggerZone"),
+                                       nil,
+                                       AEVON_CELL_BUTTON);
+    if (resetButton != nil) {
+        AevonSetProperty(resetButton, @"aevonResetTriggerZone", @"buttonAction");
+        [result addObject:resetButton];
+    }
 
     return result.count > 0 ? result : nil;
 }
@@ -426,7 +440,7 @@ static NSArray *AevonBuildFallback(id target) {
         NSBundle *bundle = nil;
         @try { bundle = [NSBundle bundleForClass:[self class]]; } @catch (NSException *e) { bundle = nil; }
         if (bundle == nil) bundle = [NSBundle mainBundle];
-        list = AevonBuildFromPlist(self, bundle);
+        list = AevonBuildFromPlist(self, bundle, @"Root");
     }
 
     /* 4) 硬编码兜底：宁可少两个分组说明，也绝不空白 */
@@ -662,6 +676,72 @@ static char AevonSliderTagKey;
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
     nav.modalPresentationStyle = UIModalPresentationPageSheet;
     [self presentViewController:nav animated:YES completion:nil];
+}
+
+/* V0.0.30（AevonDetailPageV30）：一级页只放开关，滑杆 / 恢复默认 / 圆盘 App 编辑
+ * 全部搬进二级页 —— 用户 Aevon(23) 要求「一级菜单只显示开关选项」。 */
+- (void)aevonOpenDetail {
+    UIViewController *detail = nil;
+    Class cls = NSClassFromString(@"AevonDetailListController");
+    if (cls != Nil) {
+        detail = [[cls alloc] init];
+        if ([detail respondsToSelector:@selector(setTitle:)]) {
+            [detail performSelector:@selector(setTitle:) withObject:@"细节调整"];
+        }
+    }
+    if (detail == nil) return;
+    UINavigationController *nav = self.navigationController;
+    if (nav != nil) {
+        [nav pushViewController:detail animated:YES];
+    } else {
+        /* 兜底：不在导航栈里就模态弹出（正常路径永远走 push） */
+        UINavigationController *wrap = [[UINavigationController alloc] initWithRootViewController:detail];
+        wrap.modalPresentationStyle = UIModalPresentationPageSheet;
+        [self presentViewController:wrap animated:YES completion:nil];
+    }
+}
+
+@end
+
+#pragma mark - V0.0.30：二级「细节调整」页
+
+@interface AevonDetailListController : AevonRootListController
+@end
+
+@implementation AevonDetailListController
+
+- (NSArray *)specifiers {
+    NSArray *cached = AevonCachedSpecifiers(self);
+    if (cached != nil) return cached;
+
+    NSArray *list = nil;
+    @try {
+        list = [self loadSpecifiersFromPlistName:@"Detail" target:self];
+    } @catch (NSException *exception) {
+        list = nil;
+    }
+    if (![list isKindOfClass:[NSArray class]] || list.count == 0) list = nil;
+
+    if (list == nil) {
+        NSBundle *bundle = nil;
+        @try { bundle = [NSBundle bundleForClass:[self class]]; } @catch (NSException *e) { bundle = nil; }
+        if (bundle == nil) bundle = [NSBundle mainBundle];
+        list = AevonBuildFromPlist(self, bundle, @"Detail");
+    }
+
+    if (list == nil) list = AevonBuildFallbackDetail(self);
+    if (list.count > 0) AevonStoreSpecifiers(self, list);
+    return list ?: @[];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    if (self.title.length == 0) self.title = @"细节调整";
+    AevonLogPrefsSync();
+    /* 标记：CI 校验二级页逻辑确实编入（AevonDetailPageV30） */
+    static char once; (void)once;
+    NSString *marker = @"AevonDetailPageV30";
+    if (marker.length == 0) { return; }
 }
 
 @end

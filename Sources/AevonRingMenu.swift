@@ -22,7 +22,8 @@ final class AevonRingIcon: UIView {
 
         backgroundColor = hasIcon ? .clear : UIColor(white: 0.12, alpha: 0.92)
         isUserInteractionEnabled = false
-        layer.cornerRadius = size * 0.26
+        // V0.0.30（AevonRingCircleV30）：所有图标一律改圆形（用户 Aevon(23) 要求）
+        layer.cornerRadius = size / 2
         layer.borderWidth = 0.5
         layer.borderColor = UIColor(white: 1.0, alpha: 0.16).cgColor
         layer.shadowColor = UIColor.black.cgColor
@@ -35,7 +36,7 @@ final class AevonRingIcon: UIView {
             iconView.frame = bounds.insetBy(dx: 2, dy: 2)
             iconView.contentMode = .scaleAspectFill
             iconView.isUserInteractionEnabled = false
-            iconView.layer.cornerRadius = size * 0.2237
+            iconView.layer.cornerRadius = (size - 4) / 2
             iconView.clipsToBounds = true
             addSubview(iconView)
         } else {
@@ -150,6 +151,11 @@ final class AevonRingMenu: UIView {
     private var ringRadii: [CGFloat] = []
 
     private var rotation: CGFloat = 0
+    /// 阻尼显示角（V0.0.30，AevonRingDampV30）：图标不直接贴手指角度，而是每帧
+    /// 向 `rotation` 追赶 32%（CADisplayLink），得到 Stheno 选择器那种
+    /// CustomSpringAnimation + dampingFraction 的「跟手但带韧劲」手感。
+    private var displayRotation: CGFloat = 0
+    private var displayLink: CADisplayLink?
     private var ringCenter: CGPoint = .zero
     private var isDismissing = false
 
@@ -243,6 +249,8 @@ final class AevonRingMenu: UIView {
     deinit {
         longPressTimer?.invalidate()
         centerHoldTimer?.invalidate()
+        displayLink?.invalidate()
+        displayLink = nil
     }
 
     // MARK: - 几何
@@ -264,23 +272,23 @@ final class AevonRingMenu: UIView {
 
     /// 各圈半径。
     ///
-    /// V0.0.29：半径由**每圈数量反推**（数量 × 目标间距 55pt ÷ 2π），
-    /// 保证每一圈的弧线间距都≈55pt（图标 40 + 间隙 15），盘面紧凑均匀。
-    /// 下限沿用 V0.0.28 的紧凑起步（内圈 62、圈间距 ≥44，AevonRingInnerTightV28），
+    /// V0.0.30（AevonRingDenseV29 → 自适应间距）：**一切以圆心图标为基准向外扩散**——
+    /// 半径 = max(内圈基准 62 + 44×圈序, 每圈数量 × 46pt ÷ 2π)，即「图标中心间距 ≈46pt」
+    /// 恒定、内圈永远不小于贴住圆心的 62（62 − 圆心半径 24 − 图标半径 20 = 18pt 间隙）。
+    /// 8 个 → 62、20 个(8/12) → 62/88、25 个(10/15) → 73/110，
+    /// 不会再出现「内圈被数量撑到 70+、离中心一大截」（用户 Aevon(23) 反馈）。
     /// 上限压到 maxRadius（不顶屏幕边）。
     private func radii(forCounts counts: [Int]) -> [CGFloat] {
         guard !counts.isEmpty else { return [] }
-        let target: CGFloat = 55
+        let spacing: CGFloat = 46
+        let inner: CGFloat = 62
         let limit = maxRadius
         var result: [CGFloat] = []
         var previous: CGFloat = 0
         for (index, count) in counts.enumerated() {
-            let minR: CGFloat = 62 + 44 * CGFloat(index)
-            var r = max(minR, target * CGFloat(count) / (2 * .pi))
-            // 给后面几圈留出空间，避免外圈被压到屏幕外
-            let roomCap = limit - 44 * CGFloat(counts.count - 1 - index)
-            r = min(r, max(roomCap, minR))
-            r = max(r, previous + 44, 62)
+            let base = inner + 44 * CGFloat(index)
+            var r = max(base, spacing * CGFloat(count) / (2 * .pi))
+            r = max(r, previous + 44)
             r = min(r, limit)
             result.append(r)
             previous = r
@@ -366,7 +374,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距目标 55pt / 外多内少 / 无任何文字 / 圆心按住 1 秒切旋转）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 圆形图标 / 阻尼跟手 / 弹簧出入场 / 圆心按住 1 秒切旋转）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingCircleV30 AevonRingSpringV30 AevonRingDampV30）")
     }
 
     private func drawRingTracks() {
@@ -382,15 +390,49 @@ final class AevonRingMenu: UIView {
         trackLayer.frame = bounds
     }
 
-    private func layoutIcons() {
+    private func layoutIcons(_ angle: CGFloat? = nil) {
         guard !icons.isEmpty else { return }
+        let use = angle ?? rotation
         for (index, icon) in icons.enumerated() {
             guard index < iconRadii.count, index < iconBaseAngles.count else { continue }
-            let radians = (iconBaseAngles[index] + rotation) * .pi / 180
+            let radians = (iconBaseAngles[index] + use) * .pi / 180
             let radius = iconRadii[index]
             icon.center = CGPoint(x: ringCenter.x + radius * cos(radians),
                                   y: ringCenter.y + radius * sin(radians))
         }
+    }
+
+    // MARK: - 阻尼跟手旋转（V0.0.30，AevonRingDampV30）
+
+    /// 启动阻尼追赶：图标角度每帧向真实 `rotation` 收敛 32%，
+    /// 收敛完成后自动停掉 CADisplayLink（平时零开销）。
+    private func startDamping() {
+        if displayLink == nil {
+            let link = CADisplayLink(target: self, selector: #selector(stepDamping))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+    }
+
+    private func stopDamping() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func stepDamping() {
+        guard AevonRingMenu.current === self, !isDismissing else {
+            stopDamping()
+            return
+        }
+        let diff = rotation - displayRotation
+        if abs(diff) <= 0.02 {
+            displayRotation = rotation
+            layoutIcons(displayRotation)
+            stopDamping()
+            return
+        }
+        displayRotation += diff * 0.32
+        layoutIcons(displayRotation)
     }
 
     // MARK: - 动画
@@ -413,18 +455,22 @@ final class AevonRingMenu: UIView {
         trackLayer.add(fade, forKey: "fade")
         trackLayer.opacity = 1
 
+        // V0.0.30（AevonRingSpringV30）：图标从圆心「弹射」到各自轨道 ——
+        // SwiftUI spring(dampingFraction: 0.55) 的手感等价物：
+        // UISpringTimingParameters 弹簧 + 逐个错峰，末端自然过冲回摆（Q 弹感）。
+        let spring = UISpringTimingParameters(dampingRatio: 0.55, initialVelocity: CGVector(dx: 0.4, dy: 0.4))
         for (index, icon) in icons.enumerated() {
+            let target = icon.center
+            icon.center = ringCenter
             icon.alpha = 0
             icon.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
-            let delay = 0.015 + 0.015 * Double(index)
-            UIView.animate(withDuration: 0.32,
-                           delay: delay,
-                           usingSpringWithDamping: 0.72,
-                           initialSpringVelocity: 0.6,
-                           options: [.curveEaseOut, .allowUserInteraction]) {
+            let animator = UIViewPropertyAnimator(duration: 0.55, timingParameters: spring)
+            animator.addAnimations {
                 icon.alpha = 1
                 icon.transform = .identity
+                icon.center = target
             }
+            animator.startAnimation(afterDelay: 0.02 + 0.018 * Double(index))
         }
     }
 
@@ -435,15 +481,24 @@ final class AevonRingMenu: UIView {
         longPressTimer = nil
         cancelCenterHold()
         clearPointer()
+        stopDamping()
         AevonRingMenu.current = nil
         AevonEdgeEntry.setStripInteraction(true)
         // V0.0.24：立刻解除「吞掉那根手指」的接管，把事件通道还给 App
         AevonEdgeEntry.ringDidDismiss()
-        UIView.animate(withDuration: 0.15, animations: {
-            self.alpha = 0
-            for icon in self.icons {
-                icon.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
+        // V0.0.30：图标被圆心「吸」回来（弹簧收拢），比整体淡出更有生命感
+        let spring = UISpringTimingParameters(dampingRatio: 0.78, initialVelocity: CGVector(dx: 0.5, dy: 0.5))
+        for icon in icons {
+            let animator = UIViewPropertyAnimator(duration: 0.3, timingParameters: spring)
+            animator.addAnimations {
+                icon.center = self.ringCenter
+                icon.transform = CGAffineTransform(scaleX: 0.1, y: 0.1)
+                icon.alpha = 0
             }
+            animator.startAnimation()
+        }
+        UIView.animate(withDuration: 0.18, animations: {
+            self.alpha = 0
             self.centerButton.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
         }, completion: { _ in
             self.removeFromSuperview()
@@ -525,10 +580,11 @@ final class AevonRingMenu: UIView {
         if (mx * mx + my * my).squareRoot() > 8 { cancelIconLongPress() }
 
         if rotating {
-            // 旋转模式：顺时针 / 逆时针都跟手转；画面上不选中任何图标
+            // 旋转模式：顺时针 / 逆时针都跟手转；画面上不选中任何图标。
+            // V0.0.30：不直接贴手指角度，走阻尼追赶（图标有「韧劲」的跟随感）
             if abs(delta) > 0.01 {
                 rotation += delta
-                layoutIcons()
+                startDamping()
             }
             setHovered(nil)
         } else {
@@ -569,11 +625,11 @@ final class AevonRingMenu: UIView {
             return
         }
 
-        // ③ 落在圆心：打开完整面板
+        // ③ 落在圆心：打开完整面板（V0.0.30 起面板只显示可开浮窗的 App）
         if isInsideCenter(point) {
             AevonLog.info("[圆盘] 圆心被点击，打开应用面板")
             dismiss()
-            AevonEdgeEntry.openPanel(preferRingEditing: icons.isEmpty)
+            AevonEdgeEntry.openPanel()
             return
         }
 
@@ -737,9 +793,16 @@ final class AevonRingMenu: UIView {
         for item in icons {
             let on = (item === icon)
             item.setHighlighted(on)
-            let target = on ? CGAffineTransform(scaleX: 1.14, y: 1.14) : .identity
+            // V0.0.30：放大 / 缩小走弹簧（阻尼 0.5），指上去有 Q 弹的吞吐感
+            let target = on ? CGAffineTransform(scaleX: 1.16, y: 1.16) : .identity
             if item.transform != target {
-                item.transform = target
+                UIView.animate(withDuration: 0.4,
+                               delay: 0,
+                               usingSpringWithDamping: 0.5,
+                               initialSpringVelocity: 1.4,
+                               options: [.allowUserInteraction, .beginFromCurrentState]) {
+                    item.transform = target
+                }
             }
         }
     }
