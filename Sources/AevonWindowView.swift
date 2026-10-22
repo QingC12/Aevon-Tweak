@@ -202,8 +202,8 @@ final class AevonWindowView: UIView {
     /// 显示没问题（clipsToBounds = false），但触摸永远命中不到（V0.0.37 真机复现：
     /// 窗内 ✕ 正常、窗外移动 / 缩放手势全失效）。这里把命中区扩成
     /// 「窗口 bounds ∪ 所有手柄 frame」；手柄之外仍不拦，底下 App 的触摸照常穿透。
-    override func pointInside(_ point: CGPoint, withEvent event: UIEvent?) -> Bool {
-        if super.pointInside(point, withEvent: event) { return true }
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if super.point(inside: point, with: event) { return true }
         for handle in subviews where handle is AevonEdgeHandleView {
             if !handle.isHidden, handle.alpha > 0.01, handle.frame.contains(point) {
                 return true
