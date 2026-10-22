@@ -61,9 +61,23 @@ enum AevonBootstrap {
             }
         }
 
+        // V0.0.20：UIScene 级监听（可靠 API，不依赖 SpringBoard 私有通知名）。
+        // 只做两件事：把场景激活/失活写进日志（判断「App 前台时是不是换了场景」），
+        // 以及顺手把入口窗口重顶一次。
+        let activateName = UIScene.didActivateNotification
+        let deactivateName = UIScene.didDeactivateNotification
+        for (name, label) in [(activateName, "激活"), (deactivateName, "失活")] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { note in
+                guard let scene = note.object as? UIScene else { return }
+                AevonLog.info("[场景] \(label) \(type(of: scene)) 角色 \(scene.session.role) 状态 \(scene.activationState.rawValue)")
+                guard AevonEntryHost.isInstalled else { return }
+                AevonEntryHost.raise(reason: "场景\(label)")
+                diagnose("场景\(label)")
+            }
+        }
+
         AevonLog.info("[引导] 已注册启动通知（入口不依赖任何 hook）")
     }
-
     /// 窗口栈诊断（限流 8 秒，避免刷爆日志）
     private static var lastDiagnoseAt: CFTimeInterval = 0
     private static func diagnose(_ tag: String) {

@@ -24,8 +24,9 @@ final class AevonEdgeStripView: UIView {
     static let holdDuration: TimeInterval = 0.42
 
     var onTrigger: (() -> Void)?
-    /// 触摸落点（屏幕坐标 y）：供圆盘贴着手指展开
-    var onTouchBegan: ((CGFloat) -> Void)?
+    /// 触摸流（窗口坐标 + 相位）：圆盘呼出后，这根手指还没松手，
+    /// 后续的移动 / 抬起都由这里转给圆盘，实现「图标跟手旋转 + 停住松手开窗」。
+    var onTouch: ((_ point: CGPoint, _ phase: UITouch.Phase) -> Void)?
 
     private let indicator = UIView()
     private var touchStart: CGPoint = .zero
@@ -103,7 +104,7 @@ final class AevonEdgeStripView: UIView {
         touchStart = point
         touchBeganAt = CACurrentMediaTime()
         fired = false
-        onTouchBegan?(convert(point, to: nil).y)
+        onTouch?(convert(point, to: nil), .began)
 
         let now = CACurrentMediaTime()
         if now - lastTouchLogAt > 0.8 {
@@ -118,7 +119,10 @@ final class AevonEdgeStripView: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let point = touches.first?.location(in: self), !fired else { return }
+        guard let point = touches.first?.location(in: self) else { return }
+        // 无论是否已经触发，都把触摸流转发出去：圆盘要靠它跟手旋转
+        onTouch?(convert(point, to: nil), .moved)
+        guard !fired else { return }
         let dx = point.x - touchStart.x
         let dy = point.y - touchStart.y
         // 横向位移占优且足够大，才当作「向左滑呼出」，避免纵向滑动误触
@@ -130,8 +134,9 @@ final class AevonEdgeStripView: UIView {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         cancelHold()
         restoreIndicator()
-        guard !fired else { return }
         let point = touches.first?.location(in: self) ?? touchStart
+        onTouch?(convert(point, to: nil), .ended)
+        guard !fired else { return }
         let dx = point.x - touchStart.x
         let dy = point.y - touchStart.y
         let duration = Int((CACurrentMediaTime() - touchBeganAt) * 1000)
@@ -141,6 +146,9 @@ final class AevonEdgeStripView: UIView {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         cancelHold()
         restoreIndicator()
+        if let point = touches.first?.location(in: self) {
+            onTouch?(convert(point, to: nil), .cancelled)
+        }
     }
 
     // MARK: - 触发
@@ -188,8 +196,8 @@ enum AevonEdgeEntry {
     private static var probeStart: CGPoint?
     private static var lastTriggerAt: CFTimeInterval = 0
     private static var loggedProbeBegan = false
-    /// 最近一次边缘触摸的纵向落点（屏幕坐标），圆盘据此贴手指展开
-    private static var lastTouchY: CGFloat?
+    /// 最近一次边缘触摸的位置（窗口坐标），圆盘唤出时从这里接手那根手指
+    private static var lastTouchPoint: CGPoint = .zero
 
     /// 手势条是否已挂上（不代表手势一定能触发，触发靠系统触摸分发）
     static var isVisible: Bool { return strip != nil }
@@ -212,7 +220,7 @@ enum AevonEdgeEntry {
 
         let view = AevonEdgeStripView(frame: .zero)
         view.onTrigger = { attemptTrigger("手势条") }
-        view.onTouchBegan = { y in lastTouchY = y }
+        view.onTouch = { point, phase in handleStripTouch(point, phase) }
         root.addSubview(view)
         view.layoutInParent()
 
@@ -239,7 +247,25 @@ enum AevonEdgeEntry {
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
         AevonLog.info("[边缘] 触发（\(reason)），呼出圆盘")
-        presentRing(anchorY: lastTouchY)
+        presentRing()
+    }
+
+    /// 边缘手势条的触摸流：唤出圆盘后那根手指还没松手，交给圆盘做「跟手旋转 / 停顿选定」。
+    private static func handleStripTouch(_ point: CGPoint, _ phase: UITouch.Phase) {
+        lastTouchPoint = point
+        guard let ring = AevonRingMenu.presented else { return }
+        switch phase {
+        case .began:
+            ring.beginRemoteTracking(at: point)
+        case .moved:
+            ring.remoteMoved(to: point)
+        case .ended:
+            ring.remoteEnded(at: point)
+        case .cancelled:
+            ring.remoteCancelled()
+        default:
+            break
+        }
     }
 
     /// 触摸探针 + 窗口层兜底判定。
@@ -260,7 +286,7 @@ enum AevonEdgeEntry {
             switch phase {
             case .began:
                 probeStart = inside ? point : nil
-                if inside { lastTouchY = point.y }
+                if inside { lastTouchPoint = point }
                 // 关键诊断：任何落点都记一次（限流），用来判断触摸到底有没有进我们的窗口
                 let now = CACurrentMediaTime()
                 if now - lastProbeLogAt > 3.0 {
@@ -284,14 +310,16 @@ enum AevonEdgeEntry {
         }
     }
 
-    /// 呼出圆盘（anchorY = 触发点纵坐标，圆盘贴着手指展开）。
-    static func presentRing(anchorY: CGFloat? = nil) {
+    /// 呼出圆盘。圆心固定在屏幕 65% 高处（V0.0.20），不再跟随触发点。
+    static func presentRing() {
         guard let root = AevonEntryHost.rootView else {
             AevonLog.warn("[圆盘] 入口窗口不可用，无法呼出")
             return
         }
         AevonEntryHost.raise(reason: "呼出圆盘")
-        AevonRingMenu.present(in: root, anchorY: anchorY)
+        AevonRingMenu.present(in: root)
+        // 唤出圆盘的那根手指还没离开屏幕 —— 把它的位置交给圆盘，后续移动就是旋转
+        AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint)
     }
 
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。

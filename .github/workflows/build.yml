@@ -155,14 +155,14 @@ jobs:
             || { echo "::error::缺少统一入口窗口类（AevonEntryWindow）"; exit 1; }
           echo "圆盘校验: 边缘入口（原生触摸）+ 整圆形态 + 图标单元 + 统一入口窗口 已编入"
 
-          # V0.0.19：入口窗口层级抬到 1e7（修「全屏 App 里不显示触发条」）+ 圆盘贴右布局
+          # V0.0.20：圆盘改多圈（8/12/16）+ 场景看门狗
           # 注意：Swift 的 enum + static let 没有运行时元数据，类型名不会进二进制，
-          # 只能用日志标记串校验（AevonLevel1e7）。
-          strings "$DYLIB" | grep -q 'AevonLevel1e7' \
-            || { echo "::error::入口窗口层级不是 1e7 版本（缺少 AevonLevel1e7 标记）"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonRingRightAnchor' \
-            || { echo "::error::圆盘仍是居中版本（缺少 AevonRingRightAnchor 标记）"; exit 1; }
-          echo "层级校验: 入口窗口 1e7 + 圆盘贴右锚定 已编入"
+          # 一律靠日志里的 ASCII 标记串校验。
+          strings "$DYLIB" | grep -q 'AevonRingMultiRing' \
+            || { echo "::error::圆盘不是多圈版本（缺少 AevonRingMultiRing 标记）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSceneWatch' \
+            || { echo "::error::缺少场景看门狗（AevonSceneWatch 标记）"; exit 1; }
+          echo "多圈校验: 多圈圆盘 + 场景看门狗 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"

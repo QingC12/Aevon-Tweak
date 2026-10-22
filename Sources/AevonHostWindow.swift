@@ -101,4 +101,42 @@ enum AevonHostWindow {
         if let main = candidates.first(where: { $0.screen === UIScreen.main }) { return main }
         return candidates.first
     }
+
+    /// 选「最适合承载全局浮层」的窗口场景（V0.0.20）。
+    ///
+    /// 背景：V0.0.19 把入口窗口层级抬到 1e7 之后，桌面正常、全屏 App 里仍然看不见 ——
+    /// 说明问题不在层级，而在**窗口挂错了场景**：App 进前台后，SpringBoard 可能切到
+    /// 另一个窗口场景（系统 UI 用的那个）来承载可见画面，挂在家屏场景上的窗口自然不显示。
+    /// 这里按「系统 UI 场景 > 前台活跃 > 窗口层级更高 > 主屏」打分挑一个，
+    /// 再由 `AevonEntryHost` 的看门狗在场景切换时把窗口搬过去。
+    static func preferredScene() -> UIWindowScene? {
+        var best: UIWindowScene?
+        var bestScore = Int.min
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            let score = sceneScore(scene)
+            guard score > Int.min else { continue }
+            if score > bestScore {
+                bestScore = score
+                best = scene
+            }
+        }
+        return best
+    }
+
+    /// 单个场景的「适合承载浮层」得分；不可用的场景返回 `Int.min`。
+    static func sceneScore(_ scene: UIWindowScene) -> Int {
+        guard scene.activationState == .foregroundActive
+            || scene.activationState == .foregroundInactive else { return Int.min }
+        var score = 0
+        if scene.activationState == .foregroundActive { score += 20 }
+        if scene.screen === UIScreen.main { score += 5 }
+        let role = scene.session.role.lowercased()
+        if role.contains("system") || role.contains("shell") { score += 100 }
+        if scene.windows.contains(where: { $0.windowLevel.rawValue >= UIWindow.Level.alert.rawValue }) {
+            score += 10
+        }
+        // 窗口越多，越可能是「真正在显示系统 UI」的那个场景
+        score += min(scene.windows.count, 8)
+        return score
+    }
 }

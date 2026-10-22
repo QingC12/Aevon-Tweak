@@ -6,9 +6,8 @@ import Foundation
 /// `TrashAppState` 这套数据模型 —— 圆盘里的 App 是一份用户自选的列表，可增可删。
 /// 我们只做「有序列表 + 上限」，存在偏好域 com.Aevon 的 `RingApps` 键里。
 enum AevonRingStore {
-    /// 圆盘上最多放几个（V0.0.19 从 10 提到 16：用户反馈「显示的应用太少了」）。
-    /// 半径 124 的整圆周长约 780pt，16 个图标间隔 48pt ≈ 图标 44pt + 4pt 缝隙，还是能点准。
-    static let maxCount = 16
+    /// 圆盘上最多放几个。V0.0.20 起是多圈布局：内圈 8 + 中圈 12 + 外圈 16 = 36。
+    static let maxCount = 36
 
     private static let key = "RingApps"
     private static let suite = "com.Aevon"

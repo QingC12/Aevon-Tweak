@@ -42,7 +42,7 @@ enum AevonEntryHost {
             AevonLog.warn("[入口] 多次尝试仍没有可用场景，放弃本次创建（\(reason)）")
             return nil
         }
-        guard let scene = AevonHostWindow.firstWindowScene() else {
+        guard let scene = AevonHostWindow.preferredScene() ?? AevonHostWindow.firstWindowScene() else {
             AevonLog.info("[入口] 暂无前台场景，1.5 秒后重试（第 \(attempt) 次，\(reason)）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 _ = ensureInstalled(attempt: attempt + 1, reason: reason)
@@ -70,6 +70,7 @@ enum AevonEntryHost {
 
         window = host
         AevonEdgeEntry.attachProbe(to: host)
+        startWatchdog()
 
         let bounds = controller.view.bounds
         AevonLog.info("[入口] 统一窗口已创建（level=\(Int(host.windowLevel.rawValue))，scene=\(scene.activationState.rawValue)，根视图 \(Int(bounds.width))x\(Int(bounds.height))，原因=\(reason)）（AevonEntryHost AevonLevel1e7）")
@@ -88,6 +89,47 @@ enum AevonEntryHost {
         }
     }
 
+    /// 场景看门狗（V0.0.20）。
+    ///
+    /// 每 2 秒对比一次「当前挂着的场景」与「打分最高的场景」：
+    ///   · 不一致就把窗口搬过去（`windowScene` 可以在运行中改，子视图全部保留）；
+    ///   · 每 10 秒打一次窗口栈（只在前 5 分钟），保证「App 前台时到底有几个场景、
+    ///     我们的窗口还在不在、有没有更高的窗口」一定能在日志里看到。
+    private static var watchdog: Timer?
+    private static var tickCount = 0
+
+    static func startWatchdog() {
+        guard watchdog == nil else { return }
+        let timer = Timer(timeInterval: 2.0, repeats: true) { _ in watchdogTick() }
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+        AevonLog.info("[入口] 场景看门狗已启动（每 2 秒核对场景，每 10 秒打一次窗口栈）（AevonSceneWatch）")
+    }
+
+    private static func watchdogTick() {
+        guard let host = window else { return }
+        tickCount += 1
+
+        if let preferred = AevonHostWindow.preferredScene() {
+            let currentScore = host.windowScene.map { AevonHostWindow.sceneScore($0) } ?? Int.min
+            let preferredScore = AevonHostWindow.sceneScore(preferred)
+            // 只有「明显更好」才搬家，避免多个场景同分时来回抖动
+            if preferred !== host.windowScene, preferredScore > currentScore {
+                host.windowScene = preferred
+                host.windowLevel = AevonWindowLevels.entry
+                host.isHidden = false
+                AevonLog.info("[入口] 场景切换 → \(type(of: preferred))（角色 \(preferred.session.role)，状态 \(preferred.activationState.rawValue)，得分 \(currentScore) → \(preferredScore)）")
+                dumpWindowStack("场景切换")
+                return
+            }
+        }
+
+        // 前 5 分钟每 10 秒打一次栈：用户一般会在这段时间里打开 App 验证
+        if tickCount <= 150, tickCount % 5 == 0 {
+            dumpWindowStack("周期")
+        }
+    }
+
     /// 把入口窗口重新顶到最上层（V0.0.19）。
     ///
     /// 依据：桌面可用、全屏 App 不可见 —— 除了层级被压，还有第二种可能：
@@ -100,7 +142,7 @@ enum AevonEntryHost {
         // 这里在有前台场景时重新挂一次。
         let state = host.windowScene?.activationState
         if state == nil || state == .unattached || state == .background {
-            if let scene = AevonHostWindow.firstWindowScene(), scene !== host.windowScene {
+            if let scene = AevonHostWindow.preferredScene(), scene !== host.windowScene {
                 host.windowScene = scene
                 AevonLog.info("[入口] 窗口场景已重挂（\(reason)）")
             }
@@ -120,15 +162,22 @@ enum AevonEntryHost {
     /// 不用再靠猜。
     static func dumpWindowStack(_ tag: String) {
         var parts: [String] = []
+        var index = 0
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
             var items: [String] = []
             let sorted = scene.windows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
             for w in sorted.suffix(8) {
                 items.append("\(Int(w.windowLevel.rawValue)):\(type(of: w))\(w.isHidden ? "(h)" : "")")
             }
-            parts.append("场景\(type(of: scene))·状态\(scene.activationState.rawValue)·窗口\(scene.windows.count)个[\(items.joined(separator: " "))]")
+            let mine = (scene === window?.windowScene) ? "*" : ""
+            parts.append("#\(index)\(mine)\(type(of: scene))<\(scene.session.role)>状态\(scene.activationState.rawValue)·\(scene.windows.count)窗[\(items.joined(separator: " "))]")
+            index += 1
         }
         if parts.isEmpty { parts.append("没有任何 UIWindowScene") }
-        AevonLog.info("[诊断] 窗口栈（\(tag)）：\(parts.joined(separator: " | "))")
+        let hostState = window.map { w -> String in
+            let layerText = w.layer.superlayer == nil ? "无" : "有"
+            return "入口窗口\(Int(w.windowLevel.rawValue))/隐藏\(w.isHidden ? 1 : 0)/透明度\(Int(w.alpha * 100))/场景\(w.windowScene == nil ? "无" : "有")/渲染层\(layerText)"
+        } ?? "入口窗口不存在"
+        AevonLog.info("[诊断] 窗口栈（\(tag)）：\(hostState) | \(parts.joined(separator: " | "))")
     }
 }
