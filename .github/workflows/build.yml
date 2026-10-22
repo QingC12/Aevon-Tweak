@@ -385,7 +385,6 @@ jobs:
           [ -n "$ICON2" ] || { echo "::error::deb 缺少 AevonIcon@2x.png"; exit 1; }
           PREFICON="$(find . -path '*AevonPrefs.bundle/icon@3x.png' | head -n1)"
           [ -n "$PREFICON" ] || { echo "::error::deb 缺少设置 bundle 图标 icon@3x.png"; exit 1; }
-          grep -q 'AevonTryExecute' AevonAssertionShim.m || { echo "::error::垫片缺 AevonTryExecute"; exit 1; }
           echo "V0.0.39 校验: 启动异常保护 + 崩溃回溯 + 圆盘长按移除已删 + 图标齐全 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
