@@ -152,10 +152,13 @@ final class AevonRingMenu: UIView {
     private var ringRadii: [CGFloat] = []
 
     private var rotation: CGFloat = 0
-    /// 阻尼显示角（V0.0.30，AevonRingDampV30）：图标不直接贴手指角度，而是每帧
-    /// 向 `rotation` 追赶 32%（CADisplayLink），得到 Stheno 选择器那种
-    /// CustomSpringAnimation + dampingFraction 的「跟手但带韧劲」手感。
+    /// 阻尼显示角（V0.0.30 起，V0.0.33 升级为速度弹簧）：图标不直接贴手指角度。
+    /// V0.0.33（AevonRingSpringV33）：从「每帧追 32%」的纯指数追赶，换成
+    /// **质量-弹簧-阻尼**积分器 —— 带速度项，急停会过冲回摆（Q 弹），
+    /// 慢拖有黏滞阻尼感（更跟手、更顺），比 diff*0.32 的发飘手感强得多。
     private var displayRotation: CGFloat = 0
+    /// 显示角速度（度/帧），弹簧积分器的状态量
+    private var displayVelocity: CGFloat = 0
     private var displayLink: CADisplayLink?
     private var ringCenter: CGPoint = .zero
     private var isDismissing = false
@@ -379,7 +382,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 阻尼跟手 / 弹簧出入场）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33）")
     }
 
     private func drawRingTracks() {
@@ -407,9 +410,9 @@ final class AevonRingMenu: UIView {
         }
     }
 
-    // MARK: - 阻尼跟手旋转（V0.0.30，AevonRingDampV30）
+    // MARK: - 阻尼跟手旋转（V0.0.30，V0.0.33 速度弹簧 AevonRingSpringV33）
 
-    /// 启动阻尼追赶：图标角度每帧向真实 `rotation` 收敛 32%，
+    /// 启动弹簧追赶：图标角速度向 `rotation` 弹簧收敛，
     /// 收敛完成后自动停掉 CADisplayLink（平时零开销）。
     private func startDamping() {
         if displayLink == nil {
@@ -422,21 +425,32 @@ final class AevonRingMenu: UIView {
     private func stopDamping() {
         displayLink?.invalidate()
         displayLink = nil
+        displayVelocity = 0
     }
 
+    /// V0.0.33 速度弹簧积分器（AevonRingSpringV33）。
+    /// 加速度 = 刚度 × 位移 − 阻尼 × 速度；半隐式欧拉积分，60/120Hz 自适应 dt。
+    /// 手感调参：刚度 140（跟手）/ 阻尼 16（急停过冲约 12%，慢拖黏滞）。
     @objc private func stepDamping() {
         guard AevonRingMenu.current === self, !isDismissing else {
             stopDamping()
             return
         }
         let diff = rotation - displayRotation
-        if abs(diff) <= 0.02 {
+        if abs(diff) <= 0.05 && abs(displayVelocity) <= 0.4 {
             displayRotation = rotation
+            displayVelocity = 0
             layoutIcons(displayRotation)
             stopDamping()
             return
         }
-        displayRotation += diff * 0.32
+        // dt 用 displayLink 真实帧间隔（秒），120Hz 设备上步长减半，手感一致
+        let dt = CGFloat(displayLink?.duration ?? (1.0 / 60.0))
+        let stiffness: CGFloat = 140
+        let damping: CGFloat = 16
+        let accel = stiffness * diff - damping * displayVelocity
+        displayVelocity += accel * dt
+        displayRotation += displayVelocity * dt
         layoutIcons(displayRotation)
     }
 
@@ -798,13 +812,14 @@ final class AevonRingMenu: UIView {
         for item in icons {
             let on = (item === icon)
             item.setHighlighted(on)
-            // V0.0.30：放大 / 缩小走弹簧（阻尼 0.5），指上去有 Q 弹的吞吐感
-            let target = on ? CGAffineTransform(scaleX: 1.16, y: 1.16) : .identity
+            // V0.0.33（AevonRingSpringV33）：放大 / 缩小走更 Q 的弹簧 ——
+            // 阻尼 0.48 + 初速 2.0，指上去有过冲回摆的弹力感，移开有吸回感。
+            let target = on ? CGAffineTransform(scaleX: 1.18, y: 1.18) : .identity
             if item.transform != target {
-                UIView.animate(withDuration: 0.4,
+                UIView.animate(withDuration: 0.42,
                                delay: 0,
-                               usingSpringWithDamping: 0.5,
-                               initialSpringVelocity: 1.4,
+                               usingSpringWithDamping: 0.48,
+                               initialSpringVelocity: 2.0,
                                options: [.allowUserInteraction, .beginFromCurrentState]) {
                     item.transform = target
                 }

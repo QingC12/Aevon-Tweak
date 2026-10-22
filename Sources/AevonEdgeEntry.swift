@@ -717,8 +717,13 @@ enum AevonEdgeEntry {
             lastTouchPoint = point
             // V0.0.25：App 前台时，这根手指从按下那一刻就归我们 —— App 连 began 都收不到，
             // 所以不管后面怎么滑动，前台 App 都不会跟着滚。
-            ownsTouch = AevonEntryHost.mountedInAppScene
-            if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
+            // V0.0.33（AevonTouchOwnV33）：热区按下即完全接管，不再门控 mountedInAppScene。
+            // Aevon(26) 根因：容器在 App 场景 / 入口窗口之间搬家时 mountedInAppScene 瞬间变 false，
+            // began 帧不吞 → App 收到 began + 前几帧 moved → 全屏手势照样触发；
+            // 且 shouldSwallowGlobalTouch 每帧回查 mountedInAppScene，中途搬家就撒手。
+            // 热区是右缘 18~140pt 专属手势条，桌面图标几乎不可能落在里面 —— 接管优先。
+            ownsTouch = true
+            swallowDeadline = CACurrentMediaTime() + pressLimit
             scheduleGlobalHold()
             let now = CACurrentMediaTime()
             if now - globalLastLogAt > 2.0 {
@@ -876,7 +881,11 @@ enum AevonEdgeEntry {
         }
         guard globalTouchID != 0, touchID == globalTouchID else { return false }
         guard CACurrentMediaTime() <= swallowDeadline else { return false }
-        if ownsTouch { return AevonEntryHost.mountedInAppScene }
+        // V0.0.33（AevonTouchOwnV33）：ownsTouch 成立后**锁定不再回查** mountedInAppScene。
+        // Aevon(26) 根因之一：每帧重查 → 容器搬家瞬间（日志反复「App 场景消失 / 画面进入」）
+        // 判定翻转，吞到一半突然撒手，后半段滑动全进 App，全屏手势被触发。
+        // began 时一旦接管就吞到 ended / cancelled，与挂载点无关。
+        if ownsTouch { return true }
         guard AevonRingMenu.isPresented, ringSource == "global" else { return false }
         return true
     }

@@ -292,6 +292,13 @@ jobs:
             || { echo "::error::缺少 notify 跨进程热区通道（缺 AevonGuardNotifyV32）—— 抖音/QQ 里 Guard 读不到配置"; exit 1; }
           echo "V0.0.32 校验: notify 跨进程热区通道 已编入"
 
+          # ── V0.0.33：热区按下无条件接管 + 圆盘速度弹簧 + Guard 圆盘期吞区加宽 ──
+          strings "$DYLIB" | grep -q 'AevonTouchOwnV33' \
+            || { echo "::error::热区接管仍门控 mountedInAppScene（缺 AevonTouchOwnV33）—— 容器搬家瞬间 App 会收到 began"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingSpringV33' \
+            || { echo "::error::圆盘旋转不是速度弹簧（缺 AevonRingSpringV33）"; exit 1; }
+          echo "V0.0.33 校验: 热区无条件接管 + 圆盘速度弹簧 已编入"
+
           # ── V0.0.27：App 侧触摸拦截（独立小 dylib，注入前台 App 进程）──
           # 用户 Aevon(20)：SpringBoard 里吞事件挡不住 QQ 左滑删除会话 / 抖音左滑进主页，
           # 那些是 App 进程收到触摸后自己判定的。所以必须有 AevonGuard。
@@ -311,6 +318,8 @@ jobs:
             || { echo "::error::AevonGuard 没有 notify 主配置通道（缺 AevonGuardNotifyV32）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardRingForceV32' \
             || { echo "::error::AevonGuard 圆盘展开期没有无条件吞下半屏（缺 AevonGuardRingForceV32）—— 抖音会暂停/误触"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardRingWideV33' \
+            || { echo "::error::AevonGuard 圆盘期吞区没有加宽（缺 AevonGuardRingWideV33）—— 上半屏滑动仍触发 App"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

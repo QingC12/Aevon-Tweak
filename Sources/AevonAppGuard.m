@@ -44,6 +44,8 @@ __attribute__((used)) static const char AevonGuardFileConfMarker[] = "AevonGuard
 /// CI 标记（V0.0.32）：notify(3) 主配置通道 + 圆盘展开期无条件吞下半屏
 __attribute__((used)) static const char AevonGuardNotifyMarker[] = "AevonGuardNotifyV32";
 __attribute__((used)) static const char AevonGuardRingForceMarker[] = "AevonGuardRingForceV32";
+/// CI 标记（V0.0.33）：圆盘期吞区加宽到上 18% 以外整屏 + 60s 超时
+__attribute__((used)) static const char AevonGuardRingWideMarker[] = "AevonGuardRingWideV33";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -59,7 +61,10 @@ static CFTimeInterval const AevonGuardConfigTTL = 2.0;
  * SpringBoard 全局通道的副本，不依赖 App 进程投递，所以整块吞掉没有任何副作用。
  * Darwin 通知没有载荷，这里自己计时兜底：超过 10 秒没收到 ringclose 就自动失效。 */
 static CFTimeInterval AevonGuardRingOpenAt = 0;
-static CFTimeInterval const AevonGuardRingOpenMaxAge = 10.0;
+/* V0.0.33（AevonGuardRingWideV33）：10s → 60s。
+ * Aevon(26) 根因：圆盘用户经常开着超过 10 秒（慢慢挑图标 / 旋转），10 秒一到
+ * RingOpen() 变 NO → 下半屏吞触摸失效 → 滑图标直接带动全屏 App。 */
+static CFTimeInterval const AevonGuardRingOpenMaxAge = 60.0;
 /// V0.0.32：只要收到过 ringopen，就证明插件在 SpringBoard 侧是启用的。
 /// 之后即使配置三路（notify / 文件 / 偏好）全失败，也用默认几何兜底拦截，
 /// 不再整条 Guard 失效（Aevon(25)：guard.conf 写不进 → 抖音被暂停/误触）。
@@ -293,10 +298,12 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             CGPoint pt = [touch locationInView:nil];
             BOOL inZone = NO;
             if (ringOpen) {
-                /* AevonGuardRingForceV32：圆盘开着 —— 下半屏整块 + 热区全吞。
+                /* AevonGuardRingForceV32 → V0.0.33 加宽（AevonGuardRingWideV33）：
+                 * 圆盘开着 —— **上 18% 以外整屏**吞掉。旧版只吞下半屏，而圆盘圆心在
+                 * 75% 高、外圈图标能伸到中线上方，上半屏滑动照样进 App（Aevon(26)）。
                  * 图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */
-                CGFloat half = [UIScreen mainScreen].bounds.size.height * 0.5;
-                if (pt.y >= half) { inZone = YES; }
+                CGFloat topLimit = [UIScreen mainScreen].bounds.size.height * 0.18;
+                if (pt.y >= topLimit) { inZone = YES; }
                 if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
                     inZone = YES;
                 }

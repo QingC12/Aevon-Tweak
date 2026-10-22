@@ -33,6 +33,11 @@ __attribute__((used)) static const char AevonGuardFileConfV31Marker[] = "AEVONGU
 /* V0.0.32 CI 标记：notify(3) 跨进程热区通道（沙盒 App 唯一可靠的配置来源） */
 __attribute__((used)) static const char AevonGuardNotifyV32Marker[] = "AevonGuardNotifyV32";
 
+/* V0.0.33 CI 标记：热区按下无条件接管 + 圆盘速度弹簧 + Guard 圆盘期吞区加宽 */
+__attribute__((used)) static const char AevonTouchOwnV33Marker[] = "AevonTouchOwnV33";
+__attribute__((used)) static const char AevonRingSpringV33Marker[] = "AevonRingSpringV33";
+__attribute__((used)) static const char AevonGuardRingWideV33Marker[] = "AevonGuardRingWideV33";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能
