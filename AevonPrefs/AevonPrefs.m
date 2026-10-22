@@ -60,6 +60,8 @@ static void AevonSetProperty(id spec, id value, NSString *key) {
 static NSString *const AevonPrefsDomain = @"com.Aevon";
 /* PSSwitchCell 的 cell 类型值（Preferences 框架常量，多年未变） */
 #define AEVON_CELL_SWITCH 6
+/* PSSliderCell 的 cell 类型值（V0.0.25 新增：圆盘触发区域的位置 / 宽度 / 高度） */
+#define AEVON_CELL_SLIDER 5
 
 #pragma mark - _specifiers 读写（runtime，不依赖 ivar 声明）
 
@@ -167,8 +169,44 @@ static id AevonNewSwitch(NSString *label, id target, NSString *key, id defaultVa
     return spec;
 }
 
-#pragma mark - 来源 2：从包内 Root.plist 构建
+/*
+ * 滑杆（V0.0.25）。
+ * 需要同时给出 minValue / maxValue / default 三个数值属性 —— Preferences 框架
+ * 在不同 iOS 版本上分别读 "minValue"/"maxValue"，旧版本还会读 "min"/"max"，
+ * 这里两套都写，免得出现「滑杆拖到头数值不变」或「滑杆范围是 0~1」。
+ */
+static id AevonNewSlider(NSString *label,
+                         id target,
+                         NSString *key,
+                         double minValue,
+                         double maxValue,
+                         double defaultValue) {
+    id spec = AevonNewSpecifier(label,
+                                target,
+                                @selector(setPreferenceValue:specifier:),
+                                @selector(readPreferenceValue:),
+                                AEVON_CELL_SLIDER);
+    if (spec == nil) return nil;
+    @try {
+        if (key.length > 0) {
+            AevonSetProperty(spec, key, @"key");
+            AevonSetProperty(spec, key, @"id");
+        }
+        AevonSetProperty(spec, AevonPrefsDomain, @"defaults");
+        AevonSetProperty(spec, @(minValue), @"minValue");
+        AevonSetProperty(spec, @(maxValue), @"maxValue");
+        AevonSetProperty(spec, @(minValue), @"min");
+        AevonSetProperty(spec, @(maxValue), @"max");
+        AevonSetProperty(spec, @(defaultValue), @"default");
+        /* 右侧显示当前数值，用户才知道拖到了哪个百分比 / 多少 pt */
+        AevonSetProperty(spec, @YES, @"showValue");
+    } @catch (NSException *exception) {
+        return nil;
+    }
+    return spec;
+}
 
+#pragma mark - 来源 2：从包内 Root.plist 构建
 static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle) {
     if (bundle == nil) return nil;
     NSString *path = [bundle pathForResource:@"Root" ofType:@"plist"];
@@ -195,6 +233,18 @@ static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle) {
             id def = item[@"default"];
             id spec = AevonNewSwitch(label, target, key, def);
             if (spec != nil) [result addObject:spec];
+        } else if ([cell isEqualToString:@"PSSliderCell"] || [cell isEqualToString:@"PSTSliderCell"]) {
+            NSString *key = item[@"key"];
+            if (![key isKindOfClass:[NSString class]] || key.length == 0) continue;
+            double minValue = [item[@"minValue"] respondsToSelector:@selector(doubleValue)]
+                ? [item[@"minValue"] doubleValue] : 0.0;
+            double maxValue = [item[@"maxValue"] respondsToSelector:@selector(doubleValue)]
+                ? [item[@"maxValue"] doubleValue] : 100.0;
+            double defaultValue = [item[@"default"] respondsToSelector:@selector(doubleValue)]
+                ? [item[@"default"] doubleValue] : minValue;
+            if (maxValue <= minValue) maxValue = minValue + 1;
+            id spec = AevonNewSlider(label, target, key, minValue, maxValue, defaultValue);
+            if (spec != nil) [result addObject:spec];
         }
     }
     return result.count > 0 ? result : nil;
@@ -206,9 +256,8 @@ static NSArray *AevonBuildFallback(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
-                              @"V0.0.18 边缘圆盘版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：打开「启用插件」→ 注销 → 屏幕右边下半边缘向左滑，或在该处按住 0.4 秒 → 正中弹出整圆盘 → 点图标开窗。"
-                              @"圆盘可拖动旋转，长按图标移除，点圆心打开完整面板（单窗 / 左右分屏 / 编辑圆盘），点空白处收起。"
+                              @"所有功能只在本页开关，无需终端/SSH。"
+                              @"用法：打开「启用插件」→ 注销 → 在屏幕右边缘的触发区向左滑，或在该处按住 0.4 秒 → 弹出圆盘 → 点图标开窗。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
@@ -217,6 +266,18 @@ static NSArray *AevonBuildFallback(id target) {
     if (s1a != nil) [result addObject:s1a];
     id s1b = AevonNewSwitch(@"显示桌面悬浮球（备用入口）", target, @"BubbleEnabled", @NO);
     if (s1b != nil) [result addObject:s1b];
+
+    id groupZone = AevonNewGroup(@"圆盘触发区域",
+                                 @"只有贴着右边缘的这块区域里的左滑 / 长按才能呼出圆盘。"
+                                 @"位置 = 区域中心在屏幕高度的百分比（75 与圆盘圆心对齐；贴底部用 95~98，贴顶部用 2~5）。"
+                                 @"宽度 = 从右边缘往里多少 pt（越小越不容易误触）。高度 = 上下多高。改完立即生效。");
+    if (groupZone != nil) [result addObject:groupZone];
+    id z1 = AevonNewSlider(@"触发位置（屏幕高度 %）", target, @"RingTriggerY", 0, 100, 75);
+    if (z1 != nil) [result addObject:z1];
+    id z2 = AevonNewSlider(@"触发宽度（pt）", target, @"RingTriggerWidth", 18, 140, 48);
+    if (z2 != nil) [result addObject:z2];
+    id z3 = AevonNewSlider(@"触发高度（pt）", target, @"RingTriggerHeight", 80, 900, 320);
+    if (z3 != nil) [result addObject:z3];
 
     id group2 = AevonNewGroup(@"窗口",
                               @"「浮窗内可直接触摸操作」默认开；若怀疑触摸引起异常，关掉后浮窗只显示画面。"

@@ -64,6 +64,12 @@ final class AevonRingIcon: UIView {
         layer.borderColor = (highlighted
             ? UIColor(red: 0.35, green: 0.82, blue: 1.0, alpha: 1.0)
             : UIColor(white: 1.0, alpha: 0.16)).cgColor
+        // 选中用蓝色光晕强化（文字已经去掉了，靠这个确认选的是哪个）
+        layer.shadowColor = (highlighted
+            ? UIColor(red: 0.30, green: 0.78, blue: 1.0, alpha: 1.0)
+            : UIColor.black).cgColor
+        layer.shadowOpacity = highlighted ? 0.85 : 0.45
+        layer.shadowRadius = highlighted ? 10 : 6
         if !hasIcon {
             backgroundColor = highlighted
                 ? UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
@@ -338,11 +344,12 @@ final class AevonRingMenu: UIView {
         drawRingTracks()
         layoutIcons()
 
-        // V0.0.24：圆心只留四宫格图标，不再有任何文字（用户 Aevon(17) 要求）
-        hintLabel.text = AevonRingMenu.hintText
+        // V0.0.24：圆心只留四宫格图标，不再有任何文字
+        // V0.0.25：底部也不再显示「选中的 App 名字」，只保留固定的操作提示
+        hintLabel.text = icons.isEmpty ? "点圆心添加 App" : AevonRingMenu.hintText
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23 AevonRingCenterTextFreeV24）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少，无选中文字）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25）")
     }
 
     private func drawRingTracks() {
@@ -518,19 +525,14 @@ final class AevonRingMenu: UIView {
         setHovered(icon(at: point))
     }
 
-    /// 高亮「松手就会打开」的那个图标；名字显示在底部提示行（圆心保持纯图标）
+    /// 高亮「松手就会打开」的那个图标。
+    ///
+    /// V0.0.25：**屏幕上不再出现任何「选中的 App 名字」文字**（用户要求）——
+    /// 选中状态只靠图标本身的放大 + 蓝色描边 + 蓝色光晕表达（后续再加动画）。
     private func setHovered(_ icon: AevonRingIcon?) {
         for item in icons {
-            item.transform = (item === icon) ? CGAffineTransform(scaleX: 1.10, y: 1.10) : .identity
+            item.transform = (item === icon) ? CGAffineTransform(scaleX: 1.14, y: 1.14) : .identity
             item.setHighlighted(item === icon)
-        }
-        guard !isDismissing else { return }
-        if let icon = icon {
-            hintLabel.text = icon.displayName
-        } else if icons.isEmpty {
-            hintLabel.text = "点圆心添加 App"
-        } else {
-            hintLabel.text = AevonRingMenu.hintText
         }
     }
 

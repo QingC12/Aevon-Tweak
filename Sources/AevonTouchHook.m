@@ -55,8 +55,22 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                 uintptr_t touchID = (uintptr_t)(__bridge void *)touch;
                 // `locationInView:nil` 返回触摸所在窗口的坐标（窗口全屏，等价屏幕坐标）
                 CGPoint point = [touch locationInView:nil];
-                if (AevonGlobalTouchShouldSwallow(touchID)) { swallowCount += 1; }
-                AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
+                /*
+                 * 顺序很重要（V0.0.25）：
+                 *   · began / moved —— **先上报再询问**。Swift 侧要在 begun 时就登记
+                 *     「这根手指归我」，紧接着的询问才会对 began 这一帧也返回 YES，
+                 *     这样 App 连 began 都收不到，前台 App 不会再跟着滑。
+                 *   · ended / cancelled —— **先询问再上报**。上报会把「归我」状态清掉，
+                 *     先问才能把这一次抬手也挡在 App 外面（不会留下孤儿 ended）。
+                 */
+                BOOL isRelease = (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled);
+                if (isRelease) {
+                    if (AevonGlobalTouchShouldSwallow(touchID)) { swallowCount += 1; }
+                    AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
+                } else {
+                    AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
+                    if (AevonGlobalTouchShouldSwallow(touchID)) { swallowCount += 1; }
+                }
             }
             // 整条事件的所有活动触摸都属于「被圆盘接管的那根手指」才丢弃；
             // 只要混进了别的手指就原样投递，绝不误伤其他触摸。

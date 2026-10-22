@@ -211,6 +211,17 @@ jobs:
             || { echo "::error::圆心仍在显示文字（缺 AevonRingCenterTextFreeV24）"; exit 1; }
           echo "V0.0.24 校验: 触摸接管 + 圆心纯图标 已编入"
 
+          # V0.0.25：热区可配置（位置/宽/高）+ 热区按下即接管 + 圆盘无选中文字
+          strings "$DYLIB" | grep -q 'AevonTriggerZoneV25' \
+            || { echo "::error::触发热区没有统一到配置（缺 AevonTriggerZoneV25）—— 右侧一大片仍能划出圆盘"; exit 1; }
+          strings "$DYLIB" | grep -q 'RingTriggerWidth' \
+            || { echo "::error::没有读取触发宽度设置项（RingTriggerWidth）"; exit 1; }
+          strings "$DYLIB" | grep -q 'RingTriggerHeight' \
+            || { echo "::error::没有读取触发高度设置项（RingTriggerHeight）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingNoLabelV25' \
+            || { echo "::error::圆盘仍在显示选中文字（缺 AevonRingNoLabelV25）"; exit 1; }
+          echo "V0.0.25 校验: 可配置热区 + 无选中文字 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -254,6 +265,13 @@ jobs:
           # V0.0.15 新增：边缘手势主入口开关必须在
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'EdgeGestureEnabled' \
             || { echo "::error::Root.plist 缺少 EdgeGestureEnabled（边缘圆盘入口）开关"; exit 1; }
+          # V0.0.25 新增：触发区域三个滑杆必须在（位置 / 宽度 / 高度）
+          for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
+            plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q "$K" \
+              || { echo "::error::Root.plist 缺少触发区域设置项 $K"; exit 1; }
+          done
+          strings "$PREFS_BIN" | grep -q 'PSSliderCell' \
+            || { echo "::error::设置 bundle 没有滑杆构建逻辑（PSSliderCell）"; exit 1; }
 
           # 图标三档必须在 bundle 根目录
           ICON_DIR="$(dirname "$PREFS_BIN")"

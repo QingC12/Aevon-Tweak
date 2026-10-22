@@ -57,6 +57,17 @@ enum AevonEntryHost {
     static var isInstalled: Bool { return container != nil }
     static var currentHostView: UIView? { return container?.superview }
 
+    /// 容器当前是否挂在「全屏 App 画面容器」里（= App 在前台，画面压在我们的窗口之上）。
+    ///
+    /// V0.0.25 用它决定边缘触摸要不要从 App 手里接管：
+    /// 只有 App 前台时才有「同一次滑动既转圆盘又滚 App」的问题；
+    /// 桌面绝不能接管，否则热区范围内的桌面图标会点不动。
+    static var mountedInAppScene: Bool {
+        guard let box = container, let host = box.superview else { return false }
+        guard let appView = appSceneView else { return false }
+        return host === appView
+    }
+
     // MARK: - 创建
 
     /// 确保入口窗口与容器存在（幂等）。成功返回容器，失败返回 nil（并在稍后重试）。
@@ -265,6 +276,11 @@ enum AevonEntryHost {
                 attachToWindowRoot(reason: "周期归位")
             }
         }
+
+        // 入口视图按最新配置重新落位（V0.0.25：设置里改了热区位置/宽高要立即生效，
+        // 不能等下次注销 —— 这里每 3 秒对一次，代价可以忽略）
+        AevonEdgeEntry.refreshLayoutIfNeeded()
+        AevonBubble.shared.refreshLayoutIfNeeded()
 
         // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
         if tickCount <= 60, tickCount % 10 == 0 {

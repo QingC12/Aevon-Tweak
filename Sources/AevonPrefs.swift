@@ -25,6 +25,17 @@ enum AevonPrefs {
         return defaultValue
     }
 
+    /// 读取浮点；同时兼容设置页滑杆写进来的 NSNumber 与被手工改成的字符串。
+    static func double(_ key: String, default defaultValue: Double) -> Double {
+        if let value = rawValue(key) as? NSNumber {
+            return value.doubleValue
+        }
+        if let text = rawValue(key) as? String, let parsed = Double(text) {
+            return parsed
+        }
+        return defaultValue
+    }
+
     /// 写入布尔值并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Bool) {
         AevonPrefSetBool(key, value)

@@ -1,6 +1,53 @@
 import UIKit
 import QuartzCore
 
+/// 圆盘触发热区（V0.0.25）。
+///
+/// 用户可在 设置 → Aevon → 「圆盘触发区域」调整三项：
+///   · `RingTriggerY`      热区**中心**在屏幕高度的百分比（0~100，默认 75，正好是圆盘圆心）
+///   · `RingTriggerWidth`  热区横向宽度（pt，从右边缘往左，默认 48）
+///   · `RingTriggerHeight` 热区纵向高度（pt，默认 320）
+///
+/// **三个入口通道（手势条视图 / 入口窗口探针 / 全局 sendEvent 通道）都只认这个矩形**，
+/// 保证「设置里调的那块区域」就是实际能呼出的区域 —— V0.0.24 的问题是全局通道用了
+/// 固定的「右 60pt × 下半屏 70%」，结果右侧一大片都能划出圆盘。
+enum AevonTriggerZone {
+    static let defaultCenterRatio: Double = 75
+    static let defaultWidth: Double = 48
+    static let defaultHeight: Double = 320
+
+    static var centerRatio: CGFloat {
+        let value = AevonPrefs.double("RingTriggerY", default: defaultCenterRatio)
+        return CGFloat(min(max(value, 0), 100)) / 100
+    }
+
+    static var width: CGFloat {
+        let value = AevonPrefs.double("RingTriggerWidth", default: defaultWidth)
+        return CGFloat(min(max(value, 18), 140))
+    }
+
+    static var height: CGFloat {
+        let value = AevonPrefs.double("RingTriggerHeight", default: defaultHeight)
+        return CGFloat(min(max(value, 80), 900))
+    }
+
+    /// 屏幕坐标下的热区（贴右边缘；纵向以 centerRatio 为中心，并夹紧在屏内）
+    static func rect(in bounds: CGRect) -> CGRect {
+        guard bounds.width > 1, bounds.height > 1 else { return .zero }
+        let w = min(width, bounds.width)
+        let h = min(height, bounds.height)
+        let centerY = bounds.height * centerRatio
+        let y = min(max(centerY - h / 2, 0), bounds.height - h)
+        return CGRect(x: bounds.maxX - w, y: y, width: w, height: h)
+    }
+
+    /// 日志用的一行摘要
+    static func summary(in bounds: CGRect) -> String {
+        let r = rect(in: bounds)
+        return "位置 \(Int(centerRatio * 100))% · 宽 \(Int(r.width))pt · 高 \(Int(r.height))pt（区 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
+    }
+}
+
 /// 屏幕右侧边缘的手势条。
 ///
 /// 逆向证据（Stheno.dylib）：`_showEgdeGesture` / `_edgeWidth` / `_effectEdge` /
@@ -18,8 +65,6 @@ import QuartzCore
 ///   · V0.0.21：热区 34 → 44pt（贴最边缘 20pt 会被 SpringBoard 的系统手势门控吞掉，
 ///     往里挪一点反而更容易命中）；同时补一条手势识别器通道做兜底。
 final class AevonEdgeStripView: UIView {
-    /// 热区宽度。太宽会抢掉 App 自己靠右边缘的手势，44pt 是「好呼出」与「少误触」的折中。
-    static let hitWidth: CGFloat = 44
     /// 判定为「呼出」的横向位移
     static let swipeDistance: CGFloat = 30
     /// 长按触发时长（秒）
@@ -37,33 +82,18 @@ final class AevonEdgeStripView: UIView {
     private var holdTimer: Timer?
     private var lastTouchLogAt: CFTimeInterval = 0
 
-    /// 右侧条带（逻辑坐标），供触摸探针判断「事件落在条带里」
+    /// 热区矩形（逻辑坐标，来自设置项）。三个通道共用同一个计算，避免「设置里调了但实际没变」。
     static func bandRect(in bounds: CGRect) -> CGRect {
-        return CGRect(x: bounds.maxX - hitWidth,
-                      y: bounds.midY,
-                      width: hitWidth,
-                      height: bounds.height - bounds.midY)
-    }
-
-    /// 兜底判定用的「宽容区」：比真实热区再往内、往上各放宽一截。
-    ///
-    /// 依据 Aevon(14) 日志：桌面时点悬浮球（x=375）窗口能收到事件，
-    /// 但贴右边缘（x≈420）整段零事件 —— 边缘 20pt 会被系统手势门控吃掉。
-    /// 用户手指不需要精确压在最边上，往里 60pt 也算数。
-    static func looseRect(in bounds: CGRect) -> CGRect {
-        return CGRect(x: bounds.maxX - 60,
-                      y: bounds.height * 0.30,
-                      width: 60,
-                      height: bounds.height * 0.70)
+        return AevonTriggerZone.rect(in: bounds)
     }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        // 父视图尺寸变化时保持「贴右边缘 + 占下半屏」
-        autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin, .flexibleHeight]
+        // 父视图尺寸变化时保持「贴右边缘」；纵向位置由 layoutInParent 按配置重算
+        autoresizingMask = [.flexibleLeftMargin]
 
-        // 一条淡淡的竖线当作"这里有东西"的提示，不喧宾夺主（V0.0.21：调亮到能看清）
+        // 一条淡淡的竖线当作"这里有东西"的提示，不喧宾夺主
         indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.34)
         indicator.layer.cornerRadius = 2
         indicator.isUserInteractionEnabled = false
@@ -101,10 +131,12 @@ final class AevonEdgeStripView: UIView {
     }
 
     private func layoutIndicator() {
+        // 白条始终落在热区正中，高度不超过热区本身
+        let barHeight = min(120, max(24, bounds.height - 12))
         indicator.frame = CGRect(x: bounds.width - 4,
-                                 y: (bounds.height - 120) / 2,
+                                 y: (bounds.height - barHeight) / 2,
                                  width: 4,
-                                 height: 120)
+                                 height: barHeight)
     }
 
     // MARK: - 识别器兜底通道
@@ -270,7 +302,7 @@ enum AevonEdgeEntry {
 
         strip = view
         let rootBounds = root.bounds
-        AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 或 长按\(Int(AevonEdgeStripView.holdDuration * 1000))ms）（AevonEdgeTouch）")
+        AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 或 长按\(Int(AevonEdgeStripView.holdDuration * 1000))ms）（AevonEdgeTouch AevonTriggerZoneV25）")
 
         // 圆盘的默认内容：首次使用时用应用列表预填，保证呼出不是空盘
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -338,7 +370,8 @@ enum AevonEdgeEntry {
             }
 
             let bounds = UIScreen.main.bounds
-            let band = AevonEdgeStripView.looseRect(in: bounds)
+            // V0.0.25：和全局通道 / 手势条用同一个热区（设置里可调位置与尺寸）
+            let band = AevonTriggerZone.rect(in: bounds)
             let inside = band.contains(point)
 
             switch phase {
@@ -407,6 +440,19 @@ enum AevonEdgeEntry {
     /// 接管硬上限：无论发生什么，12 秒后一定解除，杜绝「整块屏幕点不动」的最坏情况
     private static let swallowLimit: CFTimeInterval = 12
 
+    /// 热区接管（V0.0.25）：在热区里按下的那根手指，**从 began 起**就完全归我们。
+    ///
+    /// Aevon(18) 的问题是：触发那一刻 App 已经收到了 began 和前几帧移动，
+    /// 于是圆盘虽然展开、后续事件也被吞了，App 的列表照样会被那几帧带起来。
+    /// 现在改成「手指一落到热区就接管」，App 连 began 都收不到，彻底不会跟着动。
+    ///
+    /// 代价是热区内的单击不会被 App 收到 —— 这是「只在特定位置才能呼出」的必然取舍，
+    /// 所以热区默认只有 48×380pt，并且位置/宽度/高度都能在设置里调。
+    private static var ownsTouch = false
+    /// 热区按下后的最长接管时间（秒）。长按 0.42 秒就会触发圆盘，所以 4 秒足够；
+    /// 超时后不再吞，避免用户按住很久后突然开始滑动时把触摸还留在我们手里。
+    private static let pressLimit: CFTimeInterval = 4
+
     /// 装全局触摸通道（hook `UIApplication -sendEvent:`）。
     ///
     /// Aevon(16) 日志证明：App 前台时白条可见、但触摸永远进不到手势条 ——
@@ -438,28 +484,33 @@ enum AevonEdgeEntry {
         case .began:
             // 圆盘已经开着时不再跟踪边缘：此时用户的触摸是在操作圆盘（点图标 / 点空白）
             guard !AevonRingMenu.isPresented else { return }
-            // 宽容区：右边 60pt、纵向下半 70%。贴最边缘 20pt 会被系统手势门控吞掉，
-            // 用户手指落在 370~430 之间都算数。
-            guard AevonEdgeStripView.looseRect(in: screen).contains(point) else { return }
+            // 只认设置里配置的那块热区（位置 / 宽度 / 高度都可调），
+            // 不再像 V0.0.24 那样「右侧一大片 + 下半屏」都能划出来。
+            let zone = AevonTriggerZone.rect(in: screen)
+            guard zone.contains(point) else { return }
             globalTouchID = touchID
             globalStart = point
             globalFired = false
             lastTouchPoint = point
+            // V0.0.25：App 前台时，这根手指从按下那一刻就归我们 —— App 连 began 都收不到，
+            // 所以不管后面怎么滑动，前台 App 都不会跟着滚。
+            ownsTouch = AevonEntryHost.mountedInAppScene
+            if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
             scheduleGlobalHold()
             let now = CACurrentMediaTime()
             if now - globalLastLogAt > 2.0 {
                 globalLastLogAt = now
-                AevonLog.info("[边缘] 全局通道收到边缘触摸 (x=\(Int(point.x)), y=\(Int(point.y)))（AevonGlobalTouchV23）")
+                AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=\(ownsTouch ? "是" : "否")（AevonGlobalTouchV23 AevonTriggerZoneV25）")
             }
 
         case .moved:
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
+            if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
             // 圆盘已展开：这根手指继续驱动它（旋转 / 选定 / 松手开窗）
             if let ring = AevonRingMenu.presented {
                 cancelGlobalHold()
                 // 滑动期间续期：只要手指还在动，就持续把这条 touch 挡在 App 外面。
-                // 停下来 12 秒不动才自然释放（圆盘收起 / 手指抬起会立刻释放）。
                 if ringSource == "global" {
                     swallowDeadline = CACurrentMediaTime() + swallowLimit
                 }
@@ -482,6 +533,7 @@ enum AevonEdgeEntry {
             }
             globalTouchID = 0
             globalFired = false
+            ownsTouch = false
 
         case .cancelled:
             guard touchID == globalTouchID else { return }
@@ -489,6 +541,7 @@ enum AevonEdgeEntry {
             AevonRingMenu.presented?.remoteCancelled(source: "global")
             globalTouchID = 0
             globalFired = false
+            ownsTouch = false
 
         default:
             break
@@ -540,21 +593,26 @@ enum AevonEdgeEntry {
         swallowDeadline = 0
         globalTouchID = 0
         globalFired = false
+        ownsTouch = false
         cancelGlobalHold()
     }
 
     /// `AevonTouchHook.m` 逐帧询问：这根触摸要不要吞掉（不投递给 App）。
     ///
-    /// 只有同时满足才吞：
-    ///   1. 圆盘开着；
-    ///   2. 圆盘是全局通道唤起的（桌面由我们容器自己收，不需要也不应该吞）；
-    ///   3. 就是唤起圆盘的那一根手指（别的指头照常给 App）；
-    ///   4. 还在接管时间窗内。
+    /// 两条独立的接管路径，任意一条成立就吞：
+    ///   A. **热区接管（V0.0.25）**：App 前台时，手指一落到热区就归我们 —— 连 began 都不给 App，
+    ///      所以前台 App 不会跟着滑。桌面不接管（否则热区里的桌面图标点不动）。
+    ///   B. **圆盘接管（V0.0.24）**：圆盘已由全局通道唤起，继续接管到圆盘收起。
+    ///
+    /// 还有两条硬性前提：必须是唤起/接管的那一根手指（别的指头照常给 App），且没超时。
     static func shouldSwallowGlobalTouch(_ touchID: UInt) -> Bool {
-        guard AevonRingMenu.isPresented else { return false }
-        guard ringSource == "global" else { return false }
+        guard AevonPrefs.bool("Enabled", default: false),
+              AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
         guard touchID != 0, globalTouchID != 0, touchID == globalTouchID else { return false }
-        return CACurrentMediaTime() <= swallowDeadline
+        guard CACurrentMediaTime() <= swallowDeadline else { return false }
+        if ownsTouch { return AevonEntryHost.mountedInAppScene }
+        guard AevonRingMenu.isPresented, ringSource == "global" else { return false }
+        return true
     }
 
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。
