@@ -399,6 +399,13 @@ jobs:
           strings "$DYLIB" | grep -q 'AevonFloatGlobalV41' \
             || { echo "::error::浮窗全局手势没有编入（缺 AevonFloatGlobalV41）—— 全屏 App 里浮窗仍无法操作"; exit 1; }
           echo "V0.0.41 校验: 浮窗全局手势 已编入"
+
+          # ── V0.0.42：Stheno 式停靠 / 观感（贴边避让，根治吸附成巨窗后无法缩放）──
+          strings "$DYLIB" | grep -q 'AevonSthenoDockV42' \
+            || { echo "::error::停靠避让没有编入（缺 AevonSthenoDockV42）—— 吸附后四角仍会出屏"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonFloatLookV42' \
+            || { echo "::error::浮窗观感（圆角/投影）没有编入（缺 AevonFloatLookV42）"; exit 1; }
+          echo "V0.0.42 校验: 停靠避让 + 圆角投影 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

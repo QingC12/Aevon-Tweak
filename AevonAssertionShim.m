@@ -76,6 +76,13 @@ __attribute__((used)) static const char AevonSileoIconV40Marker[] = "AevonSileoI
  *                      （全屏 App 里视图层命中不到窗外手柄，Aevon(34) 根因）。 */
 __attribute__((used)) static const char AevonFloatGlobalV41Marker[] = "AevonFloatGlobalV41";
 
+/* V0.0.42 CI 标记：
+ * AevonSthenoDockV42 = 停靠（吸附）改为 Stheno 式「只靠边不改尺寸」+ 四边恒定避让
+ *                      34pt（外角块），根治吸附成巨窗后四角出屏、无法缩放；
+ * AevonFloatLookV42  = 观感复刻：圆角随缩放同比（_displayCornerRadius 系）+ 投影 + 细描边。 */
+__attribute__((used)) static const char AevonSthenoDockV42Marker[] = "AevonSthenoDockV42";
+__attribute__((used)) static const char AevonFloatLookV42Marker[] = "AevonFloatLookV42";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
