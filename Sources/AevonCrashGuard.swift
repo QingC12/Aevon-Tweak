@@ -30,10 +30,19 @@ enum AevonCrashGuard {
         let previous = current
 
         if previous == .loading {
-            // 上次加载后 SpringBoard 未能稳定运行 → 判定为插件导致崩溃，自动禁用。
+            // V0.0.40（AevonCrashAttrV40）：先看归因。真机 Aevon(32) 定论：
+            // 其他插件（ZZEvoCenterRuntime）崩溃也会被我们的信号处理器捕获，
+            // 之前一律自动禁用 Aevon → 用户开启插件后每次注销都被关回去，
+            // 永远开不起来。现在只有回溯里真出现 Aevon 帧才认账。
+            if AevonCrashCatcher.takeCrashAttribution() == "external" {
+                AevonPrefs.set(stateKey, State.healthy.rawValue)
+                AevonLog.warn("[崩溃保护] 上次崩溃由外部模块引起（回溯中无 Aevon 帧），不自动禁用 Aevon；若频繁崩溃请排查其他插件（AevonCrashAttrV40）。")
+                return true
+            }
+            // 上次加载后 SpringBoard 未能稳定运行且确为 Aevon 参与 → 自动禁用。
             AevonPrefs.set(enabledKey, false)
             AevonPrefs.set(stateKey, State.healthy.rawValue)
-            AevonLog.warn("[崩溃保护] 检测到上次加载后 SpringBoard 未稳定运行，已自动禁用 Aevon；如需重新启用请前往 设置 → Aevon。")
+            AevonLog.warn("[崩溃保护] 检测到上次加载后 SpringBoard 未稳定运行（Aevon 参与），已自动禁用 Aevon；如需重新启用请前往 设置 → Aevon。")
             return false
         }
 

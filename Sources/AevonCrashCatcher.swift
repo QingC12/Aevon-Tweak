@@ -17,10 +17,16 @@ import Darwin
  */
 
 private let kCrashLogPath = "/var/mobile/Aevon.crash.log"
+private let kOwnerPath = "/var/mobile/Aevon.crash.owner"
 private let kCrashLogPathBytes: [CChar] = Array(kCrashLogPath.utf8CString)
+private let kOwnerPathBytes: [CChar] = Array(kOwnerPath.utf8CString)
 private let kSignalTextBytes: [CChar] = Array("[崩溃] 捕获到致命信号，编号=".utf8CString)
 private let kBacktraceTitleBytes: [CChar] = Array("[崩溃] 调用栈回溯（模块+偏移，供离线符号化；AevonCrashTraceV39）\n".utf8CString)
 private let kSignalTailBytes: [CChar] = Array("（SpringBoard 即将退出）\n".utf8CString)
+private let kAttrExternalBytes: [CChar] = Array("[崩溃] 归因：外部模块引起（回溯无 Aevon 帧，Aevon 不背锅；AevonCrashAttrV40）\n".utf8CString)
+private let kAttrOwnedBytes: [CChar] = Array("[崩溃] 归因：Aevon 参与崩溃（AevonCrashAttrV40）\n".utf8CString)
+private let kOwnerExternal: [CChar] = Array("external".utf8CString)
+private let kOwnerAevon: [CChar] = Array("aevon".utf8CString)
 
 /// 致命信号处理：先落盘（信号编号 + 调用栈回溯），再恢复默认处理并重新抛出。
 ///
@@ -62,13 +68,39 @@ private func aevonSignalHandler(_ signalNumber: Int32) {
         // Swift 的 Darwin 模块在部分 SDK 上不暴露 execinfo。
         var frames = [UnsafeMutableRawPointer?](repeating: nil, count: 64)
         let count = Int(AevonBacktrace(&frames, 64))
+        // V0.0.40（AevonCrashAttrV40）：归因。回溯帧 0/1 是信号处理器自身、
+        // 帧 2 是 sigtramp 跳板，从帧 3 起才是真正崩溃现场——
+        // 只有现场里出现 Aevon 自己的帧才认账，否则是别的插件崩了（真机定论：
+        // ZZEvoCenterRuntime 崩溃曾把 Aevon 误禁用，用户永远开不起来）。
+        var owned = 0
+        if count > 3 {
+            owned = AevonCrashAttrOwnsFrame(&frames, Int32(count), 3)
+        }
+        if fd >= 0 {
+            _ = (owned == 1 ? kAttrOwnedBytes : kAttrExternalBytes).withUnsafeBufferPointer { buffer in
+                write(fd, buffer.baseAddress, buffer.count - 1)
+            }
+        }
         if count > 0 {
             _ = kBacktraceTitleBytes.withUnsafeBufferPointer { buffer in
                 write(fd, buffer.baseAddress, buffer.count - 1)
             }
             AevonBacktraceSymbolsFD(&frames, Int32(count), fd)
         }
-        close(fd)
+        if fd >= 0 { close(fd) }
+
+        // 归因标记文件：崩溃保护据此决定是否禁用（信号处理里只能 open/write/close）
+        let ofd = kOwnerPathBytes.withUnsafeBufferPointer { buffer -> Int32 in
+            guard let base = buffer.baseAddress else { return -1 }
+            return open(base, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        }
+        if ofd >= 0 {
+            let payload = owned == 1 ? kOwnerAevon : kOwnerExternal
+            _ = payload.withUnsafeBufferPointer { buffer in
+                write(ofd, buffer.baseAddress, buffer.count - 1)
+            }
+            close(ofd)
+        }
     }
 
     signal(signalNumber, SIG_DFL)
@@ -102,6 +134,18 @@ enum AevonCrashCatcher {
         for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE] {
             _ = signal(sig, handler)
         }
+        // V0.0.40（AevonCrashAttrV40）：先算好自身地址段，信号处理里做纯指针归因
+        AevonCrashAttrPrepare()
+    }
+
+    /// 读崩溃归因标记（信号处理写下的 owner 文件）："aevon" / "external" / nil。
+    /// 读完即删——一次崩溃只归因一次。
+    static func takeCrashAttribution() -> String? {
+        let manager = FileManager.default
+        guard let data = manager.contents(atPath: kOwnerPath),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        try? manager.removeItem(atPath: kOwnerPath)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 把上一次进程留下的崩溃记录并入主日志，并归档为 .old（只保留一份）。

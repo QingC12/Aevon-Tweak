@@ -67,6 +67,10 @@ __attribute__((used)) static const char AevonMedusaFrameV37Marker[] = "AevonMedu
 __attribute__((used)) static const char AevonOutsideHitV38Marker[] = "AevonOutsideHitV38";
 __attribute__((used)) static const char AevonSwipeOnlyV38Marker[] = "AevonSwipeOnlyV38";
 
+/* V0.0.40：崩溃归因（外部模块崩溃不再误禁 Aevon）+ Sileo 图标纯路径 */
+__attribute__((used)) static const char AevonCrashAttrV40Marker[] = "AevonCrashAttrV40";
+__attribute__((used)) static const char AevonSileoIconV40Marker[] = "AevonSileoIconV40";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
@@ -540,4 +544,48 @@ NSInteger AevonBacktrace(void **stack, int max) {
 
 void AevonBacktraceSymbolsFD(void **stack, int size, int fd) {
     backtrace_symbols_fd(stack, size, fd);
+}
+
+/* V0.0.40（AevonCrashAttrV40）：崩溃归因。
+ * 真机 Aevon(32) 定论：其他插件（ZZEvoCenterRuntime）崩溃也会被我们的信号
+ * 处理器捕获，崩溃保护「看到 SB 崩了就禁用 Aevon」造成误伤——用户开启插件
+ * 后每次注销都被自动关回去，永远开不起来。
+ * 方案：加载时解析自身 mach-o 的 __TEXT 段范围；信号处理里对回溯帧做
+ * 纯指针比较（无 malloc / 无符号化，async-signal-safe），只有崩溃栈里
+ * 真的出现了 Aevon 自己的帧，才承认是 Aevon 的锅。 */
+#import <dlfcn.h>
+#import <mach-o/loader.h>
+#import <mach-o/getsect.h>
+#import <string.h>
+
+static uintptr_t aevonTextStart = 0;
+static uintptr_t aevonTextEnd = 0;
+
+void AevonCrashAttrPrepare(void) {
+    Dl_info info;
+    if (dladdr((void *)AevonCrashAttrPrepare, &info) == 0 || info.dli_fbase == NULL) { return; }
+    uintptr_t base = (uintptr_t)info.dli_fbase;
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)base;
+    if (mh->magic != MH_MAGIC_64) { return; }
+
+    /* 优先用 getsectdata 取 __TEXT：包含头部与全部代码段 */
+    unsigned long size = 0;
+    uint8_t *start = getsectiondata(mh, "__TEXT", "__text", &size);
+    if (start != NULL && size > 0) {
+        aevonTextStart = (uintptr_t)start;
+        aevonTextEnd = (uintptr_t)start + size;
+        return;
+    }
+    /* 兜底：__text 段取不到就用整个镜像基址往后 64MB（宁可误判参与也不漏判） */
+    aevonTextStart = base;
+    aevonTextEnd = base + 0x4000000;
+}
+
+int AevonCrashAttrOwnsFrame(void **stack, int count, int skip) {
+    if (aevonTextEnd == 0) { return 0; }
+    for (int i = skip; i < count; i++) {
+        uintptr_t pc = (uintptr_t)stack[i];
+        if (pc >= aevonTextStart && pc < aevonTextEnd) { return 1; }
+    }
+    return 0;
 }

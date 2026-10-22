@@ -41,3 +41,13 @@ BOOL AevonTryExecute(void (^block)(void), NSString **outName, NSString **outReas
 /// 经 ObjC 垫片转发（崩溃信号处理里用，抓当前线程调用栈写入崩溃文件）。
 NSInteger AevonBacktrace(void **stack, int max);
 void AevonBacktraceSymbolsFD(void **stack, int size, int fd);
+
+/// V0.0.40（AevonCrashAttrV40）：崩溃归因。
+/// 插件加载时调用一次：算出自身 __TEXT 段地址范围（dladdr + mach-o 解析）。
+/// 真机 Aevon(32) 定论：ZZEvoCenterRuntime.dylib 崩溃也会被我们的信号处理器
+/// 捕获记录，崩溃保护误把 Aevon 自动禁用 → 用户永远开不起来插件。
+void AevonCrashAttrPrepare(void);
+/// 判定回溯栈（跳过前 skip 帧：AevonBacktrace / 信号处理器 / sigtramp 跳板）
+/// 里有没有落在 Aevon 自身地址段内的帧。返回 1 = Aevon 参与（要负责），
+/// 0 = 外部模块引起（不背锅、不禁用）。纯指针比较，信号处理内安全。
+int AevonCrashAttrOwnsFrame(void **stack, int count, int skip);
