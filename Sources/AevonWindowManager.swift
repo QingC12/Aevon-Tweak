@@ -44,7 +44,7 @@ enum AevonWindowManager {
             AevonSceneHelper.setForeground(scene, true)
 
             // 关键：`launchApplicationWithIdentifier:suspended:` 拉起的进程是挂起态，
-            // 挂起的进程不会渲染，图层列表一直是空的 —— 必须显式恢复执行。
+            // 挂起的进程不会渲染 —— 必须显式恢复执行，否则 presenter 永远拿不到首帧。
             if let pid = AevonAppInfo.pid(bundleID: bundleID) {
                 AevonAssertionShim.resumePID(Int32(pid))
                 AevonLog.info("[窗口] 已恢复 \(bundleID) 进程执行（pid=\(pid)）")
@@ -62,7 +62,7 @@ enum AevonWindowManager {
             host.addSubview(windowView)
             windows[bundleID] = windowView
 
-            // 图层异步到达：容器自己轮询同步
+            // presenter 激活后画面是异步出来的，由承载器自己探测首帧
             sceneHost.startSyncing()
             AevonSceneHelper.startKeepAlive(bundleID)
             if AevonPrefs.bool("KeepAlive", default: false),

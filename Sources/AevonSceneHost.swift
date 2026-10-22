@@ -1,253 +1,158 @@
 import Foundation
 import UIKit
 
-/// 单个 App 场景的承载器（V0.0.9 重写）。
+/// 单个 App 场景的承载器（V0.0.10 重写）。
 ///
-/// 与 V0.0.8 的差别（V0.0.8 的现象：浮窗外壳能拖能缩，但里面什么也没有）：
-/// 1. 图层的到达是**异步**的。创建 `_UISceneLayerHostContainerView` 的那一刻，
-///    `layerManager.layers` 往往是空的；V0.0.8 只同步了一次，所以一个宿主视图都没建出来。
-///    现在改为每 0.5 秒轮询，图层一出现就建宿主视图。
-/// 2. `layerManager.layers` 不保证是 NSArray（也可能是 NSSet）。V0.0.8 用
-///    `as? [AnyObject]` 强转，遇到 NSSet 会静默得到空数组。现在两种都能读。
-/// 3. 外部图层（`_UIExternalSceneLayerHostView`，键盘/浮层一类）必须放进独立的高层级窗口，
-///    直接塞进浮窗里不显示。
-/// 4. 容器释放前必须调用 `invalidate`，否则 UIKit 抛
-///    `NSInternalInconsistencyException: Must be invalidated before deallocating`，
-///    在 SpringBoard 里就是注销重启（用户回传的崩溃日志正是这一条）。
+/// V0.0.9 的做法是错的，两处都被真机日志证明：
+/// 1. 自己 alloc 系统的场景层宿主容器（LayerHostContainerView）再逐个建宿主视图。
+///    这个类不会「要求 App 渲染」——客户端从来没收到呈现请求，场景的图层列表
+///    永远是空的，所以浮窗只有外壳、里面全黑（日志：约 3 秒没收到任何图层）。
+/// 2. 拿不到图层时又去 alloc 呈现管理器（PresentationManager）兜底，初始化失败后那个
+///    对象被直接释放，它内部的呈现者持有者（ScenePresenterOwner）没 invalidate，dealloc 抛
+///    `NSInternalInconsistencyException ... must be invalidated before it can be deallocated`，
+///    在 SpringBoard 里就是自动注销（crash.log 的调用栈底部正是 Timer → 这段兜底）。
+///
+/// 正确路径（iOS 15–17，参考 LiveContainer / MilkyWay 的做法）：
+///   scene.uiPresentationManager
+///     → createPresenterWithIdentifier:           申请一个呈现者
+///     → modifyPresentationContext: appearanceStyle = 2（只要内容，不要系统装饰）
+///     → activate                                  这一步才会让 App 真正开始渲染
+///     → presentationView                          把这张视图塞进浮窗
+/// 关闭时必须 deactivate + invalidate，否则下次释放就是上面那条异常。
+///
+/// 上述私有调用全部走 `AevonPresenterShim`（ObjC，@try/@catch），异常不会冒到系统。
 final class AevonSceneHost {
     let scene: AnyObject
     let sceneID: String
     let bundleID: String
+
+    /// 屏幕尺寸的普通容器；浮窗只对它做等比缩放，不改它的尺寸。
     let container: UIView
 
-    /// 首次真正拿到宿主视图时回调一次（用于隐藏「等待画面」提示）。
+    /// 首次检测到画面时回调一次（用于隐藏「等待画面」提示）。
     var onFirstContent: (() -> Void)?
 
-    private(set) var createdHostCount = 0
-    private(set) var layerCount = 0
+    private(set) var hasContent = false
 
-    private var syncTimer: Timer?
-    private var tickCount = 0
-    private var emptyTicks = 0
-    private var lastSignature = ""
-    private var didNotify = false
-    private var invalidated = false
-    private var presenterFallbackTried = false
-
-    /// presenter 兜底路径必须自己持有，否则 +0 返回的对象会被释放。
     private var presenter: AnyObject?
-
-    private var externalWindow: UIWindow?
-    private var externalViews: [UIView] = []
+    private let presentationView: UIView
+    private var probeTimer: Timer?
+    private var ticks = 0
+    private var invalidated = false
 
     init?(scene: AnyObject, sceneID: String, bundleID: String) {
-        guard let allocated = AevonRuntime.allocate("_UISceneLayerHostContainerView") else {
-            AevonLog.warn("[场景] 系统缺少 _UISceneLayerHostContainerView，无法承载画面")
+        // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
+        // 用同一个 id 会撞车。
+        let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))" as NSString
+        guard let presenter = AevonPresenterCreate(scene, identifier) else {
+            AevonLog.warn("[场景] 无法为 \(bundleID) 创建 presenter（uiPresentationManager 不可用）")
             return nil
         }
-
-        var built: AnyObject?
-        if allocated.responds(to: Selector(("initWithScene:debugDescription:"))) {
-            built = AevonRuntime.sendInit(allocated,
-                                          Selector(("initWithScene:debugDescription:")),
-                                          first: scene,
-                                          second: "Aevon" as NSString)
-        } else if allocated.responds(to: Selector(("initWithScene:"))) {
-            built = AevonRuntime.sendInit(allocated, Selector(("initWithScene:")), argument: scene)
-        }
-
-        guard let view = built as? UIView else {
-            AevonLog.warn("[场景] _UISceneLayerHostContainerView 初始化失败")
+        guard let view = AevonPresenterView(presenter) as? UIView else {
+            AevonPresenterDestroy(presenter)
+            AevonLog.warn("[场景] presenter 没有 presentationView，放弃承载")
             return nil
         }
 
         self.scene = scene
         self.sceneID = sceneID
         self.bundleID = bundleID
-        self.container = view
+        self.presenter = presenter
+        self.presentationView = view
 
-        // 容器自身按整屏尺寸布局；浮窗只负责整体缩放，不改容器尺寸。
-        view.frame = UIScreen.main.bounds
-        view.backgroundColor = .clear
+        let host = UIView(frame: UIScreen.main.bounds)
+        host.backgroundColor = .clear
+        host.isUserInteractionEnabled = false
+        host.clipsToBounds = true
+        view.frame = host.bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.isUserInteractionEnabled = false
-        AevonLog.info("[场景] 承载容器已创建（\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)）")
+        host.addSubview(view)
+        self.container = host
+
+        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)）")
+
+        // 激活 presenter 之后再把场景推一次前台：只有场景处于前台，App 才会持续渲染。
+        AevonSceneHelper.setForeground(scene, true)
     }
 
     deinit {
-        // 兜底：上层即使忘记调用 invalidate，也不能让容器裸释放
         if !invalidated {
-            stopEverything()
+            teardownPresenter()
         }
     }
 
-    // MARK: - 同步
+    // MARK: - 首帧探测
 
     func startSyncing() {
-        guard syncTimer == nil, !invalidated else { return }
+        guard probeTimer == nil, !invalidated else { return }
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.tick()
+            self?.probe()
         }
         RunLoop.main.add(timer, forMode: .common)
-        syncTimer = timer
-        tick()
+        probeTimer = timer
+        probe()
     }
 
-    private func tick() {
+    private func probe() {
         guard !invalidated else { return }
-        tickCount += 1
+        ticks += 1
 
-        let layers = layersArray()
-        layerCount = layers.count
-
-        if layers.isEmpty {
-            emptyTicks += 1
-            if emptyTicks == 6 {
-                AevonLog.warn("[图层] 约 3 秒没收到任何图层：App 进程可能没有渲染（pid=\(AevonAppInfo.pid(bundleID: bundleID) ?? -1)）")
-                logDiagnostics()
-                tryPresenterFallback()
-            }
-            return
-        }
-
-        emptyTicks = 0
-        rebuildIfNeeded(layers)
-    }
-
-    /// 读取场景当前图层。数组 / 集合 / 快速枚举三种形态都兼容。
-    private func layersArray() -> [Any] {
-        guard scene.responds(to: Selector(("layerManager"))),
-              let manager = AevonRuntime.send(scene, Selector(("layerManager"))) else { return [] }
-        guard manager.responds(to: Selector(("layers"))),
-              let raw = AevonRuntime.send(manager, Selector(("layers"))) else { return [] }
-        if let array = raw as? [Any] { return array }
-        if let set = raw as? NSSet { return set.allObjects }
-        if let array = raw as? NSArray { return array.map { $0 } }
-        return []
-    }
-
-    private func rebuildIfNeeded(_ layers: [Any]) {
-        var signatureParts: [String] = []
-        for layer in layers {
-            let object = layer as AnyObject
-            let name = AevonRuntime.className(object) ?? "?"
-            let level = AevonRuntime.int(object, Selector(("level"))) ?? -1
-            signatureParts.append("\(name)#\(level)")
-        }
-        let signature = signatureParts.joined(separator: ",")
-        if signature == lastSignature && (container.subviews.count > 0 || !externalViews.isEmpty) { return }
-        lastSignature = signature
-
-        for sub in container.subviews { sub.removeFromSuperview() }
-        for view in externalViews { view.removeFromSuperview() }
-        externalViews.removeAll()
-
-        guard container.responds(to: Selector(("_createHostViewForLayer:"))) else {
-            AevonLog.warn("[图层] 承载容器不支持 _createHostViewForLayer:")
-            return
-        }
-
-        var created = 0
-        var hostClasses: [String] = []
-        for layer in layers {
-            guard let host = AevonRuntime.send(container,
-                                               Selector(("_createHostViewForLayer:")),
-                                               argument: layer) as? UIView else { continue }
-            created += 1
-            let className = AevonRuntime.className(host) ?? "?"
-            if !hostClasses.contains(className) { hostClasses.append(className) }
-
-            if className.contains("External") {
-                // 外部图层（键盘等）单独放高层级窗口，否则不显示
-                adoptExternal(host)
-            } else {
-                host.frame = container.bounds
-                host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                container.addSubview(host)
-            }
-        }
-
-        createdHostCount = created
-        AevonLog.info("[图层] 第 \(tickCount) 次同步：图层 \(layers.count) 个 → 宿主视图 \(created) 个（\(hostClasses.joined(separator: ","))）")
-
-        if created > 0 && !didNotify {
-            didNotify = true
+        if !hasContent && contentLooksAlive() {
+            hasContent = true
+            AevonLog.info("[场景] 首帧已到达（第 \(ticks) 次探测，子视图 \(presentationView.subviews.count) 个）")
             onFirstContent?()
         }
+
+        if hasContent {
+            if ticks >= 2 { stopProbing() }
+            return
+        }
+
+        switch ticks {
+        case 4:
+            logDiagnostics("2 秒")
+        case 8:
+            logDiagnostics("4 秒")
+            // 兜底：再恢复一次进程执行并推前台（suspended 拉起的 App 偶尔会漏恢复）
+            if let pid = AevonAppInfo.pid(bundleID: bundleID) {
+                AevonAssertionShim.resumePID(Int32(pid))
+            }
+            AevonSceneHelper.setForeground(scene, true)
+        case 16:
+            logDiagnostics("8 秒")
+            stopProbing()
+        default:
+            break
+        }
     }
 
-    private func adoptExternal(_ host: UIView) {
-        if externalWindow == nil {
-            externalWindow = AevonHostWindow.makeOverlayWindow()
-            if externalWindow == nil { AevonLog.warn("[图层] 无法创建外部图层窗口") }
-        }
-        guard let window = externalWindow else { return }
-        host.frame = UIScreen.main.bounds
-        window.addSubview(host)
-        externalViews.append(host)
+    private func stopProbing() {
+        probeTimer?.invalidate()
+        probeTimer = nil
+    }
+
+    /// presentationView 里只要有子视图或子图层，就认为画面已经出来了。
+    private func contentLooksAlive() -> Bool {
+        if !presentationView.subviews.isEmpty { return true }
+        if let sublayers = presentationView.layer.sublayers, !sublayers.isEmpty { return true }
+        return false
     }
 
     // MARK: - 诊断
 
-    private func logDiagnostics() {
+    private func logDiagnostics(_ tag: String) {
         let settings = AevonRuntime.send(scene, Selector(("settings")))
-        let foreground = settings.flatMap { boolValue($0, ["isForeground", "foreground"]) }
-        let active = boolValue(scene, ["isActive"])
+        let foreground = settings.flatMap { AevonRuntime.bool($0, key: "foreground") }
+        let active = AevonRuntime.bool(scene, key: "isActive")
         let running = AevonAppInfo.isRunning(bundleID: bundleID)
-        AevonLog.warn("[诊断] scene=\(sceneID) 类=\(AevonRuntime.className(scene) ?? "?") foreground=\(foreground.map { String($0) } ?? "?") isActive=\(active.map { String($0) } ?? "?") 进程运行=\(running)")
-    }
-
-    private func boolValue(_ object: AnyObject, _ names: [String]) -> Bool? {
-        for name in names where object.responds(to: Selector(name)) {
-            if let value = AevonRuntime.bool(object, key: name) { return value }
-        }
-        return nil
-    }
-
-    // MARK: - presenter 兜底（容器拿不到图层时尝试）
-
-    private func tryPresenterFallback() {
-        guard !presenterFallbackTried, !invalidated else { return }
-        presenterFallbackTried = true
-
-        guard let allocated = AevonRuntime.allocate("UIScenePresentationManager") else {
-            AevonLog.warn("[兜底] 系统缺少 UIScenePresentationManager")
-            return
-        }
-        var manager: AnyObject?
-        if allocated.responds(to: Selector(("_initWithScene:"))) {
-            manager = AevonRuntime.sendInit(allocated, Selector(("_initWithScene:")), argument: scene)
-        } else if allocated.responds(to: Selector(("initWithScene:"))) {
-            manager = AevonRuntime.sendInit(allocated, Selector(("initWithScene:")), argument: scene)
-        }
-        guard let presentationManager = manager,
-              presentationManager.responds(to: Selector(("_createPresenterWithIdentifier:"))) else {
-            AevonLog.warn("[兜底] UIScenePresentationManager 初始化失败")
-            return
-        }
-        guard let createdPresenter = AevonRuntime.send(presentationManager,
-                                                       Selector(("_createPresenterWithIdentifier:")),
-                                                       argument: "AevonPresenter" as NSString) else {
-            AevonLog.warn("[兜底] 无法创建 scene presenter")
-            return
-        }
-        presenter = createdPresenter
-        AevonRuntime.sendVoid(createdPresenter, Selector(("activate")))
-
-        guard let presentationView = AevonRuntime.send(createdPresenter, Selector(("presentationView"))) as? UIView else {
-            AevonLog.warn("[兜底] presenter 没有 presentationView")
-            return
-        }
-        for sub in container.subviews { sub.removeFromSuperview() }
-        presentationView.frame = container.bounds
-        presentationView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        container.addSubview(presentationView)
-
-        createdHostCount = max(createdHostCount, 1)
-        AevonLog.info("[兜底] 已改用 UIScenePresentationManager 呈现场景")
-        if !didNotify {
-            didNotify = true
-            onFirstContent?()
-        }
+        let subviews = presentationView.subviews.count
+        let sublayers = presentationView.layer.sublayers?.count ?? 0
+        AevonLog.warn("[诊断] \(tag)无画面：foreground=\(foreground.map { String($0) } ?? "?")"
+            + " isActive=\(active.map { String($0) } ?? "?")"
+            + " 进程运行=\(running)"
+            + " 呈现视图子视图=\(subviews) 子图层=\(sublayers)"
+            + " 视图尺寸=\(Int(presentationView.bounds.width))x\(Int(presentationView.bounds.height))")
     }
 
     // MARK: - 释放
@@ -255,31 +160,21 @@ final class AevonSceneHost {
     func invalidate() {
         guard !invalidated else { return }
         invalidated = true
-        stopEverything()
-        AevonLog.info("[场景] 承载容器已 invalidate 并释放（\(bundleID)）")
+        onFirstContent = nil
+        teardownPresenter()
+        AevonLog.info("[场景] 已释放 presenter（\(bundleID)）")
     }
 
-    private func stopEverything() {
-        syncTimer?.invalidate()
-        syncTimer = nil
+    private func teardownPresenter() {
+        stopProbing()
+        hasContent = false
 
-        for view in externalViews { view.removeFromSuperview() }
-        externalViews.removeAll()
-        externalWindow?.isHidden = true
-        externalWindow = nil
+        // 先摘视图，再 deactivate + invalidate（顺序错了会留下悬挂的呈现者）
+        presentationView.removeFromSuperview()
 
-        if let createdPresenter = presenter {
-            if createdPresenter.responds(to: Selector(("invalidate"))) {
-                AevonRuntime.sendVoid(createdPresenter, Selector(("invalidate")))
-            }
-            presenter = nil
+        if let presenter = presenter {
+            AevonPresenterDestroy(presenter)
+            self.presenter = nil
         }
-
-        // 关键：先 invalidate 再释放，否则 dealloc 会抛异常（SpringBoard 注销）
-        if container.responds(to: Selector(("invalidate"))) {
-            AevonRuntime.sendVoid(container, Selector(("invalidate")))
-        }
-        for sub in container.subviews { sub.removeFromSuperview() }
-        container.removeFromSuperview()
     }
 }

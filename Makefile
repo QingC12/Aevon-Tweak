@@ -12,6 +12,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = Aevon
 
 Aevon_FILES = AevonAssertionShim.m \
+    AevonPresenterShim.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
     Sources/AevonCrashCatcher.swift \

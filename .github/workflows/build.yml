@@ -103,14 +103,26 @@ jobs:
             || { echo "::error::主插件缺少拉起 App 的调用"; exit 1; }
           echo "入口校验: 悬浮球 + 应用选择面板 已编入；图标长按 hook 已移除"
 
-          # V0.0.9：画面承载必须走 AevonSceneHost（异步图层同步 + 释放前 invalidate）
+          # V0.0.10：画面承载必须走 presenter（scene.uiPresentationManager →
+          # createPresenterWithIdentifier: → activate → presentationView）。
+          # 旧的两条路径必须彻底消失，否则会重现「全黑 + 注销」。
           strings "$DYLIB" | grep -q 'AevonSceneHost' \
             || { echo "::error::主插件缺少场景承载器（AevonSceneHost）"; exit 1; }
-          strings "$DYLIB" | grep -q '_createHostViewForLayer:' \
-            || { echo "::error::主插件缺少图层宿主视图创建逻辑"; exit 1; }
-          strings "$DYLIB" | grep -q '_UISceneLayerHostContainerView' \
-            || { echo "::error::主插件缺少 _UISceneLayerHostContainerView"; exit 1; }
-          echo "画面承载: AevonSceneHost + 图层同步 已编入"
+          strings "$DYLIB" | grep -q 'uiPresentationManager' \
+            || { echo "::error::缺少 uiPresentationManager 调用（App 不会被要求渲染）"; exit 1; }
+          strings "$DYLIB" | grep -q 'createPresenterWithIdentifier:' \
+            || { echo "::error::缺少 createPresenterWithIdentifier: 调用"; exit 1; }
+          strings "$DYLIB" | grep -q 'presentationView' \
+            || { echo "::error::缺少 presentationView 取用"; exit 1; }
+          if strings "$DYLIB" | grep -q '_UISceneLayerHostContainerView'; then
+            echo "::error::仍残留 _UISceneLayerHostContainerView（V0.0.9 全黑根因）"
+            exit 1
+          fi
+          if strings "$DYLIB" | grep -q 'UIScenePresentationManager'; then
+            echo "::error::仍残留 UIScenePresentationManager 兜底（V0.0.9 注销根因）"
+            exit 1
+          fi
+          echo "画面承载: presenter 路径已编入；旧容器/旧兜底已清除"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
