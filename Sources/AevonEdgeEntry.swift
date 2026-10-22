@@ -420,6 +420,9 @@ enum AevonEdgeEntry {
         }
         guard zoneTimer == nil else { return }
         syncGuardConfig()
+        // V0.0.34：SpringBoard 启动时清一次圆盘状态位 —— 防止 SB 崩溃时圆盘开着、
+        // bit39 残留 1，导致前台 App 在下次启动后被 Guard 永久拦截（fail-open 方向）。
+        AevonNotifySetRing(0)
         let timer = Timer(timeInterval: 0.2, repeats: true) { _ in
             AevonPrefs.synchronize()
             // V0.0.31（AevonRingPinnedV31）：轮询只管触发区指纹 ——
@@ -830,6 +833,10 @@ enum AevonEdgeEntry {
         // V0.0.29：告诉 AevonGuard（App 进程）圆盘已展开 —— 它会在自己的进程里
         // 把下半屏的触摸整条吞掉，前台 App 在圆盘开着期间彻底收不到下半屏输入。
         syncGuardConfig()
+        // V0.0.34（AevonNotifyRingBitV34）：圆盘状态写进 notify(3) 共享内存。
+        // Darwin 广播（ringopen）是 fire-and-forget，沙盒 App 可能收不到 ——
+        // Aevon(27) 连续 3 版「圆盘滑动带动全屏 App」的共同根因。共享内存位零时序依赖。
+        AevonNotifySetRing(1)
         postRingState("com.aevon.ringopen")
         if source == "global" {
             AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
@@ -854,6 +861,8 @@ enum AevonEdgeEntry {
         ringExtraTouchID = 0
         ringExtraDeadline = 0
         cancelGlobalHold()
+        // V0.0.34：清共享内存圆盘状态位（Guard 侧立即恢复放行）
+        AevonNotifySetRing(0)
         postRingState("com.aevon.ringclose")
     }
 

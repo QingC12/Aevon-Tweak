@@ -21,7 +21,11 @@ UIImage *AevonIconImage(NSString *bundleID, CGFloat scale);
 /// V0.0.32：跨进程热区配置通道（notify_set_state / notify_get_state）。
 /// 沙盒 App 读不到 com.Aevon 偏好域、也未必能读 jbroot 文件，但 notify(3) 状态
 /// 在沙盒里通用 —— SpringBoard 写入后，注入 App 的 AevonGuard 直接读。
-/// 打包：x(10bit) y(10bit) w(8bit) h(10bit) enabled(1bit) + 版本标记(8bit)。
+/// 打包：x(10bit) y(10bit) w(8bit) h(10bit) enabled(1bit) ring(1bit) + 版本标记(8bit)。
 void AevonNotifySetZone(double x, double y, double w, double h, int enabled);
 /// 读到有效配置返回 1，否则 0（不改动出参）。
 int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled);
+/// V0.0.34：圆盘展开状态位（notify state bit39，AevonNotifyRingBitV34）。
+/// SpringBoard 在圆盘开 / 关时调用；Guard 每条 sendEvent 直接读共享内存，
+/// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
+void AevonNotifySetRing(int on);

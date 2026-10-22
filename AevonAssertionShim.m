@@ -38,12 +38,20 @@ __attribute__((used)) static const char AevonTouchOwnV33Marker[] = "AevonTouchOw
 __attribute__((used)) static const char AevonRingSpringV33Marker[] = "AevonRingSpringV33";
 __attribute__((used)) static const char AevonGuardRingWideV33Marker[] = "AevonGuardRingWideV33";
 
+/* V0.0.34 CI 标记：圆盘状态走 notify(3) 共享内存位（沙盒 App 零时序依赖） */
+__attribute__((used)) static const char AevonNotifyRingBitV34Marker[] = "AevonNotifyRingBitV34";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能
  * 因目录权限写不进去（Aevon(25) 日志：guard.conf 写入失败 × N）。notify_set_state
  * 的 64 位状态挂在 notify token 上，跨进程且不受沙盒文件限制，是 Guard 的主配置源。
- * 打包：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）
+ * 打包：x:10 y:10 w:8 h:10 enabled:1 ring:1(bit39) 版本:8（0x34 = V34）
+ *
+ * V0.0.34（AevonNotifyRingBitV34）：bit39 = 圆盘展开状态。
+ * 旧的 Darwin 广播（com.aevon.ringopen / ringclose）是 fire-and-forget，
+ * 沙盒 App 里可能收不到或收得晚（Aevon(27)：连续 3 版「圆盘滑动带动全屏 App」）。
+ * 改成共享内存状态位：SpringBoard 写、Guard 每条 sendEvent 直接读，零时序依赖。
  *
  * 注意：notify_set_state / notify_get_state 的参数是 **int token**，不是名字！
  * 必须先 notify_register_check("com.aevon.guardzone", &token) 再用 token 读写。
@@ -60,17 +68,41 @@ static int AevonNotifyZoneToken(void) {
     return token;
 }
 
+#define AEVON_NOTIFY_VER (0x34ULL << 40)
+#define AEVON_NOTIFY_RING_BIT (1ULL << 39)
+
 void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
     @try {
         int token = AevonNotifyZoneToken();
         if (token < 0) { return; }
-        uint64_t pack = 0;
+        /* 读-改-写：保留 bit39 圆盘状态位（圆盘开着时设置页改几何，不能把 ring 位冲掉） */
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        uint64_t ringBit = (((old >> 40) & 0xFF) == 0x34) ? (old & AEVON_NOTIFY_RING_BIT) : 0;
+        uint64_t pack = ringBit;
         pack |= ((uint64_t)llround(x)) & 0x3FFULL;
         pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
         pack |= (((uint64_t)llround(w)) & 0xFFULL) << 20;
         pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 28;
         pack |= (enabled ? 1ULL : 0ULL) << 38;
-        pack |= 0x32ULL << 40;
+        pack |= AEVON_NOTIFY_VER;
+        notify_set_state(token, pack);
+        notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* V0.0.34：圆盘展开状态位（AevonNotifyRingBitV34）。
+ * SpringBoard 在 presentRing / ringDidDismiss 调用；Guard 每条 sendEvent 直接读。 */
+void AevonNotifySetRing(int on) {
+    @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return; }
+        uint64_t pack = 0;
+        notify_get_state(token, &pack);
+        if (((pack >> 40) & 0xFF) != 0x34) { pack = 0; }
+        if (on) { pack |= AEVON_NOTIFY_RING_BIT; } else { pack &= ~AEVON_NOTIFY_RING_BIT; }
+        pack |= AEVON_NOTIFY_VER;
         notify_set_state(token, pack);
         notify_post("com.aevon.guardzone");
     } @catch (NSException *exception) {
@@ -83,7 +115,7 @@ int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled)
         if (token < 0) { return 0; }
         uint64_t pack = 0;
         notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) != 0x32) { return 0; }
+        if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
         if (x) { *x = (double)(pack & 0x3FFULL); }
         if (y) { *y = (double)((pack >> 10) & 0x3FFULL); }
         if (w) { *w = (double)((pack >> 20) & 0xFFULL); }

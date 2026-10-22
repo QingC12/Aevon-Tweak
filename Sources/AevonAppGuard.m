@@ -46,6 +46,10 @@ __attribute__((used)) static const char AevonGuardNotifyMarker[] = "AevonGuardNo
 __attribute__((used)) static const char AevonGuardRingForceMarker[] = "AevonGuardRingForceV32";
 /// CI 标记（V0.0.33）：圆盘期吞区加宽到上 18% 以外整屏 + 60s 超时
 __attribute__((used)) static const char AevonGuardRingWideMarker[] = "AevonGuardRingWideV33";
+/// CI 标记（V0.0.34）：圆盘状态读 notify(3) 共享内存位（Darwin 广播不可靠的根治）
+__attribute__((used)) static const char AevonGuardStateRingMarker[] = "AevonGuardStateRingV34";
+/// CI 标记（V0.0.34）：Guard 自身写 Aevon.log（验证注入 / 吞摸计数，可诊断）
+__attribute__((used)) static const char AevonGuardLogMarker[] = "AevonGuardLogV34";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -56,23 +60,76 @@ static CFTimeInterval AevonGuardConfigAt = 0;
 /// 配置最长缓存时间（秒）。设置里改完会发 Darwin 通知立即失效，这里只是兜底。
 static CFTimeInterval const AevonGuardConfigTTL = 2.0;
 
-/* V0.0.29：圆盘展开状态（SpringBoard 侧发 Darwin 通知 com.aevon.ringopen / ringclose）。
- * 圆盘开着的时候，前台 App 的下半屏一律收不到输入 —— 图标选择/旋转走的是
- * SpringBoard 全局通道的副本，不依赖 App 进程投递，所以整块吞掉没有任何副作用。
- * Darwin 通知没有载荷，这里自己计时兜底：超过 10 秒没收到 ringclose 就自动失效。 */
+/* V0.0.29：圆盘展开状态。
+ * V0.0.34（AevonGuardStateRingV34）：主判定改为 **notify(3) 共享内存位**（bit39）。
+ * 旧的 Darwin 广播（com.aevon.ringopen / ringclose）是 fire-and-forget，沙盒 App
+ * （抖音 / QQ）里可能收不到或收得晚 —— Aevon(27) 连续 3 版「圆盘滑动带动全屏 App」
+ * 的共同根因。现在 SpringBoard 在圆盘开 / 关时写共享内存状态位（AevonNotifySetRing），
+ * 这里每条 sendEvent 直接读，零时序依赖；Darwin 通知时间窗只做兜底。 */
 static CFTimeInterval AevonGuardRingOpenAt = 0;
-/* V0.0.33（AevonGuardRingWideV33）：10s → 60s。
- * Aevon(26) 根因：圆盘用户经常开着超过 10 秒（慢慢挑图标 / 旋转），10 秒一到
- * RingOpen() 变 NO → 下半屏吞触摸失效 → 滑图标直接带动全屏 App。 */
+/* V0.0.33（AevonGuardRingWideV33）：10s → 60s（仅兜底通道使用） */
 static CFTimeInterval const AevonGuardRingOpenMaxAge = 60.0;
 /// V0.0.32：只要收到过 ringopen，就证明插件在 SpringBoard 侧是启用的。
 /// 之后即使配置三路（notify / 文件 / 偏好）全失败，也用默认几何兜底拦截，
 /// 不再整条 Guard 失效（Aevon(25)：guard.conf 写不进 → 抖音被暂停/误触）。
 static BOOL AevonGuardPluginAlive = NO;
 
+/* 前向声明（定义在下方 notify 通道区） */
+static int AevonGuardNotifyToken(void);
+
 static BOOL AevonGuardRingOpen(void) {
+    /* 主判定：notify(3) 共享内存 bit39（每条事件实时读，微秒级开销） */
+    int token = AevonGuardNotifyToken();
+    if (token >= 0) {
+        uint64_t pack = 0;
+        notify_get_state(token, &pack);
+        if (((pack >> 40) & 0xFF) == 0x34 && ((pack >> 39) & 1ULL)) {
+            AevonGuardRingOpenAt = CACurrentMediaTime();  /* 顺便刷新兜底时间窗 */
+            return YES;
+        }
+    }
+    /* 兜底：Darwin 通知时间窗（通知通道正常时也能工作） */
     if (AevonGuardRingOpenAt <= 0) { return NO; }
     return (CACurrentMediaTime() - AevonGuardRingOpenAt) < AevonGuardRingOpenMaxAge;
+}
+
+#pragma mark - 日志（V0.0.34，AevonGuardLogV34）
+
+/* Guard 自己写 /var/mobile/Aevon.log（与 SpringBoard 侧 AevonLog 同一文件）。
+ * 目的：下一版日志能直接看到「Guard 注入了哪些进程、圆盘状态何时翻转、吞了多少事件」，
+ * 不再两眼一抹黑。写入限频（非 force 每秒最多 1 条），ring 状态切换 / 安装时 force。 */
+static void AevonGuardWriteLog(BOOL force, NSString *fmt, ...) NS_FORMAT_FUNCTION(2, 3);
+static void AevonGuardWriteLog(BOOL force, NSString *fmt, ...) {
+    @try {
+        static CFTimeInterval lastAt = 0;
+        CFTimeInterval now = CACurrentMediaTime();
+        if (!force && (now - lastAt) < 1.0) { return; }
+        lastAt = now;
+
+        static NSDateFormatter *formatter = nil;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            formatter = [[NSDateFormatter alloc] init];
+            formatter.dateFormat = @"MM-dd HH:mm:ss.SSS";
+            formatter.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+        });
+
+        va_list args;
+        va_start(args, fmt);
+        NSString *body = [[NSString alloc] initWithFormat:fmt arguments:args];
+        va_end(args);
+
+        NSString *line = [NSString stringWithFormat:@"[%@] [信息] [Guard] %@\n",
+                          [formatter stringFromDate:[NSDate date]], body];
+        const char *utf8 = line.UTF8String;
+        if (utf8 == NULL) { return; }
+        FILE *f = fopen("/var/mobile/Aevon.log", "a");
+        if (f == NULL) { return; }
+        fwrite(utf8, 1, strlen(utf8), f);
+        fclose(f);
+    } @catch (NSException *exception) {
+        // 日志失败绝不影响 App
+    }
 }
 
 #pragma mark - 偏好读取
@@ -151,9 +208,9 @@ static BOOL AevonGuardReadConfFile(CGRect *outZone, BOOL *outEnabled) {
     return NO;
 }
 
-/* V0.0.32：读 notify(3) 状态通道（与 SpringBoard 侧 AevonNotifySetZone 打包格式一致）。
+/* V0.0.34：读 notify(3) 状态通道（与 SpringBoard 侧打包格式一致）。
  * AevonGuard 是独立 dylib，不链接 AevonAssertionShim，所以这里自带一份解包。
- * 格式：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）。
+ * 格式：x:10 y:10 w:8 h:10 enabled:1 ring:1(bit39) 版本:8（0x34 = V34）。
  * 注意：notify_set_state / notify_get_state 参数是 **int token**，不是名字！ */
 static int AevonGuardNotifyToken(void) {
     static int token = -1;
@@ -170,7 +227,7 @@ static BOOL AevonGuardReadNotifyZone(CGRect *outZone, BOOL *outEnabled) {
     uint64_t pack = 0;
     notify_get_state(token, &pack);
     /* 读失败时 pack 保持 0，版本标记对不上就当没有配置 */
-    if (((pack >> 40) & 0xFF) != 0x32) { return NO; }
+    if (((pack >> 40) & 0xFF) != 0x34) { return NO; }
     double x = (double)(pack & 0x3FFULL);
     double y = (double)((pack >> 10) & 0x3FFULL);
     double w = (double)((pack >> 20) & 0xFFULL);
@@ -264,7 +321,20 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
      * Aevon(25)：guard.conf 写不进 → 配置全空 → Enabled 恒 false →
      * 连圆盘展开保护也整条失效，抖音被暂停 / 圆盘滑动带动全屏 App。
      * 只要收到过 ringopen（通知本身不依赖任何配置），下半屏一律吞。 */
+    /* V0.0.34：圆盘状态翻转时打一条日志（force，不受限频）——
+     * 下一版日志能直接确认「Guard 看到了圆盘开 / 关」，不再靠猜。 */
     BOOL ringOpen = AevonGuardRingOpen();
+    {
+        static BOOL lastLogged = NO;
+        static BOOL hasLogged = NO;
+        if (!hasLogged || ringOpen != lastLogged) {
+            hasLogged = YES;
+            lastLogged = ringOpen;
+            AevonGuardWriteLog(YES, @"圆盘状态 → %@（%@）",
+                               ringOpen ? @"展开" : @"收起",
+                               AevonGuardEnabled ? @"热区拦截启用" : @"仅圆盘期拦截");
+        }
+    }
     if (!AevonGuardEnabled && !ringOpen) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
@@ -325,6 +395,12 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     }
 
     if (active > 0 && swallowed == active) {
+        /* V0.0.34：吞摸计数（每 40 条打一次，限频内），下一版日志可量化拦截效果 */
+        static NSUInteger swallowCount = 0;
+        swallowCount += 1;
+        if (swallowCount % 40 == 1) {
+            AevonGuardWriteLog(NO, @"已吞触摸事件（累计 %lu 条）", (unsigned long)swallowCount);
+        }
         return;   // 整条事件丢弃
     }
     AevonGuardCallOriginal(self, _cmd, event);
@@ -403,6 +479,10 @@ static void AevonGuardInstall(void) {
      * 不额外 register notify 回调，避免 blocks / dispatch 依赖。 */
 
     NSLog(@"[Aevon] App 侧热区拦截已安装（%s %s）", AevonAppGuardMarker, AevonGuardNotifyMarker);
+    /* V0.0.34（AevonGuardLogV34）：注入确认日志 —— 用户日志里出现这行就说明 Guard 真的进了这个 App */
+    AevonGuardWriteLog(YES, @"已注入进程 %@（bundle %@），sendEvent 拦截就绪（AevonGuardStateRingV34 AevonGuardLogV34）",
+                       [NSString stringWithUTF8String:getprogname() ?: "?"],
+                       [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
 }
 
 __attribute__((constructor)) static void AevonGuardConstructor(void) {
