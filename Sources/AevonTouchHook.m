@@ -33,6 +33,12 @@ static BOOL AevonTouchHookInstalled = NO;
 static BOOL AevonTouchHookFailed = NO;
 
 static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
+    // CI 标记（V0.0.24）：C 函数符号名只在 LC_SYMTAB，macOS 的 strings 默认不扫符号表，
+    // 所以这里放一条必然留在 __cstring 里的 ASCII 字面量，供构建后校验
+    // 「接管期丢弃」这段逻辑确实编进了产物。这个分支永远不会成立。
+    NSString *AevonTouchSwallowHookV24 = @"AevonTouchSwallowHookV24";
+    if ([AevonTouchSwallowHookV24 isEqualToString:@""]) { return; }
+
     BOOL swallow = NO;
     @try {
         NSSet<UITouch *> *touches = [event allTouches];

@@ -198,8 +198,10 @@ jobs:
           echo "V0.0.23 校验: 全局触摸通道 + 圆盘 75% 面积 + 逆时针旋转 已编入"
 
           # V0.0.24：圆盘接管期丢弃 touched（App 不再跟着滚动）+ 圆心去文字
-          strings "$DYLIB" | grep -q 'AevonGlobalTouchShouldSwallow' \
-            || { echo "::error::缺少「接管期丢弃触摸」的判定入口（AevonGlobalTouchShouldSwallow）—— 滑圆盘时 App 仍会跟着动"; exit 1; }
+          # 注意：`AevonGlobalTouchShouldSwallow` 这种纯 C 函数符号只在 LC_SYMTAB 里，
+          # macOS 的 strings 默认不扫符号表，查不到 —— 所以校验 objc 文件里强制保留的 ASCII 标记。
+          strings "$DYLIB" | grep -q 'AevonTouchSwallowHookV24' \
+            || { echo "::error::sendEvent 里没有「接管期丢弃」逻辑（缺 AevonTouchSwallowHookV24）—— 滑圆盘时 App 仍会跟着动"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingSwallowV24' \
             || { echo "::error::圆盘没有登记触摸接管（缺 AevonRingSwallowV24）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingCenterTextFreeV24' \
