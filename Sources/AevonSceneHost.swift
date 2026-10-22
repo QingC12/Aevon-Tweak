@@ -44,10 +44,12 @@ final class AevonSceneHost {
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
         // 用同一个 id 会撞车。
         let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))"
-        guard let presenter = AevonPresenterCreate(scene, identifier) else {
+        // 垫片返回 ObjC id，桥接过来是 Any；统一按 AnyObject 持有
+        guard let created = AevonPresenterCreate(scene, identifier) as AnyObject? else {
             AevonLog.warn("[场景] 无法为 \(bundleID) 创建 presenter（uiPresentationManager 不可用）")
             return nil
         }
+        let presenter: AnyObject = created
         guard let view = AevonPresenterView(presenter) as? UIView else {
             AevonPresenterDestroy(presenter)
             AevonLog.warn("[场景] presenter 没有 presentationView，放弃承载")
