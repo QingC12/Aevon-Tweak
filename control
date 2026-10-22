@@ -1,8 +1,8 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.10
+Version: 0.0.11
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.10：改用场景 presenter 承载画面（scene.uiPresentationManager → createPresenterWithIdentifier: → activate → presentationView），修掉「浮窗全黑 + 自动注销」。入口仍为悬浮球，启动阶段零 hook。默认关闭，请在 设置 → Aevon 开启。
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.11：浮窗画面比例锁定屏幕比例，修掉「两侧黑边」与「拖手柄变细长条」。画面改为铺满式缩放，默认窗口即无黑边。入口仍为悬浮球，启动阶段零 hook。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks

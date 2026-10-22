@@ -103,7 +103,13 @@ final class AevonSceneHost {
 
         if !hasContent && contentLooksAlive() {
             hasContent = true
-            AevonLog.info("[场景] 首帧已到达（第 \(ticks) 次探测，子视图 \(presentationView.subviews.count) 个）")
+            // 记下呈现视图与首个子视图的实际尺寸：两者比例不一致就说明系统在内部留边
+            // （letterbox），那是浮窗缩放怎么调都消不掉的黑边，只能靠场景尺寸解决。
+            let outer = presentationView.bounds.size
+            let inner = presentationView.subviews.first?.frame.size ?? .zero
+            AevonLog.info("[场景] 首帧已到达（第 \(ticks) 次探测，子视图 \(presentationView.subviews.count) 个，"
+                + "呈现视图 \(Int(outer.width))x\(Int(outer.height))，"
+                + "首个子视图 \(Int(inner.width))x\(Int(inner.height))）")
             onFirstContent?()
         }
 
