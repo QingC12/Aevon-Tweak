@@ -353,6 +353,25 @@ static NSArray *AevonBuildFallback(id target) {
     if (self.title.length == 0) self.title = @"Aevon";
 }
 
+/*
+ * V0.0.26：滑杆每动一下都会走到这里。
+ *
+ * 用户 Aevon(19)：在设置里拖「触发位置 / 宽度 / 高度」，触发条不会跟着动。
+ * 原因有两层：① SpringBoard 只在看门狗里每 3 秒重排一次；② 两个进程各有
+ * CFPreferences 缓存，SpringBoard 可能还在读老值。
+ * 这里在写回 defaults 之后立刻广播一条 Darwin 通知（跨进程、不带负载），
+ * SpringBoard 收到后 synchronize + 比对指纹 + 重排，做到松手即见效果。
+ */
+- (void)setPreferenceValue:(id)value specifier:(id)specifier {
+    [super setPreferenceValue:value specifier:specifier];
+    @try {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFSTR("com.aevon.prefschanged"),
+                                             NULL, NULL, true);
+    } @catch (NSException *exception) {
+    }
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     /*

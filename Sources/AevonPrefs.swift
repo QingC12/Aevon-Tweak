@@ -9,6 +9,16 @@ enum AevonPrefs {
         return CFPreferencesCopyAppValue(key as CFString, domain)
     }
 
+    /// 让进程内的 CFPreferences 缓存失效，重新从 cfprefsd 取最新值。
+    ///
+    /// 设置 App 是**另一个进程**，它改完 `com.Aevon` 之后 SpringBoard 这边的
+    /// `CFPreferencesCopyAppValue` 可能还在吐老值 —— 表现就是「设置里拖了滑杆，
+    /// 触发条位置纹丝不动」。只在**低频轮询 / 收到变更通知**时调用，
+    /// 不要放进每次触摸的判定路径（那是 IPC，会拖慢触摸响应）。
+    static func synchronize() {
+        CFPreferencesAppSynchronize(domain)
+    }
+
     /// 读取布尔值；键不存在时返回 defaultValue。
     static func bool(_ key: String, default defaultValue: Bool) -> Bool {
         if let value = rawValue(key) as? NSNumber {

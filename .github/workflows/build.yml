@@ -222,6 +222,22 @@ jobs:
             || { echo "::error::圆盘仍在显示选中文字（缺 AevonRingNoLabelV25）"; exit 1; }
           echo "V0.0.25 校验: 可配置热区 + 无选中文字 已编入"
 
+          # V0.0.26：设置改动实时生效（Darwin 通知 + 轮询兜底）+ 触发条明暗自适应
+          #           + 圆盘无任何提示文字 + 逆时针转半圈才解锁旋转
+          strings "$DYLIB" | grep -q 'AevonTriggerZoneLiveV26' \
+            || { echo "::error::触发区改动没有实时重排（缺 AevonTriggerZoneLiveV26）—— 设置里拖滑杆触发条不会动"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonPrefsLiveV26' \
+            || { echo "::error::没有监听设置变更通知（缺 AevonPrefsLiveV26）"; exit 1; }
+          strings "$DYLIB" | grep -q 'com.aevon.prefschanged' \
+            || { echo "::error::dylib 里没有设置变更通知名（com.aevon.prefschanged）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonStripAdaptiveTintV26' \
+            || { echo "::error::触发条颜色没有随系统明暗切换（缺 AevonStripAdaptiveTintV26）—— 浅色背景下看不见"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingNoHintV26' \
+            || { echo "::error::圆盘底部提示文字没有移除（缺 AevonRingNoHintV26）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingRotateArmV26' \
+            || { echo "::error::逆时针旋转没有「半圈解锁」（缺 AevonRingRotateArmV26）—— 选图标时会误触发旋转"; exit 1; }
+          echo "V0.0.26 校验: 触发区实时生效 + 触发条明暗自适应 + 无提示文字 + 旋转半圈解锁 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
@@ -272,6 +288,9 @@ jobs:
           done
           strings "$PREFS_BIN" | grep -q 'PSSliderCell' \
             || { echo "::error::设置 bundle 没有滑杆构建逻辑（PSSliderCell）"; exit 1; }
+          # V0.0.26：滑杆写值后必须广播变更通知，SpringBoard 才会立刻重排触发条
+          strings "$PREFS_BIN" | grep -q 'com.aevon.prefschanged' \
+            || { echo "::error::设置 bundle 没有广播 com.aevon.prefschanged（改完设置触发条不会实时变化）"; exit 1; }
 
           # 图标三档必须在 bundle 根目录
           ICON_DIR="$(dirname "$PREFS_BIN")"

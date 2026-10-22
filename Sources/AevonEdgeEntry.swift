@@ -46,6 +46,11 @@ enum AevonTriggerZone {
         let r = rect(in: bounds)
         return "位置 \(Int(centerRatio * 100))% · 宽 \(Int(r.width))pt · 高 \(Int(r.height))pt（区 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
     }
+
+    /// 当前配置的指纹。设置里改了任意一项，指纹就变，SpringBoard 侧据此重排触发条。
+    static func signature() -> String {
+        return "\(Int((centerRatio * 100).rounded()))|\(Int(width.rounded()))|\(Int(height.rounded()))"
+    }
 }
 
 /// 屏幕右侧边缘的手势条。
@@ -82,6 +87,46 @@ final class AevonEdgeStripView: UIView {
     private var holdTimer: Timer?
     private var lastTouchLogAt: CFTimeInterval = 0
 
+    /// V0.0.26：触发条颜色跟着系统深浅色走。
+    ///
+    /// 之前固定用白色 34% —— 白底 App（设置、备忘录、大多数浅色界面）上几乎看不见。
+    /// 现在：深色系统 → 灰白；浅色系统 → 黑灰。按下时再提亮一档，仍然遵守同一套明暗。
+    private var isDarkAppearance: Bool {
+        switch traitCollection.userInterfaceStyle {
+        case .dark: return true
+        case .light: return false
+        default:
+            // 入口视图挂在 App 画面容器上，个别时机 trait 还没继承下来，退回全局外观
+            return UITraitCollection.current.userInterfaceStyle != .light
+        }
+    }
+
+    /// 静息态颜色
+    private var idleColor: UIColor {
+        return isDarkAppearance
+            ? UIColor(white: 0.93, alpha: 0.42)
+            : UIColor(white: 0.16, alpha: 0.46)
+    }
+
+    /// 按下 / 命中态颜色
+    private var activeColor: UIColor {
+        return isDarkAppearance
+            ? UIColor(white: 1.0, alpha: 0.88)
+            : UIColor(white: 0.05, alpha: 0.80)
+    }
+
+    /// 把颜色重新套到触发条上（外观变化、刚挂上、松手恢复都走这里）
+    func applyAppearance(active: Bool = false) {
+        indicator.backgroundColor = active ? activeColor : idleColor
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard traitCollection.userInterfaceStyle != previousTraitCollection?.userInterfaceStyle else { return }
+        applyAppearance()
+        AevonLog.info("[边缘] 触发条颜色已随系统外观切换（\(isDarkAppearance ? "深色 → 灰白" : "浅色 → 黑灰")）（AevonStripAdaptiveTintV26）")
+    }
+
     /// 热区矩形（逻辑坐标，来自设置项）。三个通道共用同一个计算，避免「设置里调了但实际没变」。
     static func bandRect(in bounds: CGRect) -> CGRect {
         return AevonTriggerZone.rect(in: bounds)
@@ -94,7 +139,7 @@ final class AevonEdgeStripView: UIView {
         autoresizingMask = [.flexibleLeftMargin]
 
         // 一条淡淡的竖线当作"这里有东西"的提示，不喧宾夺主
-        indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.34)
+        indicator.backgroundColor = idleColor
         indicator.layer.cornerRadius = 2
         indicator.isUserInteractionEnabled = false
         addSubview(indicator)
@@ -165,6 +210,7 @@ final class AevonEdgeStripView: UIView {
         guard window != nil else { return }
         // 挂上去 / 重新挂上去时校正一次几何，避免父视图当时还没布局
         layoutInParent()
+        applyAppearance()
         indicator.alpha = 0
         UIView.animate(withDuration: 0.6, delay: 1.2, options: [.curveEaseOut]) {
             self.indicator.alpha = 1
@@ -187,7 +233,7 @@ final class AevonEdgeStripView: UIView {
         }
 
         UIView.animate(withDuration: 0.12) {
-            self.indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.55)
+            self.applyAppearance(active: true)
         }
         scheduleHold()
     }
@@ -248,13 +294,13 @@ final class AevonEdgeStripView: UIView {
         fired = true
         cancelHold()
         AevonLog.info("[边缘] 手势条命中（\(reason)）")
-        indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.85)
+        indicator.backgroundColor = activeColor
         onTrigger?()
     }
 
     private func restoreIndicator() {
         UIView.animate(withDuration: 0.2) {
-            self.indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.20)
+            self.applyAppearance()
         }
     }
 }
@@ -288,6 +334,7 @@ enum AevonEdgeEntry {
         if let existing = strip {
             // 已存在：只做一次几何自愈，不重复创建
             existing.layoutInParent()
+            startTriggerZoneWatch()
             return
         }
         guard let installed = AevonEntryHost.ensureInstalled(attempt: attempt, reason: reason) else { return }
@@ -301,6 +348,8 @@ enum AevonEdgeEntry {
         view.layoutInParent()
 
         strip = view
+        // V0.0.26：触发区配置实时生效（Darwin 通知 + 0.35 秒轮询兜底）
+        AevonEdgeEntry.startTriggerZoneWatch()
         let rootBounds = root.bounds
         AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 或 长按\(Int(AevonEdgeStripView.holdDuration * 1000))ms）（AevonEdgeTouch AevonTriggerZoneV25）")
 
@@ -311,9 +360,58 @@ enum AevonEdgeEntry {
     }
 
     /// 尺寸 / 屏幕变化后重新落位。
-    static func refreshLayoutIfNeeded() {
-        strip?.layoutInParent()
+    /// `logChange` 为 true 时多打一行「触发区已按设置重排」，方便在真机日志里确认设置生效。
+    static func refreshLayoutIfNeeded(logChange: Bool = false) {
+        guard let strip = strip else { return }
+        strip.layoutInParent()
+        strip.applyAppearance()
+        if logChange {
+            let bounds = strip.superview?.bounds ?? UIScreen.main.bounds
+            AevonLog.info("[边缘] 触发区已按设置重排（\(AevonTriggerZone.summary(in: bounds))）（AevonTriggerZoneLiveV26）")
+        }
     }
+
+    // MARK: - 触发区实时生效（V0.0.26）
+
+    /// 设置里改完立刻生效的两条通道：
+    ///   1. **Darwin 通知**：设置页每次写值后立刻广播，延迟≈0；
+    ///   2. **0.35 秒轮询兜底**：通知万一没到（设置进程被杀、跨进程通知丢失），
+    ///      最迟一个轮询周期内也会跟上。
+    ///
+    /// 之前只靠看门狗每 3 秒的一次 refresh，而且 `CFPreferencesCopyAppValue`
+    /// 在 SpringBoard 进程内还有缓存 —— 用户拖完滑杆盯着屏幕看，触发条就是不动。
+    static func startTriggerZoneWatch() {
+        if zoneSignature.isEmpty { zoneSignature = AevonTriggerZone.signature() }
+        if !prefsObserverInstalled {
+            prefsObserverInstalled = true
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonPrefsChangedHandler,
+                                           "com.aevon.prefschanged" as CFString,
+                                           nil,
+                                           .deliverImmediately)
+            AevonLog.info("[边缘] 已监听设置变更通知（com.aevon.prefschanged）（AevonPrefsLiveV26）")
+        }
+        guard zoneTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.35, repeats: true) { _ in
+            AevonPrefs.synchronize()
+            checkTriggerZoneChange()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        zoneTimer = timer
+    }
+
+    /// 指纹变了就重排触发条（幂等；没变什么都不做）
+    static func checkTriggerZoneChange() {
+        let signature = AevonTriggerZone.signature()
+        guard signature != zoneSignature else { return }
+        zoneSignature = signature
+        refreshLayoutIfNeeded(logChange: true)
+    }
+
+    private static var zoneTimer: Timer?
+    private static var zoneSignature = ""
+    private static var prefsObserverInstalled = false
 
     /// 统一触发入口（手势条 / 窗口层兜底 / 识别器都走这里），带 0.6 秒去重。
     /// `source` 决定后续触摸流转发给圆盘时走哪条通道（圆盘只认最先来的那条）。
@@ -670,4 +768,19 @@ public func AevonGlobalTouchPhase(_ phase: Int, _ touchID: UInt, _ x: CGFloat, _
 @_cdecl("AevonGlobalTouchShouldSwallow")
 public func AevonGlobalTouchShouldSwallow(_ touchID: UInt) -> Bool {
     return AevonEdgeEntry.shouldSwallowGlobalTouch(touchID)
+}
+
+/// V0.0.26：设置页写完偏好后的 Darwin 通知回调。
+///
+/// 设置 App 与 SpringBoard 是两个进程，写完 `com.Aevon` 后 SpringBoard 的
+/// CFPreferences 缓存不会自动失效 —— 这里先 synchronize，再回主线程比指纹。
+private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
+                                      _ observer: UnsafeMutableRawPointer?,
+                                      _ name: CFNotificationName?,
+                                      _ object: UnsafeRawPointer?,
+                                      _ userInfo: CFDictionary?) {
+    AevonPrefs.synchronize()
+    DispatchQueue.main.async {
+        AevonEdgeEntry.checkTriggerZoneChange()
+    }
 }

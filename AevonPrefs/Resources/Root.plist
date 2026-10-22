@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Aevon 0.0.24（arm64e / roothide）。所有功能只在本页开关，无需终端 / SSH。用法：打开「启用插件」→ 注销 → 屏幕右侧下半边缘向左滑（或按住约 0.4 秒）呼出圆盘。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.0.26（arm64e / roothide）。所有功能只在本页开关，无需终端 / SSH。用法：打开「启用插件」→ 注销 → 在下方设定的热区内向左滑（或按住约 0.4 秒）呼出圆盘；逆时针转半圈后图标开始跟手旋转，顺时针或停住即进入选择，松手开窗。日志：/var/mobile/Aevon.log。</string>
 			<key>label</key>
 			<string>Aevon 分屏</string>
 		</dict>

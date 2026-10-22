@@ -103,14 +103,16 @@ final class AevonRingIcon: UIView {
 ///   · 半径整体 ×0.866（面积 = 原来的 75%），图标 40pt、圆心按钮 48pt；
 ///   · 圆心按钮是蓝色圆 + 四宫格图标，点它打开完整应用选择面板。
 ///
-/// 交互（用户 2026-10-22 第 16 号日志后定稿：**与上一版对调**）：
+/// 交互（用户 2026-10-22 第 19 号日志后定稿：**旋转需要先转半圈解锁**）：
 ///   1. 右边缘拉出圆盘后**立刻可用**，手指不离开屏幕：
-///      **逆时针**滑动 → 图标跟着转（解压感），绝不打开任何 App；
+///      **逆时针净转满 180°** → 解锁「跟手旋转」，此后逆时针继续划 = 图标跟着转；
+///      （解锁之前怎么划都不会转，避免「选图标时手指一歪就整盘乱转」）
 ///      **顺时针**滑动 → 停止旋转，进入「等待选择」，手指下的图标放大高亮；
 ///      原地停住 0.18 秒 → 同样进入「等待选择」。
 ///   2. 松手：处于「等待选择」且落在图标上 → 用浮窗打开该 App 并收起圆盘；
 ///      落在空白 → 收起；仍在旋转 → 直接收起（不误开）。
 ///   3. 圆盘停留期间可以再用手指点图标 / 点圆心 / 点空白。
+///   4. **屏幕上没有任何文字**（圆心、底部都没有）—— 选中只靠放大 + 蓝色描边 + 光晕。
 ///
 /// 触摸来源去重：唤出圆盘的那根手指可能同时被「边缘手势条」「窗口 sendEvent 探针」
 /// 「全局触摸通道」看到，三条通道都会转发同一个点。这里用 `remoteSource`
@@ -122,8 +124,13 @@ final class AevonRingMenu: UIView {
     private static let centerSize: CGFloat = 48
     /// 命中半径系数
     private static let hitFactor: CGFloat = 0.95
-    /// 判定为「拖动旋转」的最小角度（度）
+    /// 判定为「拖动旋转」的最小角度（度）—— 仅用于**已解锁后**的跟手灵敏度
     private static let dragThreshold: CGFloat = 6
+    /// 解锁「跟手旋转」所需的逆时针净角度（度）：半圈（V0.0.26）
+    ///
+    /// 用户 Aevon(19)：原来转 6° 就跟着转，选图标时手指稍一歪圆盘就乱转、经常选错。
+    /// 现在必须**净逆时针转满半圈**才认为「用户在转圆盘」，转之前的所有角度都只当选择。
+    private static let armAngle: CGFloat = 180
     /// 手指停住多久算「等待选择」
     private static let armDelay: TimeInterval = 0.18
     /// 圆心纵向位置（占屏幕高度比例）
@@ -131,12 +138,7 @@ final class AevonRingMenu: UIView {
 
     private let dimView = UIView()
     private let trackLayer = CAShapeLayer()
-    /// 底部提示行（V0.0.24 起同时承担「当前高亮的 App 名」）
-    private let hintLabel = UILabel()
     private let centerButton = UIButton(type: .custom)
-
-    /// 底部提示的默认文案
-    private static let hintText = "逆时针转 · 顺时针选定 · 停住松手开窗"
 
     private var icons: [AevonRingIcon] = []
     private var iconRadii: [CGFloat] = []
@@ -163,6 +165,15 @@ final class AevonRingMenu: UIView {
     /// 是否已进入「等待选择」
     private var remoteSelecting = false
     private var armTimer: Timer?
+
+    // 旋转解锁（V0.0.26）
+    /// 从呼出那一刻起累积的**净角度**（度，逆时针为负）
+    private var netAngle: CGFloat = 0
+    /// 是否已解锁「跟手旋转」
+    private var rotationArmed = false
+    /// 解锁瞬间的角度 / rotation 基准，保证解锁后不跳变
+    private var rotationAtArm: CGFloat = 0
+    private var netAtArm: CGFloat = 0
 
     // MARK: - 呼出 / 收起
 
@@ -204,15 +215,9 @@ final class AevonRingMenu: UIView {
         trackLayer.lineWidth = 1.5
         layer.addSublayer(trackLayer)
 
-        hintLabel.frame = CGRect(x: 0, y: 0, width: 340, height: 20)
-        hintLabel.text = AevonRingMenu.hintText
-        hintLabel.textColor = UIColor(white: 1.0, alpha: 0.55)
-        hintLabel.font = UIFont.systemFont(ofSize: 11.5)
-        hintLabel.textAlignment = .center
-        hintLabel.adjustsFontSizeToFitWidth = true
-        hintLabel.minimumScaleFactor = 0.75
-        hintLabel.isUserInteractionEnabled = false
-        addSubview(hintLabel)
+        // V0.0.25：圆心只留四宫格图标，不再有任何文字
+        // V0.0.26：底部提示文字也一并移除 —— 屏幕上不再出现任何说明文字，
+        //          后续用「选中动画」表达状态（用户 Aevon(19) 要求）
 
         centerButton.frame = CGRect(x: 0, y: 0, width: AevonRingMenu.centerSize, height: AevonRingMenu.centerSize)
         centerButton.backgroundColor = UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
@@ -252,7 +257,6 @@ final class AevonRingMenu: UIView {
         ringCenter = CGPoint(x: bounds.midX, y: bounds.height * AevonRingMenu.verticalRatio)
 
         centerButton.center = ringCenter
-        hintLabel.center = CGPoint(x: bounds.midX, y: bounds.maxY - 34)
     }
 
     /// 圆的可用最大半径：不超出左右边界，也不顶到状态栏 / 底部
@@ -344,12 +348,10 @@ final class AevonRingMenu: UIView {
         drawRingTracks()
         layoutIcons()
 
-        // V0.0.24：圆心只留四宫格图标，不再有任何文字
-        // V0.0.25：底部也不再显示「选中的 App 名字」，只保留固定的操作提示
-        hintLabel.text = icons.isEmpty ? "点圆心添加 App" : AevonRingMenu.hintText
+        // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少，无选中文字）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少，无任何文字）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26）")
     }
 
     private func drawRingTracks() {
@@ -383,13 +385,11 @@ final class AevonRingMenu: UIView {
         trackLayer.opacity = 0
         centerButton.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
         centerButton.alpha = 0
-        hintLabel.alpha = 0
 
         UIView.animate(withDuration: 0.16, animations: {
             self.dimView.alpha = 1
             self.centerButton.alpha = 1
             self.centerButton.transform = .identity
-            self.hintLabel.alpha = 1
         })
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
@@ -444,6 +444,8 @@ final class AevonRingMenu: UIView {
         remotePoint = point
         remoteLastAngle = angle(from: ringCenter, to: point)
         remoteSelecting = false
+        netAngle = 0
+        rotationArmed = false
         setHovered(nil)
         scheduleArm()
     }
@@ -455,29 +457,47 @@ final class AevonRingMenu: UIView {
         var delta = currentAngle - remoteLastAngle
         if delta > 180 { delta -= 360 }
         if delta < -180 { delta += 360 }
+        remoteLastAngle = currentAngle
+        netAngle += delta
 
-        // iOS 屏幕坐标 y 向下：角度递增 = 顺时针。
-        // V0.0.23 用户要求把两者**对调**：逆时针转、顺时针停转并选定。
-        // 逆时针（delta < 0）→ 图标跟着手指转（解压感），不会打开任何 App
-        if delta < -1.0 {
-            rotation += delta
+        // ── 第一阶段：未解锁。只累积逆时针角度，图标一动不动（防误转）──
+        if !rotationArmed {
+            if netAngle <= -AevonRingMenu.armAngle {
+                rotationArmed = true
+                rotationAtArm = rotation
+                netAtArm = netAngle
+                cancelArm()
+                pulseUnlockRotation()
+                AevonLog.info("[圆盘] 逆时针已累积 \(Int(-netAngle))°，解锁跟手旋转（AevonRingRotateArmV26）")
+                return
+            }
+            if remoteSelecting {
+                // 已经在「等待选择」：高亮跟着手指走，换到哪圈哪个图标都行
+                setHovered(icon(at: point))
+            } else {
+                // 手指还在动，重新计时；停住 0.18 秒才进入「等待选择」
+                scheduleArm()
+            }
+            return
+        }
+
+        // ── 第二阶段：已解锁。逆时针跟手转，顺时针停转并进入选择 ──
+        if delta < -0.5 {
+            rotation = rotationAtArm + (netAngle - netAtArm)
             layoutIcons()
             if remoteSelecting {
                 remoteSelecting = false
                 setHovered(nil)
             }
-            remoteLastAngle = currentAngle
             scheduleArm()
             return
         }
-        // 顺时针（delta > 0）→ 立刻停转，进入「等待选择」
-        if delta > 1.0 {
-            remoteLastAngle = currentAngle
+        if delta > 0.5 {
             cancelArm()
             enterSelecting(at: point)
             return
         }
-        // 几乎没有角度变化：如果已在选择模式，就让高亮跟着手指走（同一圈上换图标）
+        // 几乎没有角度变化：已在选择模式就让高亮跟着手指走（同一圈上换图标）
         if remoteSelecting { setHovered(icon(at: point)) }
     }
 
@@ -523,6 +543,48 @@ final class AevonRingMenu: UIView {
     private func enterSelecting(at point: CGPoint) {
         remoteSelecting = true
         setHovered(icon(at: point))
+    }
+
+    /// 解锁「跟手旋转」的反馈：一圈蓝色涟漪 + 轻度触感。
+    ///
+    /// 全程没有任何文字（用户要求去掉屏幕上所有提示文案），
+    /// 只用一个瞬间的视觉 + 触觉信号告诉用户「现在开始转了」。后续动画可以挂在这里。
+    private func pulseUnlockRotation() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        guard let radius = ringRadii.first, radius > 0 else { return }
+        let ring = CAShapeLayer()
+        ring.frame = bounds
+        ring.path = UIBezierPath(arcCenter: ringCenter,
+                                 radius: radius,
+                                 startAngle: 0,
+                                 endAngle: .pi * 2,
+                                 clockwise: true).cgPath
+        ring.fillColor = UIColor.clear.cgColor
+        ring.strokeColor = UIColor(red: 0.35, green: 0.82, blue: 1.0, alpha: 1.0).cgColor
+        ring.lineWidth = 2
+        ring.opacity = 0
+        layer.addSublayer(ring)
+
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [0, 0.9, 0]
+        fade.keyTimes = [0, 0.22, 1]
+        fade.duration = 0.55
+        ring.add(fade, forKey: "fade")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            ring.removeFromSuperlayer()
+        }
+
+        // 图标轻轻一弹，视觉上也能看出「已进入旋转」。
+        // 用 layer 动画而不是 UIView.transform —— 避免把高亮用的 1.14 缩放覆盖掉。
+        let now = CACurrentMediaTime()
+        for (index, icon) in icons.enumerated() {
+            let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+            pop.values = [1.0, 1.12, 1.0]
+            pop.keyTimes = [0, 0.45, 1]
+            pop.duration = 0.34
+            pop.beginTime = now + 0.005 * Double(index)
+            icon.layer.add(pop, forKey: "unlockPop")
+        }
     }
 
     /// 高亮「松手就会打开」的那个图标。
