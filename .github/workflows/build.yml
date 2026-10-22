@@ -141,7 +141,10 @@ jobs:
             || { echo "::error::缺少圆盘选择器（AevonRingMenu）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingIcon' \
             || { echo "::error::缺少圆盘图标单元（AevonRingIcon）"; exit 1; }
-          echo "圆盘校验: 边缘入口 + 径向菜单 + 图标单元 已编入"
+          # V0.0.16：整圆形态 + 自接管触摸（图标不再挂手势识别器）
+          strings "$DYLIB" | grep -q 'AevonRingFullCircle' \
+            || { echo "::error::圆盘不是整圆版本（缺少 AevonRingFullCircle 标记）"; exit 1; }
+          echo "圆盘校验: 边缘入口 + 整圆形态 + 图标单元 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"

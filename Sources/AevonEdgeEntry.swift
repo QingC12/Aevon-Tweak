@@ -137,6 +137,12 @@ enum AevonEdgeEntry {
         AevonRingMenu.present(in: root)
     }
 
+    /// 圆盘展开期间关掉边缘手势条（它自己挂着 UIScreenEdgePanGestureRecognizer，
+    /// 不关的话圆盘上的滑动会被它先截走）。
+    static func setStripInteraction(_ enabled: Bool) {
+        strip?.isUserInteractionEnabled = enabled
+    }
+
     /// 打开完整应用面板。
     static func openPanel(preferRingEditing: Bool = false) {
         guard let root = window?.rootViewController?.view else {

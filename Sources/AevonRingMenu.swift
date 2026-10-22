@@ -1,6 +1,9 @@
 import UIKit
 
 /// 圆盘上的一个 App 图标（带文字兜底：拿不到系统图标就画首字母圆点）。
+///
+/// 注意：图标本身**不接收触摸**（`isUserInteractionEnabled = false`）。
+/// 原因见 `AevonRingMenu` 顶部的说明 —— 触摸统一由圆盘自己按几何命中判定。
 final class AevonRingIcon: UIView {
     let bundleID: String
 
@@ -12,15 +15,16 @@ final class AevonRingIcon: UIView {
         super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
 
         backgroundColor = .clear
-        layer.cornerRadius = size * 0.23
+        isUserInteractionEnabled = false
+        layer.cornerRadius = size * 0.235
         layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.45
-        layer.shadowRadius = 8
+        layer.shadowOpacity = 0.5
+        layer.shadowRadius = 9
         layer.shadowOffset = CGSize(width: 0, height: 3)
 
         imageView.frame = bounds
         imageView.contentMode = .scaleAspectFit
-        imageView.layer.cornerRadius = size * 0.23
+        imageView.layer.cornerRadius = size * 0.235
         imageView.clipsToBounds = true
         imageView.isUserInteractionEnabled = false
         addSubview(imageView)
@@ -59,41 +63,51 @@ final class AevonRingIcon: UIView {
     }
 }
 
-/// 圆盘选择器（从屏幕边缘呼出的径向 App 菜单）。
+/// 径向圆盘选择器：**整圆**居中，App 图标沿圆周均匀分布。
 ///
-/// 逆向证据（Stheno.dylib 的属性名与本地化文案）：
-///   `_ring` / `_apps` / `_selected` / `_radius` / `_iconWidth` / `_rotationAngle` /
-///   `_tailDegree`（本地化文案 `LastIconAngle = 尾角`）/ `_dragScale` / `_scaleAngle`，
-///   文案 `Star = 收藏`、`UserList = 用户列表`、`AppSearcher`、`TrashAppView`。
-///   即：图标沿圆周排列，半径与图标宽度可调，整环可旋转（拖动改角度），可收藏自选 App。
+/// V0.0.16 两处关键修正：
+///  1. **形状**：V0.0.15 是「圆心贴在右边缘的左半圆」，看起来就是一条贴边弧线。
+///     现在圆心在屏幕正中、图标绕满 360°，并画一圈细描边，和 Stheno 的形态一致。
+///  2. **点击**：V0.0.15 的图标各自挂了 UITapGestureRecognizer，而父视图又挂了
+///     UIPanGestureRecognizer（拖动旋转）。手指落下的几十毫秒里只要轻微位移就让 pan
+///     进入 `.began`，`cancelsTouchesInView` 会把图标的 tap 直接取消，于是点图标
+///     完全没有反应 —— 日志里三次「已展开」后没有任何「选中」记录，就是这个原因。
+///     现在**不使用任何手势识别器**：图标 `isUserInteractionEnabled = false`，
+///     由圆盘自己 `touchesBegan/Moved/Ended` 按几何判定（命中半径 / 旋转阈值 / 长按），
+///     点击与拖动互不干扰。
 ///
-/// 本实现取这套模型的最小可用集：
-///   · 图标沿左半圆（96°–264°）等角分布，圆心靠在右侧边缘，视觉上是「从右边滑出的半圆盘」；
-///   · 拖动圆盘整体旋转，松手吸附到最近的步进；
-///   · 点图标 = 开窗，长按图标 = 从圆盘移除；
-///   · 圆心按钮 = 打开完整面板（单窗 / 左右分屏 / 编辑圆盘）。
+/// 逆向证据（Stheno.dylib）：`_ring` / `_rings` / `_apps` / `_selected` / `_radius` /
+/// `_iconWidth` / `_rotationAngle` / `_tailDegree` / `_dragScale` / `_scaleAngle`，
+/// 本地化 `Star = 收藏`、`RTSIF = 承载形状::圆盘`、`LastIconAngle = 尾角`。
 final class AevonRingMenu: UIView {
     private static var current: AevonRingMenu?
 
     private static let iconSize: CGFloat = 54
-    private static let centerSize: CGFloat = 58
-    private static let arcStart: CGFloat = 96
-    private static let arcEnd: CGFloat = 264
+    private static let centerSize: CGFloat = 64
+    /// 触摸命中半径系数（图标半径 27pt，取 0.82 让相邻图标之间不留死区）
+    private static let hitFactor: CGFloat = 0.82
+    /// 判定为「拖动旋转」的最小角度（度）。低于它的位移一律当点击。
+    private static let dragThreshold: CGFloat = 7
 
     private let dimView = UIView()
+    private let trackLayer = CAShapeLayer()
     private let hintLabel = UILabel()
     private let centerButton = UIButton(type: .custom)
     private let centerTitle = UILabel()
 
     private var icons: [AevonRingIcon] = []
     private var rotation: CGFloat = 0
-    private var rotationStart: CGFloat = 0
     private var panStartAngle: CGFloat = 0
     private var panStartRotation: CGFloat = 0
     private var didDrag = false
+    private var isDismissing = false
+
+    private var touchStart: CGPoint?
+    private var pressedIcon: AevonRingIcon?
+    private var longPressTimer: Timer?
 
     private var ringCenter: CGPoint = .zero
-    private var radius: CGFloat = 180
+    private var radius: CGFloat = 170
 
     // MARK: - 呼出 / 收起
 
@@ -104,7 +118,10 @@ final class AevonRingMenu: UIView {
         }
         let menu = AevonRingMenu(frame: host.bounds)
         host.addSubview(menu)
+        host.bringSubviewToFront(menu)
         current = menu
+        // 圆盘展开期间关掉边缘手势条，避免从右边滑进来时又被它抢走触摸
+        AevonEdgeEntry.setStripInteraction(false)
         menu.reload()
         menu.animateIn()
     }
@@ -119,57 +136,77 @@ final class AevonRingMenu: UIView {
         super.init(frame: frame)
         backgroundColor = .clear
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        isUserInteractionEnabled = true
 
-        dimView.backgroundColor = UIColor(white: 0, alpha: 0.22)
+        dimView.backgroundColor = UIColor(white: 0, alpha: 0.46)
         dimView.frame = bounds
         dimView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        dimView.isUserInteractionEnabled = false
         addSubview(dimView)
-        dimView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(dimTapped)))
 
-        hintLabel.frame = CGRect(x: 0, y: 0, width: 240, height: 20)
-        hintLabel.text = "左右拖动旋转 · 点图标开窗 · 长按移除"
+        // 圆周细描边：给「圆盘」一个可见轮廓
+        trackLayer.fillColor = UIColor.clear.cgColor
+        trackLayer.strokeColor = UIColor(white: 1.0, alpha: 0.16).cgColor
+        trackLayer.lineWidth = 1.5
+        layer.addSublayer(trackLayer)
+
+        hintLabel.frame = CGRect(x: 0, y: 0, width: 300, height: 20)
+        hintLabel.text = "拖动旋转 · 点图标开窗 · 长按移除 · 点空白收起"
         hintLabel.textColor = UIColor(white: 1.0, alpha: 0.55)
         hintLabel.font = UIFont.systemFont(ofSize: 12)
         hintLabel.textAlignment = .center
-        hintLabel.isHidden = true
+        hintLabel.isUserInteractionEnabled = false
         addSubview(hintLabel)
 
         centerButton.frame = CGRect(x: 0, y: 0, width: AevonRingMenu.centerSize, height: AevonRingMenu.centerSize)
-        centerButton.backgroundColor = UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.95)
+        centerButton.backgroundColor = UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
         centerButton.layer.cornerRadius = AevonRingMenu.centerSize / 2
         centerButton.layer.shadowColor = UIColor.black.cgColor
-        centerButton.layer.shadowOpacity = 0.4
-        centerButton.layer.shadowRadius = 10
+        centerButton.layer.shadowOpacity = 0.45
+        centerButton.layer.shadowRadius = 12
         centerButton.layer.shadowOffset = CGSize(width: 0, height: 3)
         centerButton.setTitle("A", for: .normal)
         centerButton.setTitleColor(.white, for: .normal)
-        centerButton.titleLabel?.font = UIFont.systemFont(ofSize: 26, weight: .bold)
-        centerButton.addTarget(self, action: #selector(centerTapped), for: .touchUpInside)
+        centerButton.titleLabel?.font = UIFont.systemFont(ofSize: 28, weight: .bold)
+        // 同样不接收触摸：圆心点击由 touchesEnded 按距离判定
+        centerButton.isUserInteractionEnabled = false
         addSubview(centerButton)
 
         centerTitle.frame = CGRect(x: 0, y: 0, width: 160, height: 16)
-        centerTitle.textColor = UIColor(white: 1.0, alpha: 0.7)
+        centerTitle.textColor = UIColor(white: 1.0, alpha: 0.72)
         centerTitle.font = UIFont.systemFont(ofSize: 11)
         centerTitle.textAlignment = .center
-        centerTitle.isHidden = true
+        centerTitle.isUserInteractionEnabled = false
         addSubview(centerTitle)
-
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        addGestureRecognizer(pan)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        longPressTimer?.invalidate()
+    }
+
     private func computeGeometry() {
-        let screen = UIScreen.main.bounds
-        ringCenter = CGPoint(x: screen.width - 46, y: screen.height * 0.70)
-        radius = min(screen.width * 0.44, 190)
+        // 整圆居中：圆心在屏幕中心略偏上，给底部提示留位置
+        ringCenter = CGPoint(x: bounds.midX, y: bounds.midY - bounds.height * 0.02)
+        // 半径：既不超出左右边界，也不顶到状态栏/底部
+        let byWidth = bounds.width / 2 - AevonRingMenu.iconSize / 2 - 20
+        let byHeight = bounds.height / 2 - AevonRingMenu.iconSize / 2 - 96
+        radius = max(96, min(byWidth, byHeight, 200))
+
         centerButton.center = ringCenter
-        centerTitle.center = CGPoint(x: ringCenter.x, y: ringCenter.y + AevonRingMenu.centerSize / 2 + 14)
-        hintLabel.center = CGPoint(x: screen.width / 2 - 30, y: screen.height - 40)
+        centerTitle.center = CGPoint(x: ringCenter.x, y: ringCenter.y + AevonRingMenu.centerSize / 2 + 15)
+        hintLabel.center = CGPoint(x: bounds.midX, y: bounds.maxY - 46)
+
+        let path = UIBezierPath(arcCenter: ringCenter,
+                                radius: radius,
+                                startAngle: 0,
+                                endAngle: CGFloat.pi * 2,
+                                clockwise: true)
+        trackLayer.path = path.cgPath
+        trackLayer.frame = bounds
     }
 
     private func reload() {
@@ -177,51 +214,35 @@ final class AevonRingMenu: UIView {
         for icon in icons { icon.removeFromSuperview() }
         icons.removeAll()
 
-        var entries: [(String, String)] = []
         for bundleID in AevonRingStore.bundleIDs() {
             let name = AevonWindowManager.title(for: bundleID)
-            entries.append((bundleID, name))
-        }
-
-        for (bundleID, name) in entries {
             let icon = AevonRingIcon(bundleID: bundleID, name: name, size: AevonRingMenu.iconSize)
             icon.center = ringCenter
-            icon.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(iconTapped(_:))))
-            let longPress = UILongPressGestureRecognizer(target: self, action: #selector(iconLongPressed(_:)))
-            longPress.minimumPressDuration = 0.65
-            icon.addGestureRecognizer(longPress)
             addSubview(icon)
             icons.append(icon)
         }
 
-        hintLabel.isHidden = icons.count < 2
-        centerTitle.text = icons.isEmpty ? "点 + 添加 App" : "共 \(icons.count) 个"
-        centerTitle.isHidden = icons.isEmpty
+        hintLabel.isHidden = false
+        centerTitle.text = icons.isEmpty ? "点圆盘打开面板添加 App" : "共 \(icons.count) 个"
         layoutIcons()
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，半径 \(Int(radius))，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，整圆半径 \(Int(radius))，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))）（AevonRingFullCircle）")
     }
 
+    /// 圆周上的等角步进（整圆 360°）
     private var step: CGFloat {
         guard icons.count > 1 else { return 0 }
-        return (AevonRingMenu.arcEnd - AevonRingMenu.arcStart) / CGFloat(icons.count - 1)
+        return 360 / CGFloat(icons.count)
     }
 
     private func layoutIcons() {
         guard !icons.isEmpty else { return }
         let n = icons.count
         for (index, icon) in icons.enumerated() {
-            let base: CGFloat
-            if n == 1 {
-                base = 180
-            } else {
-                base = AevonRingMenu.arcStart + CGFloat(index) * step
-            }
-            let degree = base + rotation
-            let radians = degree * .pi / 180
-            let point = CGPoint(x: ringCenter.x + radius * cos(radians),
-                                y: ringCenter.y + radius * sin(radians))
-            icon.center = point
-            // 离圆心越远（越靠外侧）越清晰，避免图标互相压住时糊成一团
+            // 从正上方（-90°）开始顺时针均分整圆
+            let base: CGFloat = n == 1 ? -90 : -90 + CGFloat(index) * step
+            let radians = (base + rotation) * .pi / 180
+            icon.center = CGPoint(x: ringCenter.x + radius * cos(radians),
+                                  y: ringCenter.y + radius * sin(radians))
             icon.alpha = 1.0
         }
     }
@@ -230,21 +251,30 @@ final class AevonRingMenu: UIView {
 
     private func animateIn() {
         dimView.alpha = 0
+        trackLayer.opacity = 0
         centerButton.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
         centerButton.alpha = 0
-        for icon in icons {
-            icon.alpha = 0
-            icon.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
-        }
+        centerTitle.alpha = 0
+        hintLabel.alpha = 0
 
         UIView.animate(withDuration: 0.18, animations: {
             self.dimView.alpha = 1
             self.centerButton.alpha = 1
             self.centerButton.transform = .identity
+            self.centerTitle.alpha = 1
+            self.hintLabel.alpha = 1
         })
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.28
+        trackLayer.add(fade, forKey: "fade")
+        trackLayer.opacity = 1
 
         for (index, icon) in icons.enumerated() {
-            let delay = 0.04 + 0.03 * Double(index)
+            icon.alpha = 0
+            icon.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
+            let delay = 0.03 + 0.025 * Double(index)
             UIView.animate(withDuration: 0.42,
                            delay: delay,
                            usingSpringWithDamping: 0.72,
@@ -257,77 +287,173 @@ final class AevonRingMenu: UIView {
     }
 
     private func dismiss() {
-        guard AevonRingMenu.current === self else { return }
+        guard AevonRingMenu.current === self, !isDismissing else { return }
+        isDismissing = true
+        longPressTimer?.invalidate()
+        longPressTimer = nil
         AevonRingMenu.current = nil
         UIView.animate(withDuration: 0.16, animations: {
             self.alpha = 0
             for icon in self.icons {
-                icon.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+                icon.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
             }
             self.centerButton.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
         }, completion: { _ in
             self.removeFromSuperview()
+            AevonEdgeEntry.setStripInteraction(true)
         })
     }
 
-    // MARK: - 交互
+    // MARK: - 触摸（不使用手势识别器，避免与拖动互相取消）
 
-    @objc private func dimTapped() {
-        dismiss()
-    }
-
-    @objc private func centerTapped() {
-        AevonLog.info("[圆盘] 圆心被点击，打开应用面板")
-        dismiss()
-        AevonEdgeEntry.openPanel(preferRingEditing: icons.isEmpty)
-    }
-
-    @objc private func iconTapped(_ gesture: UITapGestureRecognizer) {
-        guard let icon = gesture.view as? AevonRingIcon, !didDrag else { return }
-        let name = AevonWindowManager.title(for: icon.bundleID)
-        AevonLog.info("[圆盘] 选中 \(name) (\(icon.bundleID))")
-        dismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            AevonWindowManager.launchAndOpen(bundleID: icon.bundleID)
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let point = touches.first?.location(in: self), !isDismissing else { return }
+        touchStart = point
+        panStartAngle = angle(from: ringCenter, to: point)
+        panStartRotation = rotation
+        didDrag = false
+        pressedIcon = icon(at: point)
+        if let icon = pressedIcon {
+            UIView.animate(withDuration: 0.12) {
+                icon.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
+            }
+            scheduleLongPress(for: icon)
         }
     }
 
-    @objc private func iconLongPressed(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, let icon = gesture.view as? AevonRingIcon else { return }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let point = touches.first?.location(in: self), !isDismissing else { return }
+        let current = angle(from: ringCenter, to: point)
+        var delta = current - panStartAngle
+        if delta > 180 { delta -= 360 }
+        if delta < -180 { delta += 360 }
+
+        if !didDrag {
+            guard abs(delta) >= AevonRingMenu.dragThreshold else { return }
+            didDrag = true
+            cancelLongPress()
+            if let icon = pressedIcon {
+                icon.transform = .identity
+                pressedIcon = nil
+            }
+        }
+        rotation = panStartRotation + delta
+        layoutIcons()
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        cancelLongPress()
+        guard !isDismissing else { return }
+        let point = touches.first?.location(in: self) ?? touchStart ?? .zero
+        let start = touchStart ?? point
+        touchStart = nil
+
+        if didDrag {
+            snapRotation()
+            return
+        }
+
+        if let icon = pressedIcon {
+            icon.transform = .identity
+            pressedIcon = nil
+            activate(icon)
+            return
+        }
+
+        // 圆心 = 打开完整面板
+        let cdx = start.x - ringCenter.x
+        let cdy = start.y - ringCenter.y
+        let centerDistance = (cdx * cdx + cdy * cdy).squareRoot()
+        if centerDistance <= AevonRingMenu.centerSize * 0.75 {
+            AevonLog.info("[圆盘] 圆心被点击，打开应用面板")
+            dismiss()
+            AevonEdgeEntry.openPanel(preferRingEditing: icons.isEmpty)
+            return
+        }
+
+        // 点到空白处：收起
+        AevonLog.info("[圆盘] 点击空白处，收起圆盘")
+        dismiss()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        cancelLongPress()
+        if let icon = pressedIcon {
+            icon.transform = .identity
+            pressedIcon = nil
+        }
+        if !didDrag { return }
+        snapRotation()
+    }
+
+    private func snapRotation() {
+        let stepValue = max(1, step)
+        let snapped = (rotation / stepValue).rounded() * stepValue
+        rotation = rotationStartFrom(snapped)
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
+            self.layoutIcons()
+        }
+    }
+
+    // MARK: - 长按移除
+
+    private func scheduleLongPress(for icon: AevonRingIcon) {
+        cancelLongPress()
+        let timer = Timer(timeInterval: 0.7, repeats: false) { [weak self, weak icon] _ in
+            guard let self = self, let icon = icon, !self.didDrag else { return }
+            self.removeIcon(icon)
+        }
+        // 手指按住期间 RunLoop 处于 tracking 模式，必须显式挂到 common modes 才会触发
+        RunLoop.main.add(timer, forMode: .common)
+        longPressTimer = timer
+    }
+
+    private func cancelLongPress() {
+        longPressTimer?.invalidate()
+        longPressTimer = nil
+    }
+
+    private func removeIcon(_ icon: AevonRingIcon) {
         let name = AevonWindowManager.title(for: icon.bundleID)
         AevonLog.info("[圆盘] 长按移除 \(name) (\(icon.bundleID))")
         AevonRingStore.remove(icon.bundleID)
-        reload()
+        UIView.animate(withDuration: 0.14, animations: {
+            icon.alpha = 0
+            icon.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
+        }, completion: { _ in
+            self.reload()
+        })
     }
 
-    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard !icons.isEmpty else { return }
-        let point = gesture.location(in: self)
-        switch gesture.state {
-        case .began:
-            didDrag = false
-            panStartAngle = angle(from: ringCenter, to: point)
-            panStartRotation = rotation
-        case .changed:
-            let currentAngle = angle(from: ringCenter, to: point)
-            var delta = currentAngle - panStartAngle
-            // 跨 ±180° 时修正，避免整盘突然翻转
-            if delta > 180 { delta -= 360 }
-            if delta < -180 { delta += 360 }
-            if abs(delta) > 4 { didDrag = true }
-            rotation = panStartRotation + delta
-            layoutIcons()
-        case .ended, .cancelled, .failed:
-            guard didDrag else { return }
-            let stepValue = max(1, step)
-            let snapped = (rotation / stepValue).rounded() * stepValue
-            rotation = rotationStartFrom(snapped)
-            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
-                self.layoutIcons()
-            }
-        default:
-            break
+    // MARK: - 选中开窗
+
+    private func activate(_ icon: AevonRingIcon) {
+        let bundleID = icon.bundleID
+        let name = AevonWindowManager.title(for: bundleID)
+        AevonLog.info("[圆盘] 选中 \(name) (\(bundleID))")
+        icon.transform = CGAffineTransform(scaleX: 1.12, y: 1.12)
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            AevonWindowManager.launchAndOpen(bundleID: bundleID)
         }
+    }
+
+    // MARK: - 几何工具
+
+    private func icon(at point: CGPoint) -> AevonRingIcon? {
+        var best: AevonRingIcon?
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        let limit = AevonRingMenu.iconSize * AevonRingMenu.hitFactor
+        for icon in icons {
+            let dx = point.x - icon.center.x
+            let dy = point.y - icon.center.y
+            let distance = (dx * dx + dy * dy).squareRoot()
+            if distance <= limit && distance < bestDistance {
+                best = icon
+                bestDistance = distance
+            }
+        }
+        return best
     }
 
     private func rotationStartFrom(_ value: CGFloat) -> CGFloat {

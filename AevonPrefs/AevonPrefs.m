@@ -206,9 +206,9 @@ static NSArray *AevonBuildFallback(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
-                              @"V0.0.15 边缘圆盘版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：打开「启用插件」→ 注销 → 从屏幕右边下半边缘向左滑呼出圆盘 → 点图标开窗。"
-                              @"圆盘可拖动旋转，长按图标移除，点圆心打开完整面板（单窗 / 左右分屏 / 编辑圆盘）。"
+                              @"V0.0.16 边缘圆盘版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
+                              @"用法：打开「启用插件」→ 注销 → 从屏幕右边下半边缘向左滑 → 屏幕正中弹出整圆盘 → 点图标开窗。"
+                              @"圆盘可拖动旋转，长按图标移除，点圆心打开完整面板（单窗 / 左右分屏 / 编辑圆盘），点空白处收起。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
