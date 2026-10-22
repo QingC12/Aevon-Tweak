@@ -419,9 +419,12 @@ enum AevonEdgeEntry {
             AevonLog.info("[边缘] 已监听设置变更通知（com.aevon.prefschanged）（AevonPrefsLiveV26）")
         }
         guard zoneTimer == nil else { return }
+        syncGuardConfig()
         let timer = Timer(timeInterval: 0.2, repeats: true) { _ in
             AevonPrefs.synchronize()
-            AevonRingStore.invalidateCache()
+            // V0.0.31（AevonRingPinnedV31）：轮询只管触发区指纹 ——
+            // 旧版这里还顺手 AevonRingStore.invalidateCache()，0.2 秒一次跨进程重读
+            // 导致圆盘 App 数与排序漂移（Aevon(24)），已删除。列表只在设置页广播时刷新。
             checkTriggerZoneChange()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -456,6 +459,33 @@ enum AevonEdgeEntry {
         guard signature != zoneSignature else { return }
         zoneSignature = signature
         refreshLayoutIfNeeded(logChange: true)
+        syncGuardConfig()
+    }
+
+    /// V0.0.31（AevonGuardFileConfV31）：把当前热区几何写成 guard.conf 给 AevonGuard 用。
+    ///
+    /// 为什么不用偏好域：沙盒 App（抖音 / QQ）进程里 CFPreferences 读「com.Aevon」
+    /// 会被重定向到自己容器 —— 读到的永远是空 → Guard 在 App 里从未生效
+    /// （Aevon(24)：呼出圆盘后抖音被暂停、圆盘里滑动仍带动全屏 App）。
+    /// Guard 是 jbroot 注入的 dylib，能直接读 jbroot 下的文件，所以走文件通道：
+    /// SpringBoard（Swift）写 → App 进程 Guard 读。第一行是格式标记，第二行几何。
+    static func syncGuardConfig() {
+        let bounds = UIScreen.main.bounds
+        let r = AevonTriggerZone.rect(in: bounds)
+        let enabled = AevonPrefs.bool("Enabled", default: false)
+            && AevonPrefs.bool("EdgeGestureEnabled", default: true)
+        let body = "AEVONGUARDCONFV31\n"
+            + "\(Int(r.minX.rounded())) \(Int(r.minY.rounded())) "
+            + "\(Int(r.width.rounded())) \(Int(r.height.rounded())) "
+            + "\(enabled ? 1 : 0)\n"
+        for path in ["/var/jb/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+                     "/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf"] {
+            do {
+                try body.write(toFile: path, atomically: true, encoding: .utf8)
+                return
+            } catch { continue }
+        }
+        AevonLog.warn("[边缘] guard.conf 写入失败（App 侧拦截将依赖兜底通道）")
     }
 
     private static var zoneTimer: Timer?
@@ -776,6 +806,7 @@ enum AevonEdgeEntry {
         swallowDeadline = CACurrentMediaTime() + swallowLimit
         // V0.0.29：告诉 AevonGuard（App 进程）圆盘已展开 —— 它会在自己的进程里
         // 把下半屏的触摸整条吞掉，前台 App 在圆盘开着期间彻底收不到下半屏输入。
+        syncGuardConfig()
         postRingState("com.aevon.ringopen")
         if source == "global" {
             AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
@@ -897,8 +928,9 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
                                       _ userInfo: CFDictionary?) {
     AevonPrefs.synchronize()
     DispatchQueue.main.async {
-        // 设置里可能刚改过圆盘 App 列表 / 顺序，先清缓存再比对热区
-        AevonRingStore.invalidateCache()
+        // 设置里可能刚改过圆盘 App 列表 / 顺序 —— V0.0.31：带快照防漂移地刷新
+        AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
+        AevonEdgeEntry.syncGuardConfig()
     }
 }

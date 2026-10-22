@@ -27,6 +27,7 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
+#import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
 
@@ -35,6 +36,9 @@ __attribute__((used)) static const char AevonAppGuardMarker[] = "AevonAppGuardV2
 
 /// CI 标记（V0.0.29）：圆盘展开期「下半屏整块吞掉」
 __attribute__((used)) static const char AevonGuardRingZoneMarker[] = "AevonGuardRingZoneV29";
+
+/// CI 标记（V0.0.31）：guard.conf 文件通道配置（沙盒 App 读不到偏好域的根治）
+__attribute__((used)) static const char AevonGuardFileConfMarker[] = "AevonGuardFileConfV31";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -94,12 +98,57 @@ static double AevonGuardPrefDouble(const char *key, double fallback, double lo, 
 }
 
 /// 与 SpringBoard 侧 `AevonTriggerZone.rect(in:)` 完全一致的几何计算
+///
+/// V0.0.31（AevonGuardFileConfV31）：配置来源改为「文件优先」。
+/// 沙盒 App（抖音 / QQ）进程里 CFPreferences 读 com.Aevon 会被重定向进自己的容器，
+/// 读到的永远是空 → Enabled 恒 false → Guard 在 App 里从未生效（Aevon(24) 实证：
+/// 呼出圆盘后抖音被暂停、圆盘里滑动仍带动全屏 App）。SpringBoard 侧
+/// `AevonEdgeEntry.syncGuardConfig()` 会把几何写进 guard.conf（jbroot 下，
+/// 注入进程可读），这里优先读文件，读不到才回退偏好域（非沙盒进程仍可用）。
+static BOOL AevonGuardReadConfFile(CGRect *outZone, BOOL *outEnabled) {
+    const char *paths[] = {
+        "/var/jb/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+        "/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+        "/var/mobile/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+    };
+    for (int i = 0; i < 3; i++) {
+        FILE *f = fopen(paths[i], "r");
+        if (f == NULL) { continue; }
+        char marker[64];
+        char values[160];
+        BOOL ok = (fgets(marker, sizeof(marker), f) != NULL)
+            && (strstr(marker, "AEVONGUARDCONFV31") != NULL)
+            && (fgets(values, sizeof(values), f) != NULL);
+        fclose(f);
+        if (!ok) { continue; }
+        double x = 0, y = 0, w = 0, h = 0;
+        int enabled = 0;
+        if (sscanf(values, "%lf %lf %lf %lf %d", &x, &y, &w, &h, &enabled) == 5) {
+            if (w >= 1 && h >= 1) {
+                *outZone = CGRectMake(x, y, w, h);
+                *outEnabled = enabled ? YES : NO;
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
 static void AevonGuardReloadConfig(void) {
     AevonGuardConfigAt = CACurrentMediaTime();
 
-    BOOL enabled = AevonGuardPrefBool("Enabled", NO);
+    CGRect zone = CGRectZero;
+    BOOL enabled = NO;
+    if (AevonGuardReadConfFile(&zone, &enabled)) {
+        AevonGuardEnabled = enabled;
+        AevonGuardZone = enabled ? zone : CGRectZero;
+        return;
+    }
+
+    /* 兜底：偏好域（仅对非沙盒进程有意义）。语义与 SB 一致的「底边锚定」。 */
+    BOOL prefOn = AevonGuardPrefBool("Enabled", NO);
     BOOL edge = AevonGuardPrefBool("EdgeGestureEnabled", YES);
-    AevonGuardEnabled = (enabled && edge);
+    AevonGuardEnabled = (prefOn && edge);
     if (!AevonGuardEnabled) {
         AevonGuardZone = CGRectZero;
         return;
@@ -117,8 +166,9 @@ static void AevonGuardReloadConfig(void) {
 
     CGFloat width = MIN(rawWidth, bounds.size.width);
     CGFloat height = MIN(rawHeight, bounds.size.height);
-    CGFloat centerY = bounds.size.height * ratio;
-    CGFloat y = MIN(MAX(centerY - height / 2.0, 0.0), bounds.size.height - height);
+    /* V0.0.30 语义：RingTriggerY 是热区**底边**占屏高百分比，100% = 底边贴屏底 */
+    CGFloat bottomY = bounds.size.height * ratio;
+    CGFloat y = MIN(MAX(bottomY - height, 0.0), bounds.size.height - height);
 
     AevonGuardZone = CGRectMake(bounds.size.width - width, y, width, height);
 }
@@ -218,6 +268,8 @@ static void AevonGuardRingOpened(CFNotificationCenterRef center,
                                  const void *object,
                                  CFDictionaryRef userInfo) {
     AevonGuardRingOpenAt = CACurrentMediaTime();
+    // V0.0.31：圆盘刚打开 —— 立刻重读 guard.conf（热区可能刚被设置页改过）
+    AevonGuardConfigAt = 0;
 }
 
 static void AevonGuardRingClosed(CFNotificationCenterRef center,

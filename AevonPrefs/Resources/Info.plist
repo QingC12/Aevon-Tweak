@@ -6,15 +6,27 @@
 	<string>Aevon</string>
 	<key>CFBundleExecutable</key>
 	<string>AevonPrefs</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>icon</string>
+			</array>
+		</dict>
+	</dict>
 	<key>CFBundleIdentifier</key>
 	<string>com.Aevon.prefs</string>
 	<key>CFBundleName</key>
 	<string>Aevon</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
-	<key>CFBundleVersion</key>
-	<string>1.0</string>
 	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
 	<string>1.0</string>
 </dict>
 </plist>

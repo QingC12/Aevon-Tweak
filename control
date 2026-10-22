@@ -1,5 +1,6 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.30
+Version: 0.0.31
 Architecture: iphoneos-arm64e
+Icon: /var/jb/Library/Application Support/Aevon/AevonIcon.png
 Description: 轻量浮窗与分屏。

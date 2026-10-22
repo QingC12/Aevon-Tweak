@@ -24,6 +24,12 @@ static CFStringRef AevonPrefsAppID(void) {
  * 保留。分屏流程代码本身保留，后续版本复用。 */
 __attribute__((used)) static const char AevonSplitFlowCIMarker[] = "AevonSplitFlow";
 
+/* V0.0.31 CI 标记：Swift 侧字符串可能被常量折叠/死代码消除，统一用 ObjC used 兜底 */
+__attribute__((used)) static const char AevonRingSquareV31Marker[] = "AevonRingSquareV31";
+__attribute__((used)) static const char AevonRingAutoSizeV31Marker[] = "AevonRingAutoSizeV31";
+__attribute__((used)) static const char AevonRingPinnedV31Marker[] = "AevonRingPinnedV31";
+__attribute__((used)) static const char AevonGuardFileConfV31Marker[] = "AEVONGUARDCONFV31";
+
 void AevonPrefSetBool(NSString *key, BOOL value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,

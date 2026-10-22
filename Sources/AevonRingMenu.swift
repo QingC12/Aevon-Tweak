@@ -22,8 +22,9 @@ final class AevonRingIcon: UIView {
 
         backgroundColor = hasIcon ? .clear : UIColor(white: 0.12, alpha: 0.92)
         isUserInteractionEnabled = false
-        // V0.0.30（AevonRingCircleV30）：所有图标一律改圆形（用户 Aevon(23) 要求）
-        layer.cornerRadius = size / 2
+        // V0.0.31（AevonRingSquareV31）：改回方形（用户 Aevon(24)：圆形看着别扭）
+        // —— 与系统主屏图标一致的圆角方，外壳与内部图标都按 0.26 / 0.2237 圆角率。
+        layer.cornerRadius = size * 0.26
         layer.borderWidth = 0.5
         layer.borderColor = UIColor(white: 1.0, alpha: 0.16).cgColor
         layer.shadowColor = UIColor.black.cgColor
@@ -36,7 +37,7 @@ final class AevonRingIcon: UIView {
             iconView.frame = bounds.insetBy(dx: 2, dy: 2)
             iconView.contentMode = .scaleAspectFill
             iconView.isUserInteractionEnabled = false
-            iconView.layer.cornerRadius = (size - 4) / 2
+            iconView.layer.cornerRadius = size * 0.2237
             iconView.clipsToBounds = true
             addSubview(iconView)
         } else {
@@ -355,12 +356,16 @@ final class AevonRingMenu: UIView {
             let step = 360 / CGFloat(max(count, 1))
             // 相邻圈错开半个步进：图标不会在上下方向连成一条直线，视觉更自然
             let offset: CGFloat = (ringIndex % 2 == 1) ? step / 2 : 0
+            // V0.0.31（AevonRingAutoSizeV31）：图标大小自适应 —— 按本圈弧间距缩放，
+            // 挤的时候自动变小、疏的时候保持 40pt，永远不互相重叠。
+            let arcSpacing = 2 * CGFloat.pi * radius / CGFloat(max(count, 1))
+            let iconSize = min(AevonRingMenu.iconSize, max(28, arcSpacing * 0.78))
             for i in 0..<count {
                 guard cursor < bundleIDs.count else { break }
                 let bundleID = bundleIDs[cursor]
                 cursor += 1
                 let name = AevonWindowManager.title(for: bundleID)
-                let icon = AevonRingIcon(bundleID: bundleID, name: name, size: AevonRingMenu.iconSize)
+                let icon = AevonRingIcon(bundleID: bundleID, name: name, size: iconSize)
                 addSubview(icon)
                 icons.append(icon)
                 iconRadii.append(radius)
@@ -374,7 +379,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 圆形图标 / 阻尼跟手 / 弹簧出入场 / 圆心按住 1 秒切旋转）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingCircleV30 AevonRingSpringV30 AevonRingDampV30）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 阻尼跟手 / 弹簧出入场）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31）")
     }
 
     private func drawRingTracks() {
@@ -888,8 +893,8 @@ final class AevonRingMenu: UIView {
         for (index, icon) in icons.enumerated() {
             guard index < iconRadii.count, index < iconBaseAngles.count else { continue }
             let radius = iconRadii[index]
-            // 径向容差：半圈间距（至少图标半径）
-            let tolerance = max(AevonRingMenu.iconSize * 0.78, 28)
+            // 径向容差：半圈间距（至少图标半径）—— V0.0.31 用图标实际尺寸（自适应后各圈不同）
+            let tolerance = max(icon.frame.width * 0.78, 28)
             guard abs(distance - radius) <= tolerance else { continue }
             var iconAngle = (iconBaseAngles[index] + rotation).truncatingRemainder(dividingBy: 360)
             if iconAngle < 0 { iconAngle += 360 }
@@ -903,7 +908,7 @@ final class AevonRingMenu: UIView {
             }
         }
         guard let candidate = best else { return nil }
-        return bestScore <= AevonRingMenu.iconSize * AevonRingMenu.hitFactor ? candidate : nil
+        return bestScore <= candidate.frame.width * AevonRingMenu.hitFactor ? candidate : nil
     }
 
     private func angle(from center: CGPoint, to point: CGPoint) -> CGFloat {
