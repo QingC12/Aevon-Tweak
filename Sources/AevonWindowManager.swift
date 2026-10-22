@@ -220,19 +220,6 @@ enum AevonWindowManager {
         }
     }
 
-    /// V0.0.36（AevonFloatPrefV36）：把设置里的「浮窗默认宽度 / 顶部位置」一键应用到已开窗口。
-    ///
-    /// 只动自由位置的窗口；吸附槽位（半屏 / 顶部放大）的窗口保持吸附几何不动。
-    /// 由设置页的「应用到已开浮窗」按钮经 Darwin 通知 com.aevon.floatapply 触发。
-    static func applyDefaultGeometryToOpenWindows() {
-        var applied = 0
-        for windowView in windows.values {
-            guard windowView.currentSlot == .free else { continue }
-            if windowView.applyDefaultGeometry() { applied += 1 }
-        }
-        AevonLog.info("[窗口] 已按设置应用浮窗尺寸位置（\(applied)/\(windows.count) 个）（AevonFloatPrefV36）")
-    }
-
     /// App 的图层列表更新时通知浮窗重排。
     ///
     /// 这个回调来自 `FBSceneLayerManager _setLayers`，随 App 自己的渲染帧率触发，

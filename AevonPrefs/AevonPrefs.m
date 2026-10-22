@@ -411,28 +411,8 @@ static NSArray *AevonBuildFallbackDetail(id target) {
         [result addObject:resetButton];
     }
 
-    /* V0.0.36：浮窗默认尺寸 / 位置 + 一键应用 */
-    id groupFloat1 = AevonNewGroup(@"④ 浮窗默认宽度",
-                                   @"新开浮窗占屏幕宽度的百分比（30~95，默认 66）。");
-    if (groupFloat1 != nil) [result addObject:groupFloat1];
-    id f1 = AevonNewSlider(@"浮窗宽度（屏宽 %）", target, @"FloatWindowWidth", 30, 95, 66);
-    if (f1 != nil) [result addObject:f1];
-
-    id groupFloat2 = AevonNewGroup(@"⑤ 浮窗默认顶部位置",
-                                   @"新开浮窗顶边落在屏幕高度的百分比（2~60，默认 10）。");
-    if (groupFloat2 != nil) [result addObject:groupFloat2];
-    id f2 = AevonNewSlider(@"浮窗顶边位置（屏高 %）", target, @"FloatWindowY", 2, 60, 10);
-    if (f2 != nil) [result addObject:f2];
-
-    id applyButton = AevonNewSpecifier(@"应用到已开浮窗",
-                                       target,
-                                       NSSelectorFromString(@"aevonApplyFloatWindow"),
-                                       nil,
-                                       AEVON_CELL_BUTTON);
-    if (applyButton != nil) {
-        AevonSetProperty(applyButton, @"aevonApplyFloatWindow", @"buttonAction");
-        [result addObject:applyButton];
-    }
+    /* V0.0.37：浮窗尺寸/位置设置项已移除 —— 浮窗几何改用 Stheno 式全局记忆
+     * （medusaFrameLast 方案），拖动 / 缩放自动记住，无需设置项。 */
 
     return result.count > 0 ? result : nil;
 }
@@ -686,14 +666,6 @@ static char AevonSliderTagKey;
     } @catch (NSException *exception) {
     }
     [self aevonSyncAllSliders];
-}
-
-/* V0.0.36：把浮窗默认宽度 / 顶部位置套用到已开窗口。
- * 设置进程动不了 SpringBoard 里的视图，广播一条 Darwin 通知让那边自己应用。 */
-- (void)aevonApplyFloatWindow {
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-                                         CFSTR("com.aevon.floatapply"),
-                                         NULL, NULL, true);
 }
 
 #pragma mark - V0.0.27：圆盘 App 编辑器入口

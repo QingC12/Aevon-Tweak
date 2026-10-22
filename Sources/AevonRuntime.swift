@@ -174,6 +174,15 @@ enum AevonRuntime {
         unsafeBitCast(imp, to: Fn.self)(target, selector, a, b)
     }
 
+    /// 调用 void 方法（UInt64 + 三个对象参数，如
+    /// `UIApplicationSceneDeactivationManager _setDeactivationReasons:onScene:withSettings:reason:`，
+    /// 类型编码 v48@0:8q16@24@32@40 —— Stheno 逆向数据同款签名）。
+    static func sendVoid(_ target: AnyObject, _ selector: Selector, _ a: UInt64, _ b: Any?, _ c: Any?, _ d: Any?) {
+        guard let imp = implementation(target, selector) else { return }
+        typealias Fn = @convention(c) (AnyObject, Selector, UInt64, Any?, Any?, Any?) -> Void
+        unsafeBitCast(imp, to: Fn.self)(target, selector, a, b, c, d)
+    }
+
     /// 调用 void 方法（三个对象参数）。
     static func sendVoid(_ target: AnyObject, _ selector: Selector, _ a: Any?, _ b: Any?, _ c: Any?) {
         guard let imp = implementation(target, selector) else { return }

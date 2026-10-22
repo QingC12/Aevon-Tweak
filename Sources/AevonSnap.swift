@@ -17,7 +17,8 @@ enum AevonSnap {
     static let gap: CGFloat = 8
     /// 距离边缘多少点以内算「想吸附」
     static let edgeThreshold: CGFloat = 22
-    static let titleBarHeight: CGFloat = 40
+    /// V0.0.37：浮窗无标题栏，高度就是纯内容高
+    static let titleBarHeight: CGFloat = 0
     static let minContentWidth: CGFloat = 150
 
     static var aspect: CGFloat { return AevonWindowView.contentAspect }

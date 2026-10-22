@@ -29,6 +29,59 @@ import UIKit
     }
 }
 
+// MARK: - UIApplicationSceneDeactivationManager：窗口化场景停用门控（V0.0.37）
+//
+// 问题1（Aevon(30)）的根治点：全屏 App X 在前台时，系统会把浮窗里场景 Y 判为
+// 非前台并停用，Y 的 UI 连接从此不收输入 —— 浮窗画面看得见、点不动。
+// 桌面正常是因为没有别的 App 来抢前台。
+//
+// Stheno 逆向证据（Stheno.dylib.txt）：`UIApplicationSceneDeactivationManagerHook` +
+// `_setDeactivationReasons:onScene:withSettings:reason:`（类型编码 v48@0:8q16@24@32@40）。
+// Stheno 的浮动窗口正是 hook 这里把停用原因清零，触摸路由才不会断。
+// 我们旧版 hook 的 `UIMutableApplicationSceneSettings setDeactivationReasons:`
+// 在 iOS 17.3 上没有打中真正的停用入口，且挂在默认关闭的实验开关后面。
+@objc final class AevonSceneDeactivationHooks: NSObject {
+    @objc func sk_uasdm_setDeactivationReasons(_ reasons: UInt64,
+                                               onScene scene: Any?,
+                                               withSettings settings: Any?,
+                                               reason reasonInfo: Any?) {
+        var finalReasons = reasons
+        if reasons != 0, let scene = scene as AnyObject? {
+            let identifier = AevonSceneDeactivationHooks.sceneIdentifier(of: scene)
+            if AevonForegroundManager.shared.shouldBlockDeactivation(identifier: identifier) {
+                finalReasons = 0
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - Self.lastBlockLog > 2.0 {
+                    Self.lastBlockLog = now
+                    AevonLog.info("[场景] 已拦截场景停用（\(identifier)，AevonDeactivationGateV37）")
+                }
+            }
+        }
+        AevonRuntime.sendVoid(self,
+                              Selector(("sk_uasdm_setDeactivationReasons:onScene:withSettings:reason:")),
+                              finalReasons, scene, settings, reasonInfo)
+    }
+
+    static var lastBlockLog: TimeInterval = 0
+
+    /// 从 scene 对象多策略提取标识（UIScene / FBScene / SBScene 均覆盖）。
+    static func sceneIdentifier(of scene: AnyObject) -> String {
+        for name in ["persistentIdentifier", "identifier"] {
+            if let value = AevonRuntime.send(scene, Selector((name))) as? String, !value.isEmpty {
+                return value
+            }
+        }
+        if let token = AevonRuntime.send(scene, Selector(("identityToken"))),
+           let value = AevonRuntime.send(token, Selector(("identifier"))) as? String, !value.isEmpty {
+            return value
+        }
+        for ivar in ["_persistentIdentifier", "_identifier", "_sceneIdentifier", "_bundleIdentifier"] {
+            if let value = AevonRuntime.ivarString(scene, ivar), !value.isEmpty { return value }
+        }
+        return ""
+    }
+}
+
 // MARK: - FBScene：已窗口化场景强制前台
 
 @objc final class AevonFBSceneHooks: NSObject {

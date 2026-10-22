@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 /// Aevon 版本号（与 control 保持一致；CI 会按 tag 覆盖本行）。
-let AevonVersion = "0.0.36"
+let AevonVersion = "0.0.37"
 
 /// dyld 构造函数入口（由 AevonAssertionShim.m 以 C 符号调用）。
 /// 约定：本函数绝不抛出、绝不强制解包失败；任何异常路径只记录日志。
@@ -65,20 +65,38 @@ private func installExperimentalHooks() {
         AevonLog.info("[启动] 已安装「多任务卡片长按」hook（实验）")
     }
 
-    // 实验功能：强制前台保持（默认关，风险最高）
-    if AevonPrefs.bool("ForceForeground", default: false) {
-        AevonSwizzle.install(targetClassName: "FBScene",
-                             original: Selector(("updateSettings:withTransitionContext:completion:")),
-                             replacementClass: AevonFBSceneHooks.self,
-                             replacement: #selector(AevonFBSceneHooks.sk_fbscene_updateSettings(_:withTransitionContext:completion:)))
-        AevonSwizzle.install(targetClassName: "UIMutableApplicationSceneSettings",
-                             original: Selector(("setDeactivationReasons:")),
-                             replacementClass: AevonSceneSettingsHooks.self,
-                             replacement: #selector(AevonSceneSettingsHooks.sk_uimass_setDeactivationReasons(_:)))
-        AevonSwizzle.install(targetClassName: "FBSceneLayerManager",
-                             original: Selector(("_setLayers:")),
-                             replacementClass: AevonSceneLayerManagerHooks.self,
-                             replacement: #selector(AevonSceneLayerManagerHooks.sk_fbslm_setLayers(_:)))
-        AevonLog.info("[启动] 已安装「强制前台保持」hook（实验）")
-    }
+    /*
+     * V0.0.37（AevonDeactivationGateV37）：窗口化场景的核心保障 hook 不再挂在
+     * 「强制前台保持（实验）」开关后面 —— 浮窗是本插件的主功能，这些 hook 就是
+     * 主功能的一部分。Aevon(30) 日志铁证：这一族 hook 从未装上（零 [hook] 已安装行），
+     * 全屏 App 抢前台时浮窗场景被系统停用 → 画面看得见、点不动。
+     * Stheno 逆向数据佐证：其浮动窗口同样 hook UIApplicationSceneDeactivationManager
+     * 的 `_setDeactivationReasons:onScene:withSettings:reason:` 保住输入路由。
+     */
+    // ① FBScene 设置更新：登记过的窗口化场景强制 foreground=true
+    AevonSwizzle.install(targetClassName: "FBScene",
+                         original: Selector(("updateSettings:withTransitionContext:completion:")),
+                         replacementClass: AevonFBSceneHooks.self,
+                         replacement: #selector(AevonFBSceneHooks.sk_fbscene_updateSettings(_:withTransitionContext:completion:)))
+    // ② iOS 17 真正的停用入口：UIApplicationSceneDeactivationManager（Stheno 同款）
+    AevonSwizzle.install(targetClassName: "UIApplicationSceneDeactivationManager",
+                         original: Selector(("_setDeactivationReasons:onScene:withSettings:reason:")),
+                         replacementClass: AevonSceneDeactivationHooks.self,
+                         replacement: #selector(AevonSceneDeactivationHooks.sk_uasdm_setDeactivationReasons(_:onScene:withSettings:reason:)))
+    // ③ 旧路径兜底：UIMutableApplicationSceneSettings 的停用原因（iOS 15/16 生效）
+    AevonSwizzle.install(targetClassName: "UIMutableApplicationSceneSettings",
+                         original: Selector(("setDeactivationReasons:")),
+                         replacementClass: AevonSceneSettingsHooks.self,
+                         replacement: #selector(AevonSceneSettingsHooks.sk_uimass_setDeactivationReasons(_:)))
+    // ④ 场景宿主激活状态组件：不让系统把窗口化场景的 foreground 拉回 false
+    AevonSwizzle.install(targetClassName: "_UISceneHostingActivationStateHostComponent",
+                         original: Selector(("setForeground:")),
+                         replacementClass: AevonSceneHostingActivationHooks.self,
+                         replacement: #selector(AevonSceneHostingActivationHooks.sk_shac_setForeground(_:)))
+    // ⑤ 图层更新 → 浮窗布局刷新
+    AevonSwizzle.install(targetClassName: "FBSceneLayerManager",
+                         original: Selector(("_setLayers:")),
+                         replacementClass: AevonSceneLayerManagerHooks.self,
+                         replacement: #selector(AevonSceneLayerManagerHooks.sk_fbslm_setLayers(_:)))
+    AevonLog.info("[启动] 已安装窗口化场景保障 hook（AevonDeactivationGateV37）")
 }

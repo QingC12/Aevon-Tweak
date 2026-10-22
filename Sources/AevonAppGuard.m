@@ -52,6 +52,10 @@ __attribute__((used)) static const char AevonGuardStateRingMarker[] = "AevonGuar
 __attribute__((used)) static const char AevonGuardLogMarker[] = "AevonGuardLogV34";
 /// CI 标记（V0.0.35）：ack 回执（Guard 读到圆盘状态 → post com.aevon.guardack，SB 写日志确证注入）
 __attribute__((used)) static const char AevonGuardAckMarker[] = "AevonGuardAckV35";
+/// CI 标记（V0.0.37）：圆盘状态判定修精确 —— notify 状态有效时 bit39 唯一裁决，
+/// 60s 时间窗兜底只在状态通道不可用时启用（Aevon(30)：圆盘收起后 60 秒内整屏被吞，
+/// QQ 分享到 Sileo 点不动的根因就是兜底时间窗在 bit39=0 时仍然为真）
+__attribute__((used)) static const char AevonGuardRingExactV37Marker[] = "AevonGuardRingExactV37";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -80,17 +84,26 @@ static BOOL AevonGuardPluginAlive = NO;
 static int AevonGuardNotifyToken(void);
 
 static BOOL AevonGuardRingOpen(void) {
-    /* 主判定：notify(3) 共享内存 bit39（每条事件实时读，微秒级开销） */
+    /* 主判定：notify(3) 共享内存 bit39（每条事件实时读，微秒级开销）
+     * V0.0.37（AevonGuardRingExactV37）：状态通道有效（版本字节 = 0x34）时，
+     * bit39 是**唯一**裁决 —— bit=0 就立刻返回 NO 并清掉兜底时间窗。
+     * 旧版的 bug：bit=0 时函数继续走时间窗兜底，而 RingOpenAt 停留在圆盘收起前
+     * 最后一次刷新，于是收起后 60 秒内兜底恒真 → Guard 继续整屏吞触摸
+     * （Aevon(30) 日志 18:28:50 收起 → 18:28:59 还在吞 41 条，QQ 分享 Sileo 点不动）。 */
     int token = AevonGuardNotifyToken();
     if (token >= 0) {
         uint64_t pack = 0;
         notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) == 0x34 && ((pack >> 39) & 1ULL)) {
-            AevonGuardRingOpenAt = CACurrentMediaTime();  /* 顺便刷新兜底时间窗 */
-            return YES;
+        if (((pack >> 40) & 0xFF) == 0x34) {
+            if ((pack >> 39) & 1ULL) {
+                AevonGuardRingOpenAt = CACurrentMediaTime();  /* 诊断用，不再参与判定 */
+                return YES;
+            }
+            AevonGuardRingOpenAt = 0;
+            return NO;
         }
     }
-    /* 兜底：Darwin 通知时间窗（通知通道正常时也能工作） */
+    /* 兜底：只在状态通道不可用（旧版 SB / token 注册失败）时才用 Darwin 时间窗 */
     if (AevonGuardRingOpenAt <= 0) { return NO; }
     return (CACurrentMediaTime() - AevonGuardRingOpenAt) < AevonGuardRingOpenMaxAge;
 }
@@ -495,7 +508,7 @@ static void AevonGuardInstall(void) {
 
     NSLog(@"[Aevon] App 侧热区拦截已安装（%s %s）", AevonAppGuardMarker, AevonGuardNotifyMarker);
     /* V0.0.34（AevonGuardLogV34）：注入确认日志 —— 用户日志里出现这行就说明 Guard 真的进了这个 App */
-    AevonGuardWriteLog(YES, @"已注入进程 %@（bundle %@），sendEvent 拦截就绪（AevonGuardStateRingV34 AevonGuardLogV34）",
+    AevonGuardWriteLog(YES, @"已注入进程 %@（bundle %@），sendEvent 拦截就绪（AevonGuardStateRingV34 AevonGuardLogV34 AevonGuardRingExactV37）",
                        [NSString stringWithUTF8String:getprogname() ?: "?"],
                        [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
 }

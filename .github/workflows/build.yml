@@ -336,21 +336,28 @@ jobs:
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardAckV35' \
             || { echo "::error::AevonGuard 没有 ack 回执（缺 AevonGuardAckV35）—— 无法确证注入"; exit 1; }
           echo "V0.0.35 校验: Guard UIKit filter + ack 回执 + hover 跳跃 已编入"
-          # ── V0.0.36：浮窗外壳搬进入口容器 + 四周 8 向缩放 + 浮窗设置项 ──
+          # ── V0.0.36：浮窗外壳搬进入口容器 + 四周缩放 ──
           strings "$DYLIB" | grep -q 'AevonFloatInEntryV36' \
             || { echo "::error::浮窗外壳没有搬进入口容器（缺 AevonFloatInEntryV36）—— App 前台浮窗不可见"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonEdgeResizeV36' \
             || { echo "::error::浮窗没有四周缩放手势（缺 AevonEdgeResizeV36）"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonFloatPrefV36' \
-            || { echo "::error::浮窗宽度/位置设置项没有接入（缺 AevonFloatPrefV36）"; exit 1; }
-          DETAIL_PLIST="$(find . -name 'Detail.plist' -path '*AevonPrefs.bundle*' | head -n1)"
-          grep -q 'FloatWindowWidth' "$DETAIL_PLIST" \
-            || { echo "::error::Detail.plist 缺少 FloatWindowWidth 滑杆"; exit 1; }
-          grep -q 'FloatWindowY' "$DETAIL_PLIST" \
-            || { echo "::error::Detail.plist 缺少 FloatWindowY 滑杆"; exit 1; }
-          grep -q 'aevonApplyFloatWindow' "$DETAIL_PLIST" \
-            || { echo "::error::Detail.plist 缺少「应用到已开浮窗」按钮"; exit 1; }
-          echo "V0.0.36 校验: 浮窗单窗口化 + 四周缩放 + 设置项 已编入"
+          echo "V0.0.36 校验: 浮窗单窗口化 + 四周缩放 已编入"
+          # ── V0.0.37：场景停用门控 + Stheno 外侧边缘手势 + 全局几何记忆 ──
+          strings "$DYLIB" | grep -q 'AevonDeactivationGateV37' \
+            || { echo "::error::场景停用门控没有编入（缺 AevonDeactivationGateV37）—— 全屏 App 里浮窗内容点不动"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSthenoEdgeBarV37' \
+            || { echo "::error::浮窗没有 Stheno 外侧边缘手势（缺 AevonSthenoEdgeBarV37）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonMedusaFrameV37' \
+            || { echo "::error::浮窗没有全局几何记忆（缺 AevonMedusaFrameV37）"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardRingExactV37' \
+            || { echo "::error::AevonGuard 圆盘状态判定没有修正（缺 AevonGuardRingExactV37）—— 圆盘收起后 60 秒内整屏被吞"; exit 1; }
+          # V0.0.37：浮窗尺寸/位置设置项已移除（Stheno 式全局记忆替代），不许残留
+          DETAIL_PLIST_V37="$(find . -name 'Detail.plist' -path '*AevonPrefs.bundle*' | head -n1)"
+          if grep -q 'FloatWindowWidth\|FloatWindowY\|aevonApplyFloatWindow' "$DETAIL_PLIST_V37"; then
+            echo "::error::Detail.plist 仍残留浮窗尺寸/位置设置项（V0.0.37 已移除）"
+            exit 1
+          fi
+          echo "V0.0.37 校验: 场景停用门控 + 外侧边缘手势 + 全局几何记忆 已编入；旧浮窗设置项 已移除"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

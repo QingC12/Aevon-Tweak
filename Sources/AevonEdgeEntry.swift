@@ -423,14 +423,7 @@ enum AevonEdgeEntry {
                                            "com.aevon.guardack" as CFString,
                                            nil,
                                            .deliverImmediately)
-            // V0.0.36（AevonFloatPrefV36）：设置页「应用到已开浮窗」按钮 → 套用浮窗默认几何
-            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
-                                           nil,
-                                           aevonFloatApplyHandler,
-                                           "com.aevon.floatapply" as CFString,
-                                           nil,
-                                           .deliverImmediately)
-            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged / guardack / floatapply）（AevonPrefsLiveV26 AevonFloatPrefV36）")
+            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged / guardack）（AevonPrefsLiveV26）")
         }
         guard zoneTimer == nil else { return }
         syncGuardConfig()
@@ -1019,16 +1012,5 @@ private func aevonGuardAckHandler(_ center: CFNotificationCenter?,
                                   _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
         aevonGuardAckCount += 1
-    }
-}
-
-/// V0.0.36（AevonFloatPrefV36）：设置页「应用到已开浮窗」→ 套用浮窗默认宽度 / 顶部位置。
-private func aevonFloatApplyHandler(_ center: CFNotificationCenter?,
-                                    _ observer: UnsafeMutableRawPointer?,
-                                    _ name: CFNotificationName?,
-                                    _ object: UnsafeRawPointer?,
-                                    _ userInfo: CFDictionary?) {
-    DispatchQueue.main.async {
-        AevonWindowManager.applyDefaultGeometryToOpenWindows()
     }
 }

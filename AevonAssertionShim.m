@@ -46,10 +46,19 @@ __attribute__((used)) static const char AevonGuardUIKitV35Marker[] = "AevonGuard
 __attribute__((used)) static const char AevonGuardAckV35Marker[] = "AevonGuardAckV35";
 __attribute__((used)) static const char AevonRingHopV35Marker[] = "AevonRingHopV35";
 
-/* V0.0.36 CI 标记：浮窗外壳搬进入口容器（单窗口化）+ 四周 8 向缩放手势 + 浮窗设置项 */
+/* V0.0.36 CI 标记：浮窗外壳搬进入口容器（单窗口化）+ 四周 8 向缩放手势 */
 __attribute__((used)) static const char AevonFloatInEntryV36Marker[] = "AevonFloatInEntryV36";
 __attribute__((used)) static const char AevonEdgeResizeV36Marker[] = "AevonEdgeResizeV36";
-__attribute__((used)) static const char AevonFloatPrefV36Marker[] = "AevonFloatPrefV36";
+
+/* V0.0.37 CI 标记：
+ * AevonDeactivationGateV37 = 场景停用门控（UIApplicationSceneDeactivationManager，
+ *                            Stheno 同款，全屏 App 里浮窗可交互的根治）；
+ * AevonSthenoEdgeBarV37    = 浮窗 Stheno 外侧边缘手势（边缘条在窗外，不占窗内）；
+ * AevonMedusaFrameV37      = 浮窗几何全局记忆（Stheno medusaFrameLast 百分比方案）。
+ * 浮窗尺寸/位置设置项（AevonFloatPrefV36）已按需求移除。 */
+__attribute__((used)) static const char AevonDeactivationGateV37Marker[] = "AevonDeactivationGateV37";
+__attribute__((used)) static const char AevonSthenoEdgeBarV37Marker[] = "AevonSthenoEdgeBarV37";
+__attribute__((used)) static const char AevonMedusaFrameV37Marker[] = "AevonMedusaFrameV37";
 
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
