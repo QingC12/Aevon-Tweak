@@ -48,6 +48,7 @@ enum AevonAppList {
         var result: [AevonAppEntry] = []
         var seen = Set<String>()
         var systemSkipped = 0
+        var systemIncluded = 0
         var noIDSkipped = 0
         var samples: [String] = []
 
@@ -61,12 +62,15 @@ enum AevonAppList {
                     }
                     continue
                 }
-                if bundleID.hasPrefix("com.apple.") {
-                    systemSkipped += 1
+                // V0.0.22：系统 App 也要出现在列表里（设置 / 相机 / 照片 / 时钟…都会用到），
+                // 只排除「不是 App 的东西」：插件、小组件、扩展、后台守护进程等。
+                if !isUserFacingApp(object, bundleID: bundleID) {
+                    if bundleID.hasPrefix("com.apple.") { systemSkipped += 1 }
                     continue
                 }
                 if seen.contains(bundleID) { continue }
                 seen.insert(bundleID)
+                if bundleID.hasPrefix("com.apple.") { systemIncluded += 1 }
                 let name = displayName(of: object)
                     ?? AevonAppInfo.displayName(bundleID: bundleID)
                     ?? bundleID
@@ -74,7 +78,8 @@ enum AevonAppList {
             }
         }
 
-        AevonLog.info("[应用列表] 跳过系统 App \(systemSkipped) 个，取不到 bundleID \(noIDSkipped) 个"
+        AevonLog.info("[应用列表] 系统 App 收录 \(systemIncluded) 个，排除非 App 对象 \(systemSkipped) 个，"
+                      + "取不到 bundleID \(noIDSkipped) 个"
                       + (samples.isEmpty ? "" : "（示例类名：\(samples.joined(separator: ", "))）"))
 
         result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -82,6 +87,45 @@ enum AevonAppList {
         AevonLog.info("[应用列表] 共 \(result.count) 个可窗口化的 App"
                       + (result.isEmpty ? "" : "：\(result.prefix(8).map { $0.name }.joined(separator: "、"))"))
         return result
+    }
+
+    /// 是否「用户能看到、能点开的 App」。
+    ///
+    /// 判定顺序（任何一步能确定就返回）：系统禁启动 / 隐藏 → 否；bundle 不是 .app → 否；
+    /// 名字里带 widget / extension / appex / plugin 等 → 否；其余都收（含系统 App）。
+    private static func isUserFacingApp(_ object: AnyObject, bundleID: String) -> Bool {
+        let lower = bundleID.lowercased()
+        for banned in ["widget", "extension", "appex", "plugin", "watchkit", "watchapp",
+                       "xpc", "diagnostic", "springboard", "placeholder", "purplebuddy"] where lower.contains(banned) {
+            return false
+        }
+        // 对象自身 + 它包着的 application / applicationProxy 都查一遍
+        var targets: [AnyObject] = [object]
+        for name in ["application", "applicationProxy"] {
+            if let nested = AevonRuntime.send(object, Selector(name)) { targets.append(nested) }
+        }
+        for target in targets {
+            if let prohibited = AevonRuntime.bool(target, key: "isLaunchProhibited"), prohibited { return false }
+            if let hidden = AevonRuntime.bool(target, key: "isHidden"), hidden { return false }
+            if let placeholder = AevonRuntime.bool(target, key: "isPlaceholder"), placeholder { return false }
+            if let path = bundlePath(of: target) {
+                // 有路径就以路径说话：只认 .app
+                return path.hasSuffix(".app")
+            }
+        }
+        return true
+    }
+
+    /// 读 App 的 .app 路径（不同来源的对象属性名不同，逐个试）
+    private static func bundlePath(of object: AnyObject) -> String? {
+        for name in ["bundleURL", "applicationBundleURL", "containerURL", "bundleContainerURL"] {
+            let selector = Selector(name)
+            guard object.responds(to: selector), let value = AevonRuntime.send(object, selector) else { continue }
+            if let url = value as? URL { return url.path }
+            if let url = value as? NSURL, let path = url.path { return path }
+            if let path = value as? String, path.hasPrefix("/") { return path }
+        }
+        return nil
     }
 
     // MARK: - 来源 A：SpringBoard 的 App 表

@@ -50,7 +50,10 @@ final class AevonBubble {
             return
         }
         if ball != nil { return }
-        guard let root = AevonEntryHost.ensureInstalled(attempt: attempt, reason: reason) else { return }
+        _ = AevonEntryHost.ensureInstalled(attempt: attempt, reason: reason)
+        // V0.0.22：必须挂到统一容器上（容器会被整体搬进 / 搬出 App 画面容器），
+        // 不能再用 ensureInstalled 的返回值 —— 那可能只是窗口根视图。
+        guard let root = AevonEntryHost.activeRoot else { return }
 
         let size: CGFloat = 54
         let screen = UIScreen.main.bounds

@@ -154,33 +154,201 @@ static NSMutableDictionary *_assertionsByPID = nil;
 @end
 
 /*
- * App 图标垫片。
+ * App 图标垫片（V0.0.22 多源重写）。
  *
- * Stheno 逆向证据（Stheno.dylib 符号表）：它取图标走的是
- * `-applicationIconImageForBundleIdentifier:format:scale:`，宿主类为 SBIconController。
- * format 在不同 iOS 版本上取值不一致（0/2 都用过），所以两个都试一遍再放弃。
- * 全部失败时返回 nil，由 Swift 侧画首字母圆形兜底。
+ * 为什么要多源：V0.0.21 只走 `SBIconController -applicationIconImageForBundleIdentifier:format:scale:`
+ * 一条路，在 iOS 17.3.1 的 SpringBoard 里实测恒返回 nil（旧版本只能退回首字母色点，
+ * 用户看到的就是「圆盘和面板里都没有 App 图标」）。这里改成四级取图，任一成功即返回：
+ *   ① SBIconModel → 图标对象 → `-iconImageWithInfo:`（iOS 13+ 屏幕快照渲染，最准）
+ *   ② App 包内的 PNG（AppIcon60x60@3x.png 等，系统 App 和多数第三方 App 都有）
+ *   ③ UIImage 私有 `+_applicationIconImageForBundleIdentifier:format:scale:`
+ *   ④ SBIconController 的旧接口（format 0~3 逐个试）
+ * 全部失败返回 nil，Swift 侧仍保留文字卡片兜底。
+ *
+ * 私有调用一律 @try/@catch：图标取不到是小事，绝不能让它把 SpringBoard 拖下水。
  */
-UIImage *AevonIconImage(NSString *bundleID, CGFloat scale) {
-    if (bundleID.length == 0) return nil;
-    @try {
-        Class ctlClass = NSClassFromString(@"SBIconController");
-        if (ctlClass == Nil) return nil;
-        id ctl = ((id (*)(id, SEL))objc_msgSend)(ctlClass, @selector(sharedInstance));
-        if (ctl == nil) return nil;
 
-        SEL sel = @selector(applicationIconImageForBundleIdentifier:format:scale:);
-        if (![ctl respondsToSelector:sel]) return nil;
+typedef struct {
+    CGSize size;
+    CGFloat scale;
+    CGFloat cornerRadius;
+} AevonIconImageInfo;
 
-        CGFloat useScale = scale > 0 ? scale : 3.0;
-        for (int format = 0; format <= 2; format++) {
-            id image = ((id (*)(id, SEL, id, int, CGFloat))objc_msgSend)(ctl, sel, bundleID, format, useScale);
-            if ([image isKindOfClass:[UIImage class]]) return (UIImage *)image;
+static NSMutableDictionary<NSString *, UIImage *> *AevonIconCache(void) {
+    static NSMutableDictionary<NSString *, UIImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        cache = [NSMutableDictionary dictionary];
+    });
+    return cache;
+}
+
+/* ① 桌面图标模型 → iconImageWithInfo: */
+static UIImage *AevonIconFromIconModel(NSString *bundleID, CGFloat pointSize) {
+    Class ctlClass = NSClassFromString(@"SBIconController");
+    if (ctlClass == Nil) { return nil; }
+    id controller = ((id (*)(id, SEL))objc_msgSend)(ctlClass, NSSelectorFromString(@"sharedInstance"));
+    if (controller == nil || ![controller respondsToSelector:NSSelectorFromString(@"model")]) { return nil; }
+    id model = ((id (*)(id, SEL))objc_msgSend)(controller, NSSelectorFromString(@"model"));
+    if (model == nil) { return nil; }
+
+    id icon = nil;
+    SEL leafSelector = NSSelectorFromString(@"leafIconForIdentifier:");
+    if ([model respondsToSelector:leafSelector]) {
+        icon = ((id (*)(id, SEL, id))objc_msgSend)(model, leafSelector, bundleID);
+    }
+    if (icon == nil) {
+        SEL appSelector = NSSelectorFromString(@"applicationIconForBundleIdentifier:");
+        if ([model respondsToSelector:appSelector]) {
+            icon = ((id (*)(id, SEL, id))objc_msgSend)(model, appSelector, bundleID);
         }
-    } @catch (NSException *exception) {
-        // 私有接口，任何异常都当"没有图标"
+    }
+    if (icon == nil) { return nil; }
+
+    SEL infoSelector = NSSelectorFromString(@"iconImageWithInfo:");
+    if ([icon respondsToSelector:infoSelector]) {
+        NSMethodSignature *signature = [icon methodSignatureForSelector:infoSelector];
+        if (signature != nil && signature.numberOfArguments >= 3) {
+            NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+            [invocation setTarget:icon];
+            [invocation setSelector:infoSelector];
+            AevonIconImageInfo info;
+            info.size = CGSizeMake(pointSize, pointSize);
+            info.scale = 3.0;
+            info.cornerRadius = pointSize * 0.2237;
+            [invocation setArgument:&info atIndex:2];
+            [invocation retainArguments];
+            [invocation invoke];
+            __unsafe_unretained id result = nil;
+            [invocation getReturnValue:&result];
+            if ([result isKindOfClass:[UIImage class]]) { return (UIImage *)result; }
+        }
+    }
+    SEL legacySelector = NSSelectorFromString(@"getIconImage:");
+    if ([icon respondsToSelector:legacySelector]) {
+        id image = ((id (*)(id, SEL, id))objc_msgSend)(icon, legacySelector, bundleID);
+        if ([image isKindOfClass:[UIImage class]]) { return (UIImage *)image; }
     }
     return nil;
+}
+
+/* ② App 包内 PNG（不依赖私有 UI 接口，系统 App 必有） */
+static UIImage *AevonIconFromBundleFiles(NSString *bundleID) {
+    Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+    if (proxyClass == Nil) { return nil; }
+    SEL proxySelector = NSSelectorFromString(@"applicationProxyForIdentifier:");
+    if (![proxyClass respondsToSelector:proxySelector]) { return nil; }
+    id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, proxySelector, bundleID);
+    if (proxy == nil) { return nil; }
+
+    NSURL *bundleURL = nil;
+    @try {
+        if ([proxy respondsToSelector:NSSelectorFromString(@"bundleURL")]) {
+            bundleURL = ((id (*)(id, SEL))objc_msgSend)(proxy, NSSelectorFromString(@"bundleURL"));
+        }
+    } @catch (NSException *exception) {
+        bundleURL = nil;
+    }
+    if (![bundleURL isKindOfClass:[NSURL class]]) { return nil; }
+    NSString *directory = bundleURL.path;
+    if (directory.length == 0) { return nil; }
+
+    NSArray<NSString *> *preferred = @[
+        @"AppIcon60x60@3x.png",
+        @"AppIcon60x60@2x.png",
+        @"AppIcon76x76@2x~ipad.png",
+        @"Icon-60@3x.png",
+        @"Icon-60@2x.png",
+        @"Icon@3x.png",
+        @"Icon@2x.png",
+        @"Icon.png",
+        @"icon.png",
+    ];
+    NSFileManager *manager = [NSFileManager defaultManager];
+    for (NSString *name in preferred) {
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        if (![manager fileExistsAtPath:path]) { continue; }
+        UIImage *image = [UIImage imageWithContentsOfFile:path];
+        if (image != nil) { return image; }
+    }
+
+    // 兜底：目录里所有 png 里挑名字像图标、像素最大的那张
+    NSArray<NSString *> *files = [manager contentsOfDirectoryAtPath:directory error:NULL];
+    UIImage *best = nil;
+    CGFloat bestArea = 0;
+    for (NSString *file in files) {
+        if (![[file lowercaseString] hasSuffix:@".png"]) { continue; }
+        NSString *lower = [file lowercaseString];
+        if (!([lower containsString:@"appicon"] || [lower containsString:@"icon"])) { continue; }
+        if ([lower containsString:@"mask"] || [lower containsString:@"small"] ||
+            [lower containsString:@"spotlight"] || [lower containsString:@"notification"]) { continue; }
+        NSString *path = [directory stringByAppendingPathComponent:file];
+        UIImage *image = [UIImage imageWithContentsOfFile:path];
+        if (image == nil) { continue; }
+        CGFloat area = image.size.width * image.size.height;
+        if (area > bestArea) {
+            bestArea = area;
+            best = image;
+        }
+    }
+    return best;
+}
+
+/* ③ UIImage 的私有接口：+_applicationIconImageForBundleIdentifier:format:scale: */
+static UIImage *AevonIconFromUIImage(NSString *bundleID, CGFloat scale) {
+    Class imageClass = [UIImage class];
+    SEL selector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if (![imageClass respondsToSelector:selector]) { return nil; }
+    CGFloat useScale = scale > 0 ? scale : 3.0;
+    for (int format = 0; format <= 3; format++) {
+        @try {
+            id image = ((id (*)(id, SEL, id, int, CGFloat))objc_msgSend)(imageClass, selector, bundleID, format, useScale);
+            if ([image isKindOfClass:[UIImage class]]) { return (UIImage *)image; }
+        } @catch (NSException *exception) {
+            return nil;
+        }
+    }
+    return nil;
+}
+
+/* ④ SBIconController 旧接口 */
+static UIImage *AevonIconFromIconController(NSString *bundleID, CGFloat scale) {
+    Class ctlClass = NSClassFromString(@"SBIconController");
+    if (ctlClass == Nil) { return nil; }
+    id controller = ((id (*)(id, SEL))objc_msgSend)(ctlClass, NSSelectorFromString(@"sharedInstance"));
+    if (controller == nil) { return nil; }
+    SEL selector = NSSelectorFromString(@"applicationIconImageForBundleIdentifier:format:scale:");
+    if (![controller respondsToSelector:selector]) { return nil; }
+    CGFloat useScale = scale > 0 ? scale : 3.0;
+    for (int format = 0; format <= 3; format++) {
+        @try {
+            id image = ((id (*)(id, SEL, id, int, CGFloat))objc_msgSend)(controller, selector, bundleID, format, useScale);
+            if ([image isKindOfClass:[UIImage class]]) { return (UIImage *)image; }
+        } @catch (NSException *exception) {
+            return nil;
+        }
+    }
+    return nil;
+}
+
+UIImage *AevonIconImage(NSString *bundleID, CGFloat scale) {
+    if (bundleID.length == 0) { return nil; }
+    NSMutableDictionary<NSString *, UIImage *> *cache = AevonIconCache();
+    UIImage *cached = cache[bundleID];
+    if (cached != nil) { return cached; }
+
+    CGFloat pointSize = 60.0;
+    UIImage *image = nil;
+    @try {
+        image = AevonIconFromIconModel(bundleID, pointSize);
+        if (image == nil) { image = AevonIconFromBundleFiles(bundleID); }
+        if (image == nil) { image = AevonIconFromUIImage(bundleID, scale); }
+        if (image == nil) { image = AevonIconFromIconController(bundleID, scale); }
+    } @catch (NSException *exception) {
+        image = nil;
+    }
+    if (image != nil) { cache[bundleID] = image; }
+    return image;
 }
 
 /*

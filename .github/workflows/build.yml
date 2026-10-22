@@ -165,14 +165,25 @@ jobs:
             || { echo "::error::缺少场景看门狗（AevonSceneWatch 标记）"; exit 1; }
           echo "多圈校验: 多圈圆盘 + 场景看门狗 已编入"
 
-          # V0.0.21：场景白名单（只在 SBWindowScene 上挂入口）+ 圆盘纯文字 / 75% 锚点
+          # V0.0.21：场景白名单（只认 SBWindowScene）+ 圆盘 75% 锚点
           strings "$DYLIB" | grep -q 'AevonSceneWhiteListV21' \
             || { echo "::error::入口窗口没有做场景白名单（缺 AevonSceneWhiteListV21）—— 会用灵动岛场景挂窗口"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonRingTextOnlyV21' \
-            || { echo "::error::圆盘不是纯文字版本（缺 AevonRingTextOnlyV21）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingAnchor75V21' \
             || { echo "::error::圆盘圆心不是 75% 锚点（缺 AevonRingAnchor75V21）"; exit 1; }
-          echo "V0.0.21 校验: 场景白名单 + 圆盘纯文字 + 75% 锚点 已编入"
+          # V0.0.22：唯一入口容器（可整体搬进 App 画面容器）+ 原生图标 + 系统 App
+          strings "$DYLIB" | grep -q 'AevonSingleContainerV22' \
+            || { echo "::error::入口不是唯一容器版本（缺 AevonSingleContainerV22）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSceneVCHookV22' \
+            || { echo "::error::缺少 App 画面容器钩子标记（AevonSceneVCHookV22）"; exit 1; }
+          strings "$DYLIB" | grep -q 'SBDeviceApplicationSceneViewController' \
+            || { echo "::error::App 画面容器钩子没编进二进制（SBDeviceApplicationSceneViewController）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonEntryContainerView' \
+            || { echo "::error::缺少唯一入口容器类（AevonEntryContainerView）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingNativeIconV22' \
+            || { echo "::error::圆盘没有恢复原生图标（缺 AevonRingNativeIconV22）"; exit 1; }
+          strings "$DYLIB" | grep -q 'iconImageWithInfo:' \
+            || { echo "::error::图标取图缺少 SBIconModel 通道（iconImageWithInfo:）"; exit 1; }
+          echo "V0.0.22 校验: 唯一容器 + App 画面容器钩子 + 原生图标 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"

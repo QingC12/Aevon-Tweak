@@ -97,5 +97,21 @@ enum AevonBootstrap {
         }
         AevonEdgeEntry.install(attempt: 1, reason: reason)
         AevonBubble.shared.install(attempt: 1, reason: reason)
+        installSceneHookIfNeeded()
+    }
+
+    /// V0.0.22：装 App 画面容器钩子（只 hook viewDidAppear / viewDidDisappear 两个方法）。
+    /// 入口视图要压在全屏 App 之上，唯一的落点就是 `SBDeviceApplicationSceneViewController.view`，
+    /// 其余位置（窗口层级 / 场景根视图）都被真机日志证明无效或会失效。
+    private static var sceneHookInstalled = false
+    private static func installSceneHookIfNeeded() {
+        guard !sceneHookInstalled else { return }
+        sceneHookInstalled = true
+        guard AevonSceneHookAvailable() else {
+            AevonLog.warn("[入口] 未找到 App 画面容器类（SBDeviceApplicationSceneViewController），跳过钩子——桌面入口不受影响")
+            return
+        }
+        AevonSceneHookInstall()
+        AevonLog.info("[入口] App 画面容器钩子已安装（viewDidAppear / viewDidDisappear，包装全屏 App 用）（AevonSceneVCHookV22）")
     }
 }

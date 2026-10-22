@@ -162,11 +162,11 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
                 subtitleLabel.text = "左边：\(first.name)　再点一个 App 完成分屏（再点自己不取消）"
             } else {
                 titleLabel.text = "左右分屏：先选左边的 App"
-                subtitleLabel.text = "共 \(apps.count) 个用户 App　选好后会自动再开右边"
+                subtitleLabel.text = "共 \(apps.count) 个 App（含系统 App）　选好后会自动再开右边"
             }
         } else {
             titleLabel.text = "选择要浮窗打开的 App"
-            subtitleLabel.text = "共 \(apps.count) 个用户 App"
+            subtitleLabel.text = "共 \(apps.count) 个 App（含系统 App）"
         }
         table.reloadData()
     }
@@ -360,6 +360,9 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
             ?? UITableViewCell(style: .subtitle, reuseIdentifier: identifier)
         guard let entry = entry(at: indexPath) else { return cell }
         cell.backgroundColor = .clear
+        // V0.0.22：每一行显示 App 原生图标（取不到时返回 nil，自动退回纯文字）
+        cell.imageView?.image = AevonAppIcon.image(bundleID: entry.bundleID, size: 34)
+        cell.imageView?.contentMode = .scaleAspectFit
         cell.textLabel?.text = entry.name
         cell.textLabel?.textColor = .white
         cell.textLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)

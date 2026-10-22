@@ -85,31 +85,15 @@ enum AevonHostWindow {
         return overlay
     }
 
-    /// 场景根视图（`SBWindowSceneViewController.view`）。
+    /// **V0.0.22 认知修正（重要）**：`SBDeviceApplicationSceneViewController.view` 才是
+    /// App 画面的真实容器，所以容器搬家由 `AevonSceneHook` 直接把这个控制器的 view 报上来，
+    /// 不再靠「从窗口反推根视图」——V0.0.21 猜错父视图（拿到一个普通 UIView），
+    /// 结果容器挂进了一个收不到触摸的地方，整版入口全废（真机日志 Aevon(15)）。
     ///
-    /// **V0.0.21 关键认知**：SpringBoard 里前台 App 的画面**不是普通 UIWindow**，
-    /// 而是 `SBDeviceApplicationSceneViewController` 的 view，直接挂在 scene 根视图上，
-    /// 和我们的窗口是**兄弟视图**。`windowLevel` 只决定窗口之间的顺序，
-    /// 压不过这种「不属于任何窗口」的兄弟视图 —— 这就是 V0.0.19 把层级抬到 1e7
-    /// 之后「桌面正常、全屏 App 里连触发条都看不见」的真正原因。
-    /// 想盖住 App，只能把视图挂到同一个 scene 根视图上并 `bringSubviewToFront`。
-    static func sceneRootView(_ scene: UIWindowScene?) -> UIView? {
-        guard let scene = scene else { return nil }
-        var best: UIView?
-        for w in scene.windows {
-            var controller: UIViewController? = w.rootViewController
-            while let parent = controller?.parent { controller = parent }
-            guard let view = controller?.view else { continue }
-            if view.bounds.width > 1, view.bounds.height > 1 {
-                best = view
-                break
-            }
-        }
-        return best
-    }
+    /// 只挑「角色合格」的窗口场景，优先主屏。
 
-
-    /// 只挑「当前确实在前台/非激活、且角色合格」的窗口场景，优先主屏。
+    /// 注意：SpringBoard 的所有 `UIWindowScene` 在真机上 `activationState` 都是 0（unattached），
+    /// 所以**不能用激活状态做筛选**，只能按角色白名单 + 窗口数量打分。
     ///
     /// V0.0.21：改成按 `sceneScore` 排序后取最高分。旧实现「第一个 foregroundActive」
     /// 会随 connectedScenes 的迭代顺序漂移到灵动岛场景（见 `sceneScore` 的排除表）。
@@ -158,9 +142,6 @@ enum AevonHostWindow {
     /// 结论：Aperture / Curtain 这类附属场景**不参与触摸命中**，绝不能用来挂入口窗口。
     /// 只认 Home 屏所在的 `SBWindowScene`（角色 = UIWindowSceneSessionRoleApplication）。
     static func sceneScore(_ scene: UIWindowScene) -> Int {
-        guard scene.activationState == .foregroundActive
-            || scene.activationState == .foregroundInactive else { return Int.min }
-
         let role = scene.session.role.rawValue
         let className = String(describing: type(of: scene))
         let lowerRole = role.lowercased()
@@ -175,11 +156,9 @@ enum AevonHostWindow {
         guard role == "UIWindowSceneSessionRoleApplication" else { return Int.min }
 
         var score = 0
-        if scene.activationState == .foregroundActive { score += 40 }
-        if scene.screen === UIScreen.main { score += 20 }
+        if scene.screen === UIScreen.main { score += 40 }
         // SBWindowScene 是 SpringBoard 自己的主窗口场景，桌面上的一切都在它上面
         if lowerClass.contains("sbwindowscene") { score += 30 }
-        if lowerClass.contains("deviceapplication") { score -= 10 }
         // 窗口越多越像「真正在显示系统 UI」的那个场景（状态栏 / 控制中心 / 图标层都在里面）
         score += min(scene.windows.count, 12)
         return score

@@ -1,11 +1,5 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.21
+Version: 0.0.22
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.21：修掉「只能在悬浮球面板打开时才能划出圆盘，桌面上划不出」——根因是 V0.0.20 的场景看门狗按角色名打分，把入口窗口搬进了会被系统排除在触摸命中之外的灵动岛帘幕场景（SBSystemApertureCurtainWindowScene），现在只认桌面的 SBWindowScene（Application 角色），Aperture / Curtain / 键盘等附属场景一律永久排除，看门狗也改成只在场景不合格时才纠正一次；右侧热区加宽到 44pt 并补了两条兜底通道（窗口层左滑/长按、手势识别器），贴边被系统手势门控吞掉时也能呼出。圆盘圆心下移到屏幕 75% 高度，单手拇指不用够到屏幕中间；圆盘和面板里的所有图标改为纯文字卡片，不再出现取不到系统图标时的首字母色点。交互按新要求重做：拉出圆盘即固定，手指不离开屏幕——顺时针滑动就旋转、逆时针滑动立刻停止旋转进入等待选择（图标放大高亮、圆心下方显示名字），此时松手落在图标上直接开浮窗并自动收起圆盘，落在空白处收起，仍在旋转时松手直接收起不误开；不需要先抬手再摸第二次。浮窗可触摸操作，支持左右分屏与边缘吸附。默认关闭，请在 设置 → Aevon 开启。
-Maintainer: Aevon Dev <aevon@local>
-Author: Aevon Dev
-Section: Tweaks
-Depends: mobilesubstrate, firmware (>= 16.0)
-Conflicts: com.aevon.tweak, com.splitkit.tweak
-Replaces: com.aevon.tweak, com.splitkit.tweak
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.22：修掉 V0.0.21 的严重回归——上一版把入口视图搬进「场景根视图覆盖层」，但挂到的是一个收不到触摸的普通视图上，结果桌面划不出圆盘、悬浮球面板点不动；这版取消那层覆盖层，改为「唯一容器 + 整体搬家」：手势条、悬浮球、圆盘、面板全部装在同一个容器里，桌面时挂在入口窗口上，App 进前台时由 App 画面容器钩子（SBDeviceApplicationSceneViewController 的 viewDidAppear / viewDidDisappear）把整个容器搬进 App 画面容器，从而真正压在全屏 App 之上；App 退出后自动搬回。应用选择面板和圆盘恢复显示 App 原生图标（四级取图：桌面图标模型 → App 包内 PNG → UIImage 私有接口 → 图标控制器旧接口），取不到才退回文字卡片；面板同时收录系统 App（设置、相机、照片、时钟等），只排除小组件、插件、扩展这类非 App 对象。圆盘仍为 75% 高度多圈形态、顺时针旋转 / 逆时针选定 / 松手选中开窗。浮窗可触摸操作，支持左右分屏与边缘吸附。默认关闭，请在 设置 → Aevon 开启。

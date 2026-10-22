@@ -13,6 +13,7 @@ TWEAK_NAME = Aevon
 
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
+    Sources/AevonSceneHook.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
     Sources/AevonCrashCatcher.swift \
@@ -25,6 +26,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonRingMenu.swift \
     Sources/AevonRingStore.swift \
     Sources/AevonAppList.swift \
+    Sources/AevonAppIcon.swift \
     Sources/AevonAppPickerView.swift \
     Sources/AevonRuntime.swift \
     Sources/AevonSwizzle.swift \

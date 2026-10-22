@@ -1,23 +1,26 @@
 import UIKit
 
-/// 圆盘上的一个 App 单元（V0.0.21：**只显示文字**，不再请求 App 图标）。
+/// 圆盘上的一个 App 单元（V0.0.22：**恢复原生 App 图标**）。
 ///
-/// 为什么去掉图标：真机上 `SBIconController -applicationIconImageForBundleIdentifier:format:scale:`
-/// 在 SpringBoard 的某些状态下返回 nil，于是圆盘里全是「首字母彩色圆点」——
-/// 既不像图标也不像文字，反而更难认。用户明确要求只显示文字，这里直接改成文字卡片：
-/// 深色半透明胶囊 + 白字，字号随字数自适应，视觉上干净且一定能显示出来。
+/// 取图走 `AevonAppIcon`（多源兜底），取到就显示圆角方形图标；
+/// 取不到才退回「深色胶囊 + 白字」的文字卡片，保证任何情况下都能认出是哪个 App。
 final class AevonRingIcon: UIView {
     let bundleID: String
     var displayName: String
 
     private let label = UILabel()
+    private let iconView = UIImageView()
+    /// 是否成功拿到原生图标（决定高亮时改边框还是改底色）
+    private let hasIcon: Bool
 
     init(bundleID: String, name: String, size: CGFloat) {
         self.bundleID = bundleID
         self.displayName = name
+        let icon = AevonAppIcon.image(bundleID: bundleID, size: size - 4)
+        self.hasIcon = icon != nil
         super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
 
-        backgroundColor = UIColor(white: 0.12, alpha: 0.92)
+        backgroundColor = hasIcon ? .clear : UIColor(white: 0.12, alpha: 0.92)
         isUserInteractionEnabled = false
         layer.cornerRadius = size * 0.26
         layer.borderWidth = 0.5
@@ -27,22 +30,45 @@ final class AevonRingIcon: UIView {
         layer.shadowRadius = 6
         layer.shadowOffset = CGSize(width: 0, height: 2)
 
-        label.frame = bounds.insetBy(dx: 3, dy: 2)
-        label.text = AevonRingIcon.shortName(name)
-        label.textAlignment = .center
-        label.textColor = .white
-        label.numberOfLines = 2
-        label.lineBreakMode = .byTruncatingTail
-        label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.62
-        label.isUserInteractionEnabled = false
-        addSubview(label)
-        label.font = UIFont.systemFont(ofSize: AevonRingIcon.fontSize(for: label.text ?? "", size: size),
-                                       weight: .medium)
+        if let icon = icon {
+            iconView.image = icon
+            iconView.frame = bounds.insetBy(dx: 2, dy: 2)
+            iconView.contentMode = .scaleAspectFill
+            iconView.isUserInteractionEnabled = false
+            iconView.layer.cornerRadius = size * 0.2237
+            iconView.clipsToBounds = true
+            addSubview(iconView)
+        } else {
+            label.frame = bounds.insetBy(dx: 3, dy: 2)
+            label.text = AevonRingIcon.shortName(name)
+            label.textAlignment = .center
+            label.textColor = .white
+            label.numberOfLines = 2
+            label.lineBreakMode = .byTruncatingTail
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.62
+            label.isUserInteractionEnabled = false
+            addSubview(label)
+            label.font = UIFont.systemFont(ofSize: AevonRingIcon.fontSize(for: label.text ?? "", size: size),
+                                           weight: .medium)
+        }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// 高亮「松手就会打开」的那个图标
+    func setHighlighted(_ highlighted: Bool) {
+        layer.borderWidth = highlighted ? 2.5 : 0.5
+        layer.borderColor = (highlighted
+            ? UIColor(red: 0.35, green: 0.82, blue: 1.0, alpha: 1.0)
+            : UIColor(white: 1.0, alpha: 0.16)).cgColor
+        if !hasIcon {
+            backgroundColor = highlighted
+                ? UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
+                : UIColor(white: 0.12, alpha: 0.92)
+        }
     }
 
     /// 名字太长会挤成一团：超过 6 个字就截断（圆盘上一行最多 4 字、两行 8 字，取 6 兼顾）
@@ -287,7 +313,7 @@ final class AevonRingMenu: UIView {
 
         centerTitle.text = icons.isEmpty ? "点圆心添加 App" : "共 \(icons.count) 个"
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，纯文字图标 75% 锚点）（AevonRingFullCircle AevonRingMultiRing AevonRingTextOnlyV21 AevonRingAnchor75V21）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，原生图标 75% 锚点）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21）")
     }
 
     private func drawRingTracks() {
@@ -466,9 +492,7 @@ final class AevonRingMenu: UIView {
     private func setHovered(_ icon: AevonRingIcon?) {
         for item in icons {
             item.transform = (item === icon) ? CGAffineTransform(scaleX: 1.10, y: 1.10) : .identity
-            item.backgroundColor = (item === icon)
-                ? UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
-                : UIColor(white: 0.12, alpha: 0.92)
+            item.setHighlighted(item === icon)
         }
         if let icon = icon {
             centerTitle.text = icon.displayName
