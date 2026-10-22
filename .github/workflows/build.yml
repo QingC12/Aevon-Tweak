@@ -328,13 +328,23 @@ jobs:
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardLogV34' \
             || { echo "::error::AevonGuard 没有日志通道（缺 AevonGuardLogV34）—— 无法验证注入与拦截"; exit 1; }
           echo "V0.0.34 校验: 圆盘状态共享内存位 + Guard 日志 已编入"
+          # ── V0.0.35：Guard 全 App 注入（UIKit bundle filter）+ ack 回执 + hover 向上跳跃 ──
+          strings "$DYLIB" | grep -q 'AevonRingHopV35' \
+            || { echo "::error::划过图标没有向上跳跃动画（缺 AevonRingHopV35）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonGuardAckV35' \
+            || { echo "::error::SB 侧没有 ack 确证逻辑（缺 AevonGuardAckV35）"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardAckV35' \
+            || { echo "::error::AevonGuard 没有 ack 回执（缺 AevonGuardAckV35）—— 无法确证注入"; exit 1; }
+          echo "V0.0.35 校验: Guard UIKit filter + ack 回执 + hover 跳跃 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
           echo "guard plist: $GUARD_PLIST"
           [ -n "$GUARD_PLIST" ] || { echo "::error::缺少 AevonGuard.plist（注入范围）"; exit 1; }
-          plutil -convert xml1 -o - "$GUARD_PLIST" | grep -q '<key>Mode</key>' \
-            || { echo "::error::AevonGuard.plist 缺少 Mode 键（不会注入 App 进程）"; exit 1; }
+          # V0.0.35（AevonGuardUIKitV35）：必须是 Bundles=com.apple.UIKit（全 GUI App 注入）；
+          # 旧 Mode=Any 空 Filter 在 roothide ellekit 上可能被跳过（Aevon(28)：零 [Guard] 日志）
+          plutil -convert xml1 -o - "$GUARD_PLIST" | grep -q 'com.apple.UIKit' \
+            || { echo "::error::AevonGuard.plist 不是 Bundles=com.apple.UIKit（Guard 可能不会注入 App 进程）"; exit 1; }
           echo "V0.0.27 校验: App 侧触摸拦截 dylib 已编入"
 
           # V0.0.27：圆盘列表实时同步 + 悬浮球移除

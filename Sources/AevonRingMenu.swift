@@ -382,7 +382,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35）")
     }
 
     private func drawRingTracks() {
@@ -812,14 +812,21 @@ final class AevonRingMenu: UIView {
         for item in icons {
             let on = (item === icon)
             item.setHighlighted(on)
-            // V0.0.33（AevonRingSpringV33）：放大 / 缩小走更 Q 的弹簧 ——
-            // 阻尼 0.48 + 初速 2.0，指上去有过冲回摆的弹力感，移开有吸回感。
-            let target = on ? CGAffineTransform(scaleX: 1.18, y: 1.18) : .identity
+            // V0.0.35（AevonRingHopV35）：划过图标 = 放大 1.18 + **向上跳跃 8pt** ——
+            // 弹簧阻尼 0.42 + 初速 2.8，跳上去有过冲、回落的吸回感（用户点名要的跳跃动画）。
+            // 位移用屏幕坐标向上（y 负），与圆周角度无关，任何位置的图标都是「向上跳」。
+            let target: CGAffineTransform
+            if on {
+                target = CGAffineTransform(translationX: 0, y: -8)
+                    .scaledBy(x: 1.18, y: 1.18)
+            } else {
+                target = .identity
+            }
             if item.transform != target {
-                UIView.animate(withDuration: 0.42,
+                UIView.animate(withDuration: 0.45,
                                delay: 0,
-                               usingSpringWithDamping: 0.48,
-                               initialSpringVelocity: 2.0,
+                               usingSpringWithDamping: 0.42,
+                               initialSpringVelocity: 2.8,
                                options: [.allowUserInteraction, .beginFromCurrentState]) {
                     item.transform = target
                 }

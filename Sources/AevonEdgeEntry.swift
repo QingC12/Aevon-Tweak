@@ -416,6 +416,13 @@ enum AevonEdgeEntry {
                                            "com.aevon.prefschanged" as CFString,
                                            nil,
                                            .deliverImmediately)
+            // V0.0.35：Guard 回执通道（呼出圆盘后据此确证 App 侧注入与状态读取）
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonGuardAckHandler,
+                                           "com.aevon.guardack" as CFString,
+                                           nil,
+                                           .deliverImmediately)
             AevonLog.info("[边缘] 已监听设置变更通知（com.aevon.prefschanged）（AevonPrefsLiveV26）")
         }
         guard zoneTimer == nil else { return }
@@ -838,6 +845,18 @@ enum AevonEdgeEntry {
         // Aevon(27) 连续 3 版「圆盘滑动带动全屏 App」的共同根因。共享内存位零时序依赖。
         AevonNotifySetRing(1)
         postRingState("com.aevon.ringopen")
+        // V0.0.35（AevonGuardAckV35）：2.5 秒后检查 App 侧回执 ——
+        // 有 ack = Guard 注入了且读到了状态位；没有 = Guard 未注入（换 filter 前的老毛病）
+        aevonGuardAckCount = 0
+        let ackTimer = Timer(timeInterval: 2.5, repeats: false) { _ in
+            let n = aevonGuardAckCount
+            if n > 0 {
+                AevonLog.info("[Guard] App 侧已确认圆盘状态（收到 \(n) 次回执）（AevonGuardAckV35）")
+            } else {
+                AevonLog.warn("[Guard] 2.5 秒内未收到 App 侧回执 —— Guard 可能未注入前台 App（AevonGuardAckV35）")
+            }
+        }
+        RunLoop.main.add(ackTimer, forMode: .common)
         if source == "global" {
             AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
         }
@@ -968,5 +987,22 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
         AevonEdgeEntry.syncGuardConfig()
+    }
+}
+
+/// V0.0.35（AevonGuardAckV35）：App 侧 Guard 的回执。
+/// Guard 读到圆盘状态位翻转 / 收到 ringopen 时 post `com.aevon.guardack`，
+/// SpringBoard 收到这里计数 —— 呼出圆盘 2.5 秒后写确证日志：
+/// 「App 侧 Guard 已确认」或「未确认（可能未注入）」。沙盒 App 写不了日志文件，
+/// 这是唯一能从 SB 侧确证 Guard 活着的方式。
+var aevonGuardAckCount = 0
+
+private func aevonGuardAckHandler(_ center: CFNotificationCenter?,
+                                  _ observer: UnsafeMutableRawPointer?,
+                                  _ name: CFNotificationName?,
+                                  _ object: UnsafeRawPointer?,
+                                  _ userInfo: CFDictionary?) {
+    DispatchQueue.main.async {
+        aevonGuardAckCount += 1
     }
 }

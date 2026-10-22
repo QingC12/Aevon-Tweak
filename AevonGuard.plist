@@ -1,20 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.w3.org/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!--
-	  AevonGuard 是极小的纯 ObjC dylib（几 KB），必须注入到**前台 App 进程**，
-	  才能在 App 内部把手势掐断（SpringBoard 侧吞事件挡不住 App 自己的横向手势）。
-
-	  Mode = Any：不筛选进程。构造函数第一步就判断：
-	    · 进程名是 SpringBoard → 直接返回（由 Aevon.dylib 负责）；
-	    · 没有 UIApplication 类（守护进程 / launchd / backboardd）→ 直接返回；
-	  所以除 GUI App 外不会有任何行为。
-	-->
 	<key>Filter</key>
 	<dict>
-		<key>Mode</key>
-		<string>Any</string>
+		<!--
+		  V0.0.35 (AevonGuardUIKitV35): 必须注入所有 GUI App, Aevon(28) 定论。
+		  旧写法 Mode=Any + 空 Filter 在 roothide 的 ellekit 注入器上可能被整个跳过
+		  (Aevon(28) 日志: 0.0.34 加的 Guard 注入日志一条都没有, 圆盘期触摸照进抖音)。
+		  改用经典全 App 写法: 所有 GUI 进程都链接 UIKit framework (bundle
+		  com.apple.UIKit), loader 按链接库匹配即可稳定注入。
+		  构造函数仍有三重保险: SpringBoard / 无 UIApplication / 设置 App 直接 return。
+		-->
+		<key>Bundles</key>
+		<array>
+			<string>com.apple.UIKit</string>
+		</array>
 	</dict>
 </dict>
 </plist>

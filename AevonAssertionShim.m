@@ -41,6 +41,11 @@ __attribute__((used)) static const char AevonGuardRingWideV33Marker[] = "AevonGu
 /* V0.0.34 CI 标记：圆盘状态走 notify(3) 共享内存位（沙盒 App 零时序依赖） */
 __attribute__((used)) static const char AevonNotifyRingBitV34Marker[] = "AevonNotifyRingBitV34";
 
+/* V0.0.35 CI 标记：Guard 全 App 注入（UIKit bundle filter）+ ack 回执 + hover 向上跳跃 */
+__attribute__((used)) static const char AevonGuardUIKitV35Marker[] = "AevonGuardUIKitV35";
+__attribute__((used)) static const char AevonGuardAckV35Marker[] = "AevonGuardAckV35";
+__attribute__((used)) static const char AevonRingHopV35Marker[] = "AevonRingHopV35";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能

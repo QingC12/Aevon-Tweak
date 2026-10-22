@@ -50,6 +50,8 @@ __attribute__((used)) static const char AevonGuardRingWideMarker[] = "AevonGuard
 __attribute__((used)) static const char AevonGuardStateRingMarker[] = "AevonGuardStateRingV34";
 /// CI 标记（V0.0.34）：Guard 自身写 Aevon.log（验证注入 / 吞摸计数，可诊断）
 __attribute__((used)) static const char AevonGuardLogMarker[] = "AevonGuardLogV34";
+/// CI 标记（V0.0.35）：ack 回执（Guard 读到圆盘状态 → post com.aevon.guardack，SB 写日志确证注入）
+__attribute__((used)) static const char AevonGuardAckMarker[] = "AevonGuardAckV35";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -91,6 +93,19 @@ static BOOL AevonGuardRingOpen(void) {
     /* 兜底：Darwin 通知时间窗（通知通道正常时也能工作） */
     if (AevonGuardRingOpenAt <= 0) { return NO; }
     return (CACurrentMediaTime() - AevonGuardRingOpenAt) < AevonGuardRingOpenMaxAge;
+}
+
+/* V0.0.35（AevonGuardAckV35）：ack 回执。
+ * 沙盒 App 写不了 /var/mobile/Aevon.log（V0.0.34 的 Guard 日志在抖音里全部失败，
+ * Aevon(28) 日志零 [Guard] 行），改用 notify_post 回执：Guard 读到圆盘状态 /
+ * 收到 ringopen 时 post com.aevon.guardack，SpringBoard 监听并写日志 ——
+ * 下一版日志能直接确证「Guard 注入了 + state 读到了」。notify_post 走 notifyd，
+ * 沙盒 App 可用。 */
+static void AevonGuardPostAck(void) {
+    @try {
+        notify_post("com.aevon.guardack");
+    } @catch (NSException *exception) {
+    }
 }
 
 #pragma mark - 日志（V0.0.34，AevonGuardLogV34）
@@ -330,6 +345,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         if (!hasLogged || ringOpen != lastLogged) {
             hasLogged = YES;
             lastLogged = ringOpen;
+            AevonGuardPostAck();   /* V0.0.35：状态翻转回执（SB 侧写日志确证） */
             AevonGuardWriteLog(YES, @"圆盘状态 → %@（%@）",
                                ringOpen ? @"展开" : @"收起",
                                AevonGuardEnabled ? @"热区拦截启用" : @"仅圆盘期拦截");
@@ -368,12 +384,10 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             CGPoint pt = [touch locationInView:nil];
             BOOL inZone = NO;
             if (ringOpen) {
-                /* AevonGuardRingForceV32 → V0.0.33 加宽（AevonGuardRingWideV33）：
-                 * 圆盘开着 —— **上 18% 以外整屏**吞掉。旧版只吞下半屏，而圆盘圆心在
-                 * 75% 高、外圈图标能伸到中线上方，上半屏滑动照样进 App（Aevon(26)）。
-                 * 图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */
-                CGFloat topLimit = [UIScreen mainScreen].bounds.size.height * 0.18;
-                if (pt.y >= topLimit) { inZone = YES; }
+                /* V0.0.35：圆盘开着 —— **整屏**吞掉（连顶部 18% 也吞，状态栏区无交互需求）。
+                 * 旧版留 18% 是给「万一圆盘需要顶部交互」，实际不存在这个场景，
+                 * 反而多留一条缝。图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */
+                inZone = YES;
                 if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
                     inZone = YES;
                 }
@@ -428,6 +442,7 @@ static void AevonGuardRingOpened(CFNotificationCenterRef center,
      * 之后即使配置读不到也用默认几何兜底，不再整条 Guard 失效。 */
     AevonGuardPluginAlive = YES;
     AevonGuardConfigAt = 0;
+    AevonGuardPostAck();   /* V0.0.35 */
 }
 
 static void AevonGuardRingClosed(CFNotificationCenterRef center,
