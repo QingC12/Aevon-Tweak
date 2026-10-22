@@ -43,7 +43,8 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                 phase != UITouchPhaseEnded && phase != UITouchPhaseCancelled) {
                 continue;
             }
-            CGPoint point = [touch locationInWindow];
+            // `locationInView:nil` 返回触摸所在窗口的坐标（窗口全屏，等价屏幕坐标）
+            CGPoint point = [touch locationInView:nil];
             AevonGlobalTouchPhase((NSInteger)phase,
                                   (uintptr_t)(__bridge void *)touch,
                                   point.x, point.y);
