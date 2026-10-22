@@ -72,7 +72,7 @@ enum AevonEntryHost {
         AevonEdgeEntry.attachProbe(to: host)
 
         let bounds = controller.view.bounds
-        AevonLog.info("[入口] 统一窗口已创建（level=\(Int(host.windowLevel.rawValue))，scene=\(scene.activationState.rawValue)，根视图 \(Int(bounds.width))x\(Int(bounds.height))，原因=\(reason)）（AevonEntryHost）")
+        AevonLog.info("[入口] 统一窗口已创建（level=\(Int(host.windowLevel.rawValue))，scene=\(scene.activationState.rawValue)，根视图 \(Int(bounds.width))x\(Int(bounds.height))，原因=\(reason)）（AevonEntryHost AevonLevel1e7）")
         return controller.view
     }
 

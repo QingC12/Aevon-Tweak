@@ -156,8 +156,10 @@ jobs:
           echo "圆盘校验: 边缘入口（原生触摸）+ 整圆形态 + 图标单元 + 统一入口窗口 已编入"
 
           # V0.0.19：入口窗口层级抬到 1e7（修「全屏 App 里不显示触发条」）+ 圆盘贴右布局
-          strings "$DYLIB" | grep -q 'AevonWindowLevels' \
-            || { echo "::error::入口窗口层级表缺失（AevonWindowLevels）"; exit 1; }
+          # 注意：Swift 的 enum + static let 没有运行时元数据，类型名不会进二进制，
+          # 只能用日志标记串校验（AevonLevel1e7）。
+          strings "$DYLIB" | grep -q 'AevonLevel1e7' \
+            || { echo "::error::入口窗口层级不是 1e7 版本（缺少 AevonLevel1e7 标记）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingRightAnchor' \
             || { echo "::error::圆盘仍是居中版本（缺少 AevonRingRightAnchor 标记）"; exit 1; }
           echo "层级校验: 入口窗口 1e7 + 圆盘贴右锚定 已编入"
