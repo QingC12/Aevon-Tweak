@@ -17,6 +17,13 @@ static CFStringRef AevonPrefsAppID(void) {
     return CFSTR("com.Aevon");
 }
 
+/* V0.0.30：CI 校验标记。
+ * 面板去掉「左右分屏」档后 openSplit 暂无调用方，Swift/LLVM 会把无人调用的函数
+ * 连同其内部的字符串常量一起消除（V0.0.29 里靠面板调用链保活，现在断了），
+ * Swift 侧的常量引用也会被常量折叠/死代码消除 —— 只有 ObjC 的 used 属性能强制
+ * 保留。分屏流程代码本身保留，后续版本复用。 */
+__attribute__((used)) static const char AevonSplitFlowCIMarker[] = "AevonSplitFlow";
+
 void AevonPrefSetBool(NSString *key, BOOL value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,
