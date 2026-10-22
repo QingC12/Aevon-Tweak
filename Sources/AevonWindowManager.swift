@@ -23,7 +23,6 @@ enum AevonWindowManager {
     }
 
     static func title(for bundleID: String) -> String {
-        if splitFlowCIMarker.isEmpty { /* CI 标记引用，永不执行 */ }
         return AevonAppInfo.displayName(bundleID: bundleID) ?? bundleID
     }
 

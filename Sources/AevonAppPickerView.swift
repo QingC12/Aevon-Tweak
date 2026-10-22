@@ -97,7 +97,7 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         refreshChips()
         updateHeaders()
         AevonLog.info("[面板] 应用选择面板已创建（\(apps.count) 项，\(sections.count) 个字母分组，"
-            + "已开窗口 \(AevonWindowManager.openBundleIDs.count) 个）（AevonPanelSimpleV30）")
+            + "已开窗口 \(AevonWindowManager.openBundleIDs.count) 个，流程标记 \(AevonWindowManager.splitFlowCIMarker)）（AevonPanelSimpleV30）")
     }
 
     required init?(coder: NSCoder) {
