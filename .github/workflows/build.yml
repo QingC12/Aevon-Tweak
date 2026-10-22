@@ -38,6 +38,9 @@ jobs:
           # 版本号以 control 为唯一来源，同步写进 Swift 常量，避免多处漂移
           sed -i '' "s/^let AevonVersion = .*/let AevonVersion = \"${VERSION}\"/" Sources/Aevon.swift
           grep -n 'let AevonVersion' Sources/Aevon.swift
+          # 设置页页脚里的版本号也一起同步，避免设置里显示上一版的旧号
+          sed -i '' -E "s/Aevon [0-9]+\.[0-9]+\.[0-9]+/Aevon ${VERSION}/g" AevonPrefs/Resources/Root.plist
+          grep -c "Aevon ${VERSION}" AevonPrefs/Resources/Root.plist || echo "::warning::设置页页脚版本号未同步（不影响功能）"
 
       - name: 安装依赖（gnu-make / Procursus ldid / xz）
         run: |
