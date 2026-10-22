@@ -2,7 +2,7 @@
 #import <objc/runtime.h>
 
 /*
- * 全局触摸通道（V0.0.23）。
+ * 全局触摸通道（V0.0.23 建立，V0.0.24 增加「接管期丢弃」）。
  *
  * 为什么必须下沉到这一层：
  *   Aevon(16) 日志的证据是「右侧白条可见、但 App 前台整场零『手势区收到触摸』」，
@@ -11,46 +11,58 @@
  *   直接交给了 App 画面，我们的手势条永远排不上队。
  *   继续在视图层调几何 / 调层级都无解，只能从事件总入口拿。
  *
- * 做法：
- *   hook 进程内 `UIApplication -sendEvent:`（SpringBoard 的所有触摸都会经过这里），
- *   在调用原实现**之后**把每个变化中的触摸（began / moved / ended / cancelled）
- *   连同触摸身份（指针地址）与坐标上报给 Swift 侧。
- *   完全不消费事件、不改变任何系统行为，Swift 侧只做「右边缘左滑 / 长按」判定，
- *   命中才呼出圆盘；没命中就当它不存在。
+ * V0.0.24 为什么还要「丢弃」：
+ *   Aevon(17) 用户反馈「圆盘能呼出了，但滑圆盘时前台 App 跟着一起动」。
+ *   原因就是上面那条：这根手指的事件**同时**被 App 收了 —— 我们从旁路过看得到坐标，
+ *   但事件本身照旧投递给 App，于是 App 跟着滚屏 / 翻页。
+ *   所以当圆盘由全局通道唤起、并且还压着这根手指时，Swift 侧会告诉这里「这根 touch 要吞」，
+ *   这一条事件就不再调用原实现（App 收不到），圆盘靠全局通道自己完成旋转 / 选定 / 开窗。
  *
- * 安全：
- *   · 只在用户开启插件且开关打开时安装（由 Swift 侧控制安装时机）；
- *   · 全程 @try/@catch，任何异常都不外抛；
- *   · 找不到方法时静默跳过并返回 NO，调用方继续用原有的视图通道兜底。
+ * 安全设计（任何一条不成立就退回原样）：
+ *   · 只在圆盘「由全局通道唤起」且「那根手指还没抬起」时丢弃，最多 12 秒（Swift 侧兜底）；
+ *   · 圆盘一收起立刻解除（AevonEdgeEntry.ringDidDismiss）；
+ *   · 一条事件里只要有任何一个触摸不属于那根手指，就整体照常投递（宁可不吞，也不能误伤）；
+ *   · 全程 @try/@catch，任何异常都不外抛；找不到方法时静默跳过并返回 NO。
  */
 
 extern void AevonGlobalTouchPhase(NSInteger phase, uintptr_t touchID, CGFloat x, CGFloat y);
+extern BOOL AevonGlobalTouchShouldSwallow(uintptr_t touchID);
 
 static IMP AevonOrigSendEvent = NULL;
 static BOOL AevonTouchHookInstalled = NO;
 static BOOL AevonTouchHookFailed = NO;
 
 static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
-    if (AevonOrigSendEvent) {
-        ((void (*)(id, SEL, UIEvent *))AevonOrigSendEvent)(self, _cmd, event);
-    }
+    BOOL swallow = NO;
     @try {
         NSSet<UITouch *> *touches = [event allTouches];
-        if (touches.count == 0) { return; }
-        for (UITouch *touch in touches) {
-            UITouchPhase phase = touch.phase;
-            if (phase != UITouchPhaseBegan && phase != UITouchPhaseMoved &&
-                phase != UITouchPhaseEnded && phase != UITouchPhaseCancelled) {
-                continue;
+        if (touches.count > 0) {
+            NSInteger active = 0;
+            NSInteger swallowCount = 0;
+            for (UITouch *touch in touches) {
+                UITouchPhase phase = touch.phase;
+                if (phase != UITouchPhaseBegan && phase != UITouchPhaseMoved &&
+                    phase != UITouchPhaseEnded && phase != UITouchPhaseCancelled) {
+                    continue;
+                }
+                active += 1;
+                uintptr_t touchID = (uintptr_t)(__bridge void *)touch;
+                // `locationInView:nil` 返回触摸所在窗口的坐标（窗口全屏，等价屏幕坐标）
+                CGPoint point = [touch locationInView:nil];
+                if (AevonGlobalTouchShouldSwallow(touchID)) { swallowCount += 1; }
+                AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
             }
-            // `locationInView:nil` 返回触摸所在窗口的坐标（窗口全屏，等价屏幕坐标）
-            CGPoint point = [touch locationInView:nil];
-            AevonGlobalTouchPhase((NSInteger)phase,
-                                  (uintptr_t)(__bridge void *)touch,
-                                  point.x, point.y);
+            // 整条事件的所有活动触摸都属于「被圆盘接管的那根手指」才丢弃；
+            // 只要混进了别的手指就原样投递，绝不误伤其他触摸。
+            if (active > 0 && swallowCount >= active) { swallow = YES; }
         }
     } @catch (NSException *exception) {
         // 私有路径出错绝不影响 SpringBoard
+        swallow = NO;
+    }
+    if (swallow) { return; }
+    if (AevonOrigSendEvent) {
+        ((void (*)(id, SEL, UIEvent *))AevonOrigSendEvent)(self, _cmd, event);
     }
 }
 

@@ -197,6 +197,15 @@ jobs:
             || { echo "::error::圆盘手势没有对调成逆时针旋转（缺 AevonRingCounterClockV23）"; exit 1; }
           echo "V0.0.23 校验: 全局触摸通道 + 圆盘 75% 面积 + 逆时针旋转 已编入"
 
+          # V0.0.24：圆盘接管期丢弃 touched（App 不再跟着滚动）+ 圆心去文字
+          strings "$DYLIB" | grep -q 'AevonGlobalTouchShouldSwallow' \
+            || { echo "::error::缺少「接管期丢弃触摸」的判定入口（AevonGlobalTouchShouldSwallow）—— 滑圆盘时 App 仍会跟着动"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingSwallowV24' \
+            || { echo "::error::圆盘没有登记触摸接管（缺 AevonRingSwallowV24）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingCenterTextFreeV24' \
+            || { echo "::error::圆心仍在显示文字（缺 AevonRingCenterTextFreeV24）"; exit 1; }
+          echo "V0.0.24 校验: 触摸接管 + 圆心纯图标 已编入"
+
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }

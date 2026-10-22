@@ -125,9 +125,12 @@ final class AevonRingMenu: UIView {
 
     private let dimView = UIView()
     private let trackLayer = CAShapeLayer()
+    /// 底部提示行（V0.0.24 起同时承担「当前高亮的 App 名」）
     private let hintLabel = UILabel()
     private let centerButton = UIButton(type: .custom)
-    private let centerTitle = UILabel()
+
+    /// 底部提示的默认文案
+    private static let hintText = "逆时针转 · 顺时针选定 · 停住松手开窗"
 
     private var icons: [AevonRingIcon] = []
     private var iconRadii: [CGFloat] = []
@@ -196,10 +199,12 @@ final class AevonRingMenu: UIView {
         layer.addSublayer(trackLayer)
 
         hintLabel.frame = CGRect(x: 0, y: 0, width: 340, height: 20)
-        hintLabel.text = "逆时针转 · 顺时针选定 · 停住松手开窗"
+        hintLabel.text = AevonRingMenu.hintText
         hintLabel.textColor = UIColor(white: 1.0, alpha: 0.55)
         hintLabel.font = UIFont.systemFont(ofSize: 11.5)
         hintLabel.textAlignment = .center
+        hintLabel.adjustsFontSizeToFitWidth = true
+        hintLabel.minimumScaleFactor = 0.75
         hintLabel.isUserInteractionEnabled = false
         addSubview(hintLabel)
 
@@ -223,13 +228,6 @@ final class AevonRingMenu: UIView {
         // 圆心不接收触摸：由几何判定处理，避免和旋转手势冲突
         centerButton.isUserInteractionEnabled = false
         addSubview(centerButton)
-
-        centerTitle.frame = CGRect(x: 0, y: 0, width: 220, height: 16)
-        centerTitle.textColor = UIColor(white: 1.0, alpha: 0.72)
-        centerTitle.font = UIFont.systemFont(ofSize: 11)
-        centerTitle.textAlignment = .center
-        centerTitle.isUserInteractionEnabled = false
-        addSubview(centerTitle)
     }
 
     required init?(coder: NSCoder) {
@@ -248,7 +246,6 @@ final class AevonRingMenu: UIView {
         ringCenter = CGPoint(x: bounds.midX, y: bounds.height * AevonRingMenu.verticalRatio)
 
         centerButton.center = ringCenter
-        centerTitle.center = CGPoint(x: ringCenter.x, y: ringCenter.y + AevonRingMenu.centerSize / 2 + 15)
         hintLabel.center = CGPoint(x: bounds.midX, y: bounds.maxY - 34)
     }
 
@@ -341,10 +338,11 @@ final class AevonRingMenu: UIView {
         drawRingTracks()
         layoutIcons()
 
-        centerTitle.text = icons.isEmpty ? "点圆心添加 App" : "共 \(icons.count) 个"
+        // V0.0.24：圆心只留四宫格图标，不再有任何文字（用户 Aevon(17) 要求）
+        hintLabel.text = AevonRingMenu.hintText
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，面积 75% 外多内少）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCounterClockV23 AevonRingCenterTextFreeV24）")
     }
 
     private func drawRingTracks() {
@@ -378,14 +376,12 @@ final class AevonRingMenu: UIView {
         trackLayer.opacity = 0
         centerButton.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
         centerButton.alpha = 0
-        centerTitle.alpha = 0
         hintLabel.alpha = 0
 
         UIView.animate(withDuration: 0.16, animations: {
             self.dimView.alpha = 1
             self.centerButton.alpha = 1
             self.centerButton.transform = .identity
-            self.centerTitle.alpha = 1
             self.hintLabel.alpha = 1
         })
         let fade = CABasicAnimation(keyPath: "opacity")
@@ -419,6 +415,8 @@ final class AevonRingMenu: UIView {
         armTimer = nil
         AevonRingMenu.current = nil
         AevonEdgeEntry.setStripInteraction(true)
+        // V0.0.24：立刻解除「吞掉那根手指」的接管，把事件通道还给 App
+        AevonEdgeEntry.ringDidDismiss()
         UIView.animate(withDuration: 0.15, animations: {
             self.alpha = 0
             for icon in self.icons {
@@ -520,16 +518,19 @@ final class AevonRingMenu: UIView {
         setHovered(icon(at: point))
     }
 
-    /// 高亮「松手就会打开」的那个图标，并在圆心下方显示名字
+    /// 高亮「松手就会打开」的那个图标；名字显示在底部提示行（圆心保持纯图标）
     private func setHovered(_ icon: AevonRingIcon?) {
         for item in icons {
             item.transform = (item === icon) ? CGAffineTransform(scaleX: 1.10, y: 1.10) : .identity
             item.setHighlighted(item === icon)
         }
+        guard !isDismissing else { return }
         if let icon = icon {
-            centerTitle.text = icon.displayName
-        } else if !isDismissing {
-            centerTitle.text = icons.isEmpty ? "点圆心添加 App" : "共 \(icons.count) 个"
+            hintLabel.text = icon.displayName
+        } else if icons.isEmpty {
+            hintLabel.text = "点圆心添加 App"
+        } else {
+            hintLabel.text = AevonRingMenu.hintText
         }
     }
 

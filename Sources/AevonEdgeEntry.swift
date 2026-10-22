@@ -401,6 +401,12 @@ enum AevonEdgeEntry {
     private static var globalHoldTimer: Timer?
     private static var globalLastLogAt: CFTimeInterval = 0
 
+    /// 圆盘接管期（V0.0.24）：只有「全局通道唤起的圆盘」需要把这根手指从 App 手里拿走。
+    private static var ringSource = ""
+    private static var swallowDeadline: CFTimeInterval = 0
+    /// 接管硬上限：无论发生什么，12 秒后一定解除，杜绝「整块屏幕点不动」的最坏情况
+    private static let swallowLimit: CFTimeInterval = 12
+
     /// 装全局触摸通道（hook `UIApplication -sendEvent:`）。
     ///
     /// Aevon(16) 日志证明：App 前台时白条可见、但触摸永远进不到手势条 ——
@@ -452,6 +458,11 @@ enum AevonEdgeEntry {
             // 圆盘已展开：这根手指继续驱动它（旋转 / 选定 / 松手开窗）
             if let ring = AevonRingMenu.presented {
                 cancelGlobalHold()
+                // 滑动期间续期：只要手指还在动，就持续把这条 touch 挡在 App 外面。
+                // 停下来 12 秒不动才自然释放（圆盘收起 / 手指抬起会立刻释放）。
+                if ringSource == "global" {
+                    swallowDeadline = CACurrentMediaTime() + swallowLimit
+                }
                 ring.remoteMoved(to: point, source: "global")
                 return
             }
@@ -500,7 +511,7 @@ enum AevonEdgeEntry {
         globalHoldTimer = nil
     }
 
-    /// 呼出圆盘。圆心固定在屏幕 65% 高处（V0.0.20），不再跟随触发点。
+    /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
     static func presentRing(source: String) {
         guard let root = AevonEntryHost.activeRoot else {
             AevonLog.warn("[圆盘] 入口窗口不可用，无法呼出")
@@ -511,6 +522,39 @@ enum AevonEdgeEntry {
         // 唤出圆盘的那根手指还没离开屏幕 —— 把它的位置交给圆盘，后续移动就是旋转。
         // 圆盘只认这个 source，另一条通道（手势条 / 窗口探针）的重复事件会被忽略。
         AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint, source: source)
+
+        // V0.0.24：全局通道唤起时，这根手指的事件同时也被 App 收着（用户 Aevon(17) 反馈
+        // 「滑圆盘时前台 App 跟着动」）。这里登记接管，`AevonTouchHook.m` 会在
+        // sendEvent 里把这条 touch 丢掉，不再投递给 App。
+        ringSource = source
+        swallowDeadline = CACurrentMediaTime() + swallowLimit
+        if source == "global" {
+            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24）")
+        }
+    }
+
+    /// 圆盘收起：立刻解除接管，把事件通道还给 App。
+    /// 任何一条路径（松手开窗、点空白、点圆心、长按移除后重载）都会走到这里。
+    static func ringDidDismiss() {
+        ringSource = ""
+        swallowDeadline = 0
+        globalTouchID = 0
+        globalFired = false
+        cancelGlobalHold()
+    }
+
+    /// `AevonTouchHook.m` 逐帧询问：这根触摸要不要吞掉（不投递给 App）。
+    ///
+    /// 只有同时满足才吞：
+    ///   1. 圆盘开着；
+    ///   2. 圆盘是全局通道唤起的（桌面由我们容器自己收，不需要也不应该吞）；
+    ///   3. 就是唤起圆盘的那一根手指（别的指头照常给 App）；
+    ///   4. 还在接管时间窗内。
+    static func shouldSwallowGlobalTouch(_ touchID: UInt) -> Bool {
+        guard AevonRingMenu.isPresented else { return false }
+        guard ringSource == "global" else { return false }
+        guard touchID != 0, globalTouchID != 0, touchID == globalTouchID else { return false }
+        return CACurrentMediaTime() <= swallowDeadline
     }
 
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。
@@ -562,4 +606,10 @@ public func AevonGlobalTouchPhase(_ phase: Int, _ touchID: UInt, _ x: CGFloat, _
     default: return
     }
     AevonEdgeEntry.handleGlobal(phase: mapped, point: CGPoint(x: x, y: y), touchID: touchID)
+}
+
+/// V0.0.24：事件是否丢弃（不投递给 App）的判定入口，供 `AevonTouchHook.m` 调用。
+@_cdecl("AevonGlobalTouchShouldSwallow")
+public func AevonGlobalTouchShouldSwallow(_ touchID: UInt) -> Bool {
+    return AevonEdgeEntry.shouldSwallowGlobalTouch(touchID)
 }
