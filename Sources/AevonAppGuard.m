@@ -33,6 +33,9 @@
 /// CI 标记：构建后校验这段逻辑确实编进了 __cstring
 __attribute__((used)) static const char AevonAppGuardMarker[] = "AevonAppGuardV27";
 
+/// CI 标记（V0.0.29）：圆盘展开期「下半屏整块吞掉」
+__attribute__((used)) static const char AevonGuardRingZoneMarker[] = "AevonGuardRingZoneV29";
+
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
 static CFMutableSetRef AevonGuardSwallowed = NULL;
@@ -41,6 +44,18 @@ static CGRect AevonGuardZone = {{0, 0}, {0, 0}};
 static CFTimeInterval AevonGuardConfigAt = 0;
 /// 配置最长缓存时间（秒）。设置里改完会发 Darwin 通知立即失效，这里只是兜底。
 static CFTimeInterval const AevonGuardConfigTTL = 2.0;
+
+/* V0.0.29：圆盘展开状态（SpringBoard 侧发 Darwin 通知 com.aevon.ringopen / ringclose）。
+ * 圆盘开着的时候，前台 App 的下半屏一律收不到输入 —— 图标选择/旋转走的是
+ * SpringBoard 全局通道的副本，不依赖 App 进程投递，所以整块吞掉没有任何副作用。
+ * Darwin 通知没有载荷，这里自己计时兜底：超过 10 秒没收到 ringclose 就自动失效。 */
+static CFTimeInterval AevonGuardRingOpenAt = 0;
+static CFTimeInterval const AevonGuardRingOpenMaxAge = 10.0;
+
+static BOOL AevonGuardRingOpen(void) {
+    if (AevonGuardRingOpenAt <= 0) { return NO; }
+    return (CACurrentMediaTime() - AevonGuardRingOpenAt) < AevonGuardRingOpenMaxAge;
+}
 
 #pragma mark - 偏好读取
 
@@ -156,7 +171,16 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         BOOL owned = CFSetContainsValue(AevonGuardSwallowed, identity) ? YES : NO;
 
         if (phase == UITouchPhaseBegan) {
-            if (CGRectContainsPoint(AevonGuardZone, [touch locationInView:nil])) {
+            BOOL inZone = CGRectContainsPoint(AevonGuardZone, [touch locationInView:nil]);
+            /* V0.0.29：圆盘展开期间，下半屏整块视为热区 —— 前台 App 在圆盘开着时
+             * 收不到任何下半屏输入（用户 Aevon(22) 反馈「滑动到圆盘外面依旧触发 App 操作」）。
+             * 圆盘的图标选择 / 旋转走 SpringBoard 全局通道的副本，不依赖这里投递。 */
+            if (!inZone && AevonGuardRingOpen()) {
+                CGFloat y = [touch locationInView:nil].y;
+                CGFloat half = [UIScreen mainScreen].bounds.size.height * 0.5;
+                if (y >= half) { inZone = YES; }
+            }
+            if (inZone) {
                 CFSetAddValue(AevonGuardSwallowed, identity);
                 owned = YES;
             }
@@ -187,6 +211,23 @@ static void AevonGuardPrefsChanged(CFNotificationCenterRef center,
     AevonGuardConfigAt = 0;
 }
 
+/* V0.0.29：圆盘开 / 关广播（SpringBoard 侧 AevonEdgeEntry 发出） */
+static void AevonGuardRingOpened(CFNotificationCenterRef center,
+                                 void *observer,
+                                 CFNotificationName name,
+                                 const void *object,
+                                 CFDictionaryRef userInfo) {
+    AevonGuardRingOpenAt = CACurrentMediaTime();
+}
+
+static void AevonGuardRingClosed(CFNotificationCenterRef center,
+                                 void *observer,
+                                 CFNotificationName name,
+                                 const void *object,
+                                 CFDictionaryRef userInfo) {
+    AevonGuardRingOpenAt = 0;
+}
+
 static void AevonGuardInstall(void) {
     if (AevonGuardOrigSendEvent != NULL) { return; }
 
@@ -206,6 +247,20 @@ static void AevonGuardInstall(void) {
                                     NULL,
                                     AevonGuardPrefsChanged,
                                     CFSTR("com.aevon.prefschanged"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL,
+                                    AevonGuardRingOpened,
+                                    CFSTR("com.aevon.ringopen"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL,
+                                    AevonGuardRingClosed,
+                                    CFSTR("com.aevon.ringclose"),
                                     NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 

@@ -71,6 +71,12 @@
 			<integer>0</integer>
 			<key>maxValue</key>
 			<integer>100</integer>
+			<!-- V0.0.29：PSSliderCell 只认 min/max（不是 minValue/maxValue），
+			     缺了这两个键滑杆量程会退化成默认 0~1，一拖就写回 0.x → 触发条永远在顶部 -->
+			<key>min</key>
+			<integer>0</integer>
+			<key>max</key>
+			<integer>100</integer>
 			<key>default</key>
 			<integer>75</integer>
 			<key>footerText</key>
@@ -97,6 +103,10 @@
 			<integer>18</integer>
 			<key>maxValue</key>
 			<integer>140</integer>
+			<key>min</key>
+			<integer>18</integer>
+			<key>max</key>
+			<integer>140</integer>
 			<key>default</key>
 			<integer>48</integer>
 			<key>footerText</key>
@@ -120,6 +130,10 @@
 			<key>minValue</key>
 			<integer>80</integer>
 			<key>maxValue</key>
+			<integer>900</integer>
+			<key>min</key>
+			<integer>80</integer>
+			<key>max</key>
 			<integer>900</integer>
 			<key>default</key>
 			<integer>320</integer>

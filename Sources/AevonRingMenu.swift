@@ -264,48 +264,65 @@ final class AevonRingMenu: UIView {
 
     /// 各圈半径。
     ///
-    /// V0.0.28：内圈从 68 收到 **62**（用户要求「内圈离中心图标近一点，但要留够间距」）——
-    /// 62 − 圆心半径 24 − 图标半径 20 = 18pt 空隙，不贴住但明显更紧凑；
-    /// 两圈间距 50、三圈时间距 44，外圈不至于顶到屏幕边。
-    private func radii(forRingCount count: Int) -> [CGFloat] {
-        guard count > 0 else { return [] }
+    /// V0.0.29：半径由**每圈数量反推**（数量 × 目标间距 55pt ÷ 2π），
+    /// 保证每一圈的弧线间距都≈55pt（图标 40 + 间隙 15），盘面紧凑均匀。
+    /// 下限沿用 V0.0.28 的紧凑起步（内圈 62、圈间距 ≥44，AevonRingInnerTightV28），
+    /// 上限压到 maxRadius（不顶屏幕边）。
+    private func radii(forCounts counts: [Int]) -> [CGFloat] {
+        guard !counts.isEmpty else { return [] }
+        let target: CGFloat = 55
         let limit = maxRadius
-        if count == 1 { return [min(84, limit)] }
-        let base: CGFloat = 62
-        let spacing: CGFloat = count >= 3 ? 44 : 50
-        return (0..<count).map { min(base + CGFloat($0) * spacing, limit) }
+        var result: [CGFloat] = []
+        var previous: CGFloat = 0
+        for (index, count) in counts.enumerated() {
+            let minR: CGFloat = 62 + 44 * CGFloat(index)
+            var r = max(minR, target * CGFloat(count) / (2 * .pi))
+            // 给后面几圈留出空间，避免外圈被压到屏幕外
+            let roomCap = limit - 44 * CGFloat(counts.count - 1 - index)
+            r = min(r, max(roomCap, minR))
+            r = max(r, previous + 44, 62)
+            r = min(r, limit)
+            result.append(r)
+            previous = r
+        }
+        return result
     }
 
-    /// 按总数决定每圈放几个（V0.0.23：**外圈一定比内圈多**）。
+    /// 按总数决定每圈放几个（V0.0.29 重写，标记 AevonRingDenseV29）。
     ///
-    /// 旧的固定容量 [8, 12, 16] 在 20 个 App 时会排成 8 + 12，
-    /// 视觉上内圈挤、外圈松，用户反馈「外圈应该比内圈多」。
-    /// 现在按总数动态分配：
-    ///   · ≤ 8  ：一圈
-    ///   · 9~20 ：两圈，内圈约 38%（20 个 → 8 + 12）
-    ///   · ≥ 21 ：三圈，权重 1 : 1.5 : 2（36 个 → 8 + 12 + 16）
-    /// 余数优先补给外圈，保证「越外越多」。
+    /// 旧版问题（用户 Aevon(22) 反馈）：固定权重 1 : 1.5 : 2 + 内圈半径 62 起步，
+    /// 21~25 个 App 时内圈只摊到 4~5 个，弧线间距被拉到 ~80pt，「图标之间的间隔非常大」。
+    ///
+    /// 新规则（配合 `radii(forCounts:)` 的「数量反推半径」一起用）：
+    ///   · ≤16 个：一圈（半径由数量反推，4 个也只会撑到 62 的下限）；
+    ///   · 17~34 个：两圈，内圈约 40%（20 个 → 8 + 12，半径约 70 / 106，间距≈55）；
+    ///   · ≥35 个：三圈，权重 1 : 1.5 : 2（36 个 → 8 + 12 + 16，间距≈55）。
+    /// 外圈仍不少于内圈；每圈数量有上限（12 / 15 / 20），防止间距被压到图标重叠。
     static func distribution(for total: Int) -> [Int] {
         guard total > 0 else { return [] }
-        if total <= 8 { return [total] }
-        if total <= 20 {
-            var inner = Int((CGFloat(total) * 0.38).rounded())
-            inner = min(max(inner, 3), 8)
+        if total <= 16 { return [total] }
+        if total <= 34 {
+            var inner = Int((CGFloat(total) * 0.4).rounded())
+            inner = min(max(inner, 4), 12)
             return [inner, total - inner]
         }
+        let caps = [12, 15, 20]
         let weights: [CGFloat] = [1, 1.5, 2]
-        var parts = weights.map { Int((CGFloat(total) * $0 / 4.5).rounded(.down)) }
-        parts[0] = max(parts[0], 3)
-        var rest = total - parts.reduce(0, +)
-        // 余数先给外圈，再给中圈
-        while rest > 0 {
-            parts[2] += 1
-            rest -= 1
-            if rest > 0 {
-                parts[1] += 1
-                rest -= 1
-            }
+        var parts = weights.enumerated().map { (i, w) in
+            min(max(Int((CGFloat(total) * w / 4.5).rounded(.down)), 4), caps[i])
         }
+        var rest = total - parts.reduce(0, +)
+        // 余数先给外圈、再给中圈（保持「外多内少」），同时不超容量
+        var guardCounter = 0
+        while rest > 0 && guardCounter < 64 {
+            guardCounter += 1
+            if parts[2] < caps[2] { parts[2] += 1; rest -= 1 }
+            else if parts[1] < caps[1] { parts[1] += 1; rest -= 1 }
+            else if parts[0] < caps[0] { parts[0] += 1; rest -= 1 }
+            else { break }
+        }
+        // 超出总容量（>47 个）时溢出塞给外圈，间距略压小于目标值即可
+        if rest > 0 { parts[2] += rest }
         return parts
     }
 
@@ -322,7 +339,7 @@ final class AevonRingMenu: UIView {
 
         // 由内到外依次填圈：容量按总数动态分配（外圈一定比内圈多）
         ringCounts = AevonRingMenu.distribution(for: bundleIDs.count)
-        ringRadii = radii(forRingCount: ringCounts.count)
+        ringRadii = radii(forCounts: ringCounts)
 
         var cursor = 0
         for (ringIndex, count) in ringCounts.enumerated() {
@@ -349,7 +366,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，内圈收紧 / 外多内少 / 无任何文字 / 圆心按住 1 秒切旋转）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距目标 55pt / 外多内少 / 无任何文字 / 圆心按住 1 秒切旋转）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29）")
     }
 
     private func drawRingTracks() {
@@ -457,6 +474,13 @@ final class AevonRingMenu: UIView {
 
     func remoteCancelled(source: String) {
         handlePointerCancelled(source: source)
+    }
+
+    /// V0.0.29：当前是否有活动指针（与 `handlePointerBegan` 的去重判定同口径）。
+    /// 圆盘展开期间，新落下的手指只有在没有活动指针时才接管为当前指针。
+    var isPointerActive: Bool {
+        return !pointerSource.isEmpty &&
+               CACurrentMediaTime() - pointerLastEventAt < AevonRingMenu.pointerStaleInterval
     }
 
     private func handlePointerBegan(at point: CGPoint, source: String) {

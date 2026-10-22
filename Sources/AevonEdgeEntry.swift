@@ -575,6 +575,11 @@ enum AevonEdgeEntry {
     /// 超时后不再吞，避免用户按住很久后突然开始滑动时把触摸还留在我们手里。
     private static let pressLimit: CFTimeInterval = 4
 
+    /// V0.0.29：圆盘展开期间的「额外手指」（原指针还在旋转 / 拖动时落下的新手指）。
+    /// 只吞不驱动：App 收不到，也不参与圆盘的手势状态机。
+    private static var ringExtraTouchID: UInt = 0
+    private static var ringExtraDeadline: CFTimeInterval = 0
+
     /// 装全局触摸通道（hook `UIApplication -sendEvent:`）。
     ///
     /// Aevon(16) 日志证明：App 前台时白条可见、但触摸永远进不到手势条 ——
@@ -604,8 +609,31 @@ enum AevonEdgeEntry {
         let screen = UIScreen.main.bounds
         switch phase {
         case .began:
-            // 圆盘已经开着时不再跟踪边缘：此时用户的触摸是在操作圆盘（点图标 / 点空白）
-            guard !AevonRingMenu.isPresented else { return }
+            // V0.0.29：圆盘展开期间，**下半屏的触摸一律归圆盘**（用户 Aevon(22) 反馈：
+            // 「手指滑动到圆盘外面时依旧会触发主屏 app 的操作」）。原先这里直接 return，
+            // 新触摸既不跟踪也不吞 → 前台 App / 桌面照常响应。
+            // 现在分两种情况：
+            //   · 原指针还压着（正在旋转 / 拖动）→ 新手指只登记为「额外吞掉」，
+            //     不驱动圆盘（圆盘同一时刻只认一根手指）；
+            //   · 原指针已抬起（KeepOpen 等待选择）→ 新触摸接管为当前指针，
+            //     可以继续点图标 / 点圆心 / 盘外松手收起。
+            if let ring = AevonRingMenu.presented {
+                guard point.y >= screen.midY else { return }   // 上半屏照常给 App（状态栏等）
+                if ring.isPointerActive {
+                    ringExtraTouchID = touchID
+                    ringExtraDeadline = CACurrentMediaTime() + swallowLimit
+                    return
+                }
+                globalTouchID = touchID
+                globalStart = point
+                globalFired = true          // 圆盘开着时绝不再走触发逻辑
+                lastTouchPoint = point
+                ownsTouch = true
+                ringSource = "global"
+                swallowDeadline = CACurrentMediaTime() + swallowLimit
+                ring.beginRemoteTracking(at: point, source: "global")
+                return
+            }
             // 只认设置里配置的那块热区（位置 / 宽度 / 高度都可调），
             // 不再像 V0.0.24 那样「右侧一大片 + 下半屏」都能划出来。
             let zone = AevonTriggerZone.rect(in: screen)
@@ -626,6 +654,13 @@ enum AevonEdgeEntry {
             }
 
         case .moved:
+            // V0.0.29：圆盘开着时被「只吞不驱动」的额外手指 —— 续期吞咽即可
+            if touchID == ringExtraTouchID {
+                if CACurrentMediaTime() <= ringExtraDeadline {
+                    ringExtraDeadline = CACurrentMediaTime() + swallowLimit
+                }
+                return
+            }
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
             if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
@@ -648,6 +683,12 @@ enum AevonEdgeEntry {
             }
 
         case .ended:
+            // V0.0.29：额外手指抬起（hook 已按「先询问再上报」把抬手帧吞掉）—— 只清状态
+            if touchID == ringExtraTouchID {
+                ringExtraTouchID = 0
+                ringExtraDeadline = 0
+                return
+            }
             guard touchID == globalTouchID else { return }
             cancelGlobalHold()
             if let ring = AevonRingMenu.presented {
@@ -658,6 +699,11 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            if touchID == ringExtraTouchID {
+                ringExtraTouchID = 0
+                ringExtraDeadline = 0
+                return
+            }
             guard touchID == globalTouchID else { return }
             cancelGlobalHold()
             AevonRingMenu.presented?.remoteCancelled(source: "global")
@@ -703,9 +749,18 @@ enum AevonEdgeEntry {
         // sendEvent 里把这条 touch 丢掉，不再投递给 App。
         ringSource = source
         swallowDeadline = CACurrentMediaTime() + swallowLimit
+        // V0.0.29：告诉 AevonGuard（App 进程）圆盘已展开 —— 它会在自己的进程里
+        // 把下半屏的触摸整条吞掉，前台 App 在圆盘开着期间彻底收不到下半屏输入。
+        postRingState(CFSTR("com.aevon.ringopen"))
         if source == "global" {
-            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24）")
+            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
         }
+    }
+
+    /// V0.0.29：跨进程广播圆盘开 / 关（Darwin 通知无载荷，Guard 收到后自行计时兜底）。
+    private static func postRingState(_ name: CFString) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             name, nil, nil, true)
     }
 
     /// 圆盘收起：立刻解除接管，把事件通道还给 App。
@@ -716,7 +771,10 @@ enum AevonEdgeEntry {
         globalTouchID = 0
         globalFired = false
         ownsTouch = false
+        ringExtraTouchID = 0
+        ringExtraDeadline = 0
         cancelGlobalHold()
+        postRingState(CFSTR("com.aevon.ringclose"))
     }
 
     /// `AevonTouchHook.m` 逐帧询问：这根触摸要不要吞掉（不投递给 App）。
@@ -726,11 +784,22 @@ enum AevonEdgeEntry {
     ///      所以前台 App 不会跟着滑。桌面不接管（否则热区里的桌面图标点不动）。
     ///   B. **圆盘接管（V0.0.24）**：圆盘已由全局通道唤起，继续接管到圆盘收起。
     ///
-    /// 还有两条硬性前提：必须是唤起/接管的那一根手指（别的指头照常给 App），且没超时。
+    /// 还有三条硬性前提：必须是唤起/接管的那一根手指（别的指头照常给 App），且没超时。
     static func shouldSwallowGlobalTouch(_ touchID: UInt) -> Bool {
         guard AevonPrefs.bool("Enabled", default: false),
               AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
-        guard touchID != 0, globalTouchID != 0, touchID == globalTouchID else { return false }
+        guard touchID != 0 else { return false }
+        // V0.0.29：圆盘展开期间被吞掉的「额外手指」（下半屏、不驱动圆盘）
+        if touchID == ringExtraTouchID {
+            return CACurrentMediaTime() <= ringExtraDeadline
+        }
+        // V0.0.29：圆盘展开期间重新登记的指针（KeepOpen 后点选 / 盘外松手收起的那根）。
+        // 桌面也要吞 —— 下半屏在圆盘开着时不该点动桌面图标。
+        if AevonRingMenu.isPresented, ringSource == "global",
+           touchID == globalTouchID, CACurrentMediaTime() <= swallowDeadline {
+            return true
+        }
+        guard globalTouchID != 0, touchID == globalTouchID else { return false }
         guard CACurrentMediaTime() <= swallowDeadline else { return false }
         if ownsTouch { return AevonEntryHost.mountedInAppScene }
         guard AevonRingMenu.isPresented, ringSource == "global" else { return false }
