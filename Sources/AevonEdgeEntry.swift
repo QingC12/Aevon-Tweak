@@ -462,30 +462,48 @@ enum AevonEdgeEntry {
         syncGuardConfig()
     }
 
-    /// V0.0.31（AevonGuardFileConfV31）：把当前热区几何写成 guard.conf 给 AevonGuard 用。
+    /// V0.0.32（AevonGuardNotifyV32）：把当前热区几何同步给 AevonGuard。
     ///
     /// 为什么不用偏好域：沙盒 App（抖音 / QQ）进程里 CFPreferences 读「com.Aevon」
-    /// 会被重定向到自己容器 —— 读到的永远是空 → Guard 在 App 里从未生效
-    /// （Aevon(24)：呼出圆盘后抖音被暂停、圆盘里滑动仍带动全屏 App）。
-    /// Guard 是 jbroot 注入的 dylib，能直接读 jbroot 下的文件，所以走文件通道：
-    /// SpringBoard（Swift）写 → App 进程 Guard 读。第一行是格式标记，第二行几何。
+    /// 会被重定向到自己容器 —— 读到的永远是空 → Guard 在 App 里从未生效。
+    /// 为什么 V0.0.31 的 guard.conf 还不够：SpringBoard（mobile）写不进 root 属主的
+    /// `AevonPrefs.bundle/` 目录（Aevon(25) 日志：guard.conf 写入失败 × N）。
+    ///
+    /// V0.0.32 主通道是 **notify(3) 状态**（`notify_set_state`，跨进程、沙盒通用）；
+    /// guard.conf 文件降级为多路径兜底；两者都失败时 Guard 侧还有 PluginAlive 默认几何。
     static func syncGuardConfig() {
         let bounds = UIScreen.main.bounds
         let r = AevonTriggerZone.rect(in: bounds)
         let enabled = AevonPrefs.bool("Enabled", default: false)
             && AevonPrefs.bool("EdgeGestureEnabled", default: true)
-        let body = "AEVONGUARDCONFV31\n"
+
+        // 主通道：notify(3) 状态（AevonGuardNotifyV32）
+        AevonNotifySetZone(Double(r.minX), Double(r.minY), Double(r.width), Double(r.height), enabled ? 1 : 0)
+
+        // 兜底：文件通道（多路径，含无空格的 Library/Aevon）
+        let body = "AEVONGUARDCONFV32\n"
             + "\(Int(r.minX.rounded())) \(Int(r.minY.rounded())) "
             + "\(Int(r.width.rounded())) \(Int(r.height.rounded())) "
             + "\(enabled ? 1 : 0)\n"
-        for path in ["/var/jb/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
-                     "/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf"] {
+        let fm = FileManager.default
+        let candidates: [String] = [
+            "/var/jb/Library/Aevon/guard.conf",
+            "/var/jb/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+            "/var/mobile/AevonGuard.conf",
+        ]
+        var wrote = false
+        for path in candidates {
+            let dir = (path as NSString).deletingLastPathComponent
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             do {
                 try body.write(toFile: path, atomically: true, encoding: .utf8)
-                return
+                wrote = true
+                break
             } catch { continue }
         }
-        AevonLog.warn("[边缘] guard.conf 写入失败（App 侧拦截将依赖兜底通道）")
+        if !wrote {
+            AevonLog.warn("[边缘] guard.conf 写入失败（notify 通道为主，App 侧拦截仍可用）（AevonGuardNotifyV32）")
+        }
     }
 
     private static var zoneTimer: Timer?

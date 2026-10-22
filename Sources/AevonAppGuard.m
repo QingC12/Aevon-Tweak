@@ -30,6 +30,7 @@
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
+#import <notify.h>
 
 /// CI 标记：构建后校验这段逻辑确实编进了 __cstring
 __attribute__((used)) static const char AevonAppGuardMarker[] = "AevonAppGuardV27";
@@ -39,6 +40,10 @@ __attribute__((used)) static const char AevonGuardRingZoneMarker[] = "AevonGuard
 
 /// CI 标记（V0.0.31）：guard.conf 文件通道配置（沙盒 App 读不到偏好域的根治）
 __attribute__((used)) static const char AevonGuardFileConfMarker[] = "AevonGuardFileConfV31";
+
+/// CI 标记（V0.0.32）：notify(3) 主配置通道 + 圆盘展开期无条件吞下半屏
+__attribute__((used)) static const char AevonGuardNotifyMarker[] = "AevonGuardNotifyV32";
+__attribute__((used)) static const char AevonGuardRingForceMarker[] = "AevonGuardRingForceV32";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -55,6 +60,10 @@ static CFTimeInterval const AevonGuardConfigTTL = 2.0;
  * Darwin 通知没有载荷，这里自己计时兜底：超过 10 秒没收到 ringclose 就自动失效。 */
 static CFTimeInterval AevonGuardRingOpenAt = 0;
 static CFTimeInterval const AevonGuardRingOpenMaxAge = 10.0;
+/// V0.0.32：只要收到过 ringopen，就证明插件在 SpringBoard 侧是启用的。
+/// 之后即使配置三路（notify / 文件 / 偏好）全失败，也用默认几何兜底拦截，
+/// 不再整条 Guard 失效（Aevon(25)：guard.conf 写不进 → 抖音被暂停/误触）。
+static BOOL AevonGuardPluginAlive = NO;
 
 static BOOL AevonGuardRingOpen(void) {
     if (AevonGuardRingOpenAt <= 0) { return NO; }
@@ -99,25 +108,28 @@ static double AevonGuardPrefDouble(const char *key, double fallback, double lo, 
 
 /// 与 SpringBoard 侧 `AevonTriggerZone.rect(in:)` 完全一致的几何计算
 ///
-/// V0.0.31（AevonGuardFileConfV31）：配置来源改为「文件优先」。
-/// 沙盒 App（抖音 / QQ）进程里 CFPreferences 读 com.Aevon 会被重定向进自己的容器，
-/// 读到的永远是空 → Enabled 恒 false → Guard 在 App 里从未生效（Aevon(24) 实证：
-/// 呼出圆盘后抖音被暂停、圆盘里滑动仍带动全屏 App）。SpringBoard 侧
-/// `AevonEdgeEntry.syncGuardConfig()` 会把几何写进 guard.conf（jbroot 下，
-/// 注入进程可读），这里优先读文件，读不到才回退偏好域（非沙盒进程仍可用）。
+/// V0.0.32（AevonGuardNotifyV32）：配置来源优先级
+///   1. notify(3) 状态（跨进程、沙盒通用，主通道）
+///   2. guard.conf 文件（多路径兜底）
+///   3. 偏好域（仅非沙盒进程）
+///   4. 默认几何 + PluginAlive 插存（收到过 ringopen 就证明插件开着）
+/// 沙盒 App（抖音 / QQ）里 CFPreferences 读 com.Aevon 会被重定向进自己的容器；
+/// guard.conf 也可能因 SpringBoard 写不进 root 属主目录而失败（Aevon(25)）。
 static BOOL AevonGuardReadConfFile(CGRect *outZone, BOOL *outEnabled) {
     const char *paths[] = {
+        "/var/jb/Library/Aevon/guard.conf",
         "/var/jb/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+        "/Library/Aevon/guard.conf",
         "/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
-        "/var/mobile/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
+        "/var/mobile/AevonGuard.conf",
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         FILE *f = fopen(paths[i], "r");
         if (f == NULL) { continue; }
         char marker[64];
         char values[160];
         BOOL ok = (fgets(marker, sizeof(marker), f) != NULL)
-            && (strstr(marker, "AEVONGUARDCONFV31") != NULL)
+            && (strstr(marker, "AEVONGUARDCONF") != NULL)
             && (fgets(values, sizeof(values), f) != NULL);
         fclose(f);
         if (!ok) { continue; }
@@ -134,43 +146,79 @@ static BOOL AevonGuardReadConfFile(CGRect *outZone, BOOL *outEnabled) {
     return NO;
 }
 
+/* V0.0.32：读 notify(3) 状态通道（与 SpringBoard 侧 AevonNotifySetZone 打包格式一致）。
+ * AevonGuard 是独立 dylib，不链接 AevonAssertionShim，所以这里自带一份解包。
+ * 格式：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）。 */
+static BOOL AevonGuardReadNotifyZone(CGRect *outZone, BOOL *outEnabled) {
+    uint64_t pack = 0;
+    notify_get_state("com.aevon.guardzone", &pack);
+    /* 读失败时 pack 保持 0，版本标记对不上就当没有配置 */
+    if (((pack >> 40) & 0xFF) != 0x32) { return NO; }
+    double x = (double)(pack & 0x3FFULL);
+    double y = (double)((pack >> 10) & 0x3FFULL);
+    double w = (double)((pack >> 20) & 0xFFULL);
+    double h = (double)((pack >> 28) & 0x3FFULL);
+    if (w < 1 || h < 1) { return NO; }
+    *outZone = CGRectMake(x, y, w, h);
+    *outEnabled = ((pack >> 38) & 1ULL) ? YES : NO;
+    return YES;
+}
+
 static void AevonGuardReloadConfig(void) {
     AevonGuardConfigAt = CACurrentMediaTime();
 
     CGRect zone = CGRectZero;
     BOOL enabled = NO;
+
+    /* 1. notify(3) 状态通道（主通道，沙盒通用） */
+    if (AevonGuardReadNotifyZone(&zone, &enabled)) {
+        AevonGuardEnabled = enabled;
+        AevonGuardZone = enabled ? zone : CGRectZero;
+        return;
+    }
+
+    /* 2. guard.conf 文件通道 */
     if (AevonGuardReadConfFile(&zone, &enabled)) {
         AevonGuardEnabled = enabled;
         AevonGuardZone = enabled ? zone : CGRectZero;
         return;
     }
 
-    /* 兜底：偏好域（仅对非沙盒进程有意义）。语义与 SB 一致的「底边锚定」。 */
+    /* 3. 偏好域（仅对非沙盒进程有意义）。语义与 SB 一致的「底边锚定」。 */
     BOOL prefOn = AevonGuardPrefBool("Enabled", NO);
     BOOL edge = AevonGuardPrefBool("EdgeGestureEnabled", YES);
     AevonGuardEnabled = (prefOn && edge);
-    if (!AevonGuardEnabled) {
-        AevonGuardZone = CGRectZero;
-        return;
+    if (AevonGuardEnabled) {
+        CGRect bounds = [UIScreen mainScreen].bounds;
+        if (bounds.size.width >= 1.0 && bounds.size.height >= 1.0) {
+            double ratio = AevonGuardPrefDouble("RingTriggerY", 75.0, 0.0, 100.0) / 100.0;
+            double rawWidth = AevonGuardPrefDouble("RingTriggerWidth", 48.0, 18.0, 140.0);
+            double rawHeight = AevonGuardPrefDouble("RingTriggerHeight", 320.0, 80.0, 900.0);
+            CGFloat width = MIN(rawWidth, bounds.size.width);
+            CGFloat height = MIN(rawHeight, bounds.size.height);
+            CGFloat bottomY = bounds.size.height * ratio;
+            CGFloat y = MIN(MAX(bottomY - height, 0.0), bounds.size.height - height);
+            AevonGuardZone = CGRectMake(bounds.size.width - width, y, width, height);
+            return;
+        }
     }
 
-    CGRect bounds = [UIScreen mainScreen].bounds;
-    if (bounds.size.width < 1.0 || bounds.size.height < 1.0) {
-        AevonGuardZone = CGRectZero;
-        return;
+    /* 4. V0.0.32：三路全失败，但收到过 ringopen —— 插件肯定开着，用默认几何兜底 */
+    if (AevonGuardPluginAlive) {
+        CGRect bounds = [UIScreen mainScreen].bounds;
+        if (bounds.size.width >= 1.0 && bounds.size.height >= 1.0) {
+            CGFloat width = MIN(48.0, bounds.size.width);
+            CGFloat height = MIN(320.0, bounds.size.height);
+            CGFloat bottomY = bounds.size.height * 0.75;
+            CGFloat y = MIN(MAX(bottomY - height, 0.0), bounds.size.height - height);
+            AevonGuardEnabled = YES;
+            AevonGuardZone = CGRectMake(bounds.size.width - width, y, width, height);
+            return;
+        }
     }
 
-    double ratio = AevonGuardPrefDouble("RingTriggerY", 75.0, 0.0, 100.0) / 100.0;
-    double rawWidth = AevonGuardPrefDouble("RingTriggerWidth", 48.0, 18.0, 140.0);
-    double rawHeight = AevonGuardPrefDouble("RingTriggerHeight", 320.0, 80.0, 900.0);
-
-    CGFloat width = MIN(rawWidth, bounds.size.width);
-    CGFloat height = MIN(rawHeight, bounds.size.height);
-    /* V0.0.30 语义：RingTriggerY 是热区**底边**占屏高百分比，100% = 底边贴屏底 */
-    CGFloat bottomY = bounds.size.height * ratio;
-    CGFloat y = MIN(MAX(bottomY - height, 0.0), bounds.size.height - height);
-
-    AevonGuardZone = CGRectMake(bounds.size.width - width, y, width, height);
+    AevonGuardEnabled = NO;
+    AevonGuardZone = CGRectZero;
 }
 
 #pragma mark - 事件拦截
@@ -195,11 +243,20 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     if (CACurrentMediaTime() - AevonGuardConfigAt > AevonGuardConfigTTL) {
         AevonGuardReloadConfig();
     }
-    if (!AevonGuardEnabled) {
+    /* V0.0.32：圆盘展开期的下半屏吞触摸**不再依赖 Enabled / 配置**。
+     * Aevon(25)：guard.conf 写不进 → 配置全空 → Enabled 恒 false →
+     * 连圆盘展开保护也整条失效，抖音被暂停 / 圆盘滑动带动全屏 App。
+     * 只要收到过 ringopen（通知本身不依赖任何配置），下半屏一律吞。 */
+    BOOL ringOpen = AevonGuardRingOpen();
+    if (!AevonGuardEnabled && !ringOpen) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
-    if (AevonGuardSwallowed == NULL || CGRectIsEmpty(AevonGuardZone) || event == nil) {
+    if (AevonGuardSwallowed == NULL || event == nil) {
+        AevonGuardCallOriginal(self, _cmd, event);
+        return;
+    }
+    if (!ringOpen && CGRectIsEmpty(AevonGuardZone)) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
@@ -221,14 +278,18 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         BOOL owned = CFSetContainsValue(AevonGuardSwallowed, identity) ? YES : NO;
 
         if (phase == UITouchPhaseBegan) {
-            BOOL inZone = CGRectContainsPoint(AevonGuardZone, [touch locationInView:nil]);
-            /* V0.0.29：圆盘展开期间，下半屏整块视为热区 —— 前台 App 在圆盘开着时
-             * 收不到任何下半屏输入（用户 Aevon(22) 反馈「滑动到圆盘外面依旧触发 App 操作」）。
-             * 圆盘的图标选择 / 旋转走 SpringBoard 全局通道的副本，不依赖这里投递。 */
-            if (!inZone && AevonGuardRingOpen()) {
-                CGFloat y = [touch locationInView:nil].y;
+            CGPoint pt = [touch locationInView:nil];
+            BOOL inZone = NO;
+            if (ringOpen) {
+                /* AevonGuardRingForceV32：圆盘开着 —— 下半屏整块 + 热区全吞。
+                 * 图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */
                 CGFloat half = [UIScreen mainScreen].bounds.size.height * 0.5;
-                if (y >= half) { inZone = YES; }
+                if (pt.y >= half) { inZone = YES; }
+                if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
+                    inZone = YES;
+                }
+            } else if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
+                inZone = YES;
             }
             if (inZone) {
                 CFSetAddValue(AevonGuardSwallowed, identity);
@@ -268,7 +329,9 @@ static void AevonGuardRingOpened(CFNotificationCenterRef center,
                                  const void *object,
                                  CFDictionaryRef userInfo) {
     AevonGuardRingOpenAt = CACurrentMediaTime();
-    // V0.0.31：圆盘刚打开 —— 立刻重读 guard.conf（热区可能刚被设置页改过）
+    /* V0.0.32：收到 ringopen = 插件肯定在跑。立刻重读配置；
+     * 之后即使配置读不到也用默认几何兜底，不再整条 Guard 失效。 */
+    AevonGuardPluginAlive = YES;
     AevonGuardConfigAt = 0;
 }
 
@@ -316,7 +379,11 @@ static void AevonGuardInstall(void) {
                                     NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    NSLog(@"[Aevon] App 侧热区拦截已安装（%s）", AevonAppGuardMarker);
+    /* V0.0.32：notify(3) 状态写入时 SpringBoard 会 post com.aevon.prefschanged，
+     * 上面的 prefschanged 观察者已把 ConfigAt 清零 → 下一次 sendEvent 重读 notify 状态。
+     * 不额外 register notify 回调，避免 blocks / dispatch 依赖。 */
+
+    NSLog(@"[Aevon] App 侧热区拦截已安装（%s %s）", AevonAppGuardMarker, AevonGuardNotifyMarker);
 }
 
 __attribute__((constructor)) static void AevonGuardConstructor(void) {

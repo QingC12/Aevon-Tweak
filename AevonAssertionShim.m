@@ -30,6 +30,50 @@ __attribute__((used)) static const char AevonRingAutoSizeV31Marker[] = "AevonRin
 __attribute__((used)) static const char AevonRingPinnedV31Marker[] = "AevonRingPinnedV31";
 __attribute__((used)) static const char AevonGuardFileConfV31Marker[] = "AEVONGUARDCONFV31";
 
+/* V0.0.32 CI 标记：notify(3) 跨进程热区通道（沙盒 App 唯一可靠的配置来源） */
+__attribute__((used)) static const char AevonGuardNotifyV32Marker[] = "AevonGuardNotifyV32";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.0.32：notify(3) 状态通道
+ * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能
+ * 因目录权限写不进去（Aevon(25) 日志：guard.conf 写入失败 × N）。notify_set_state
+ * 的 64 位状态挂在通知名上，跨进程且不受沙盒文件限制，是 Guard 的主配置源。
+ * 打包：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）
+ * ────────────────────────────────────────────────────────────────── */
+#include <notify.h>
+#include <math.h>
+
+void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
+    @try {
+        uint64_t pack = 0;
+        pack |= ((uint64_t)llround(x)) & 0x3FFULL;
+        pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
+        pack |= (((uint64_t)llround(w)) & 0xFFULL) << 20;
+        pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 28;
+        pack |= (enabled ? 1ULL : 0ULL) << 38;
+        pack |= 0x32ULL << 40;
+        notify_set_state("com.aevon.guardzone", pack);
+        notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
+int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled) {
+    @try {
+        uint64_t pack = 0;
+        notify_get_state("com.aevon.guardzone", &pack);
+        if (((pack >> 40) & 0xFF) != 0x32) { return 0; }
+        if (x) { *x = (double)(pack & 0x3FFULL); }
+        if (y) { *y = (double)((pack >> 10) & 0x3FFULL); }
+        if (w) { *w = (double)((pack >> 20) & 0xFFULL); }
+        if (h) { *h = (double)((pack >> 28) & 0x3FFULL); }
+        if (enabled) { *enabled = (int)((pack >> 38) & 1ULL); }
+        return 1;
+    } @catch (NSException *exception) {
+        return 0;
+    }
+}
+
 void AevonPrefSetBool(NSString *key, BOOL value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,

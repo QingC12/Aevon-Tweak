@@ -17,3 +17,11 @@ void AevonPrefSetDouble(NSString *key, double value);
 /// 取 App 图标（SpringBoard 私有：SBIconController -applicationIconImageForBundleIdentifier:format:scale:）。
 /// 全程 @try/@catch，取不到返回 nil —— 调用方必须准备文字兜底，绝不因图标缺失而失败。
 UIImage *AevonIconImage(NSString *bundleID, CGFloat scale);
+
+/// V0.0.32：跨进程热区配置通道（notify_set_state / notify_get_state）。
+/// 沙盒 App 读不到 com.Aevon 偏好域、也未必能读 jbroot 文件，但 notify(3) 状态
+/// 在沙盒里通用 —— SpringBoard 写入后，注入 App 的 AevonGuard 直接读。
+/// 打包：x(10bit) y(10bit) w(8bit) h(10bit) enabled(1bit) + 版本标记(8bit)。
+void AevonNotifySetZone(double x, double y, double w, double h, int enabled);
+/// 读到有效配置返回 1，否则 0（不改动出参）。
+int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled);
