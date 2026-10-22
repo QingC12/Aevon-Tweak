@@ -1,8 +1,8 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.11
+Version: 0.0.12
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.11：浮窗画面比例锁定屏幕比例，修掉「两侧黑边」与「拖手柄变细长条」。画面改为铺满式缩放，默认窗口即无黑边。入口仍为悬浮球，启动阶段零 hook。默认关闭，请在 设置 → Aevon 开启。
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.12：修掉缩放卡顿——手势期间只改外壳矩阵，不再每帧重设内层场景几何；手柄热区放大到 44pt。画面比例仍锁定屏幕比例，默认无黑边。入口为悬浮球，启动阶段零 hook。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks

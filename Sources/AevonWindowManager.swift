@@ -139,7 +139,17 @@ enum AevonWindowManager {
         }
     }
 
+    /// App 的图层列表更新时通知浮窗重排。
+    ///
+    /// 这个回调来自 `FBSceneLayerManager _setLayers`，随 App 自己的渲染帧率触发，
+    /// 一秒可能几十次。以前每次都 `setNeedsLayout`，等于把 App 的每一帧都变成本进程
+    /// 的一次完整布局 —— 缩放时尤其明显。这里做 0.3 秒节流，布局本身也有缓存短路。
+    private static var lastLayerRefresh: TimeInterval = 0
+
     static func notifyLayersUpdated() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastLayerRefresh >= 0.3 else { return }
+        lastLayerRefresh = now
         for (_, windowView) in windows {
             windowView.setNeedsLayout()
         }

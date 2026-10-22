@@ -2,21 +2,24 @@ import UIKit
 
 /// 单个 App 的浮窗外壳：标题栏（拖动）+ 内容（App 场景，整体缩放）+ 缩放手柄。
 ///
-/// V0.0.9 改动：App 场景按整屏尺寸渲染，浮窗只对承载容器做**等比缩放**。
-/// 以前直接把容器铺满内容区，等于要求系统把整屏画面塞进一个小框，
-/// 结果是外壳有、里面空。
+/// V0.0.9：App 场景按整屏尺寸渲染，浮窗只对承载容器做等比缩放。
+/// V0.0.11：内容区宽高比锁定屏幕比例（修掉两侧黑边）＋ 手柄锁比例（修掉细长条）。
+/// V0.0.12（本版）：修「缩放卡顿」。
 ///
-/// V0.0.11 改动（真机反馈：画面两边有黑边、拖手柄后变成细长条）：
-/// 根因是两处比例没有对上——
-/// 1. 初始窗口是「屏宽 0.78 × 屏高 0.60」，内容区比例 306×471 ≈ 0.65，
-///    而屏幕比例是 393÷852 ≈ 0.46，等比缩放只能按较紧的高度算，
-///    宽度方向就多出 44pt 的空白，也就是用户看到的两侧黑边。
-/// 2. 缩放手柄是横竖各自加位移，比例完全放开，于是能拖成细长条。
+/// 卡顿的根因：以前每次 `frame` 变化都会走一遍 layout，然后在 `layoutSubviews` 里
+/// 重新给内层承载容器设 `bounds / transform / anchorPoint / position`。
+/// 那个容器里装的是 App 的跨进程画面（`_UIScenePresentationView` → CAHostLayer），
+/// 它的几何每变一次，Core Animation 都要和渲染服务器同步一遍、把整屏内容重新采样，
+/// 一个手势 60 帧就是 60 次 IPC + 60 次整屏重采样，必然卡。
 ///
-/// 现在的规则（Stheno 的做法也是让场景按宿主比例铺满，而不是把整屏塞进任意框）：
-/// * 内容区宽高比恒等于屏幕宽高比 ⇒ 画面正好填满，既无黑边也不裁切；
-/// * 手柄拖动只在「宽度」这一个自由度上生效，高度由比例算出来；
-/// * 缩放算法改用 max（铺满）而不是 min（留边），浮点误差也不会露黑边。
+/// 现在的做法（和系统级浮窗同一个思路）：
+/// * 手势期间**只改外壳自己的 layer.transform**，内部图层树一个属性都不动，
+///   所以只是外层的矩阵参与合成，GPU 一次变换就够；
+/// * 锚点临时挪到左上角，缩放时左上角不动，视觉上就是「拉右下角」；
+/// * 手势期间把圆角裁剪关掉（圆角 + 裁剪 + 缩放子层会触发离屏合成），
+///   结束后再恢复，只在抬起手指那一下做一次真正的 layout；
+/// * `applyContentScale` 带缓存，尺寸和系数没变就直接返回，
+///   应用自己在刷新画面时频繁触发的图层更新也不会变成无意义的布局。
 final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
@@ -28,8 +31,8 @@ final class AevonWindowView: UIView {
         return size.width / size.height
     }()
 
-    /// 内容宽的最小值，再小就看不清了。
     private static let minContentWidth: CGFloat = 150
+    private static let cornerRadius: CGFloat = 12
 
     private let titleBarHeight: CGFloat = 40
     private let contentClip = UIView()
@@ -42,6 +45,12 @@ final class AevonWindowView: UIView {
     private var moveOriginPoint: CGPoint = .zero
     private var resizeOriginFrame: CGRect = .zero
     private var resizeOriginPoint: CGPoint = .zero
+
+    /// 手势进行中（此时只允许改 transform，不允许改 frame）
+    private var isLiveResizing = false
+    /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
+    private var lastClipSize: CGSize = .zero
+    private var lastAppliedScale: CGFloat = 0
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
@@ -63,7 +72,7 @@ final class AevonWindowView: UIView {
                        height: height)
 
         backgroundColor = UIColor(white: 0.12, alpha: 1.0)
-        layer.cornerRadius = 12
+        layer.cornerRadius = AevonWindowView.cornerRadius
         clipsToBounds = true
 
         // 标题栏
@@ -86,10 +95,11 @@ final class AevonWindowView: UIView {
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         titleBar.addSubview(closeButton)
 
-        // 内容区（裁剪 + 等比缩放）
+        // 内容区。比例锁定后画面正好铺满，不需要裁剪 ——
+        // 少一层 clipsToBounds 就少一次离屏合成，缩放更顺。
         contentClip.frame = CGRect(x: 0, y: titleBarHeight, width: width, height: contentHeight)
         contentClip.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        contentClip.clipsToBounds = true
+        contentClip.clipsToBounds = false
         contentClip.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
         addSubview(contentClip)
 
@@ -111,15 +121,23 @@ final class AevonWindowView: UIView {
             }
         }
 
-        // 缩放手柄
-        let handleSize: CGFloat = 28
-        resizeHandle.frame = CGRect(x: width - handleSize - 6,
-                                    y: height - handleSize - 6,
-                                    width: handleSize,
-                                    height: handleSize)
-        resizeHandle.backgroundColor = UIColor.white.withAlphaComponent(0.35)
-        resizeHandle.layer.cornerRadius = handleSize / 2
+        // 缩放手柄：视觉圆点 28pt，触摸热区 44pt（热区留在窗口内，否则被裁剪后点不到）
+        let dotSize: CGFloat = 28
+        let touchSize: CGFloat = 44
+        resizeHandle.frame = CGRect(x: width - touchSize - 2,
+                                    y: height - touchSize - 2,
+                                    width: touchSize,
+                                    height: touchSize)
+        resizeHandle.backgroundColor = .clear
         resizeHandle.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
+        let dot = UIView(frame: CGRect(x: touchSize - dotSize - 6,
+                                       y: touchSize - dotSize - 6,
+                                       width: dotSize,
+                                       height: dotSize))
+        dot.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+        dot.layer.cornerRadius = dotSize / 2
+        dot.isUserInteractionEnabled = false
+        resizeHandle.addSubview(dot)
         addSubview(resizeHandle)
 
         // 手势
@@ -139,10 +157,17 @@ final class AevonWindowView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        contentClip.frame = CGRect(x: 0,
-                                   y: titleBarHeight,
-                                   width: bounds.width,
-                                   height: max(0, bounds.height - titleBarHeight))
+        // 缩放进行中不允许布局（手势只会改 transform，走到这里说明有外部触发，
+        // 一旦在这里改内部几何就又退回到卡顿的老路，直接跳过）
+        if isLiveResizing { return }
+
+        let clipFrame = CGRect(x: 0,
+                               y: titleBarHeight,
+                               width: bounds.width,
+                               height: max(0, bounds.height - titleBarHeight))
+        if contentClip.frame != clipFrame {
+            contentClip.frame = clipFrame
+        }
         applyContentScale()
     }
 
@@ -150,6 +175,7 @@ final class AevonWindowView: UIView {
     ///
     /// 用 max 而不是 min：内容区比例已经锁定成屏幕比例，两者理论相等，
     /// 取较大的一边可以吃掉浮点误差，绝不会在两侧露出底色（黑边）。
+    /// 尺寸与系数都没变化时直接返回，避免无意义的图层重建。
     private func applyContentScale() {
         let screen = UIScreen.main.bounds.size
         guard screen.width > 0, screen.height > 0,
@@ -157,13 +183,22 @@ final class AevonWindowView: UIView {
 
         let scale = max(contentClip.bounds.width / screen.width,
                         contentClip.bounds.height / screen.height)
-        let container = sceneHost.container
 
+        let clipSize = contentClip.bounds.size
+        if abs(clipSize.width - lastClipSize.width) < 0.01,
+           abs(clipSize.height - lastClipSize.height) < 0.01,
+           abs(scale - lastAppliedScale) < 0.0001 {
+            return
+        }
+        lastClipSize = clipSize
+        lastAppliedScale = scale
+
+        let container = sceneHost.container
         container.layer.anchorPoint = .zero
         container.bounds = CGRect(origin: .zero, size: screen)
         container.transform = CGAffineTransform(scaleX: scale, y: scale)
-        container.layer.position = CGPoint(x: (contentClip.bounds.width - screen.width * scale) / 2.0,
-                                           y: (contentClip.bounds.height - screen.height * scale) / 2.0)
+        container.layer.position = CGPoint(x: (clipSize.width - screen.width * scale) / 2.0,
+                                           y: (clipSize.height - screen.height * scale) / 2.0)
     }
 
     // MARK: - 拖动
@@ -178,22 +213,22 @@ final class AevonWindowView: UIView {
         case .changed:
             let dx = point.x - moveOriginPoint.x
             let dy = point.y - moveOriginPoint.y
-            var newFrame = moveOriginFrame.offsetBy(dx: dx, dy: dy)
             let screen = UIScreen.main.bounds
-            newFrame.origin.x = max(0, min(newFrame.origin.x, screen.width - 60))
-            newFrame.origin.y = max(0, min(newFrame.origin.y, screen.height - 60))
-            frame = newFrame
+            var center = CGPoint(x: moveOriginFrame.midX + dx, y: moveOriginFrame.midY + dy)
+            // 至少留 60pt 在屏幕内，避免拖丢
+            let halfW = moveOriginFrame.width / 2.0
+            let halfH = moveOriginFrame.height / 2.0
+            center.x = max(60 - halfW, min(center.x, screen.width - 60 + halfW))
+            center.y = max(60 - halfH, min(center.y, screen.height - 60 + halfH))
+            // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
+            self.center = center
         default:
             break
         }
     }
 
-    // MARK: - 缩放（锁定宽高比）
+    // MARK: - 缩放（锁定宽高比，手势期间只改矩阵）
 
-    /// 手柄只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例 + 标题栏。
-    ///
-    /// 拖动方向取 |dx| 与 |dy| 里大的那个来定，这样斜着拖也跟手，
-    /// 但永远不会把窗口拖成细长条。
     @objc private func handleResize(_ gesture: UIPanGestureRecognizer) {
         guard let superview = superview else { return }
         let point = gesture.location(in: superview)
@@ -201,36 +236,74 @@ final class AevonWindowView: UIView {
         case .began:
             resizeOriginFrame = frame
             resizeOriginPoint = point
+            beginLiveResize()
 
         case .changed:
             let dx = point.x - resizeOriginPoint.x
             let dy = point.y - resizeOriginPoint.y
-            let aspect = AevonWindowView.contentAspect
-            let screen = UIScreen.main.bounds
+            let width = clampedContentWidth(dx: dx, dy: dy, base: resizeOriginFrame)
+            let factor = max(0.05, width / max(1, resizeOriginFrame.width))
+            // 关键：只动外层矩阵，内部的 App 画面图层树完全不碰
+            transform = CGAffineTransform(scaleX: factor, y: factor)
 
-            let originContentWidth = resizeOriginFrame.width
-            let originContentHeight = max(1, resizeOriginFrame.height - titleBarHeight)
-
-            let widthFromX = originContentWidth + dx
-            let widthFromY = (originContentHeight + dy) * aspect
-            var contentWidth = abs(dx) >= abs(dy) ? widthFromX : widthFromY
-
-            // 上限：不超出屏幕右侧、也不超出屏幕底部
-            let maxByScreenWidth = screen.width - resizeOriginFrame.origin.x - 8
-            let maxByScreenHeight = (screen.height - resizeOriginFrame.origin.y - 8 - titleBarHeight) * aspect
-            let maxWidth = max(AevonWindowView.minContentWidth,
-                               min(maxByScreenWidth, maxByScreenHeight))
-            contentWidth = max(AevonWindowView.minContentWidth, min(contentWidth, maxWidth))
-
-            let contentHeight = contentWidth / aspect
-            frame = CGRect(x: resizeOriginFrame.origin.x,
-                           y: resizeOriginFrame.origin.y,
-                           width: contentWidth,
-                           height: contentHeight + titleBarHeight)
+        case .ended, .cancelled, .failed:
+            finishLiveResize()
 
         default:
             break
         }
+    }
+
+    /// 手柄只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例 + 标题栏。
+    /// 拖动方向取 |dx| 与 |dy| 里大的那个来定，斜着拖也跟手，但拖不出细长条。
+    private func clampedContentWidth(dx: CGFloat, dy: CGFloat, base: CGRect) -> CGFloat {
+        let aspect = AevonWindowView.contentAspect
+        let screen = UIScreen.main.bounds
+        let originContentHeight = max(1, base.height - titleBarHeight)
+
+        let widthFromX = base.width + dx
+        let widthFromY = (originContentHeight + dy) * aspect
+        var width = abs(dx) >= abs(dy) ? widthFromX : widthFromY
+
+        // 上限：不超出屏幕右侧、也不超出屏幕底部
+        let maxByScreenWidth = screen.width - base.minX - 8
+        let maxByScreenHeight = (screen.height - base.minY - 8 - titleBarHeight) * aspect
+        let maxWidth = max(AevonWindowView.minContentWidth,
+                           min(maxByScreenWidth, maxByScreenHeight))
+        width = max(AevonWindowView.minContentWidth, min(width, maxWidth))
+        return width
+    }
+
+    /// 进入「实时缩放」：锚点挪到左上角，关掉圆角裁剪，内部一个属性都不动。
+    private func beginLiveResize() {
+        isLiveResizing = true
+        let topLeft = frame.origin
+        layer.anchorPoint = .zero
+        layer.position = topLeft          // 改锚点后必须立刻补位置，否则会跳
+        layer.cornerRadius = 0
+        clipsToBounds = false             // 圆角 + 裁剪 + 缩放会走离屏合成
+        contentClip.clipsToBounds = false
+    }
+
+    /// 抬手：把矩阵换成真实 frame，只在这一下做一次完整布局。
+    private func finishLiveResize() {
+        guard isLiveResizing else { return }
+        isLiveResizing = false
+
+        let factor = max(0.05, transform.a)
+        transform = .identity
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.cornerRadius = AevonWindowView.cornerRadius
+        clipsToBounds = true
+
+        let width = max(AevonWindowView.minContentWidth, resizeOriginFrame.width * factor)
+        let height = width / AevonWindowView.contentAspect + titleBarHeight
+        frame = CGRect(x: resizeOriginFrame.minX,
+                       y: resizeOriginFrame.minY,
+                       width: width,
+                       height: height)
+        setNeedsLayout()
+        AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（内容 \(Int(width))x\(Int(height - titleBarHeight))）")
     }
 
     // MARK: - 关闭

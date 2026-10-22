@@ -131,7 +131,7 @@ enum AevonSceneHelper {
         setForeground(scene, false)
     }
 
-    // MARK: - 保活定时器（每秒把场景推回前台）
+    // MARK: - 保活定时器（只在前台状态掉了时才补一次）
 
     private static var keepAliveTimers: [String: DispatchSourceTimer] = [:]
 
@@ -141,6 +141,14 @@ enum AevonSceneHelper {
         timer.schedule(deadline: .now() + 0.5, repeating: 1.0)
         timer.setEventHandler {
             guard let scene = self.scene(for: bundleID) else { return }
+            // 先看场景当前的前台标记：已经是前台就什么都不做。
+            // 以前每秒无条件 setForeground 一次，等于每秒一次跨进程状态写入，
+            // 在缩放这种主线程密集的场景里是白花掉的开销。
+            let settings = AevonRuntime.send(scene, Selector(("settings")))
+            if let foreground = settings.flatMap({ AevonRuntime.bool($0, key: "foreground") }),
+               foreground {
+                return
+            }
             self.setForeground(scene, true)
         }
         timer.resume()
