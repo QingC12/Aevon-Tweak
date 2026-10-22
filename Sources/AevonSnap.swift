@@ -1,6 +1,6 @@
 import UIKit
 
-/// 吸附槽位：把窗口拖到屏幕边缘松手时，自动对齐到的位置。
+/// 吸附槽位：把窗口拖到屏幕边缘松手、或轻点左右侧条时，对齐到的位置。
 enum AevonSnapSlot: String {
     case free
     case left
@@ -8,29 +8,34 @@ enum AevonSnapSlot: String {
     case top
 }
 
-/// 吸附与安全区几何（V0.0.42，AevonSthenoDockV42）。
+/// 吸附与安全区几何（V0.0.43，AevonSthenoDockV43）。
 ///
-/// 按 Stheno 的主浮窗模型重做（逆向键：`leftPecent` / `rightPecent` /
+/// 按 Stheno 主浮窗的百分比几何模型重做（逆向键：`leftPecent` / `rightPecent` /
 /// `leftHeightPecent` / `rightHeightPecent` / `edgeWidth` / `medusaFrameLast`）：
-///   · Stheno 的「停靠」是**把窗口靠到某一侧，尺寸不变**，位置与高度用百分比记忆；
-///     从不会因为吸附就把窗口撑成巨窗。
-///   · `edgeWidth` 对应这里的 `edgeInset`：窗口与屏幕边缘之间恒定留出的距离，
-///     也是外侧手柄（角块 34pt）能被手指够到的前提。
+///   · 位置与大小都存屏幕百分比，换机型按比例还原；
+///   · `edgeWidth` 只表示「贴边留多薄的一层」——Stheno 的浮窗是贴着屏幕边缘的，
+///     不存在 34pt 那种空白安全区（Aevon(36) 用户反馈：留太宽很丑）。
+///   · 停靠（left/right）是**贴边 + 换成停靠档的小尺寸**，不会留下巨窗。
 ///
-/// V0.0.41 之前的 `top` 档会算出 407x884（屏 430x932），四个外角块全落在屏幕外，
-/// 于是吸附完就再也缩放不了（Aevon(35) 日志：`吸附到顶部放大 407x884`）。
-/// 现在所有档位都夹在安全区内，且吸附不改尺寸。
+/// 尺寸三档（屏 430x932 时的实际值）：
+///   · 默认新开窗 55% 屏宽 → 约 236x512（V0.0.42 是 70% / 301x652，偏大）
+///   · 停靠小窗   50% 屏宽 → 约 215x466
+///   · 手动缩放的上下限由 `maxWidth` / `maxHeight` 兜住
 enum AevonSnap {
-    static let gap: CGFloat = 8
-    /// 距离边缘多少点以内算「想吸附」
-    static let edgeThreshold: CGFloat = 26
+    /// 贴边距离（Stheno `edgeWidth` 对应物）。用户要求从 34pt 收到 5pt。
+    static let edgeInset: CGFloat = 5
+    /// 距离屏幕边缘多少点以内算「想吸附」
+    static let edgeThreshold: CGFloat = 22
     /// V0.0.37：浮窗无标题栏，高度就是纯内容高
     static let titleBarHeight: CGFloat = 0
     static let minContentWidth: CGFloat = 150
 
-    /// 贴边避让（Stheno `edgeWidth` 对应物）：窗口与屏幕四边的最小距离。
-    /// 取外角块边长 —— 窗口贴到最边上时，四个角的缩放手柄仍旧完整落在屏内。
-    static var edgeInset: CGFloat { return AevonWindowView.cornerSize }
+    /// 默认新开窗的宽度比例（屏宽百分比）
+    static let defaultWidthRatio: CGFloat = 0.55
+    /// 停靠（吸附到某一侧）时的宽度比例
+    static let dockWidthRatio: CGFloat = 0.50
+    /// 读历史几何时的宽度上限：旧版本可能存着 66%~94% 的巨窗，读出来必须收回来
+    static let maxRestoredRatio: CGFloat = 0.58
 
     static var aspect: CGFloat { return AevonWindowView.contentAspect }
 
@@ -50,6 +55,16 @@ enum AevonSnap {
         return max(minContentWidth / max(0.2, aspect), screen.height - edgeInset * 2)
     }
 
+    /// 默认新开窗的 frame：屏宽 55%，水平居中，顶边 12% 屏高
+    static func defaultFrame() -> CGRect {
+        let screen = UIScreen.main.bounds
+        let width = max(minContentWidth, min(screen.width * defaultWidthRatio, maxWidth))
+        let height = min(height(forWidth: width), maxHeight)
+        let x = (screen.width - width) / 2.0
+        let y = max(edgeInset, min(screen.height * 0.12, screen.height - edgeInset - height))
+        return clamped(CGRect(x: x, y: y, width: width, height: height))
+    }
+
     /// 按宽度与安全区求一个合规 frame（宽高比锁定屏幕比例）
     static func fitted(width: CGFloat) -> CGRect {
         let screen = UIScreen.main.bounds
@@ -60,11 +75,11 @@ enum AevonSnap {
             w = max(minContentWidth, h * aspect)
         }
         let x = (screen.width - w) / 2.0
-        let y = max(edgeInset, min(screen.height * 0.10, screen.height - edgeInset - h))
-        return CGRect(x: x, y: y, width: w, height: h)
+        let y = max(edgeInset, min(screen.height * 0.12, screen.height - edgeInset - h))
+        return clamped(CGRect(x: x, y: y, width: w, height: h))
     }
 
-    /// 把任意 frame 夹进安全区：尺寸超限先缩，再把 origin 推进屏内。
+    /// 把任意 frame 夹进屏幕：尺寸超限先缩，再把 origin 推进屏内（只留 edgeInset）。
     /// 这是「贴边自动避让」的唯一实现点 —— 任何路径改完 frame 都过一遍这里。
     static func clamped(_ frame: CGRect) -> CGRect {
         let screen = UIScreen.main.bounds
@@ -88,34 +103,35 @@ enum AevonSnap {
         return f
     }
 
-    /// 停靠到某一格（Stheno 式：只动位置，不动尺寸）。
-    /// `base` 是停靠前的 frame，用来保留当前大小与另一轴的位置。
+    /// 停靠到某一侧的 frame（Stheno 式：贴边 + 换成停靠档的小尺寸）。
+    /// `base` 是停靠前的 frame，用来保留另一轴的中心位置。
     static func frame(for slot: AevonSnapSlot, from base: CGRect) -> CGRect {
         let screen = UIScreen.main.bounds
         guard slot != .free else { return clamped(base) }
-        let size = clamped(base).size
-        var f = CGRect(origin: .zero, size: size)
+        var width = max(minContentWidth, min(screen.width * dockWidthRatio, maxWidth))
+        var height = height(forWidth: width)
+        if height > maxHeight {
+            height = maxHeight
+            width = max(minContentWidth, height * aspect)
+        }
+        var f = CGRect(x: 0, y: 0, width: width, height: height)
         switch slot {
         case .free:
             return clamped(base)
         case .left:
             f.origin.x = edgeInset
-            f.origin.y = base.midY - size.height / 2.0
+            f.origin.y = base.midY - height / 2.0
         case .right:
-            f.origin.x = screen.width - edgeInset - size.width
-            f.origin.y = base.midY - size.height / 2.0
+            f.origin.x = screen.width - edgeInset - width
+            f.origin.y = base.midY - height / 2.0
         case .top:
-            f.origin.x = base.midX - size.width / 2.0
+            f.origin.x = base.midX - width / 2.0
             f.origin.y = edgeInset
         }
         return clamped(f)
     }
 
     /// 松手时按窗口位置判断想吸附到哪一格；不需要吸附时返回 nil。
-    ///
-    /// 阈值必须叠加 `edgeInset`：拖动时窗口已经被避让夹在离屏幕边缘 34pt 处，
-    /// 若只按真实屏幕边缘判断，窗口永远进不了 26pt 区间 —— 吸附就再也触发不了
-    /// （V0.0.42 改避让后踩到的连带问题）。
     static func slot(for frame: CGRect) -> AevonSnapSlot? {
         let screen = UIScreen.main.bounds
         guard screen.width > 0, screen.height > 0, frame.width > 0 else { return nil }

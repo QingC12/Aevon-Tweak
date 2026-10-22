@@ -83,6 +83,16 @@ __attribute__((used)) static const char AevonFloatGlobalV41Marker[] = "AevonFloa
 __attribute__((used)) static const char AevonSthenoDockV42Marker[] = "AevonSthenoDockV42";
 __attribute__((used)) static const char AevonFloatLookV42Marker[] = "AevonFloatLookV42";
 
+/* V0.0.43 CI 标记（AevonSthenoGestureV43）：
+ * 按 Stheno 主浮窗 1:1 复刻几何与手势 ——
+ *   · 贴边距离 34pt → 5pt（Stheno 浮窗是贴着屏幕边的，没有大空白）；
+ *   · 默认窗宽 70% → 55%，停靠尺寸固定为 50% 屏宽的小窗；
+ *   · 顶部（顶边条 + 上角块 + 右上 ✕）手势全删；
+ *   · 左右侧条：长按/拖动 = 移动，轻点 = 停靠到该侧并变小窗；
+ *   · 底边条：双击 = 关闭浮窗；
+ *   · 贴边时手柄自动改挂到窗内侧，避免 5pt 缝隙下抓不到。 */
+__attribute__((used)) static const char AevonSthenoGestureV43Marker[] = "AevonSthenoGestureV43";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

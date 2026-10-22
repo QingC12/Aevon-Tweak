@@ -587,7 +587,7 @@ enum AevonEdgeEntry {
     private static var globalFired = false
     private static var globalLastLogAt: CFTimeInterval = 0
 
-    // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
+    // MARK: - 浮窗手势（V0.0.41 起，V0.0.43 按用户要求改交互）
 
     /// 当前被全局通道接管的那根手指（0 = 没接管浮窗）
     private static var floatTouchID: UInt = 0
@@ -595,15 +595,23 @@ enum AevonEdgeEntry {
     private static weak var floatWindow: AevonWindowView?
     private static var floatGrab: AevonFloatGrab?
     private static var floatDeadline: CFTimeInterval = 0
+    /// 按下点 / 按下时刻：用来区分「轻点」还是「拖动」
+    private static var floatStart: CGPoint = .zero
+    private static var floatStartAt: CFTimeInterval = 0
+    /// 是否已真正进入拖动 / 缩放。侧条必须先越过阈值才算拖动，
+    /// 否则「想停靠的那一下轻点」会被当成微小拖动，永远触发不了停靠。
+    private static var floatEngaged = false
+    /// 越过多少点算拖动（不超过它抬手 = 轻点）
+    private static let floatMoveSlop: CGFloat = 10
+    /// 轻点允许的最长按压时间
+    private static let floatTapLimit: CFTimeInterval = 0.45
     /// 拖拽硬上限：拖到 30 秒一定解除，杜绝「窗口一直吸着手指」的最坏情况
     private static let floatDragLimit: CFTimeInterval = 30
 
-    /// 双击识别（全局通道没有 UITapGestureRecognizer，得自己记）
-    private static var floatLastTapAt: CFTimeInterval = 0
-    private static var floatLastTapPoint: CGPoint = .zero
-    private static weak var floatLastTapWindow: AevonWindowView?
-    private static let floatDoubleTapGap: CFTimeInterval = 0.34
-    private static let floatDoubleTapRadius: CGFloat = 26
+    /// 底边条双击关闭（全局通道没有 UITapGestureRecognizer，只能自己记）
+    private static var floatBottomLastTapAt: CFTimeInterval = 0
+    private static weak var floatBottomLastTapWindow: AevonWindowView?
+    private static let floatDoubleTapGap: CFTimeInterval = 0.36
 
     /// 浮窗手势是否正压着某根手指（供吞事件判断）
     private static var floatGestureActive: Bool {
@@ -786,9 +794,14 @@ enum AevonEdgeEntry {
         }
     }
 
-    // MARK: - 浮窗手势状态机（V0.0.41，AevonFloatGlobalV41）
+    // MARK: - 浮窗手势状态机（V0.0.43，AevonSthenoGestureV43）
 
-    /// 按下：命中浮窗外侧手柄 / ✕ 就整段接管这根手指。
+    /// 按下：命中浮窗侧条 / 下角块 / 底边条就整段接管这根手指。
+    ///
+    /// 交互（用户 Aevon(36) 指定）：
+    ///   · 左右侧条：长按或拖动 = 移动窗口；**轻点 = 停靠到该侧 + 变小窗**；
+    ///   · 底边条：**双击 = 关闭浮窗**（顶部的 ✕ 已移除）；
+    ///   · 下角块：拖动 = 对角缩放。
     ///
     /// 返回 true = 这根触摸已归浮窗，调用方必须立刻 return（既不再判热区，也不给 App）。
     private static func handleFloatGestureBegan(point: CGPoint, touchID: UInt) -> Bool {
@@ -803,37 +816,23 @@ enum AevonEdgeEntry {
         }
 
         let now = CACurrentMediaTime()
-        // 双击边条 = 小窗 / 大窗换档。原来是手柄上的 UITapGestureRecognizer，
-        // 全屏 App 里同样收不到，这里用同一套全局通道补上。
-        if case .close = hit.grab {
-            // ✕ 不算双击候选
-        } else if now - floatLastTapAt <= floatDoubleTapGap,
-                  floatLastTapWindow === hit.window,
-                  hypot(point.x - floatLastTapPoint.x,
-                        point.y - floatLastTapPoint.y) <= floatDoubleTapRadius {
-            floatLastTapAt = 0
-            floatLastTapWindow = nil
-            floatTouchID = touchID
-            floatWindow = hit.window
-            floatGrab = nil              // 双击不拖拽，抬手直接收尾
-            floatDeadline = now + floatDragLimit
-            hit.window.cycleSize()
-            AevonLog.info("[窗口] 双击换档（全局通道）（AevonFloatGlobalV41）")
-            return true
-        }
-
         floatTouchID = touchID
         floatWindow = hit.window
         floatGrab = hit.grab
+        floatStart = point
+        floatStartAt = now
         floatDeadline = now + floatDragLimit
+        floatEngaged = false
         hit.window.grabBegin(hit.grab, at: hit.layerPoint)
         switch hit.grab {
-        case .bar:
-            AevonLog.info("[窗口] 全局通道开始拖动（移动）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
+        case .side:
+            // 先不移动：到底是「轻点停靠」还是「长按移动」，要等抬手/阈值才知道
+            AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点停靠）（AevonSthenoGestureV43）")
         case .corner:
+            floatEngaged = true
             AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
-        case .close:
-            AevonLog.info("[窗口] 全局通道命中关闭钮（AevonFloatGlobalV41）")
+        case .bottom:
+            AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（双击关闭）（AevonSthenoGestureV43）")
         }
         return true
     }
@@ -852,6 +851,21 @@ enum AevonEdgeEntry {
             return false
         }
         floatDeadline = now + floatDragLimit      // 手指还在动就续期
+
+        // 底边条只认双击，不参与拖动 —— 但事件必须继续吞住，不能落回 App
+        if let grab = floatGrab {
+            if case .bottom = grab { return true }
+        }
+
+        if !floatEngaged {
+            // 侧条：越过阈值才算拖动，之前都只是「可能的轻点」
+            let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
+            guard moved > floatMoveSlop else { return true }
+            floatEngaged = true
+            // 基准点重设到当前点，否则第一帧会瞬移一个阈值距离，手感发跳
+            win.rebaseGrab(at: AevonEntryHost.floatLayerPoint(fromScreen: point))
+            AevonLog.info("[窗口] 侧条开始移动 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV43）")
+        }
         win.grabUpdate(to: AevonEntryHost.floatLayerPoint(fromScreen: point))
         return true
     }
@@ -862,19 +876,46 @@ enum AevonEdgeEntry {
         guard floatTouchID != 0, touchID == floatTouchID else { return false }
         let win = floatWindow
         let layerPoint = AevonEntryHost.floatLayerPoint(fromScreen: point)
+        let elapsed = CACurrentMediaTime() - floatStartAt
+        let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
+        // 轻点 = 没越阈值、时间短、位移小
+        let isTap = !cancelled && !floatEngaged && elapsed <= floatTapLimit && moved <= floatMoveSlop
+
         if cancelled {
             win?.grabCancel()
-        } else {
-            win?.grabEnd(at: layerPoint, commit: true)
-            // 记一次双击候选：只有「手柄上的轻点」才算，✕ 不算
-            if let grab = floatGrab, win != nil {
-                switch grab {
-                case .close:
-                    break
-                case .bar, .corner:
-                    floatLastTapAt = CACurrentMediaTime()
-                    floatLastTapPoint = point
-                    floatLastTapWindow = win
+        } else if let win = win, let grab = floatGrab {
+            switch grab {
+            case .side(let edges):
+                if floatEngaged {
+                    // 拖过 = 正常结束（贴边松手会自动吸附）
+                    win.grabEnd(at: layerPoint, commit: true)
+                } else if isTap {
+                    // 轻点侧条 = 停靠到该侧 + 变成小窗
+                    win.grabCancel()   // 丢掉这段「只按下没移动」的抓取
+                    let slot: AevonSnapSlot = edges.contains(.left) ? .left : .right
+                    win.dock(to: slot)
+                    AevonLog.info("[窗口] 侧条轻点 → \(AevonSnap.describe(slot)) + 小窗"
+                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）（AevonSthenoGestureV43）")
+                } else {
+                    // 按住太久又没动：既不算轻点也没拖动，原样恢复
+                    win.grabCancel()
+                }
+            case .corner:
+                win.grabEnd(at: layerPoint, commit: true)
+            case .bottom:
+                win.grabCancel()
+                if isTap {
+                    let now = CACurrentMediaTime()
+                    if now - floatBottomLastTapAt <= floatDoubleTapGap,
+                       floatBottomLastTapWindow === win {
+                        floatBottomLastTapAt = 0
+                        floatBottomLastTapWindow = nil
+                        AevonLog.info("[窗口] 底边双击 → 关闭 \(win.bundleID)（AevonSthenoGestureV43）")
+                        win.closeSelf()
+                    } else {
+                        floatBottomLastTapAt = now
+                        floatBottomLastTapWindow = win
+                    }
                 }
             }
         }
@@ -887,6 +928,7 @@ enum AevonEdgeEntry {
         floatWindow = nil
         floatGrab = nil
         floatDeadline = 0
+        floatEngaged = false
     }
 
     /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
