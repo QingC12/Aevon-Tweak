@@ -410,20 +410,23 @@ jobs:
           # ── V0.0.43：Stheno 式几何与手势（贴边 5pt / 默认小窗 / 侧条轻点停靠 / 底边双击关闭）──
           strings "$DYLIB" | grep -q 'AevonSthenoGestureV43' \
             || { echo "::error::Stheno 手势体系没有编入（缺 AevonSthenoGestureV43）"; exit 1; }
-          # 注意：中文日志串必须用 grep -a 直接搜二进制。
-          # macOS 的 strings 默认只提取 ASCII —— 中文 UTF-8 永远不出现，
-          # V0.0.43 第一次构建就是在这里误报「没有编入」而失败（编译其实是好的）。
-          grep -a -q '侧条轻点' "$DYLIB" \
-            || { echo "::error::侧条轻点停靠没有编入（缺日志串「侧条轻点」）"; exit 1; }
-          grep -a -q '底边双击' "$DYLIB" \
-            || { echo "::error::底边双击关闭没有编入（缺日志串「底边双击」）"; exit 1; }
-          grep -a -q '侧条开始移动' "$DYLIB" \
-            || { echo "::error::侧条长按移动没有编入（缺日志串「侧条开始移动」）"; exit 1; }
-          # 顶部的关闭钮必须删干净（残留说明还挂着旧手势）
-          if grep -a -q '全局通道命中关闭钮' "$DYLIB"; then
-            echo "::error::仍存在顶部关闭钮逻辑（V0.0.43 应已移除）"; exit 1
-          fi
-          echo "V0.0.43 校验: 贴边 5pt + 侧条轻点停靠 + 底部双击关闭 已编入"
+          # 中文日志串改用 python 按字节搜：
+          #   ① macOS 的 strings 只提取 ASCII，中文 UTF-8 永远不出现；
+          #   ② BSD grep 在 C locale 下搜多字节模式会静默不匹配。
+          #   两次误报都是这两个原因，不是代码没编进去。
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["侧条轻点", "侧条开始移动", "底边双击", "停靠小窗"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少日志串: " + ", ".join(miss))
+              sys.exit(1)
+          if "全局通道命中关闭钮".encode("utf-8") in data:
+              print("::error::仍存在顶部关闭钮逻辑（V0.0.43 应已移除）")
+              sys.exit(1)
+          print("V0.0.43 校验: 贴边 5pt + 侧条轻点停靠 + 侧条长按移动 + 底边双击关闭 已编入")
+          PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
@@ -558,7 +561,9 @@ jobs:
           echo "图标: icon.png / icon@2x.png / icon@3x.png 均存在"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
+      # V0.0.43：即使后续校验失败也先传上去 —— 校验误报时还能拿到 deb 本地复核。
       - name: 上传产物（artifact，不发 Release）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Aevon-deb
