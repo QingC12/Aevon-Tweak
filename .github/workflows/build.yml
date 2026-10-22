@@ -368,6 +368,25 @@ jobs:
             echo "::error::长按触发路径仍有残留"; exit 1
           fi
           echo "V0.0.38 校验: 外侧手势命中修复 + 仅左滑触发 已编入"
+
+          # ── V0.0.39：启动异常保护 + 崩溃回溯 + 圆盘长按移除删除 + 图标 ──
+          strings "$DYLIB" | grep -q 'AevonBootShieldV39' \
+            || { echo "::error::启动异常保护没有编入（缺 AevonBootShieldV39）—— 自动注销问题会复发"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonCrashTraceV39' \
+            || { echo "::error::崩溃捕获器没有调用栈回溯（缺 AevonCrashTraceV39）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingNoHoldRemoveV39' \
+            || { echo "::error::圆盘长按移除没有删除干净（缺 AevonRingNoHoldRemoveV39）"; exit 1; }
+          if strings "$DYLIB" | grep -q '长按移除'; then
+            echo "::error::圆盘长按移除日志仍有残留"; exit 1
+          fi
+          ICON="$(find . -path '*Library/Aevon/AevonIcon.png' | head -n1)"
+          [ -n "$ICON" ] || { echo "::error::deb 缺少 /var/jb/Library/Aevon/AevonIcon.png（包图标）"; exit 1; }
+          ICON2="$(find . -path '*Library/Aevon/AevonIcon@2x.png' | head -n1)"
+          [ -n "$ICON2" ] || { echo "::error::deb 缺少 AevonIcon@2x.png"; exit 1; }
+          PREFICON="$(find . -path '*AevonPrefs.bundle/icon@3x.png' | head -n1)"
+          [ -n "$PREFICON" ] || { echo "::error::deb 缺少设置 bundle 图标 icon@3x.png"; exit 1; }
+          grep -q 'AevonTryExecute' AevonAssertionShim.m || { echo "::error::垫片缺 AevonTryExecute"; exit 1; }
+          echo "V0.0.39 校验: 启动异常保护 + 崩溃回溯 + 圆盘长按移除已删 + 图标齐全 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

@@ -67,6 +67,14 @@ __attribute__((used)) static const char AevonMedusaFrameV37Marker[] = "AevonMedu
 __attribute__((used)) static const char AevonOutsideHitV38Marker[] = "AevonOutsideHitV38";
 __attribute__((used)) static const char AevonSwipeOnlyV38Marker[] = "AevonSwipeOnlyV38";
 
+/* V0.0.39 CI 标记：
+ * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
+ * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
+ * AevonRingNoHoldRemoveV39 = 圆盘长按移除图标功能已删除。 */
+__attribute__((used)) static const char AevonBootShieldV39Marker[] = "AevonBootShieldV39";
+__attribute__((used)) static const char AevonCrashTraceV39Marker[] = "AevonCrashTraceV39";
+__attribute__((used)) static const char AevonRingNoHoldRemoveV39Marker[] = "AevonRingNoHoldRemoveV39";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能
@@ -507,4 +515,18 @@ extern void AevonInitialize(void);
 
 __attribute__((constructor)) static void AevonConstructor(void) {
     AevonInitialize();
+}
+
+/* V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
+ * 入口窗口创建等启动关键路径经此执行：UIKit 抛 NSException 时捕获带出，
+ * SpringBoard 不再被带崩（V0.0.38 自动注销问题的兜底网）。 */
+BOOL AevonTryExecute(void (^block)(void), NSString **outName, NSString **outReason) {
+    @try {
+        block();
+        return YES;
+    } @catch (NSException *exception) {
+        if (outName != NULL) { *outName = exception.name; }
+        if (outReason != NULL) { *outReason = exception.reason; }
+        return NO;
+    }
 }

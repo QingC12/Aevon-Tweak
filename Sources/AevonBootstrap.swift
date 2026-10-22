@@ -30,6 +30,8 @@ enum AevonBootstrap {
         }
 
         // 兜底：每次回到活跃态时检查一遍（首次没有场景 / 被系统回收 / 屏幕尺寸变化时补建与校正）
+        // V0.0.39：延迟 1.5 → 3.0 秒 —— V0.0.38 在 didBecomeActive+1.5s 的窗口创建段
+        // 出现 SIGSEGV（Aevon(32)），此时 SpringBoard 自身布局还没铺完，错峰降低竞态概率。
         _ = center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                object: nil,
                                queue: .main) { _ in
@@ -41,7 +43,7 @@ enum AevonBootstrap {
                 diagnose("回到桌面")
                 return
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 installEntries(reason: "didBecomeActive")
             }
         }
@@ -87,17 +89,52 @@ enum AevonBootstrap {
     }
 
     /// 建唯一入口窗口 → 挂边缘手势条（V0.0.27：备用悬浮球已全部移除）
+    ///
+    /// V0.0.39（AevonBootShieldV39）：每一步独立套 ObjC 异常保护并落面包屑日志 ——
+    /// 任何一步抛 NSException 只记日志不中断启动，后续步骤照常；绝不再把异常抛回系统。
     private static func installEntries(reason: String) {
         guard AevonPrefs.bool("Enabled", default: false) else { return }
-        guard AevonEntryHost.ensureInstalled(reason: reason) != nil else {
+
+        var exName: NSString?
+        var exReason: NSString?
+        var installed: UIView?
+        AevonTryExecute({
+            installed = AevonEntryHost.ensureInstalled(reason: reason)
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] 入口创建抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
+        }
+        guard installed != nil else {
             AevonLog.info("[引导] 入口窗口暂不可用，等待下一次活跃态重试（\(reason)）")
             return
         }
-        AevonEdgeEntry.install(attempt: 1, reason: reason)
-        installSceneHookIfNeeded()
+
+        AevonTryExecute({
+            AevonEdgeEntry.install(attempt: 1, reason: reason)
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] 手势条挂载抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
+        }
+
+        exName = nil
+        exReason = nil
+        AevonTryExecute({
+            installSceneHookIfNeeded()
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] 场景钩子安装抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
+        }
+
         // V0.0.23：App 前台时视图层收不到边缘触摸（被 App 画面命中测试截走），
         // 补一条不经过命中测试的全局通道。
-        AevonEdgeEntry.installGlobalTouch()
+        exName = nil
+        exReason = nil
+        AevonTryExecute({
+            _ = AevonEdgeEntry.installGlobalTouch()
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] 全局触摸通道安装抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
+        }
     }
 
     /// V0.0.22：装 App 画面容器钩子（只 hook viewDidAppear / viewDidDisappear 两个方法）。

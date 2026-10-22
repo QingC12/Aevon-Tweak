@@ -29,3 +29,9 @@ int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled)
 /// SpringBoard 在圆盘开 / 关时调用；Guard 每条 sendEvent 直接读共享内存，
 /// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
 void AevonNotifySetRing(int on);
+
+/// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
+/// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
+/// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，
+/// 保证 UIKit 抛异常时 SpringBoard 不再被带崩（V0.0.38 自动注销问题）。
+BOOL AevonTryExecute(void (^block)(void), NSString **outName, NSString **outReason);

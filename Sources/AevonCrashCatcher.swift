@@ -19,9 +19,16 @@ import Darwin
 private let kCrashLogPath = "/var/mobile/Aevon.crash.log"
 private let kCrashLogPathBytes: [CChar] = Array(kCrashLogPath.utf8CString)
 private let kSignalTextBytes: [CChar] = Array("[崩溃] 捕获到致命信号，编号=".utf8CString)
+private let kBacktraceTitleBytes: [CChar] = Array("[崩溃] 调用栈回溯（模块+偏移，供离线符号化；AevonCrashTraceV39）\n".utf8CString)
 private let kSignalTailBytes: [CChar] = Array("（SpringBoard 即将退出）\n".utf8CString)
 
-/// 致命信号处理：先落盘，再恢复默认处理并重新抛出，保证系统仍能生成崩溃报告。
+/// 致命信号处理：先落盘（信号编号 + 调用栈回溯），再恢复默认处理并重新抛出。
+///
+/// V0.0.39（AevonCrashTraceV39）：之前只写信号编号，SIGSEGV 完全无法定位
+/// （真机 Aevon(32)：连续自动注销，崩溃记录只有一行「编号=11」）。
+/// 这里在信号处理里调 `backtrace` + `backtrace_symbols_fd` 把当前线程调用栈
+/// （模块 + 偏移）直接写进崩溃文件 —— `backtrace_symbols_fd` 官方保证不走 malloc，
+/// 是信号处理里唯一安全的符号化方式；拿不到符号也有模块偏移可供离线对照。
 private func aevonSignalHandler(_ signalNumber: Int32) {
     let fd = kCrashLogPathBytes.withUnsafeBufferPointer { buffer -> Int32 in
         guard let base = buffer.baseAddress else { return -1 }
@@ -48,6 +55,16 @@ private func aevonSignalHandler(_ signalNumber: Int32) {
 
         _ = kSignalTailBytes.withUnsafeBufferPointer { buffer in
             write(fd, buffer.baseAddress, buffer.count - 1)
+        }
+
+        // 调用栈回溯：本线程 64 帧，模块+偏移直接写 fd（不走 malloc）
+        var frames = [UnsafeMutableRawPointer?](repeating: nil, count: 64)
+        let count = backtrace(&frames, 64)
+        if count > 0 {
+            _ = kBacktraceTitleBytes.withUnsafeBufferPointer { buffer in
+                write(fd, buffer.baseAddress, buffer.count - 1)
+            }
+            backtrace_symbols_fd(&frames, Int32(count), fd)
         }
         close(fd)
     }

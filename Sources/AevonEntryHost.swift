@@ -127,6 +127,12 @@ enum AevonEntryHost {
     // MARK: - 创建
 
     /// 确保入口窗口与容器存在（幂等）。成功返回容器，失败返回 nil（并在稍后重试）。
+    ///
+    /// V0.0.39（AevonBootShieldV39）：整条创建链路加 ObjC 异常保护 + 逐段面包屑日志。
+    /// V0.0.38 真机（Aevon(32)）在本函数窗口内 SIGSEGV 且日志断流，无法定位 —— 现在：
+    ///   · 每走完一段就落一行日志，崩溃时最后一行就是病灶段；
+    ///   · UIKit 抛 NSException 时捕获并降级（场景窗口 → 无场景窗口 → 放弃重试），
+    ///     绝不再把异常抛回系统带走 SpringBoard（自动注销问题）。
     @discardableResult
     static func ensureInstalled(attempt: Int = 1, reason: String) -> UIView? {
         if let existing = container { return existing }
@@ -143,43 +149,93 @@ enum AevonEntryHost {
             return nil
         }
 
-        let host = AevonEntryWindow(windowScene: scene)
-        host.frame = UIScreen.main.bounds
-        host.backgroundColor = .clear
-        // V0.0.19 起入口窗口层级 = 1e7。桌面 / 回桌面场景靠它；
-        // App 前台时它会被 App 画面容器压住，改由容器搬家解决（见类注释）。
-        host.windowLevel = AevonWindowLevels.entry
+        AevonLog.info("[入口] ① 场景已选定（\(type(of: scene))），开始创建窗口（\(reason)）（AevonBootShieldV39）")
 
-        // 根视图命中自身返回 nil：未命中即穿透到下层
-        let controller = AevonEntryRootController()
-        host.rootViewController = controller
-        host.isHidden = false
-        // 立刻走一次布局：保证根视图 bounds 不是 0
-        host.layoutIfNeeded()
-        controller.view.layoutIfNeeded()
+        // —— ② 窗口对象：场景窗口优先，抛异常降级为无场景窗口（两者都不行就放弃本次） ——
+        var createdWindow: AevonEntryWindow?
+        var createdController: AevonEntryRootController?
+        var exName: NSString?
+        var exReason: NSString?
 
-        let box = AevonEntryContainerView(frame: controller.view.bounds)
-        box.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        box.backgroundColor = .clear
-        box.isUserInteractionEnabled = true
-        controller.view.addSubview(box)
+        var built = AevonTryExecute({
+            let host = AevonEntryWindow(windowScene: scene)
+            host.frame = UIScreen.main.bounds
+            host.backgroundColor = .clear
+            // V0.0.19 起入口窗口层级 = 1e7。桌面 / 回桌面场景靠它；
+            // App 前台时它会被 App 画面容器压住，改由容器搬家解决（见类注释）。
+            host.windowLevel = AevonWindowLevels.entry
+            let controller = AevonEntryRootController()
+            host.rootViewController = controller
+            host.isHidden = false
+            // 立刻走一次布局：保证根视图 bounds 不是 0
+            host.layoutIfNeeded()
+            controller.view.layoutIfNeeded()
+            createdWindow = host
+            createdController = controller
+        }, &exName, &exReason)
 
-        // V0.0.36（AevonFloatInEntryV36）：容器最底部放浮窗层。
-        // 之后手势条 / 圆盘 / 面板 add 进容器都在它上面，层级秩序天然成立。
-        let floatView = AevonWindowLayerView(frame: box.bounds)
-        floatView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        floatView.backgroundColor = .clear
-        floatView.isUserInteractionEnabled = true
-        box.addSubview(floatView)
-        floatLayer = floatView
+        if !built {
+            AevonLog.warn("[入口] ② 场景窗口创建抛异常（\(exName ?? "未知"): \(exReason ?? "无")），降级为无场景窗口重试（AevonBootShieldV39）")
+            createdWindow = nil
+            createdController = nil
+            exName = nil
+            exReason = nil
+            built = AevonTryExecute({
+                let host = AevonEntryWindow(frame: UIScreen.main.bounds)
+                host.frame = UIScreen.main.bounds
+                host.backgroundColor = .clear
+                host.windowLevel = AevonWindowLevels.entry
+                let controller = AevonEntryRootController()
+                host.rootViewController = controller
+                host.isHidden = false
+                host.layoutIfNeeded()
+                controller.view.layoutIfNeeded()
+                createdWindow = host
+                createdController = controller
+            }, &exName, &exReason)
+            if !built {
+                AevonLog.warn("[入口] ② 无场景窗口也抛异常（\(exName ?? "未知"): \(exReason ?? "无")），放弃本次创建（AevonBootShieldV39）")
+                return nil
+            }
+        }
+
+        guard let host = createdWindow, let controller = createdController else { return nil }
+        AevonLog.info("[入口] ② 窗口对象已创建（level=\(Int(AevonWindowLevels.entry.rawValue))，场景窗口=\(host.windowScene != nil ? "是" : "否")）")
+
+        // —— ③ 容器 + 浮窗层 ——
+        var createdBox: AevonEntryContainerView?
+        var createdFloatLayer: AevonWindowLayerView?
+        let boxesBuilt = AevonTryExecute({
+            let box = AevonEntryContainerView(frame: controller.view.bounds)
+            box.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            box.backgroundColor = .clear
+            box.isUserInteractionEnabled = true
+            controller.view.addSubview(box)
+
+            // V0.0.36（AevonFloatInEntryV36）：容器最底部放浮窗层。
+            // 之后手势条 / 圆盘 / 面板 add 进容器都在它上面，层级秩序天然成立。
+            let floatView = AevonWindowLayerView(frame: box.bounds)
+            floatView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            floatView.backgroundColor = .clear
+            floatView.isUserInteractionEnabled = true
+            box.addSubview(floatView)
+            createdBox = box
+            createdFloatLayer = floatView
+        }, &exName, &exReason)
+        guard boxesBuilt, let box = createdBox, let floatView = createdFloatLayer else {
+            AevonLog.warn("[入口] ③ 容器/浮窗层创建抛异常（\(exName ?? "未知"): \(exReason ?? "无")），放弃本次创建（AevonBootShieldV39）")
+            return nil
+        }
+        AevonLog.info("[入口] ③ 容器与浮窗层已就位")
 
         window = host
         container = box
+        floatLayer = floatView
         AevonEdgeEntry.attachProbe(to: host)
         startWatchdog()
 
         let bounds = box.bounds
-        AevonLog.info("[入口] 入口窗口与容器已创建（level=\(Int(host.windowLevel.rawValue))，场景 \(type(of: scene))，容器 \(Int(bounds.width))x\(Int(bounds.height))，浮窗层已就位，原因=\(reason)）（AevonEntryHost AevonSingleContainerV22 AevonFloatInEntryV36）")
+        AevonLog.info("[入口] ④ 入口窗口与容器已创建（level=\(Int(host.windowLevel.rawValue))，场景 \(type(of: scene))，容器 \(Int(bounds.width))x\(Int(bounds.height))，浮窗层已就位，原因=\(reason)）（AevonEntryHost AevonSingleContainerV22 AevonFloatInEntryV36 AevonBootShieldV39）")
 
         // 万一创建时已经有 App 场景在场（热启动 / 重新初始化），优先挂上去
         if let sceneView = appSceneView, isUsableHost(sceneView) {

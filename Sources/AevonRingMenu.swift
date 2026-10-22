@@ -178,7 +178,8 @@ final class AevonRingMenu: UIView {
     /// 刚切换过模式：要等手指离开圆心 / 重新按下，才允许再按 1 秒切换
     private var centerHoldSuppressed = false
 
-    private var longPressTimer: Timer?
+    // V0.0.39（AevonRingNoHoldRemoveV39）：长按图标移除功能已整体删除（用户不需要）；
+    // 圆盘列表的增删统一走设置页的圆盘编辑器。
 
     // MARK: - 呼出 / 收起
 
@@ -251,7 +252,6 @@ final class AevonRingMenu: UIView {
     }
 
     deinit {
-        longPressTimer?.invalidate()
         centerHoldTimer?.invalidate()
         displayLink?.invalidate()
         displayLink = nil
@@ -496,8 +496,6 @@ final class AevonRingMenu: UIView {
     private func dismiss() {
         guard AevonRingMenu.current === self, !isDismissing else { return }
         isDismissing = true
-        longPressTimer?.invalidate()
-        longPressTimer = nil
         cancelCenterHold()
         clearPointer()
         stopDamping()
@@ -571,7 +569,6 @@ final class AevonRingMenu: UIView {
         pointerEverInsideRing = isInsideRingArea(point)
         // 新手指落下来，重新允许「按住圆心 1 秒」切换模式
         centerHoldSuppressed = false
-        scheduleIconLongPressIfNeeded(at: point)
         if rotating {
             setHovered(nil)
         } else {
@@ -582,7 +579,6 @@ final class AevonRingMenu: UIView {
 
     private func handlePointerMoved(to point: CGPoint, source: String) {
         guard AevonRingMenu.current === self, !isDismissing, source == pointerSource else { return }
-        let previous = pointerPoint
         pointerPoint = point
         pointerLastEventAt = CACurrentMediaTime()
         if isInsideRingArea(point) { pointerEverInsideRing = true }
@@ -592,11 +588,6 @@ final class AevonRingMenu: UIView {
         if delta > 180 { delta -= 360 }
         if delta < -180 { delta += 360 }
         pointerAngle = currentAngle
-
-        // 手指明显移动过：不再算长按移除
-        let mx = point.x - previous.x
-        let my = point.y - previous.y
-        if (mx * mx + my * my).squareRoot() > 8 { cancelIconLongPress() }
 
         if rotating {
             // 旋转模式：顺时针 / 逆时针都跟手转；画面上不选中任何图标。
@@ -617,7 +608,6 @@ final class AevonRingMenu: UIView {
     private func handlePointerEnded(at point: CGPoint, source: String) {
         guard AevonRingMenu.current === self, !isDismissing, source == pointerSource else { return }
         cancelCenterHold()
-        cancelIconLongPress()
         pointerPoint = point
         if isInsideRingArea(point) { pointerEverInsideRing = true }
         let everInside = pointerEverInsideRing
@@ -665,7 +655,6 @@ final class AevonRingMenu: UIView {
     private func handlePointerCancelled(source: String) {
         guard source == pointerSource else { return }
         cancelCenterHold()
-        cancelIconLongPress()
         clearPointer()
     }
 
@@ -854,37 +843,6 @@ final class AevonRingMenu: UIView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         handlePointerCancelled(source: "local")
-    }
-
-    // MARK: - 长按图标移除（仅选择模式）
-
-    private func scheduleIconLongPressIfNeeded(at point: CGPoint) {
-        guard !rotating, let icon = icon(at: point) else { return }
-        cancelIconLongPress()
-        let timer = Timer(timeInterval: 0.7, repeats: false) { [weak self, weak icon] _ in
-            guard let self = self, let icon = icon,
-                  AevonRingMenu.current === self, !self.rotating else { return }
-            self.removeIcon(icon)
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        longPressTimer = timer
-    }
-
-    private func cancelIconLongPress() {
-        longPressTimer?.invalidate()
-        longPressTimer = nil
-    }
-
-    private func removeIcon(_ icon: AevonRingIcon) {
-        AevonLog.info("[圆盘] 长按移除 \(icon.displayName) (\(icon.bundleID))")
-        clearPointer()
-        AevonRingStore.remove(icon.bundleID)
-        UIView.animate(withDuration: 0.14, animations: {
-            icon.alpha = 0
-            icon.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
-        }, completion: { _ in
-            self.reload()
-        })
     }
 
     // MARK: - 选中开窗
