@@ -15,9 +15,11 @@ import QuartzCore
 ///     而同一时刻悬浮球窗口的点击一直是好的 —— 所以直接搬家到那个可用容器里。
 ///     同时几何改为「按父视图 bounds 落位 + layoutSubviews 自愈」，
 ///     杜绝「挂上去的时候父视图还是零尺寸、子视图永远落在 bounds 之外」这种死角。
+///   · V0.0.21：热区 34 → 44pt（贴最边缘 20pt 会被 SpringBoard 的系统手势门控吞掉，
+///     往里挪一点反而更容易命中）；同时补一条手势识别器通道做兜底。
 final class AevonEdgeStripView: UIView {
-    /// 热区宽度。太宽会抢掉 App 自己靠右边缘的手势，34pt 是「好呼出」与「少误触」的折中。
-    static let hitWidth: CGFloat = 34
+    /// 热区宽度。太宽会抢掉 App 自己靠右边缘的手势，44pt 是「好呼出」与「少误触」的折中。
+    static let hitWidth: CGFloat = 44
     /// 判定为「呼出」的横向位移
     static let swipeDistance: CGFloat = 30
     /// 长按触发时长（秒）
@@ -43,18 +45,42 @@ final class AevonEdgeStripView: UIView {
                       height: bounds.height - bounds.midY)
     }
 
+    /// 兜底判定用的「宽容区」：比真实热区再往内、往上各放宽一截。
+    ///
+    /// 依据 Aevon(14) 日志：桌面时点悬浮球（x=375）窗口能收到事件，
+    /// 但贴右边缘（x≈420）整段零事件 —— 边缘 20pt 会被系统手势门控吃掉。
+    /// 用户手指不需要精确压在最边上，往里 60pt 也算数。
+    static func looseRect(in bounds: CGRect) -> CGRect {
+        return CGRect(x: bounds.maxX - 60,
+                      y: bounds.height * 0.30,
+                      width: 60,
+                      height: bounds.height * 0.70)
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         // 父视图尺寸变化时保持「贴右边缘 + 占下半屏」
         autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin, .flexibleHeight]
 
-        // 一条很淡的竖线当作"这里有东西"的提示，不喧宾夺主
-        indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.20)
-        indicator.layer.cornerRadius = 1.5
+        // 一条淡淡的竖线当作"这里有东西"的提示，不喧宾夺主（V0.0.21：调亮到能看清）
+        indicator.backgroundColor = UIColor(white: 1.0, alpha: 0.34)
+        indicator.layer.cornerRadius = 2
         indicator.isUserInteractionEnabled = false
         addSubview(indicator)
         layoutIndicator()
+
+        // 兜底通道：系统手势偶尔会把原始 touches 取消掉，识别器仍能独立拿到手势方向。
+        // 两个识别器都不取消触摸，所以不会影响上面那套 touchesBegan/Moved 逻辑。
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.cancelsTouchesInView = false
+        pan.delaysTouchesBegan = false
+        addGestureRecognizer(pan)
+
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHoldGesture(_:)))
+        hold.minimumPressDuration = AevonEdgeStripView.holdDuration
+        hold.cancelsTouchesInView = false
+        addGestureRecognizer(hold)
     }
 
     required init?(coder: NSCoder) {
@@ -75,10 +101,26 @@ final class AevonEdgeStripView: UIView {
     }
 
     private func layoutIndicator() {
-        indicator.frame = CGRect(x: bounds.width - 3,
-                                 y: (bounds.height - 96) / 2,
-                                 width: 3,
-                                 height: 96)
+        indicator.frame = CGRect(x: bounds.width - 4,
+                                 y: (bounds.height - 120) / 2,
+                                 width: 4,
+                                 height: 120)
+    }
+
+    // MARK: - 识别器兜底通道
+
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        guard !fired else { return }
+        let translation = gesture.translation(in: self)
+        if translation.x <= -AevonEdgeStripView.swipeDistance,
+           abs(translation.x) >= abs(translation.y) * 0.7 {
+            fire(reason: "识别器左滑 \(Int(translation.x))pt")
+        }
+    }
+
+    @objc private func handleHoldGesture(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, !fired else { return }
+        fire(reason: "识别器长按")
     }
 
     override func layoutSubviews() {
@@ -216,10 +258,12 @@ enum AevonEdgeEntry {
             existing.layoutInParent()
             return
         }
-        guard let root = AevonEntryHost.ensureInstalled(attempt: attempt, reason: reason) else { return }
+        guard let installed = AevonEntryHost.ensureInstalled(attempt: attempt, reason: reason) else { return }
+        // 优先挂到「能压住全屏 App」的场景覆盖层上
+        let root = AevonEntryHost.activeRoot ?? installed
 
         let view = AevonEdgeStripView(frame: .zero)
-        view.onTrigger = { attemptTrigger("手势条") }
+        view.onTrigger = { attemptTrigger("手势条", source: "strip") }
         view.onTouch = { point, phase in handleStripTouch(point, phase) }
         root.addSubview(view)
         view.layoutInParent()
@@ -239,30 +283,30 @@ enum AevonEdgeEntry {
         strip?.layoutInParent()
     }
 
-    /// 统一触发入口（手势条与窗口层兜底都走这里），带 0.6 秒去重，
-    /// 避免「手势条判一次 + 窗口兜底再判一次」把圆盘开了又关。
-    static func attemptTrigger(_ reason: String) {
+    /// 统一触发入口（手势条 / 窗口层兜底 / 识别器都走这里），带 0.6 秒去重。
+    /// `source` 决定后续触摸流转发给圆盘时走哪条通道（圆盘只认最先来的那条）。
+    static func attemptTrigger(_ reason: String, source: String) {
         let now = CACurrentMediaTime()
         guard now - lastTriggerAt > 0.6 else { return }
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
-        AevonLog.info("[边缘] 触发（\(reason)），呼出圆盘")
-        presentRing()
+        AevonLog.info("[边缘] 触发（\(reason)，来源 \(source)），呼出圆盘")
+        presentRing(source: source)
     }
 
-    /// 边缘手势条的触摸流：唤出圆盘后那根手指还没松手，交给圆盘做「跟手旋转 / 停顿选定」。
+    /// 边缘手势条的触摸流：唤出圆盘后那根手指还没松手，交给圆盘做「跟手旋转 / 逆时针选定」。
     private static func handleStripTouch(_ point: CGPoint, _ phase: UITouch.Phase) {
         lastTouchPoint = point
         guard let ring = AevonRingMenu.presented else { return }
         switch phase {
         case .began:
-            ring.beginRemoteTracking(at: point)
+            ring.beginRemoteTracking(at: point, source: "strip")
         case .moved:
-            ring.remoteMoved(to: point)
+            ring.remoteMoved(to: point, source: "strip")
         case .ended:
-            ring.remoteEnded(at: point)
+            ring.remoteEnded(at: point, source: "strip")
         case .cancelled:
-            ring.remoteCancelled()
+            ring.remoteCancelled(source: "strip")
         default:
             break
         }
@@ -270,56 +314,94 @@ enum AevonEdgeEntry {
 
     /// 触摸探针 + 窗口层兜底判定。
     ///
-    /// 两件事：
-    ///  1. **诊断**：事件到达入口窗口时记一笔（只记右侧条带内、限流），
-    ///     下次日志若「有窗口事件、没有手势区收到触摸」，就说明是命中/图层问题。
-    ///  2. **兜底**：直接在窗口层做一次左滑判定。`sendEvent` 只要窗口收到事件就会调用，
-    ///     不经过 hitTest —— 哪怕手势条因为任何原因命中不到，手势照样能用。
+    /// 三件事：
+    ///  1. **诊断**：事件到达入口窗口时记一笔（限流），用来判断「事件有没有进窗口」。
+    ///  2. **兜底触发**：直接在窗口层做左滑 / 长按判定，不经过 hitTest ——
+    ///     哪怕手势条因为任何原因命中不到，手势照样能用。
+    ///  3. **接力**（V0.0.21 关键修复）：圆盘展开后，唤出它的那根手指还没离开屏幕，
+    ///     后续的 moved / ended 从这里转给圆盘，实现「滑出即可旋转、松手即开窗」。
+    ///     V0.0.20 缺了这一步，用户看到的就是「圆盘出来后不动，得抬手再摸一次才行」。
     static func attachProbe(to window: AevonEntryWindow) {
         window.eventProbe = { point, phase in
             guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return }
-            let band = AevonEdgeStripView.bandRect(in: UIScreen.main.bounds)
-            // 上下左右各放宽一点，手指刚压上去的抖动不算出界
-            let slack = band.insetBy(dx: -10, dy: -8)
-            let inside = slack.contains(point)
+
+            // 圆盘已展开：这根手指继续驱动圆盘（旋转 / 选定 / 松手开窗）
+            if let ring = AevonRingMenu.presented {
+                switch phase {
+                case .began: ring.beginRemoteTracking(at: point, source: "window")
+                case .moved: ring.remoteMoved(to: point, source: "window")
+                case .ended: ring.remoteEnded(at: point, source: "window")
+                case .cancelled: ring.remoteCancelled(source: "window")
+                default: break
+                }
+                return
+            }
+
+            let bounds = UIScreen.main.bounds
+            let band = AevonEdgeStripView.looseRect(in: bounds)
+            let inside = band.contains(point)
 
             switch phase {
             case .began:
                 probeStart = inside ? point : nil
-                if inside { lastTouchPoint = point }
-                // 关键诊断：任何落点都记一次（限流），用来判断触摸到底有没有进我们的窗口
+                if inside {
+                    lastTouchPoint = point
+                    scheduleProbeHold()
+                }
+                // 关键诊断：任何落点都记一次（限流），判断触摸到底有没有进我们的窗口
                 let now = CACurrentMediaTime()
                 if now - lastProbeLogAt > 3.0 {
                     lastProbeLogAt = now
-                    AevonLog.info("[边缘] 入口窗口收到触摸 (x=\(Int(point.x)), y=\(Int(point.y))，条带内=\(inside ? "是" : "否")，条带 \(Int(band.minX))~\(Int(band.maxX)) x \(Int(band.minY))~\(Int(band.maxY)))")
+                    AevonLog.info("[边缘] 入口窗口收到触摸 (x=\(Int(point.x)), y=\(Int(point.y))，宽容区内=\(inside ? "是" : "否")，区 \(Int(band.minX))~\(Int(band.maxX)) x \(Int(band.minY))~\(Int(band.maxY)))")
                 }
                 if inside, !loggedProbeBegan {
                     loggedProbeBegan = true
                     AevonLog.info("[边缘] 窗口层已接管边缘触摸（兜底判定生效）")
                 }
             case .moved:
-                guard inside, let start = probeStart else { return }
+                guard let start = probeStart else { return }
+                lastTouchPoint = point
                 let dx = point.x - start.x
                 let dy = point.y - start.y
+                if abs(dx) > 12 || abs(dy) > 12 { cancelProbeHold() }
                 if dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
-                    attemptTrigger("窗口层左滑 \(Int(dx))pt")
+                    attemptTrigger("窗口层左滑 \(Int(dx))pt", source: "window")
                 }
             default:
                 probeStart = nil
+                cancelProbeHold()
             }
         }
     }
 
+    private static var probeHoldTimer: Timer?
+
+    /// 窗口层的长按兜底（手指按住不动 0.42 秒也能呼出圆盘）。
+    private static func scheduleProbeHold() {
+        cancelProbeHold()
+        let timer = Timer(timeInterval: AevonEdgeStripView.holdDuration, repeats: false) { _ in
+            attemptTrigger("窗口层长按", source: "window")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        probeHoldTimer = timer
+    }
+
+    private static func cancelProbeHold() {
+        probeHoldTimer?.invalidate()
+        probeHoldTimer = nil
+    }
+
     /// 呼出圆盘。圆心固定在屏幕 65% 高处（V0.0.20），不再跟随触发点。
-    static func presentRing() {
-        guard let root = AevonEntryHost.rootView else {
+    static func presentRing(source: String) {
+        guard let root = AevonEntryHost.activeRoot else {
             AevonLog.warn("[圆盘] 入口窗口不可用，无法呼出")
             return
         }
         AevonEntryHost.raise(reason: "呼出圆盘")
         AevonRingMenu.present(in: root)
-        // 唤出圆盘的那根手指还没离开屏幕 —— 把它的位置交给圆盘，后续移动就是旋转
-        AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint)
+        // 唤出圆盘的那根手指还没离开屏幕 —— 把它的位置交给圆盘，后续移动就是旋转。
+        // 圆盘只认这个 source，另一条通道（手势条 / 窗口探针）的重复事件会被忽略。
+        AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint, source: source)
     }
 
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。
@@ -329,7 +411,7 @@ enum AevonEdgeEntry {
 
     /// 打开完整应用面板。
     static func openPanel(preferRingEditing: Bool = false) {
-        guard let root = AevonEntryHost.rootView else {
+        guard let root = AevonEntryHost.activeRoot else {
             AevonLog.warn("[面板] 入口窗口不可用，无法打开面板")
             return
         }
@@ -352,6 +434,6 @@ enum AevonEdgeEntry {
 
     /// 供悬浮球（备用入口）复用同一套面板。
     static func hostRootView() -> UIView? {
-        return AevonEntryHost.rootView
+        return AevonEntryHost.activeRoot
     }
 }

@@ -97,7 +97,7 @@ final class AevonBubble {
 
     @objc private func ballTapped() {
         AevonLog.info("[悬浮球] 点击，打开应用选择面板")
-        guard let root = AevonEntryHost.rootView else { return }
+        guard let root = AevonEntryHost.activeRoot else { return }
         if let existing = picker {
             existing.removeFromSuperview()
             picker = nil

@@ -26,12 +26,84 @@ final class AevonEntryWindow: AevonPassthroughWindow {
     }
 }
 
+/// 场景根视图上的覆盖层（V0.0.21）。
+///
+/// 它不属于任何 UIWindow，直接作为 `SBWindowSceneViewController.view` 的子视图，
+/// 靠 `bringSubviewToFront` 压在全屏 App 的容器之上 —— 这是唯一能盖住 App 的办法
+/// （窗口层级对「兄弟视图」无效，见 `AevonHostWindow.sceneRootView` 的说明）。
+/// 命中自身返回 nil，其余触摸照常穿透，不会影响系统与 App。
+final class AevonOverlayRootView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event) else { return nil }
+        return hit === self ? nil : hit
+    }
+}
+
 /// 入口窗口宿主：创建 / 复用唯一窗口，对外只暴露根视图。
 enum AevonEntryHost {
     private static var window: AevonEntryWindow?
+    /// 场景根视图上的覆盖层（弱引用：它由 scene 根视图持有，被回收时自动失效）
+    private static weak var overlay: AevonOverlayRootView?
 
+    /// 窗口自己的根视图（永远存在，用来兜底）
     static var rootView: UIView? { return window?.rootViewController?.view }
     static var isInstalled: Bool { return window != nil }
+
+    /// 当前有效的覆盖层（父视图还在才算数）
+    static var overlayView: UIView? {
+        guard let overlay = overlay, overlay.superview != nil else { return nil }
+        return overlay
+    }
+
+    /// 入口视图的统一挂载点：有覆盖层就用覆盖层（能压住全屏 App），否则退回窗口根视图。
+    static var activeRoot: UIView? {
+        if let view = overlayView { return view }
+        return window?.rootViewController?.view
+    }
+
+    /// 把覆盖层挂到当前场景的根视图上并顶到最前（幂等，随时可调）。
+    @discardableResult
+    static func ensureOverlay(reason: String) -> UIView? {
+        guard let win = window else { return nil }
+        let scene = win.windowScene ?? AevonHostWindow.preferredScene()
+        guard let root = AevonHostWindow.sceneRootView(scene) else { return nil }
+
+        if let existing = overlay, existing.superview === root {
+            // 已经在正确的位置：只需要重新顶到最前（App 切换时容器可能被重新添加）
+            root.bringSubviewToFront(existing)
+            return existing
+        }
+
+        let view = overlay ?? AevonOverlayRootView(frame: root.bounds)
+        if view.superview !== root { view.removeFromSuperview() }
+        view.frame = root.bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = true
+        root.addSubview(view)
+        root.bringSubviewToFront(view)
+
+        let old = window?.rootViewController?.view
+        let moved = reparentEntries(from: old, to: view)
+        overlay = view
+        AevonLog.info("[入口] 覆盖层已挂到场景根视图（\(Int(root.bounds.width))x\(Int(root.bounds.height))，父类 \(type(of: root))，搬入 \(moved) 个入口视图，原因=\(reason)）（AevonSceneOverlayV21）")
+        AevonEdgeEntry.refreshLayoutIfNeeded()
+        AevonBubble.shared.refreshLayoutIfNeeded()
+        return view
+    }
+
+    /// 把窗口根视图里的入口子视图整体搬到覆盖层（或反向搬回）。
+    @discardableResult
+    private static func reparentEntries(from old: UIView?, to new: UIView) -> Int {
+        guard let old = old, old !== new else { return 0 }
+        var count = 0
+        for sub in old.subviews {
+            sub.removeFromSuperview()
+            new.addSubview(sub)
+            count += 1
+        }
+        return count
+    }
 
     /// 确保入口窗口存在（幂等）。成功返回根视图，失败返回 nil（并在稍后重试）。
     @discardableResult
@@ -74,6 +146,8 @@ enum AevonEntryHost {
 
         let bounds = controller.view.bounds
         AevonLog.info("[入口] 统一窗口已创建（level=\(Int(host.windowLevel.rawValue))，scene=\(scene.activationState.rawValue)，根视图 \(Int(bounds.width))x\(Int(bounds.height))，原因=\(reason)）（AevonEntryHost AevonLevel1e7）")
+        // 立刻尝试挂场景覆盖层（能盖住全屏 App 的那一层）
+        if let view = ensureOverlay(reason: reason) { return view }
         return controller.view
     }
 
@@ -89,43 +163,46 @@ enum AevonEntryHost {
         }
     }
 
-    /// 场景看门狗（V0.0.20）。
+    /// 场景看门狗（V0.0.20 引入，V0.0.21 收紧）。
     ///
-    /// 每 2 秒对比一次「当前挂着的场景」与「打分最高的场景」：
-    ///   · 不一致就把窗口搬过去（`windowScene` 可以在运行中改，子视图全部保留）；
-    ///   · 每 10 秒打一次窗口栈（只在前 5 分钟），保证「App 前台时到底有几个场景、
-    ///     我们的窗口还在不在、有没有更高的窗口」一定能在日志里看到。
+    /// **V0.0.21 修正**：V0.0.20 每 2 秒按场景打分把窗口搬一次，
+    /// 结果搬进了 `SBSystemApertureCurtainWindowScene`（灵动岛帘幕场景）——
+    /// 该场景不参与触摸命中，整版边缘手势全废（真机日志 Aevon(14)：
+    /// 桌面上只有悬浮球能点，右边缘零事件）。
+    /// 现在只在「当前场景角色不合格」时才纠正，正常运行时一个字节都不动。
     private static var watchdog: Timer?
     private static var tickCount = 0
 
     static func startWatchdog() {
         guard watchdog == nil else { return }
-        let timer = Timer(timeInterval: 2.0, repeats: true) { _ in watchdogTick() }
+        let timer = Timer(timeInterval: 3.0, repeats: true) { _ in watchdogTick() }
         RunLoop.main.add(timer, forMode: .common)
         watchdog = timer
-        AevonLog.info("[入口] 场景看门狗已启动（每 2 秒核对场景，每 10 秒打一次窗口栈）（AevonSceneWatch）")
+        AevonLog.info("[入口] 场景看门狗已启动（每 3 秒核对角色，每 30 秒打一次窗口栈，只在场景不合格时纠正）（AevonSceneWatch）")
     }
 
     private static func watchdogTick() {
         guard let host = window else { return }
         tickCount += 1
 
-        if let preferred = AevonHostWindow.preferredScene() {
-            let currentScore = host.windowScene.map { AevonHostWindow.sceneScore($0) } ?? Int.min
-            let preferredScore = AevonHostWindow.sceneScore(preferred)
-            // 只有「明显更好」才搬家，避免多个场景同分时来回抖动
-            if preferred !== host.windowScene, preferredScore > currentScore {
-                host.windowScene = preferred
+        // 每轮都把覆盖层重新顶到最前（App 切前台时它的容器会被重新添加，可能盖住我们）
+        ensureOverlay(reason: "周期")
+
+        // 只纠正「角色不合格 / 场景掉了」的情况
+        if !AevonHostWindow.isAcceptableScene(host.windowScene) {
+            if let target = AevonHostWindow.preferredScene() {
+                let from = host.windowScene.map { "\(type(of: $0))<\($0.session.role.rawValue)>" } ?? "无"
+                host.windowScene = target
                 host.windowLevel = AevonWindowLevels.entry
                 host.isHidden = false
-                AevonLog.info("[入口] 场景切换 → \(type(of: preferred))（角色 \(preferred.session.role.rawValue)，状态 \(preferred.activationState.rawValue)，得分 \(currentScore) → \(preferredScore)）")
-                dumpWindowStack("场景切换")
+                AevonLog.warn("[入口] 场景不合格，已纠正 \(from) → \(type(of: target))<\(target.session.role.rawValue)>（AevonSceneFix AevonSceneWhiteListV21）")
+                dumpWindowStack("场景纠正")
                 return
             }
         }
 
-        // 前 5 分钟每 10 秒打一次栈：用户一般会在这段时间里打开 App 验证
-        if tickCount <= 150, tickCount % 5 == 0 {
+        // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
+        if tickCount <= 60, tickCount % 10 == 0 {
             dumpWindowStack("周期")
         }
     }
@@ -137,14 +214,12 @@ enum AevonEntryHost {
     /// 都重设一次层级与可见性，代价近乎为零，却能把这类时序问题抹平。
     static func raise(reason: String) {
         guard let host = window else { return }
-        // 场景自愈：SpringBoard 的场景偶尔会掉到 unattached/background（V0.0.18 日志里
-        // 就是 scene=0）。窗口挂在不活跃的场景上时不会参与合成，全屏 App 下自然看不见。
-        // 这里在有前台场景时重新挂一次。
-        let state = host.windowScene?.activationState
-        if state == nil || state == .unattached || state == .background {
-            if let scene = AevonHostWindow.preferredScene(), scene !== host.windowScene {
+        // 场景自愈（V0.0.21 收紧）：只有「角色不合格 / 场景掉了」才重挂。
+        // 旧实现只要状态不是 foregroundActive 就重挂，在场景切换瞬间容易踩到正在销毁的场景。
+        if !AevonHostWindow.isAcceptableScene(host.windowScene) {
+            if let scene = AevonHostWindow.preferredScene() {
                 host.windowScene = scene
-                AevonLog.info("[入口] 窗口场景已重挂（\(reason)）")
+                AevonLog.info("[入口] 窗口场景已重挂 → \(type(of: scene))<\(scene.session.role.rawValue)>（\(reason)）")
             }
         }
         let before = host.windowLevel.rawValue
@@ -153,6 +228,8 @@ enum AevonEntryHost {
         if before != AevonWindowLevels.entry.rawValue {
             AevonLog.info("[入口] 层级已重设 \(Int(before)) → \(Int(host.windowLevel.rawValue))（\(reason)）")
         }
+        // V0.0.21：真正决定「App 前台看不看得见」的是场景根视图上的覆盖层，窗口层级只是兜底
+        ensureOverlay(reason: reason)
     }
 
     /// 窗口栈诊断（V0.0.19）：把当前所有场景的窗口按层级打出来。
