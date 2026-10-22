@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.0.27（arm64e / roothide）。所有功能只在本页开关，无需终端 / SSH。用法：打开「启用插件」→ 注销 → 在下方设定的热区内向左滑（或按住约 0.4 秒）呼出圆盘；逆时针转半圈后图标开始跟手旋转，顺时针或停住即进入选择，松手开窗。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.0.28（arm64e / roothide）。所有功能只在本页开关，无需终端 / SSH。用法：打开「启用插件」→ 注销 → 在下方设定的热区内向左滑（或按住约 0.4 秒）呼出圆盘；逆时针转半圈后图标开始跟手旋转，顺时针或停住即进入选择，松手开窗。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -66,13 +66,17 @@
 			<key>key</key>
 			<string>RingTriggerY</string>
 			<key>label</key>
-			<string>触发位置（屏幕高度 %）</string>
+			<string>触发位置：0% = 屏幕顶部，100% = 屏幕底部</string>
 			<key>minValue</key>
 			<integer>0</integer>
 			<key>maxValue</key>
 			<integer>100</integer>
 			<key>default</key>
 			<integer>75</integer>
+			<key>footerText</key>
+			<string>热区中心落在屏幕高度的百分比，默认 75（正好是圆盘圆心）。
+0% 贴屏幕最上面，100% 贴最下面；想单手好够到就 60~85。
+拖动时右侧触发条会实时跟着上下移动，设置里的数字同步变化。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -88,13 +92,15 @@
 			<key>key</key>
 			<string>RingTriggerWidth</string>
 			<key>label</key>
-			<string>触发宽度（pt）</string>
+			<string>触发宽度：贴着右边缘的厚度（pt）</string>
 			<key>minValue</key>
 			<integer>18</integer>
 			<key>maxValue</key>
 			<integer>140</integer>
 			<key>default</key>
 			<integer>48</integer>
+			<key>footerText</key>
+			<string>热区从右边缘往左有多厚。数值越小越不容易误触，也越难划出；默认 48，建议 30~60。拖动时触发条会实时变粗 / 变细。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -110,13 +116,29 @@
 			<key>key</key>
 			<string>RingTriggerHeight</string>
 			<key>label</key>
-			<string>触发高度（pt）</string>
+			<string>触发高度：热区上下的总高度（pt）</string>
 			<key>minValue</key>
 			<integer>80</integer>
 			<key>maxValue</key>
 			<integer>900</integer>
 			<key>default</key>
 			<integer>320</integer>
+			<key>footerText</key>
+			<string>热区纵向总长。越大可呼出的纵向范围越广；默认 320（约屏幕 1/3），建议 240~420。拖动时触发条会实时变长 / 变短。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>如果触发条跑到了不合适的位置（例如贴着屏幕顶部），点下面的按钮一键恢复：位置 75%、宽 48pt、高 320pt。恢复后触发条会立刻回到屏幕右侧中部。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>恢复默认触发区域（75% / 48pt / 320pt）</string>
+			<key>action</key>
+			<string>aevonResetTriggerZone</string>
 		</dict>
 		<dict>
 			<key>cell</key>

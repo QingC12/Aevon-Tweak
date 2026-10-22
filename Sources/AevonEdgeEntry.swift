@@ -381,6 +381,7 @@ enum AevonEdgeEntry {
     /// 之前只靠看门狗每 3 秒的一次 refresh，而且 `CFPreferencesCopyAppValue`
     /// 在 SpringBoard 进程内还有缓存 —— 用户拖完滑杆盯着屏幕看，触发条就是不动。
     static func startTriggerZoneWatch() {
+        migrateLegacyBrokenZoneIfNeeded()
         if zoneSignature.isEmpty { zoneSignature = AevonTriggerZone.signature() }
         if !prefsObserverInstalled {
             prefsObserverInstalled = true
@@ -400,6 +401,28 @@ enum AevonEdgeEntry {
         }
         RunLoop.main.add(timer, forMode: .common)
         zoneTimer = timer
+    }
+
+    /// V0.0.28：修掉 V0.0.27 留下的「触发区被写成 0% / 18pt / 80pt」。
+    ///
+    /// 那一版三个滑杆的初始值没从偏好读（停在最左端），用户一碰就把 0 写回去，
+    /// 于是触发条跑到屏幕最顶部、又细又短 —— 用户以为是「纵向反了」。
+    /// 这里按特征值识别（几乎不可能是人为组合），一次性恢复成默认值并记一行日志。
+    private static var migratedLegacyZone = false
+
+    private static func migrateLegacyBrokenZoneIfNeeded() {
+        guard !migratedLegacyZone else { return }
+        migratedLegacyZone = true
+        let y = AevonPrefs.double("RingTriggerY", default: -1)
+        let w = AevonPrefs.double("RingTriggerWidth", default: -1)
+        let h = AevonPrefs.double("RingTriggerHeight", default: -1)
+        guard y >= 0, y <= 1.5, w >= 0, w <= 18.5, h >= 0, h <= 80.5 else { return }
+        AevonPrefs.set("RingTriggerY", 75)
+        AevonPrefs.set("RingTriggerWidth", 48)
+        AevonPrefs.set("RingTriggerHeight", 320)
+        AevonPrefs.synchronize()
+        zoneSignature = ""
+        AevonLog.warn("[边缘] 检测到上一版误写的触发区（≈0% / 18pt / 80pt），已恢复默认 75% / 48pt / 320pt（AevonTriggerZoneResetV28）")
     }
 
     /// 指纹变了就重排触发条（幂等；没变什么都不做）

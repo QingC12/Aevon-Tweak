@@ -220,6 +220,14 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
         // 没有 UIKit 的进程（守护进程 / launchd / backboardd）直接退出，绝不做任何事
         if (objc_getClass("UIApplication") == NULL) { return; }
         if (objc_getClass("SpringBoard") != NULL) { return; }
+        /*
+         * V0.0.28：**排除「设置」App**。
+         * 设置页里的三个触发区滑杆跨在热区里，若在 Preferences 进程也被接管，
+         * 滑杆右半截就拖不动（用户会以为「滑条只能拖到最小值」）。
+         * Aevon 自己的设置页永远不需要热区手势。
+         */
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        if ([bundleID isEqualToString:@"com.apple.Preferences"]) { return; }
 
         @try {
             AevonGuardInstall();

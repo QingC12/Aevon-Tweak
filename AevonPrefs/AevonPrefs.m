@@ -57,6 +57,55 @@ static void AevonSetProperty(id spec, id value, NSString *key) {
     @try { fn(spec, sel, value, key); } @catch (NSException *exception) {}
 }
 
+/* 读回 specifier 的属性（同一套 runtime 直调，避开私有头文件） */
+static id AevonGetProperty(id spec, NSString *key) {
+    if (spec == nil || key == nil) return nil;
+    SEL sel = sel_registerName("propertyForKey:");
+    if (![spec respondsToSelector:sel]) return nil;
+    typedef id (*GetPropertyFn)(id, SEL, NSString *);
+    GetPropertyFn fn = (GetPropertyFn)[spec methodForSelector:sel];
+    if (fn == NULL) return nil;
+    @try { return fn(spec, sel, key); } @catch (NSException *exception) { return nil; }
+    return nil;
+}
+
+/*
+ * 读偏好里的数值（V0.0.28）。
+ * 根因：PSSliderCell 初始化滑块位置时只看 specifier 的 "default"，
+ * 不会走 readPreferenceValue: —— 于是三个触发区滑杆一进页面全停在最左端（0），
+ * 用户一碰就把 0 写回偏好，触发条就跑到屏幕最顶部、高度/宽度也变成最小值。
+ * 现在构造 specifier 时直接用**已存储的值**当 default，滑块一进来就在正确位置。
+ */
+static NSNumber *AevonPrefsNumber(NSString *key) {
+    if (key.length == 0) return nil;
+    CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
+    CFPreferencesAppSynchronize(domain);
+    CFTypeRef raw = CFPreferencesCopyAppValue((__bridge CFStringRef)key, domain);
+    if (raw == NULL) return nil;
+    NSNumber *number = nil;
+    CFTypeID type = CFGetTypeID(raw);
+    if (type == CFNumberGetTypeID()) {
+        number = (__bridge_transfer NSNumber *)raw;
+    } else if (type == CFStringGetTypeID()) {
+        NSString *text = (__bridge_transfer NSString *)raw;
+        number = @([text doubleValue]);
+    } else {
+        CFRelease(raw);
+    }
+    return number;
+}
+
+/*
+ * V0.0.28：滑条同步的诊断输出。
+ * 这个 ASCII 字面量同时是 CI 的构建后校验标记（swift/objc 的方法名不在 __cstring 里，
+ * 只有这种字面量能被 `strings` 扫到）。
+ */
+static void AevonLogPrefsSync(void) {
+    NSString *marker = @"AevonSliderSyncV28";
+    if (marker.length == 0) { NSLog(@"%@", marker); }
+    NSLog(@"[Aevon] 触发区滑条已按存储值校正（%@）", marker);
+}
+
 static NSString *const AevonPrefsDomain = @"com.Aevon";
 /* PSSwitchCell 的 cell 类型值（Preferences 框架常量，多年未变） */
 #define AEVON_CELL_SWITCH 6
@@ -242,9 +291,13 @@ static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle) {
                 ? [item[@"minValue"] doubleValue] : 0.0;
             double maxValue = [item[@"maxValue"] respondsToSelector:@selector(doubleValue)]
                 ? [item[@"maxValue"] doubleValue] : 100.0;
-            double defaultValue = [item[@"default"] respondsToSelector:@selector(doubleValue)]
-                ? [item[@"default"] doubleValue] : minValue;
+            NSNumber *stored = AevonPrefsNumber(key);
+            id initial = stored ?: item[@"default"];
+            double defaultValue = [initial respondsToSelector:@selector(doubleValue)]
+                ? [initial doubleValue] : minValue;
             if (maxValue <= minValue) maxValue = minValue + 1;
+            if (defaultValue < minValue) defaultValue = minValue;
+            if (defaultValue > maxValue) defaultValue = maxValue;
             id spec = AevonNewSlider(label, target, key, minValue, maxValue, defaultValue);
             if (spec != nil) [result addObject:spec];
         } else if ([cell isEqualToString:@"PSButtonCell"]) {
@@ -429,7 +482,14 @@ static char AevonSliderTagKey;
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    /*
+     * 每次进页面：先按偏好重算一遍 specifier（这样三个滑杆的 default 就是真实存储值），
+     * 再挂 target 并校正滑块位置。V0.0.28 之前滑块一律从 0 开始 —— 用户一碰就把 0
+     * 写回偏好，触发条直接跑到屏幕最顶部（误以为「方向反了」）。
+     */
     [self aevonHookSliders];
+    [self aevonSyncAllSliders];
+    AevonLogPrefsSync();
 }
 
 - (void)viewDidLayoutSubviews {
@@ -448,9 +508,17 @@ static char AevonSliderTagKey;
         UISlider *slider = (UISlider *)view;
         if (objc_getAssociatedObject(slider, &AevonSliderTagKey) == nil) {
             objc_setAssociatedObject(slider, &AevonSliderTagKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            /* 连续回报：PSSliderCell 在部分系统上只在松手时发一次 valueChanged，
+             * 那样触发条就只能在抬手后跳一下 —— 用户要的是「拖着滑条，条跟着走」。 */
+            slider.continuous = YES;
             [slider addTarget:self
                        action:@selector(aevonSliderValueChanged:)
              forControlEvents:UIControlEventValueChanged];
+            /* 手指刚按下先把滑块校正到真实值（防止显示与实际不一致时越拖越偏） */
+            [slider addTarget:self
+                       action:@selector(aevonSliderTouchDown:)
+             forControlEvents:UIControlEventTouchDown];
+            [self aevonSyncSlider:slider];
         }
         return;
     }
@@ -459,35 +527,127 @@ static char AevonSliderTagKey;
     }
 }
 
+#pragma mark - V0.0.28：滑条 ↔ 触发条 双向同步
+
+/* 往上找承载它的 UITableViewCell，再取 specifier 的 key */
+- (NSString *)aevonKeyForSlider:(UISlider *)slider specifier:(id *)outSpecifier {
+    UIView *node = slider;
+    while (node != nil && ![node isKindOfClass:[UITableViewCell class]]) {
+        node = node.superview;
+    }
+    id spec = nil;
+    if (node != nil && [node respondsToSelector:@selector(specifier)]) {
+        spec = [node performSelector:@selector(specifier)];
+    }
+    if (outSpecifier != NULL) *outSpecifier = spec;
+    id key = AevonGetProperty(spec, @"key");
+    return [key isKindOfClass:[NSString class]] ? (NSString *)key : nil;
+}
+
+/* 把存储值压回滑块 + 让 PSSliderCell 右侧的数值标签一起更新 */
+- (void)aevonSyncSlider:(UISlider *)slider {
+    id spec = nil;
+    NSString *key = [self aevonKeyForSlider:slider specifier:&spec];
+    if (key.length == 0) return;
+    NSNumber *stored = AevonPrefsNumber(key);
+    double value = stored.doubleValue;
+    if (stored == nil) {
+        id def = AevonGetProperty(spec, @"default");
+        if ([def respondsToSelector:@selector(doubleValue)]) {
+            value = [def doubleValue];
+        } else {
+            return;
+        }
+    }
+    if (value < slider.minimumValue) value = slider.minimumValue;
+    if (value > slider.maximumValue) value = slider.maximumValue;
+    [slider setValue:(float)value animated:NO];
+
+    /* 让框架自己的数值标签显示同一个数（"value"/"default" 两个键不同版本分别读） */
+    AevonSetProperty(spec, @(value), @"value");
+    AevonSetProperty(spec, @(value), @"default");
+    UITableViewCell *cell = (UITableViewCell *)slider.superview;
+    while (cell != nil && ![cell isKindOfClass:[UITableViewCell class]]) {
+        cell = (UITableViewCell *)cell.superview;
+    }
+    if (cell != nil && [cell respondsToSelector:@selector(refreshCellContentsWithSpecifier:)]) {
+        @try {
+            [cell performSelector:@selector(refreshCellContentsWithSpecifier:) withObject:spec];
+        } @catch (NSException *exception) {
+        }
+    }
+    /* refresh 可能又把滑块设回旧值，最后再压一次确保位置正确 */
+    [slider setValue:(float)value animated:NO];
+    slider.continuous = YES;
+}
+
+- (void)aevonSyncAllSliders {
+    [self aevonWalkSync:self.view depth:0];
+}
+
+- (void)aevonWalkSync:(UIView *)view depth:(NSInteger)depth {
+    if (view == nil || depth > 16) return;
+    if ([view isKindOfClass:[UISlider class]]) {
+        [self aevonSyncSlider:(UISlider *)view];
+        return;
+    }
+    for (UIView *sub in view.subviews) {
+        [self aevonWalkSync:sub depth:depth + 1];
+    }
+}
+
+- (void)aevonSliderTouchDown:(UISlider *)slider {
+    [self aevonSyncSlider:slider];
+}
+
 /*
  * 拖动过程中每一帧：写回偏好 + 广播 com.aevon.prefschanged。
  * SpringBoard 收到后 synchronize + 比对指纹 + 重排触发条 —— 视觉上就是"跟手"。
  * PSSliderCell 自己只在某些系统版本上「松手才提交」，所以这里必须自己写。
  */
 - (void)aevonSliderValueChanged:(UISlider *)slider {
-    NSString *key = nil;
-    UIView *node = slider;
-    while (node != nil && ![node isKindOfClass:[UITableViewCell class]]) {
-        node = node.superview;
-    }
-    if (node != nil && [node respondsToSelector:@selector(specifier)]) {
-        id spec = [node performSelector:@selector(specifier)];
-        if ([spec respondsToSelector:@selector(propertyForKey:)]) {
-            id value = [spec performSelector:@selector(propertyForKey:) withObject:@"key"];
-            if ([value isKindOfClass:[NSString class]]) key = (NSString *)value;
-        }
-    }
-
-    CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
+    id spec = nil;
+    NSString *key = [self aevonKeyForSlider:slider specifier:&spec];
     if (key.length > 0) {
+        CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
         CFPreferencesSetAppValue((__bridge CFStringRef)key,
                                  (__bridge CFPropertyListRef)@(slider.value),
                                  domain);
         CFPreferencesAppSynchronize(domain);
+        /* 数值标签跟着手指走（不然只有滑块在动、数字不动） */
+        AevonSetProperty(spec, @(slider.value), @"default");
     }
+    /* 拖动时每帧都会走到这里：写偏好不节流，但跨进程通知限到 ~30ms 一次，
+     * 免得 SpringBoard 被通知洪水拖慢（视觉上仍然跟手）。 */
+    static CFTimeInterval lastPost = 0;
+    CFTimeInterval now = CFAbsoluteTimeGetCurrent();
+    if (lastPost == 0 || now - lastPost >= 0.03) {
+        lastPost = now;
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFSTR("com.aevon.prefschanged"),
+                                             NULL, NULL, true);
+    }
+}
+
+/* 一键恢复触发区默认值：位置 75% / 宽 48pt / 高 320pt */
+- (void)aevonResetTriggerZone {
+    NSDictionary *defaults = @{ @"RingTriggerY": @75,
+                                @"RingTriggerWidth": @48,
+                                @"RingTriggerHeight": @320 };
+    CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
+    [defaults enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSNumber *value, BOOL *stop) {
+        (void)stop;
+        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)value, domain);
+    }];
+    CFPreferencesAppSynchronize(domain);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                                          CFSTR("com.aevon.prefschanged"),
                                          NULL, NULL, true);
+    @try {
+        [self reloadSpecifiers];
+    } @catch (NSException *exception) {
+    }
+    [self aevonSyncAllSliders];
 }
 
 #pragma mark - V0.0.27：圆盘 App 编辑器入口

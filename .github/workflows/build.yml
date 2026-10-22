@@ -238,9 +238,24 @@ jobs:
             || { echo "::error::触发条颜色没有随系统明暗切换（缺 AevonStripAdaptiveTintV26）—— 浅色背景下看不见"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingNoHintV26' \
             || { echo "::error::圆盘底部提示文字没有移除（缺 AevonRingNoHintV26）"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonRingRotateArmV26' \
-            || { echo "::error::逆时针旋转没有「半圈解锁」（缺 AevonRingRotateArmV26）—— 选图标时会误触发旋转"; exit 1; }
-          echo "V0.0.26 校验: 触发区实时生效 + 触发条明暗自适应 + 无提示文字 + 旋转半圈解锁 已编入"
+          echo "V0.0.26 校验: 触发区实时生效 + 触发条明暗自适应 + 无提示文字 已编入"
+
+          # ── V0.0.28：圆盘两模式（选择 / 旋转）+ 内圈收紧 + 抬手指不收起圆盘 ──
+          # 用户 Aevon(21)：取消「逆时针转半圈解锁」，改成「按住圆心 1 秒开关旋转」。
+          strings "$DYLIB" | grep -q 'AevonRingHoldRotateV28' \
+            || { echo "::error::圆盘没有「按住圆心 1 秒切旋转」（缺 AevonRingHoldRotateV28）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingTwoModeV28' \
+            || { echo "::error::圆盘没有选择 / 旋转两模式（缺 AevonRingTwoModeV28）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingInnerTightV28' \
+            || { echo "::error::圆盘内圈没有收紧（缺 AevonRingInnerTightV28）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingKeepOpenV28' \
+            || { echo "::error::抬手指会把圆盘一起收起（缺 AevonRingKeepOpenV28）"; exit 1; }
+          # 旧的「半圈解锁」必须彻底消失，否则两套门槛会互相打架
+          if strings "$DYLIB" | grep -q 'AevonRingRotateArmV26'; then
+            echo "::error::仍残留旧的「逆时针半圈解锁」机制（AevonRingRotateArmV26）"
+            exit 1
+          fi
+          echo "V0.0.28 校验: 圆心按住切旋转 + 内圈收紧 + 抬手保持展开 已编入"
 
           # ── V0.0.27：App 侧触摸拦截（独立小 dylib，注入前台 App 进程）──
           # 用户 Aevon(20)：SpringBoard 里吞事件挡不住 QQ 左滑删除会话 / 抖音左滑进主页，
@@ -303,6 +318,15 @@ jobs:
             || { echo "::error::圆盘 App 编辑器不支持拖动排序（缺 moveRowAtIndexPath）"; exit 1; }
           strings "$PREFS_BIN" | grep -q 'aevonSliderValueChanged' \
             || { echo "::error::设置页滑杆没有拖动实时回调（缺 aevonSliderValueChanged）"; exit 1; }
+          # V0.0.28：滑条必须按存储值初始化（否则一碰就写 0，触发条跑到屏幕顶部）
+          strings "$PREFS_BIN" | grep -q 'AevonSliderSyncV28' \
+            || { echo "::error::滑条没有按存储值校正（缺 AevonSliderSyncV28）—— 滑杆会停在最左端"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'aevonResetTriggerZone' \
+            || { echo "::error::设置页缺少「恢复默认触发区域」按钮动作（aevonResetTriggerZone）"; exit 1; }
+          PREFS_DIR_TMP="$(dirname "$PREFS_BIN")"
+          plutil -convert xml1 -o - "$PREFS_DIR_TMP/Root.plist" | grep -q 'aevonResetTriggerZone' \
+            || { echo "::error::Root.plist 缺少「恢复默认触发区域」按钮"; exit 1; }
+          echo "V0.0.28 设置侧校验: 滑条按存储值校正 + 恢复默认按钮 已编入"
 
           # Root.plist 必须随包，且开关项不少于 6 个
           ICON_DIR="$(dirname "$PREFS_BIN")"
