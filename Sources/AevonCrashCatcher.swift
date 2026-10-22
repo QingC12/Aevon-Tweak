@@ -72,9 +72,9 @@ private func aevonSignalHandler(_ signalNumber: Int32) {
         // 帧 2 是 sigtramp 跳板，从帧 3 起才是真正崩溃现场——
         // 只有现场里出现 Aevon 自己的帧才认账，否则是别的插件崩了（真机定论：
         // ZZEvoCenterRuntime 崩溃曾把 Aevon 误禁用，用户永远开不起来）。
-        var owned = 0
+        var owned: Int = 0
         if count > 3 {
-            owned = AevonCrashAttrOwnsFrame(&frames, Int32(count), 3)
+            owned = Int(AevonCrashAttrOwnsFrame(&frames, Int32(count), 3))
         }
         if fd >= 0 {
             _ = (owned == 1 ? kAttrOwnedBytes : kAttrExternalBytes).withUnsafeBufferPointer { buffer in
