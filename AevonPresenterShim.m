@@ -17,6 +17,7 @@ typedef id (*AevonIdFn1)(id, SEL, id);
 typedef void (*AevonVoidFn0)(id, SEL);
 typedef void (*AevonVoidFn1)(id, SEL, id);
 typedef void (*AevonVoidFnInt1)(id, SEL, NSInteger);
+typedef void (*AevonVoidFnBlock1)(id, SEL, void (^)(id));
 
 id AevonPresenterCreate(id scene, NSString *identifier) {
     @try {
@@ -45,7 +46,7 @@ id AevonPresenterCreate(id scene, NSString *identifier) {
                     // 外观设置失败不影响呈现
                 }
             };
-            ((AevonVoidFn1)objc_msgSend)(presenter, modifySelector, (__bridge id)configure);
+            ((AevonVoidFnBlock1)objc_msgSend)(presenter, modifySelector, configure);
         }
 
         SEL activateSelector = NSSelectorFromString(@"activate");
