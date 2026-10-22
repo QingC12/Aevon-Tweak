@@ -47,6 +47,8 @@
  * 同名不同签名的实现，clang 会报 -Wobjc-multiple-method-names（本工程 -Werror）。
  * 这里全部走 runtime 直调，既避开重名解析，也不依赖私有头文件。
  */
+static NSString *const AevonPrefsDomain = @"com.Aevon";
+
 static void AevonSetProperty(id spec, id value, NSString *key) {
     if (spec == nil || key == nil) return;
     SEL sel = sel_registerName("setProperty:forKey:");
@@ -106,7 +108,6 @@ static void AevonLogPrefsSync(void) {
     NSLog(@"[Aevon] 触发区滑条已按存储值校正（%@）", marker);
 }
 
-static NSString *const AevonPrefsDomain = @"com.Aevon";
 /* PSSwitchCell 的 cell 类型值（Preferences 框架常量，多年未变） */
 #define AEVON_CELL_SWITCH 6
 /* PSSliderCell 的 cell 类型值（V0.0.25 新增：圆盘触发区域的位置 / 宽度 / 高度） */
