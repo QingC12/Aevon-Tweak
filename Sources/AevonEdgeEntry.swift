@@ -97,8 +97,6 @@ enum AevonTriggerZone {
 final class AevonEdgeStripView: UIView {
     /// 判定为「呼出」的横向位移
     static let swipeDistance: CGFloat = 30
-    /// 长按触发时长（秒）
-    static let holdDuration: TimeInterval = 0.42
 
     var onTrigger: (() -> Void)?
     /// 触摸流（窗口坐标 + 相位）：圆盘呼出后，这根手指还没松手，
@@ -109,7 +107,6 @@ final class AevonEdgeStripView: UIView {
     private var touchStart: CGPoint = .zero
     private var touchBeganAt: CFTimeInterval = 0
     private var fired = false
-    private var holdTimer: Timer?
     private var lastTouchLogAt: CFTimeInterval = 0
 
     /// V0.0.26：触发条颜色跟着系统深浅色走。
@@ -171,24 +168,15 @@ final class AevonEdgeStripView: UIView {
         layoutIndicator()
 
         // 兜底通道：系统手势偶尔会把原始 touches 取消掉，识别器仍能独立拿到手势方向。
-        // 两个识别器都不取消触摸，所以不会影响上面那套 touchesBegan/Moved 逻辑。
+        // 识别器不取消触摸，所以不会影响上面那套 touchesBegan/Moved 逻辑。
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.cancelsTouchesInView = false
         pan.delaysTouchesBegan = false
         addGestureRecognizer(pan)
-
-        let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHoldGesture(_:)))
-        hold.minimumPressDuration = AevonEdgeStripView.holdDuration
-        hold.cancelsTouchesInView = false
-        addGestureRecognizer(hold)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        holdTimer?.invalidate()
     }
 
     /// 按父视图 bounds 重新落位（幂等）。父视图还没布局时直接返回，等 layoutSubviews 再来一次。
@@ -218,11 +206,6 @@ final class AevonEdgeStripView: UIView {
            abs(translation.x) >= abs(translation.y) * 0.7 {
             fire(reason: "识别器左滑 \(Int(translation.x))pt")
         }
-    }
-
-    @objc private func handleHoldGesture(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, !fired else { return }
-        fire(reason: "识别器长按")
     }
 
     override func layoutSubviews() {
@@ -260,7 +243,6 @@ final class AevonEdgeStripView: UIView {
         UIView.animate(withDuration: 0.12) {
             self.applyAppearance(active: true)
         }
-        scheduleHold()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -277,7 +259,6 @@ final class AevonEdgeStripView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        cancelHold()
         restoreIndicator()
         let point = touches.first?.location(in: self) ?? touchStart
         onTouch?(convert(point, to: nil), .ended)
@@ -285,11 +266,10 @@ final class AevonEdgeStripView: UIView {
         let dx = point.x - touchStart.x
         let dy = point.y - touchStart.y
         let duration = Int((CACurrentMediaTime() - touchBeganAt) * 1000)
-        AevonLog.info("[边缘] 手势区触摸结束未触发（dx=\(Int(dx)), dy=\(Int(dy)), 持续 \(duration)ms，阈值：左滑 \(-Int(AevonEdgeStripView.swipeDistance))pt 或长按 \(Int(AevonEdgeStripView.holdDuration * 1000))ms）")
+        AevonLog.info("[边缘] 手势区触摸结束未触发（dx=\(Int(dx)), dy=\(Int(dy)), 持续 \(duration)ms，阈值：左滑 \(-Int(AevonEdgeStripView.swipeDistance))pt）（AevonSwipeOnlyV38）")
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        cancelHold()
         restoreIndicator()
         if let point = touches.first?.location(in: self) {
             onTouch?(convert(point, to: nil), .cancelled)
@@ -298,26 +278,9 @@ final class AevonEdgeStripView: UIView {
 
     // MARK: - 触发
 
-    private func scheduleHold() {
-        cancelHold()
-        let timer = Timer(timeInterval: AevonEdgeStripView.holdDuration, repeats: false) { [weak self] _ in
-            guard let self = self, !self.fired else { return }
-            self.fire(reason: "边缘长按 \(Int(AevonEdgeStripView.holdDuration * 1000))ms")
-        }
-        // 手指按住时 RunLoop 处于 tracking 模式，必须挂到 common modes 才会触发
-        RunLoop.main.add(timer, forMode: .common)
-        holdTimer = timer
-    }
-
-    private func cancelHold() {
-        holdTimer?.invalidate()
-        holdTimer = nil
-    }
-
     private func fire(reason: String) {
         guard !fired else { return }
         fired = true
-        cancelHold()
         AevonLog.info("[边缘] 手势条命中（\(reason)）")
         indicator.backgroundColor = activeColor
         onTrigger?()
@@ -376,7 +339,7 @@ enum AevonEdgeEntry {
         // V0.0.26：触发区配置实时生效（Darwin 通知 + 0.35 秒轮询兜底）
         AevonEdgeEntry.startTriggerZoneWatch()
         let rootBounds = root.bounds
-        AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 或 长按\(Int(AevonEdgeStripView.holdDuration * 1000))ms）（AevonEdgeTouch AevonTriggerZoneV25 AevonRingListLiveV27 AevonAppGuardSideV27）")
+        AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt）（AevonEdgeTouch AevonTriggerZoneV25 AevonRingListLiveV27 AevonAppGuardSideV27 AevonSwipeOnlyV38）")
 
         // 圆盘的默认内容：首次使用时用应用列表预填，保证呼出不是空盘
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -553,8 +516,9 @@ enum AevonEdgeEntry {
     ///
     /// 三件事：
     ///  1. **诊断**：事件到达入口窗口时记一笔（限流），用来判断「事件有没有进窗口」。
-    ///  2. **兜底触发**：直接在窗口层做左滑 / 长按判定，不经过 hitTest ——
+    ///  2. **兜底触发**：直接在窗口层做左滑判定，不经过 hitTest ——
     ///     哪怕手势条因为任何原因命中不到，手势照样能用。
+    ///     V0.0.38（AevonSwipeOnlyV38）：长按触发整体移除，只保留左滑。
     ///  3. **接力**（V0.0.21 关键修复）：圆盘展开后，唤出它的那根手指还没离开屏幕，
     ///     后续的 moved / ended 从这里转给圆盘，实现「滑出即可旋转、松手即开窗」。
     ///     V0.0.20 缺了这一步，用户看到的就是「圆盘出来后不动，得抬手再摸一次才行」。
@@ -589,7 +553,6 @@ enum AevonEdgeEntry {
                 probeStart = inside ? point : nil
                 if inside {
                     lastTouchPoint = point
-                    scheduleProbeHold()
                 }
                 // 关键诊断：任何落点都记一次（限流），判断触摸到底有没有进我们的窗口
                 let now = CACurrentMediaTime()
@@ -606,32 +569,13 @@ enum AevonEdgeEntry {
                 lastTouchPoint = point
                 let dx = point.x - start.x
                 let dy = point.y - start.y
-                if abs(dx) > 12 || abs(dy) > 12 { cancelProbeHold() }
                 if dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
                     attemptTrigger("窗口层左滑 \(Int(dx))pt", source: "window")
                 }
             default:
                 probeStart = nil
-                cancelProbeHold()
             }
         }
-    }
-
-    private static var probeHoldTimer: Timer?
-
-    /// 窗口层的长按兜底（手指按住不动 0.42 秒也能呼出圆盘）。
-    private static func scheduleProbeHold() {
-        cancelProbeHold()
-        let timer = Timer(timeInterval: AevonEdgeStripView.holdDuration, repeats: false) { _ in
-            attemptTrigger("窗口层长按", source: "window")
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        probeHoldTimer = timer
-    }
-
-    private static func cancelProbeHold() {
-        probeHoldTimer?.invalidate()
-        probeHoldTimer = nil
     }
 
     // MARK: - 全局触摸通道（V0.0.23）
@@ -641,7 +585,6 @@ enum AevonEdgeEntry {
     private static var globalTouchID: UInt = 0
     private static var globalStart: CGPoint = .zero
     private static var globalFired = false
-    private static var globalHoldTimer: Timer?
     private static var globalLastLogAt: CFTimeInterval = 0
 
     /// 圆盘接管期（V0.0.24）：只有「全局通道唤起的圆盘」需要把这根手指从 App 手里拿走。
@@ -659,8 +602,8 @@ enum AevonEdgeEntry {
     /// 代价是热区内的单击不会被 App 收到 —— 这是「只在特定位置才能呼出」的必然取舍，
     /// 所以热区默认只有 48×380pt，并且位置/宽度/高度都能在设置里调。
     private static var ownsTouch = false
-    /// 热区按下后的最长接管时间（秒）。长按 0.42 秒就会触发圆盘，所以 4 秒足够；
-    /// 超时后不再吞，避免用户按住很久后突然开始滑动时把触摸还留在我们手里。
+    /// 热区按下后的最长接管时间（秒）。V0.0.38 起长按触发已移除，
+    /// 这 4 秒只兜「按住不动又不抬手」的极端情况；期间用户一开始滑动就继续续期。
     private static let pressLimit: CFTimeInterval = 4
 
     /// V0.0.29：圆盘展开期间的「额外手指」（原指针还在旋转 / 拖动时落下的新手指）。
@@ -742,7 +685,6 @@ enum AevonEdgeEntry {
             // 热区是右缘 18~140pt 专属手势条，桌面图标几乎不可能落在里面 —— 接管优先。
             ownsTouch = true
             swallowDeadline = CACurrentMediaTime() + pressLimit
-            scheduleGlobalHold()
             let now = CACurrentMediaTime()
             if now - globalLastLogAt > 2.0 {
                 globalLastLogAt = now
@@ -762,7 +704,6 @@ enum AevonEdgeEntry {
             if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
             // 圆盘已展开：这根手指继续驱动它（旋转 / 选定 / 松手开窗）
             if let ring = AevonRingMenu.presented {
-                cancelGlobalHold()
                 // 滑动期间续期：只要手指还在动，就持续把这条 touch 挡在 App 外面。
                 if ringSource == "global" {
                     swallowDeadline = CACurrentMediaTime() + swallowLimit
@@ -772,7 +713,6 @@ enum AevonEdgeEntry {
             }
             let dx = point.x - globalStart.x
             let dy = point.y - globalStart.y
-            if abs(dx) > 12 || abs(dy) > 12 { cancelGlobalHold() }
             if !globalFired, dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
                 globalFired = true
                 attemptTrigger("全局左滑 \(Int(dx))pt", source: "global")
@@ -786,7 +726,6 @@ enum AevonEdgeEntry {
                 return
             }
             guard touchID == globalTouchID else { return }
-            cancelGlobalHold()
             if let ring = AevonRingMenu.presented {
                 ring.remoteEnded(at: point, source: "global")
             }
@@ -801,7 +740,6 @@ enum AevonEdgeEntry {
                 return
             }
             guard touchID == globalTouchID else { return }
-            cancelGlobalHold()
             AevonRingMenu.presented?.remoteCancelled(source: "global")
             globalTouchID = 0
             globalFired = false
@@ -810,22 +748,6 @@ enum AevonEdgeEntry {
         default:
             break
         }
-    }
-
-    private static func scheduleGlobalHold() {
-        cancelGlobalHold()
-        let timer = Timer(timeInterval: AevonEdgeStripView.holdDuration, repeats: false) { _ in
-            guard globalTouchID != 0, !globalFired else { return }
-            globalFired = true
-            attemptTrigger("全局长按", source: "global")
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        globalHoldTimer = timer
-    }
-
-    private static func cancelGlobalHold() {
-        globalHoldTimer?.invalidate()
-        globalHoldTimer = nil
     }
 
     /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
@@ -878,7 +800,7 @@ enum AevonEdgeEntry {
     }
 
     /// 圆盘收起：立刻解除接管，把事件通道还给 App。
-    /// 任何一条路径（松手开窗、点空白、点圆心、长按移除后重载）都会走到这里。
+    /// 任何一条路径（松手开窗、点空白、点圆心、设置重载后移除）都会走到这里。
     static func ringDidDismiss() {
         ringSource = ""
         swallowDeadline = 0
@@ -887,7 +809,6 @@ enum AevonEdgeEntry {
         ownsTouch = false
         ringExtraTouchID = 0
         ringExtraDeadline = 0
-        cancelGlobalHold()
         // V0.0.34：清共享内存圆盘状态位（Guard 侧立即恢复放行）
         AevonNotifySetRing(0)
         postRingState("com.aevon.ringclose")

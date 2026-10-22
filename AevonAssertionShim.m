@@ -60,6 +60,13 @@ __attribute__((used)) static const char AevonDeactivationGateV37Marker[] = "Aevo
 __attribute__((used)) static const char AevonSthenoEdgeBarV37Marker[] = "AevonSthenoEdgeBarV37";
 __attribute__((used)) static const char AevonMedusaFrameV37Marker[] = "AevonMedusaFrameV37";
 
+/* V0.0.38 CI 标记：
+ * AevonOutsideHitV38 = 外侧手势命中修复（pointInside 扩成「窗口 bounds ∪ 手柄」，
+ *                      根治窗外边条/外角块命中不到 → 移动/缩放全失效）；
+ * AevonSwipeOnlyV38  = 触发条长按呼出已移除，只保留左滑。 */
+__attribute__((used)) static const char AevonOutsideHitV38Marker[] = "AevonOutsideHitV38";
+__attribute__((used)) static const char AevonSwipeOnlyV38Marker[] = "AevonSwipeOnlyV38";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能

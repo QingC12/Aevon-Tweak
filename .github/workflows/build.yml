@@ -358,6 +358,16 @@ jobs:
             exit 1
           fi
           echo "V0.0.37 校验: 场景停用门控 + 外侧边缘手势 + 全局几何记忆 已编入；旧浮窗设置项 已移除"
+
+          # ── V0.0.38：外侧手势命中修复 + 长按触发移除 ──
+          strings "$DYLIB" | grep -q 'AevonOutsideHitV38' \
+            || { echo "::error::外侧手势命中修复没有编入（缺 AevonOutsideHitV38）—— 窗外边条/外角块会命中不到"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSwipeOnlyV38' \
+            || { echo "::error::长按触发没有移除干净（缺 AevonSwipeOnlyV38）"; exit 1; }
+          if strings "$DYLIB" | grep -q '识别器长按\|边缘长按\|全局长按\|窗口层长按'; then
+            echo "::error::长按触发路径仍有残留"; exit 1
+          fi
+          echo "V0.0.38 校验: 外侧手势命中修复 + 仅左滑触发 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

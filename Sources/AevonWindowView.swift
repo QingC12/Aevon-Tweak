@@ -196,6 +196,22 @@ final class AevonWindowView: UIView {
         return hit
     }
 
+    /// V0.0.38（AevonOutsideHitV38）：外侧手势区的命中修复。
+    ///
+    /// UIKit 的 pointInside 只认 bounds 内的点 —— 边条 / 外角块的 frame 全在窗外，
+    /// 显示没问题（clipsToBounds = false），但触摸永远命中不到（V0.0.37 真机复现：
+    /// 窗内 ✕ 正常、窗外移动 / 缩放手势全失效）。这里把命中区扩成
+    /// 「窗口 bounds ∪ 所有手柄 frame」；手柄之外仍不拦，底下 App 的触摸照常穿透。
+    override func pointInside(_ point: CGPoint, with event: UIEvent?) -> Bool {
+        if super.pointInside(point, with: event) { return true }
+        for handle in subviews where handle is AevonEdgeHandleView {
+            if !handle.isHidden, handle.alpha > 0.01, handle.frame.contains(point) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// 把整屏尺寸的容器等比铺满内容区。
     ///
     /// 用 max 而不是 min：内容区比例已经锁定成屏幕比例，两者理论相等，
