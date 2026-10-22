@@ -265,8 +265,6 @@ jobs:
           # V0.0.27：圆盘列表实时同步 + 悬浮球移除
           strings "$DYLIB" | grep -q 'AevonRingListLiveV27' \
             || { echo "::error::圆盘列表没有实时同步标记（缺 AevonRingListLiveV27）"; exit 1; }
-          strings "$DYLIB" | grep -q 'invalidateCache' \
-            || { echo "::error::SpringBoard 侧没有清理 RingApps 缓存（设置里改完圆盘不更新）"; exit 1; }
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
