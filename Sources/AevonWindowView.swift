@@ -1,25 +1,13 @@
 import UIKit
 
-/// 单个 App 的浮窗外壳：标题栏（拖动）+ 内容（App 场景，整体缩放）+ 缩放手柄。
+/// 单个 App 的浮窗外壳：标题栏（拖动 / 双击放大）+ 内容（App 场景，整体缩放）+ 缩放手柄。
 ///
 /// V0.0.9：App 场景按整屏尺寸渲染，浮窗只对承载容器做等比缩放。
 /// V0.0.11：内容区宽高比锁定屏幕比例（修掉两侧黑边）＋ 手柄锁比例（修掉细长条）。
-/// V0.0.12（本版）：修「缩放卡顿」。
-///
-/// 卡顿的根因：以前每次 `frame` 变化都会走一遍 layout，然后在 `layoutSubviews` 里
-/// 重新给内层承载容器设 `bounds / transform / anchorPoint / position`。
-/// 那个容器里装的是 App 的跨进程画面（`_UIScenePresentationView` → CAHostLayer），
-/// 它的几何每变一次，Core Animation 都要和渲染服务器同步一遍、把整屏内容重新采样，
-/// 一个手势 60 帧就是 60 次 IPC + 60 次整屏重采样，必然卡。
-///
-/// 现在的做法（和系统级浮窗同一个思路）：
-/// * 手势期间**只改外壳自己的 layer.transform**，内部图层树一个属性都不动，
-///   所以只是外层的矩阵参与合成，GPU 一次变换就够；
-/// * 锚点临时挪到左上角，缩放时左上角不动，视觉上就是「拉右下角」；
-/// * 手势期间把圆角裁剪关掉（圆角 + 裁剪 + 缩放子层会触发离屏合成），
-///   结束后再恢复，只在抬起手指那一下做一次真正的 layout；
-/// * `applyContentScale` 带缓存，尺寸和系数没变就直接返回，
-///   应用自己在刷新画面时频繁触发的图层更新也不会变成无意义的布局。
+/// V0.0.12：修缩放卡顿 —— 手势期间只改外壳自己的 `layer.transform`，内部图层树一个属性都不动；
+///          抬手那一下才提交真实 frame，并且关掉手势期间的圆角裁剪（避免离屏合成）。
+/// V0.0.13：可用性 —— ①窗口大小/位置按 App 记住，下次开窗还原；
+///          ②双击标题栏在「小窗 / 大窗」两档之间切换；③触摸时把窗口提到最前（多窗重叠时）。
 final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
@@ -33,8 +21,13 @@ final class AevonWindowView: UIView {
 
     private static let minContentWidth: CGFloat = 150
     private static let cornerRadius: CGFloat = 12
+    private static let titleBarHeightValue: CGFloat = 40
 
-    private let titleBarHeight: CGFloat = 40
+    /// 全局唯一的偏好域，和设置面板共用
+    private static let prefsSuite = "com.Aevon"
+
+    private var titleBarHeight: CGFloat { AevonWindowView.titleBarHeightValue }
+
     private let contentClip = UIView()
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
@@ -62,14 +55,17 @@ final class AevonWindowView: UIView {
         // 默认宽度取屏宽 66%，并保证加上标题栏后不超屏高 72%
         let preferred = screen.width * 0.66
         let maxByHeight = screen.height * 0.72 * aspect
-        let contentWidth = max(AevonWindowView.minContentWidth, min(preferred, maxByHeight))
-        let contentHeight = contentWidth / aspect
-        let width = contentWidth
-        let height = contentHeight + titleBarHeight
-        frame = CGRect(x: (screen.width - width) / 2.0,
-                       y: max(60, screen.height * 0.10),
-                       width: width,
-                       height: height)
+        let defaultContentWidth = max(AevonWindowView.minContentWidth,
+                                      min(preferred, maxByHeight))
+        let defaultFrame = CGRect(x: (screen.width - defaultContentWidth) / 2.0,
+                                  y: max(60, screen.height * 0.10),
+                                  width: defaultContentWidth,
+                                  height: defaultContentWidth / aspect + AevonWindowView.titleBarHeightValue)
+        // 恢复这个 App 上次的窗口大小与位置
+        let restored = AevonWindowView.rememberedFrame(bundleID: bundleID, fallback: defaultFrame)
+        let width = restored.width
+        let contentHeight = restored.height - titleBarHeight
+        frame = restored
 
         backgroundColor = UIColor(white: 0.12, alpha: 1.0)
         layer.cornerRadius = AevonWindowView.cornerRadius
@@ -125,7 +121,7 @@ final class AevonWindowView: UIView {
         let dotSize: CGFloat = 28
         let touchSize: CGFloat = 44
         resizeHandle.frame = CGRect(x: width - touchSize - 2,
-                                    y: height - touchSize - 2,
+                                    y: restored.height - touchSize - 2,
                                     width: touchSize,
                                     height: touchSize)
         resizeHandle.backgroundColor = .clear
@@ -143,12 +139,16 @@ final class AevonWindowView: UIView {
         // 手势
         let move = UIPanGestureRecognizer(target: self, action: #selector(handleMove(_:)))
         titleBar.addGestureRecognizer(move)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleTitleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        titleBar.addGestureRecognizer(doubleTap)
         let resize = UIPanGestureRecognizer(target: self, action: #selector(handleResize(_:)))
         resizeHandle.addGestureRecognizer(resize)
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（比例锁定屏幕 \(String(format: "%.3f", aspect))，"
-            + "内容 \(Int(contentWidth))x\(Int(contentHeight))）")
+            + "内容 \(Int(width))x\(Int(contentHeight))，"
+            + "\(restored == defaultFrame ? "默认尺寸" : "已恢复上次尺寸")）")
     }
 
     required init?(coder: NSCoder) {
@@ -169,6 +169,15 @@ final class AevonWindowView: UIView {
             contentClip.frame = clipFrame
         }
         applyContentScale()
+    }
+
+    /// 触摸落在本窗口时把自己提到最前（多窗重叠时点哪个哪个在上）。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        if hit != nil, let superview = superview, superview.subviews.last !== self {
+            superview.bringSubviewToFront(self)
+        }
+        return hit
     }
 
     /// 把整屏尺寸的容器等比铺满内容区。
@@ -222,6 +231,8 @@ final class AevonWindowView: UIView {
             center.y = max(60 - halfH, min(center.y, screen.height - 60 + halfH))
             // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
             self.center = center
+        case .ended, .cancelled, .failed:
+            persistFrame()
         default:
             break
         }
@@ -303,7 +314,62 @@ final class AevonWindowView: UIView {
                        width: width,
                        height: height)
         setNeedsLayout()
+        persistFrame()
         AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（内容 \(Int(width))x\(Int(height - titleBarHeight))）")
+    }
+
+    // MARK: - 双击标题栏：小窗 / 大窗 两档
+
+    @objc private func handleTitleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard !isLiveResizing, gesture.state == .ended else { return }
+        let screen = UIScreen.main.bounds
+        let aspect = AevonWindowView.contentAspect
+
+        let smallWidth = max(AevonWindowView.minContentWidth,
+                             min(screen.width * 0.62, screen.height * 0.66 * aspect))
+        let bigWidth = min(screen.width * 0.94, screen.height * 0.88 * aspect)
+        let threshold = (smallWidth + bigWidth) / 2.0
+        let target = bounds.width < threshold ? bigWidth : smallWidth
+        let targetHeight = target / aspect + titleBarHeight
+
+        // 以当前中心为基准缩放，再夹回屏幕内
+        var newFrame = CGRect(x: 0, y: 0, width: target, height: targetHeight)
+        newFrame.origin.x = max(8, min(frame.midX - target / 2.0, screen.width - target - 8))
+        newFrame.origin.y = max(24, min(frame.midY - targetHeight / 2.0, screen.height - targetHeight - 8))
+        frame = newFrame
+        setNeedsLayout()
+        persistFrame()
+        AevonLog.info("[窗口] 双击切换尺寸 \(Int(target))x\(Int(targetHeight))")
+    }
+
+    // MARK: - 窗口尺寸记忆
+
+    private static func frameKey(_ bundleID: String) -> String {
+        return "WindowFrame." + bundleID
+    }
+
+    /// 读上次的窗口位置与宽度；数据不合理就直接用默认值。
+    private static func rememberedFrame(bundleID: String, fallback: CGRect) -> CGRect {
+        guard let store = UserDefaults(suiteName: prefsSuite),
+              let raw = store.array(forKey: frameKey(bundleID)) as? [Double],
+              raw.count >= 3 else { return fallback }
+
+        let screen = UIScreen.main.bounds
+        let aspect = contentAspect
+        let x = CGFloat(raw[0]), y = CGFloat(raw[1]), width = CGFloat(raw[2])
+        guard width >= minContentWidth, width <= screen.width * 0.95 else { return fallback }
+
+        let height = width / aspect + titleBarHeightValue
+        let clampedX = max(0, min(x, screen.width - 60))
+        let clampedY = max(0, min(y, screen.height - 60))
+        return CGRect(x: clampedX, y: clampedY, width: width, height: height)
+    }
+
+    private func persistFrame() {
+        guard !isLiveResizing, transform.isIdentity else { return }
+        guard let store = UserDefaults(suiteName: AevonWindowView.prefsSuite) else { return }
+        store.set([Double(frame.minX), Double(frame.minY), Double(frame.width)],
+                  forKey: AevonWindowView.frameKey(bundleID))
     }
 
     // MARK: - 关闭
@@ -313,6 +379,8 @@ final class AevonWindowView: UIView {
     }
 
     func teardown() {
+        // 关窗前把最终位置记下来
+        persistFrame()
         // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
         // NSInternalInconsistencyException: Must be invalidated before deallocating
         sceneHost.onFirstContent = nil

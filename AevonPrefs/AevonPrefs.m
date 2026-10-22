@@ -206,8 +206,9 @@ static NSArray *AevonBuildFallback(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
-                              @"V0.0.10 悬浮球版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：打开「启用插件」和「显示悬浮球」→ 注销 → 桌面右侧出现蓝色圆球 → 点圆球选 App。"
+                              @"V0.0.13 悬浮球版（纯 arm64e / roothide）。所有功能只在本页开关，无需终端/SSH。"
+                              @"用法：打开「启用插件」和「显示悬浮球」→ 注销 → 桌面出现蓝色圆球 → 点圆球选 App。"
+                              @"浮窗内可直接触摸操作 App；双击标题栏可快速放大/缩小；窗口大小按 App 记住。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
@@ -216,10 +217,13 @@ static NSArray *AevonBuildFallback(id target) {
     if (s1b != nil) [result addObject:s1b];
 
     id group2 = AevonNewGroup(@"窗口",
-                              @"「多任务卡片长按」是实验入口，开启后需注销才生效；若开启后进入安全模式，请把它关掉。");
+                              @"「浮窗内可直接触摸操作」默认开；若怀疑触摸引起异常，关掉后浮窗只显示画面。"
+                              @"窗口大小与位置按 App 记住，下次开窗恢复。");
     if (group2 != nil) [result addObject:group2];
     id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @NO);
     if (s2 != nil) [result addObject:s2];
+    id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作", target, @"TouchEnabled", @YES);
+    if (s2a != nil) [result addObject:s2a];
     id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
     if (s2b != nil) [result addObject:s2b];
 

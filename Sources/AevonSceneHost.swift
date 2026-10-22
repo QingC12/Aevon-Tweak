@@ -64,16 +64,21 @@ final class AevonSceneHost {
 
         let host = UIView(frame: UIScreen.main.bounds)
         host.backgroundColor = .clear
-        host.isUserInteractionEnabled = false
+        // V0.0.13：浮窗里的 App 要能直接点。
+        // 以前这里硬关掉交互，等于只能看画面。presentationView 的触摸会由 UIKit
+        // 通过 presenter 的 UI 连接转发进 App 进程，不需要我们自己造触摸事件。
+        // 开关默认开，若怀疑触摸引发异常可在 设置 → Aevon 关掉。
+        let interactive = AevonPrefs.bool("TouchEnabled", default: true)
+        host.isUserInteractionEnabled = interactive
         host.clipsToBounds = true
         view.frame = host.bounds
         view.autoresizingMask = [UIView.AutoresizingMask.flexibleWidth,
                                  UIView.AutoresizingMask.flexibleHeight]
-        view.isUserInteractionEnabled = false
+        view.isUserInteractionEnabled = interactive
         host.addSubview(view)
         self.container = host
 
-        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)）")
+        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")）")
 
         // 激活 presenter 之后再把场景推一次前台：只有场景处于前台，App 才会持续渲染。
         AevonSceneHelper.setForeground(scene, true)
