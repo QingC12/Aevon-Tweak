@@ -13,6 +13,19 @@ final class AevonEdgeHandleView: UIView {
     }
 }
 
+/// 浮窗上被按住的位置（V0.0.41，AevonFloatGlobalV41）。
+///
+/// 全局触摸通道拿不到 `UIPanGestureRecognizer`，只能拿到坐标，所以命中结果用这个
+/// 枚举交给浮窗自己决定「这次拖动是移动 / 缩放 / 关闭」。
+enum AevonFloatGrab {
+    /// 外侧边条 → 移动窗口
+    case bar(UIRectEdge)
+    /// 外角块 → 从对角缩放
+    case corner(UIRectEdge)
+    /// 右上角悬浮 ✕ → 关闭
+    case close
+}
+
 /// 单个 App 的浮窗外壳：纯内容（无标题栏）+ 右上悬浮 ✕ + 贴窗外边缘的手势区。
 ///
 /// V0.0.9：App 场景按整屏尺寸渲染，浮窗只对承载容器做等比缩放。
@@ -34,6 +47,13 @@ final class AevonEdgeHandleView: UIView {
 ///   全局一份 `MedusaFrameLast`（left/top/width 三个屏幕百分比，对应 Stheno 的
 ///   medusaFrameLast / _leftPecentLast 体系），所有浮窗共享上次位置与大小；
 ///   不再按 App 分别记忆。
+/// V0.0.41（AevonFloatGlobalV41）：手势不再只靠手柄上的 `UIPanGestureRecognizer`。
+///   Aevon(34) 真机：桌面拖动/缩放正常、全屏 App 里完全无效 —— 同一个视图层代码，
+///   差别只在事件来源。全屏 App 时 `SBDeviceApplicationSceneViewController.view`
+///   的命中测试不把窗外的点交给我们（V0.0.23 已确认的黑洞），pan 永远不 begun。
+///   现在把手柄的**命中判定 + 位移计算**拆成 `grab(at:)` / `grabBegin` / `grabUpdate`
+///   / `grabEnd`，由全局触摸通道（`UIApplication -sendEvent:`）直接驱动；
+///   pan 仍保留，作为该通道不可用时的桌面兜底（通道接管时会吞掉事件，不会双触发）。
 final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
@@ -292,6 +312,144 @@ final class AevonWindowView: UIView {
         }
     }
 
+    // MARK: - 全局触摸驱动（V0.0.41，AevonFloatGlobalV41）
+
+    /// 当前正被全局通道拖着的手柄（nil = 没在拖）
+    private(set) var activeGrab: AevonFloatGrab?
+
+    /// 命中判定。`layerPoint` 是**浮窗层（屏幕）坐标**。
+    ///
+    /// 为什么命中判定要能被外面调用：Aevon(34) 真机证据是「桌面上浮窗手势正常、
+    /// 全屏 App 里完全无效」—— 同一个视图层代码，差别只在事件来源。全屏 App 时
+    /// `SBDeviceApplicationSceneViewController.view` 的命中测试根本不把窗外的点交给我们
+    /// （V0.0.23 就已确认这个黑洞，圆盘正是靠 `UIApplication -sendEvent:` 才活下来的），
+    /// 于是手柄的 pan 永远不 begun。既然事件总入口可靠，命中判定就得从这里也能走。
+    func grab(at layerPoint: CGPoint) -> AevonFloatGrab? {
+        guard let parent = superview else { return nil }
+        let local = convert(layerPoint, from: parent)
+
+        // ✕ 先判：它压在窗内右上，若被边条帧盖住会误判成拖动
+        if !closeButton.isHidden, closeButton.alpha > 0.01,
+           closeButton.frame.insetBy(dx: -8, dy: -8).contains(local) {
+            return .close
+        }
+        for handle in subviews.compactMap({ $0 as? AevonEdgeHandleView }) {
+            guard !handle.isHidden, handle.alpha > 0.01 else { continue }
+            if handle.frame.contains(local) {
+                return handle.isCorner ? .corner(handle.edges) : .bar(handle.edges)
+            }
+        }
+        return nil
+    }
+
+    /// 开始一段外部驱动的拖拽。`layerPoint` = 浮窗层（屏幕）坐标。
+    func grabBegin(_ grab: AevonFloatGrab, at layerPoint: CGPoint) {
+        guard let parent = superview else { return }
+        switch grab {
+        case .bar:
+            activeGrab = grab
+            moveOriginFrame = frame
+            moveOriginPoint = layerPoint
+        case .corner(let edges):
+            activeGrab = grab
+            resizeOriginFrame = frame
+            resizeOriginPoint = layerPoint
+            resizeOriginEdges = edges
+            // 锚点取「不动的那些边」的交点：拖右 → 锚在左（x=0）；拖左 → 锚在右（x=1）
+            let ax: CGFloat = edges.contains(.left) ? 1.0
+                : (edges.contains(.right) ? 0.0 : 0.5)
+            let ay: CGFloat = edges.contains(.top) ? 1.0
+                : (edges.contains(.bottom) ? 0.0 : 0.5)
+            beginLiveResize(anchor: CGPoint(x: ax, y: ay))
+        case .close:
+            activeGrab = grab
+        }
+        parent.bringSubviewToFront(self)
+    }
+
+    /// 拖动中。`layerPoint` = 浮窗层（屏幕）坐标。
+    func grabUpdate(to layerPoint: CGPoint) {
+        guard let grab = activeGrab else { return }
+        switch grab {
+        case .bar:
+            applyBarMove(to: layerPoint)
+        case .corner(let edges):
+            applyCornerResize(to: layerPoint, edges: edges)
+        case .close:
+            break
+        }
+    }
+
+    /// 抬手。`commit` = false 表示这段拖拽被取消（不落盘几何、不关窗）。
+    func grabEnd(at layerPoint: CGPoint, commit: Bool) {
+        guard let grab = activeGrab else { return }
+        activeGrab = nil
+        switch grab {
+        case .bar:
+            applyBarMove(to: layerPoint)
+            if commit, AevonPrefs.bool("SnapEnabled", default: true),
+               let slot = AevonSnap.slot(for: frame) {
+                snap(to: slot)
+                return
+            }
+            persistFrame()
+        case .corner(let edges):
+            applyCornerResize(to: layerPoint, edges: edges)
+            finishEdgeResize()
+        case .close:
+            guard commit, let parent = superview else { return }
+            let local = convert(layerPoint, from: parent)
+            if !closeButton.isHidden,
+               closeButton.frame.insetBy(dx: -8, dy: -8).contains(local) {
+                closeTapped()
+            }
+        }
+    }
+
+    /// 取消当前拖拽（超时 / 系统打断）：缩放退回原几何，移动不落盘。
+    func grabCancel() {
+        guard let grab = activeGrab else { return }
+        activeGrab = nil
+        switch grab {
+        case .bar:
+            frame = moveOriginFrame
+        case .corner:
+            if isLiveResizing {
+                isLiveResizing = false
+                transform = .identity
+                layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+                contentClip.layer.cornerRadius = AevonWindowView.cornerRadius
+                contentClip.clipsToBounds = true
+                frame = resizeOriginFrame
+                setNeedsLayout()
+            }
+        case .close:
+            break
+        }
+    }
+
+    /// 小窗 / 大窗切换（原「双击边条」，现在也可由全局通道触发）。
+    func cycleSize() {
+        guard !isLiveResizing else { return }
+        let screen = UIScreen.main.bounds
+        let aspect = AevonWindowView.contentAspect
+
+        let smallWidth = max(AevonWindowView.minContentWidth,
+                             min(screen.width * 0.62, screen.height * 0.66 * aspect))
+        let bigWidth = min(screen.width * 0.94, screen.height * 0.88 * aspect)
+        let threshold = (smallWidth + bigWidth) / 2.0
+        let target = bounds.width < threshold ? bigWidth : smallWidth
+        let targetHeight = target / aspect
+
+        var newFrame = CGRect(x: 0, y: 0, width: target, height: targetHeight)
+        newFrame.origin.x = max(8, min(frame.midX - target / 2.0, screen.width - target - 8))
+        newFrame.origin.y = max(24, min(frame.midY - targetHeight / 2.0, screen.height - targetHeight - 8))
+        frame = newFrame
+        setNeedsLayout()
+        persistFrame()
+        AevonLog.info("[窗口] 双击切换尺寸 \(Int(target))x\(Int(targetHeight))")
+    }
+
     // MARK: - 边条移动
 
     @objc private func handleBarMove(_ gesture: UIPanGestureRecognizer) {
@@ -302,18 +460,9 @@ final class AevonWindowView: UIView {
             moveOriginFrame = frame
             moveOriginPoint = point
         case .changed:
-            let dx = point.x - moveOriginPoint.x
-            let dy = point.y - moveOriginPoint.y
-            let screen = UIScreen.main.bounds
-            var center = CGPoint(x: moveOriginFrame.midX + dx, y: moveOriginFrame.midY + dy)
-            // 至少留 60pt 在屏幕内，避免拖丢
-            let halfW = moveOriginFrame.width / 2.0
-            let halfH = moveOriginFrame.height / 2.0
-            center.x = max(60 - halfW, min(center.x, screen.width - 60 + halfW))
-            center.y = max(60 - halfH, min(center.y, screen.height - 60 + halfH))
-            // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
-            self.center = center
+            applyBarMove(to: point)
         case .ended, .cancelled, .failed:
+            applyBarMove(to: point)
             // 松手时若贴着屏幕边缘，就吸附成左半屏 / 右半屏 / 顶部放大。
             if gesture.state == .ended,
                AevonPrefs.bool("SnapEnabled", default: true),
@@ -325,6 +474,21 @@ final class AevonWindowView: UIView {
         default:
             break
         }
+    }
+
+    /// 移动的纯计算部分（V0.0.41 拆出来）：pan 手势与全局通道共用同一套夹边逻辑。
+    private func applyBarMove(to point: CGPoint) {
+        let dx = point.x - moveOriginPoint.x
+        let dy = point.y - moveOriginPoint.y
+        let screen = UIScreen.main.bounds
+        var center = CGPoint(x: moveOriginFrame.midX + dx, y: moveOriginFrame.midY + dy)
+        // 至少留 60pt 在屏幕内，避免拖丢
+        let halfW = moveOriginFrame.width / 2.0
+        let halfH = moveOriginFrame.height / 2.0
+        center.x = max(60 - halfW, min(center.x, screen.width - 60 + halfW))
+        center.y = max(60 - halfH, min(center.y, screen.height - 60 + halfH))
+        // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
+        self.center = center
     }
 
     // MARK: - 外角缩放（V0.0.36 起，V0.0.37 移到窗外角块）
@@ -350,12 +514,7 @@ final class AevonWindowView: UIView {
             beginLiveResize(anchor: CGPoint(x: ax, y: ay))
 
         case .changed:
-            let dx = point.x - resizeOriginPoint.x
-            let dy = point.y - resizeOriginPoint.y
-            let width = clampedCornerWidth(dx: dx, dy: dy, base: resizeOriginFrame, edges: edges)
-            let factor = max(0.05, width / max(1, resizeOriginFrame.width))
-            // 只动外层矩阵，内部的 App 画面图层树完全不碰
-            transform = CGAffineTransform(scaleX: factor, y: factor)
+            applyCornerResize(to: point, edges: edges)
 
         case .ended, .cancelled, .failed:
             finishEdgeResize()
@@ -363,6 +522,16 @@ final class AevonWindowView: UIView {
         default:
             break
         }
+    }
+
+    /// 缩放的纯计算部分（V0.0.41 拆出来）：只动外层矩阵，pan 与全局通道共用。
+    private func applyCornerResize(to point: CGPoint, edges: UIRectEdge) {
+        let dx = point.x - resizeOriginPoint.x
+        let dy = point.y - resizeOriginPoint.y
+        let width = clampedCornerWidth(dx: dx, dy: dy, base: resizeOriginFrame, edges: edges)
+        let factor = max(0.05, width / max(1, resizeOriginFrame.width))
+        // 只动外层矩阵，内部的 App 画面图层树完全不碰
+        transform = CGAffineTransform(scaleX: factor, y: factor)
     }
 
     /// 只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例。
@@ -443,24 +612,7 @@ final class AevonWindowView: UIView {
 
     @objc private func handleBarDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard !isLiveResizing, gesture.state == .ended else { return }
-        let screen = UIScreen.main.bounds
-        let aspect = AevonWindowView.contentAspect
-
-        let smallWidth = max(AevonWindowView.minContentWidth,
-                             min(screen.width * 0.62, screen.height * 0.66 * aspect))
-        let bigWidth = min(screen.width * 0.94, screen.height * 0.88 * aspect)
-        let threshold = (smallWidth + bigWidth) / 2.0
-        let target = bounds.width < threshold ? bigWidth : smallWidth
-        let targetHeight = target / aspect
-
-        // 以当前中心为基准缩放，再夹回屏幕内
-        var newFrame = CGRect(x: 0, y: 0, width: target, height: targetHeight)
-        newFrame.origin.x = max(8, min(frame.midX - target / 2.0, screen.width - target - 8))
-        newFrame.origin.y = max(24, min(frame.midY - targetHeight / 2.0, screen.height - targetHeight - 8))
-        frame = newFrame
-        setNeedsLayout()
-        persistFrame()
-        AevonLog.info("[窗口] 双击切换尺寸 \(Int(target))x\(Int(targetHeight))")
+        cycleSize()
     }
 
     // MARK: - 吸附

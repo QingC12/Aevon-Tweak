@@ -587,6 +587,29 @@ enum AevonEdgeEntry {
     private static var globalFired = false
     private static var globalLastLogAt: CFTimeInterval = 0
 
+    // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
+
+    /// 当前被全局通道接管的那根手指（0 = 没接管浮窗）
+    private static var floatTouchID: UInt = 0
+    /// 弱引用：窗口被关掉 / 场景回收时这里自动失效，不会拖住已销毁的浮窗
+    private static weak var floatWindow: AevonWindowView?
+    private static var floatGrab: AevonFloatGrab?
+    private static var floatDeadline: CFTimeInterval = 0
+    /// 拖拽硬上限：拖到 30 秒一定解除，杜绝「窗口一直吸着手指」的最坏情况
+    private static let floatDragLimit: CFTimeInterval = 30
+
+    /// 双击识别（全局通道没有 UITapGestureRecognizer，得自己记）
+    private static var floatLastTapAt: CFTimeInterval = 0
+    private static var floatLastTapPoint: CGPoint = .zero
+    private static weak var floatLastTapWindow: AevonWindowView?
+    private static let floatDoubleTapGap: CFTimeInterval = 0.34
+    private static let floatDoubleTapRadius: CGFloat = 26
+
+    /// 浮窗手势是否正压着某根手指（供吞事件判断）
+    private static var floatGestureActive: Bool {
+        return floatTouchID != 0 && floatWindow != nil
+    }
+
     /// 圆盘接管期（V0.0.24）：只有「全局通道唤起的圆盘」需要把这根手指从 App 手里拿走。
     private static var ringSource = ""
     private static var swallowDeadline: CFTimeInterval = 0
@@ -622,7 +645,8 @@ enum AevonEdgeEntry {
     static func installGlobalTouch() -> Bool {
         if globalInstalled { return true }
         guard AevonPrefs.bool("Enabled", default: false) else { return false }
-        guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
+        // V0.0.41：不再依赖 EdgeGestureEnabled。这条通道现在同时承载浮窗拖拽，
+        // 用户关掉边缘呼出圆盘也不该让浮窗拖不动 —— 热区逻辑自己在 began 里判断开关。
         let ok = AevonTouchHookInstall()
         globalInstalled = ok
         if ok {
@@ -635,8 +659,7 @@ enum AevonEdgeEntry {
 
     /// 全局触摸分发（由 `AevonTouchHook.m` 在 `UIApplication -sendEvent:` 里回调）。
     static func handleGlobal(phase: UITouch.Phase, point: CGPoint, touchID: UInt) {
-        guard AevonPrefs.bool("Enabled", default: false),
-              AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return }
+        guard AevonPrefs.bool("Enabled", default: false) else { return }
         let screen = UIScreen.main.bounds
         switch phase {
         case .began:
@@ -665,8 +688,15 @@ enum AevonEdgeEntry {
                 ring.beginRemoteTracking(at: point, source: "global")
                 return
             }
+            // V0.0.41（AevonFloatGlobalV41）：浮窗手势走全局通道。
+            // Aevon(34) 证据：桌面手势正常、全屏 App 里完全无效 —— 同一个视图层代码，
+            // 差别只在事件来源。全屏 App 时窗外的手柄 pan 根本不会 begun
+            // （`SBDeviceApplicationSceneViewController.view` 的命中黑洞，V0.0.23 已确认），
+            // 而圆盘靠这条全局通道一直活着，所以浮窗也只能从事件总入口拿触摸。
+            if handleFloatGestureBegan(point: point, touchID: touchID) { return }
             // 只认设置里配置的那块热区（位置 / 宽度 / 高度都可调），
             // 不再像 V0.0.24 那样「右侧一大片 + 下半屏」都能划出来。
+            guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return }
             let zone = AevonTriggerZone.rect(in: screen)
             guard zone.contains(point) else { return }
             // V0.0.36（AevonFloatInEntryV36）：落点在浮窗上 = 用户在操作浮窗，
@@ -692,6 +722,8 @@ enum AevonEdgeEntry {
             }
 
         case .moved:
+            // V0.0.41：正在被全局通道拖动的浮窗 —— 只驱动浮窗，绝不进 App
+            if handleFloatGestureMoved(point: point, touchID: touchID) { return }
             // V0.0.29：圆盘开着时被「只吞不驱动」的额外手指 —— 续期吞咽即可
             if touchID == ringExtraTouchID {
                 if CACurrentMediaTime() <= ringExtraDeadline {
@@ -719,6 +751,8 @@ enum AevonEdgeEntry {
             }
 
         case .ended:
+            // V0.0.41：浮窗拖拽抬手 —— 提交几何 / 命中 ✕ 才关窗 / 记录双击候选
+            if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: false) { return }
             // V0.0.29：额外手指抬起（hook 已按「先询问再上报」把抬手帧吞掉）—— 只清状态
             if touchID == ringExtraTouchID {
                 ringExtraTouchID = 0
@@ -734,6 +768,8 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            // V0.0.41：浮窗拖拽被系统打断 —— 缩放退回原几何，移动不落盘
+            if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: true) { return }
             if touchID == ringExtraTouchID {
                 ringExtraTouchID = 0
                 ringExtraDeadline = 0
@@ -748,6 +784,109 @@ enum AevonEdgeEntry {
         default:
             break
         }
+    }
+
+    // MARK: - 浮窗手势状态机（V0.0.41，AevonFloatGlobalV41）
+
+    /// 按下：命中浮窗外侧手柄 / ✕ 就整段接管这根手指。
+    ///
+    /// 返回 true = 这根触摸已归浮窗，调用方必须立刻 return（既不再判热区，也不给 App）。
+    private static func handleFloatGestureBegan(point: CGPoint, touchID: UInt) -> Bool {
+        // 上一根手指的 ended 万一丢了，别让整段浮窗手势永久失效 —— 超时就地清理
+        if floatTouchID != 0 {
+            if CACurrentMediaTime() > floatDeadline { clearFloatGesture() } else { return false }
+        }
+        // 圆盘开着时一切归圆盘，浮窗让位（避免两套状态机抢同一根手指）
+        guard AevonRingMenu.presented == nil else { return false }
+        guard let hit = AevonEntryHost.grabFloatingWindow(atScreenPoint: point) else {
+            return false
+        }
+
+        let now = CACurrentMediaTime()
+        // 双击边条 = 小窗 / 大窗换档。原来是手柄上的 UITapGestureRecognizer，
+        // 全屏 App 里同样收不到，这里用同一套全局通道补上。
+        if case .close = hit.grab {
+            // ✕ 不算双击候选
+        } else if now - floatLastTapAt <= floatDoubleTapGap,
+                  floatLastTapWindow === hit.window,
+                  hypot(point.x - floatLastTapPoint.x,
+                        point.y - floatLastTapPoint.y) <= floatDoubleTapRadius {
+            floatLastTapAt = 0
+            floatLastTapWindow = nil
+            floatTouchID = touchID
+            floatWindow = hit.window
+            floatGrab = nil              // 双击不拖拽，抬手直接收尾
+            floatDeadline = now + floatDragLimit
+            hit.window.cycleSize()
+            AevonLog.info("[窗口] 双击换档（全局通道）（AevonFloatGlobalV41）")
+            return true
+        }
+
+        floatTouchID = touchID
+        floatWindow = hit.window
+        floatGrab = hit.grab
+        floatDeadline = now + floatDragLimit
+        hit.window.grabBegin(hit.grab, at: hit.layerPoint)
+        switch hit.grab {
+        case .bar:
+            AevonLog.info("[窗口] 全局通道开始拖动（移动）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
+        case .corner:
+            AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
+        case .close:
+            AevonLog.info("[窗口] 全局通道命中关闭钮（AevonFloatGlobalV41）")
+        }
+        return true
+    }
+
+    /// 拖动中。返回 true = 已消费，调用方 return。
+    private static func handleFloatGestureMoved(point: CGPoint, touchID: UInt) -> Bool {
+        guard floatTouchID != 0, touchID == floatTouchID else { return false }
+        guard let win = floatWindow else {
+            clearFloatGesture()
+            return false
+        }
+        let now = CACurrentMediaTime()
+        guard now <= floatDeadline else {
+            win.grabCancel()
+            clearFloatGesture()
+            return false
+        }
+        floatDeadline = now + floatDragLimit      // 手指还在动就续期
+        win.grabUpdate(to: AevonEntryHost.floatLayerPoint(fromScreen: point))
+        return true
+    }
+
+    /// 抬手 / 取消。返回 true = 已消费，调用方 return。
+    private static func handleFloatGestureEnded(point: CGPoint, touchID: UInt,
+                                               cancelled: Bool) -> Bool {
+        guard floatTouchID != 0, touchID == floatTouchID else { return false }
+        let win = floatWindow
+        let layerPoint = AevonEntryHost.floatLayerPoint(fromScreen: point)
+        if cancelled {
+            win?.grabCancel()
+        } else {
+            win?.grabEnd(at: layerPoint, commit: true)
+            // 记一次双击候选：只有「手柄上的轻点」才算，✕ 不算
+            if let grab = floatGrab, win != nil {
+                switch grab {
+                case .close:
+                    break
+                case .bar, .corner:
+                    floatLastTapAt = CACurrentMediaTime()
+                    floatLastTapPoint = point
+                    floatLastTapWindow = win
+                }
+            }
+        }
+        clearFloatGesture()
+        return true
+    }
+
+    private static func clearFloatGesture() {
+        floatTouchID = 0
+        floatWindow = nil
+        floatGrab = nil
+        floatDeadline = 0
     }
 
     /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
@@ -823,9 +962,14 @@ enum AevonEdgeEntry {
     ///
     /// 还有三条硬性前提：必须是唤起/接管的那一根手指（别的指头照常给 App），且没超时。
     static func shouldSwallowGlobalTouch(_ touchID: UInt) -> Bool {
-        guard AevonPrefs.bool("Enabled", default: false),
-              AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
+        guard AevonPrefs.bool("Enabled", default: false) else { return false }
         guard touchID != 0 else { return false }
+        // V0.0.41（AevonFloatGlobalV41）：浮窗拖拽期间这根手指完全归浮窗。
+        // 手柄在浮窗**外侧**，落点就是 App 内容 —— 不吞的话拖窗会连带拖动 App 页面 / 列表。
+        if floatGestureActive, touchID == floatTouchID,
+           CACurrentMediaTime() <= floatDeadline {
+            return true
+        }
         // V0.0.29：圆盘展开期间被吞掉的「额外手指」（下半屏、不驱动圆盘）
         if touchID == ringExtraTouchID {
             return CACurrentMediaTime() <= ringExtraDeadline

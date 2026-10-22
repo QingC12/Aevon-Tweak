@@ -71,6 +71,11 @@ __attribute__((used)) static const char AevonSwipeOnlyV38Marker[] = "AevonSwipeO
 __attribute__((used)) static const char AevonCrashAttrV40Marker[] = "AevonCrashAttrV40";
 __attribute__((used)) static const char AevonSileoIconV40Marker[] = "AevonSileoIconV40";
 
+/* V0.0.41 CI 标记：
+ * AevonFloatGlobalV41 = 浮窗移动/缩放/关闭/双击改由全局触摸通道驱动
+ *                      （全屏 App 里视图层命中不到窗外手柄，Aevon(34) 根因）。 */
+__attribute__((used)) static const char AevonFloatGlobalV41Marker[] = "AevonFloatGlobalV41";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

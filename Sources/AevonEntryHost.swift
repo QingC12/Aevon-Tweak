@@ -106,6 +106,32 @@ enum AevonEntryHost {
         return false
     }
 
+    /// 屏幕点 → 命中的浮窗与抓取目标（V0.0.41，AevonFloatGlobalV41）。
+    ///
+    /// 全屏 App 时视图层收不到窗外的触摸（see `AevonWindowView.grab`），
+    /// 所以由全局触摸通道在事件总入口查询这张表，再直接驱动浮窗。
+    /// 返回的第三个值是该点换算到浮窗层坐标的结果，后续 update / end 复用同一坐标系。
+    static func grabFloatingWindow(atScreenPoint point: CGPoint)
+        -> (window: AevonWindowView, grab: AevonFloatGrab, layerPoint: CGPoint)? {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return nil }
+        let layerPoint = self.floatLayerPoint(fromScreen: point)
+        // 后加入的在上面：从后往前找，命中最上层那个窗
+        for view in layer.subviews.reversed() where !view.isHidden && view.alpha > 0.01 {
+            guard let win = view as? AevonWindowView else { continue }
+            if let grab = win.grab(at: layerPoint) {
+                return (win, grab, layerPoint)
+            }
+        }
+        return nil
+    }
+
+    /// 屏幕（窗口）坐标 → 浮窗层坐标。浮窗层全屏且 origin 为 0，正常是恒等变换，
+    /// 但容器被搬进 App 场景视图后坐标系由系统决定，统一走 convert 才不会偏。
+    static func floatLayerPoint(fromScreen point: CGPoint) -> CGPoint {
+        guard let layer = floatLayer else { return point }
+        return layer.convert(point, from: nil)
+    }
+
     /// 入口视图的统一挂载点（手势条 / 悬浮球 / 圆盘 / 面板都往这里加）
     static var activeRoot: UIView? { return container }
     /// 历史别名，语义同 `activeRoot`
