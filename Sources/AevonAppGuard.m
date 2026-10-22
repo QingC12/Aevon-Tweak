@@ -148,10 +148,22 @@ static BOOL AevonGuardReadConfFile(CGRect *outZone, BOOL *outEnabled) {
 
 /* V0.0.32：读 notify(3) 状态通道（与 SpringBoard 侧 AevonNotifySetZone 打包格式一致）。
  * AevonGuard 是独立 dylib，不链接 AevonAssertionShim，所以这里自带一份解包。
- * 格式：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）。 */
+ * 格式：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）。
+ * 注意：notify_set_state / notify_get_state 参数是 **int token**，不是名字！ */
+static int AevonGuardNotifyToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.guardzone", &token);
+    });
+    return token;
+}
+
 static BOOL AevonGuardReadNotifyZone(CGRect *outZone, BOOL *outEnabled) {
+    int token = AevonGuardNotifyToken();
+    if (token < 0) { return NO; }
     uint64_t pack = 0;
-    notify_get_state("com.aevon.guardzone", &pack);
+    notify_get_state(token, &pack);
     /* 读失败时 pack 保持 0，版本标记对不上就当没有配置 */
     if (((pack >> 40) & 0xFF) != 0x32) { return NO; }
     double x = (double)(pack & 0x3FFULL);

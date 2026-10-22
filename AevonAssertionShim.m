@@ -37,14 +37,28 @@ __attribute__((used)) static const char AevonGuardNotifyV32Marker[] = "AevonGuar
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能
  * 因目录权限写不进去（Aevon(25) 日志：guard.conf 写入失败 × N）。notify_set_state
- * 的 64 位状态挂在通知名上，跨进程且不受沙盒文件限制，是 Guard 的主配置源。
+ * 的 64 位状态挂在 notify token 上，跨进程且不受沙盒文件限制，是 Guard 的主配置源。
  * 打包：x:10 y:10 w:8 h:10 enabled:1 版本:8（0x32 = V32）
+ *
+ * 注意：notify_set_state / notify_get_state 的参数是 **int token**，不是名字！
+ * 必须先 notify_register_check("com.aevon.guardzone", &token) 再用 token 读写。
  * ────────────────────────────────────────────────────────────────── */
 #include <notify.h>
 #include <math.h>
 
+static int AevonNotifyZoneToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.guardzone", &token);
+    });
+    return token;
+}
+
 void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
     @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return; }
         uint64_t pack = 0;
         pack |= ((uint64_t)llround(x)) & 0x3FFULL;
         pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
@@ -52,7 +66,7 @@ void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
         pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 28;
         pack |= (enabled ? 1ULL : 0ULL) << 38;
         pack |= 0x32ULL << 40;
-        notify_set_state("com.aevon.guardzone", pack);
+        notify_set_state(token, pack);
         notify_post("com.aevon.guardzone");
     } @catch (NSException *exception) {
     }
@@ -60,8 +74,10 @@ void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
 
 int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled) {
     @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return 0; }
         uint64_t pack = 0;
-        notify_get_state("com.aevon.guardzone", &pack);
+        notify_get_state(token, &pack);
         if (((pack >> 40) & 0xFF) != 0x32) { return 0; }
         if (x) { *x = (double)(pack & 0x3FFULL); }
         if (y) { *y = (double)((pack >> 10) & 0x3FFULL); }
