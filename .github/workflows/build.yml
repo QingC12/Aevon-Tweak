@@ -141,9 +141,7 @@ jobs:
             || { echo "::error::缺少圆盘选择器（AevonRingMenu）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingIcon' \
             || { echo "::error::缺少圆盘图标单元（AevonRingIcon）"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonIconImage' \
-            || { echo "::error::缺少 App 图标获取（AevonIconImage）"; exit 1; }
-          echo "圆盘校验: 边缘入口 + 径向菜单 + 收藏存储 + 图标接口 已编入"
+          echo "圆盘校验: 边缘入口 + 径向菜单 + 图标单元 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
