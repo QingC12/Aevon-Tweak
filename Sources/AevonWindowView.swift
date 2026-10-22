@@ -5,8 +5,12 @@ import UIKit
 final class AevonEdgeHandleView: UIView {
     /// 这个手柄负责哪些边（角手柄是两个边的组合 → 缩放；单边条 → 移动）
     var edges: UIRectEdge = []
-    /// 角手柄 = 缩放，边条 = 移动
-    var isCorner: Bool { return edges.intersection([.top, .bottom, .left, .right]).count >= 2 }
+    /// 角手柄（横竖两边都有）= 缩放，单边条 = 移动
+    var isCorner: Bool {
+        let horizontal = edges.contains(.left) || edges.contains(.right)
+        let vertical = edges.contains(.top) || edges.contains(.bottom)
+        return horizontal && vertical
+    }
 }
 
 /// 单个 App 的浮窗外壳：纯内容（无标题栏）+ 右上悬浮 ✕ + 贴窗外边缘的手势区。
