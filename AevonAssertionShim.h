@@ -35,3 +35,9 @@ void AevonNotifySetRing(int on);
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，
 /// 保证 UIKit 抛异常时 SpringBoard 不再被带崩（V0.0.38 自动注销问题）。
 BOOL AevonTryExecute(void (^block)(void), NSString **outName, NSString **outReason);
+
+/// V0.0.39（AevonCrashTraceV39）：execinfo 转发。
+/// Swift 的 Darwin 模块在部分 SDK 上不暴露 backtrace / backtrace_symbols_fd，
+/// 经 ObjC 垫片转发（崩溃信号处理里用，抓当前线程调用栈写入崩溃文件）。
+NSInteger AevonBacktrace(void **stack, int max);
+void AevonBacktraceSymbolsFD(void **stack, int size, int fd);

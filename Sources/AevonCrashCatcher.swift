@@ -58,13 +58,15 @@ private func aevonSignalHandler(_ signalNumber: Int32) {
         }
 
         // 调用栈回溯：本线程 64 帧，模块+偏移直接写 fd（不走 malloc）
+        // 经 ObjC 垫片转发（AevonBacktrace / AevonBacktraceSymbolsFD）——
+        // Swift 的 Darwin 模块在部分 SDK 上不暴露 execinfo。
         var frames = [UnsafeMutableRawPointer?](repeating: nil, count: 64)
-        let count = backtrace(&frames, 64)
+        let count = Int(AevonBacktrace(&frames, 64))
         if count > 0 {
             _ = kBacktraceTitleBytes.withUnsafeBufferPointer { buffer in
                 write(fd, buffer.baseAddress, buffer.count - 1)
             }
-            backtrace_symbols_fd(&frames, Int32(count), fd)
+            AevonBacktraceSymbolsFD(&frames, Int32(count), fd)
         }
         close(fd)
     }

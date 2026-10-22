@@ -530,3 +530,14 @@ BOOL AevonTryExecute(void (^block)(void), NSString **outName, NSString **outReas
         return NO;
     }
 }
+
+/* V0.0.39（AevonCrashTraceV39）：execinfo 转发（Swift Darwin 模块未暴露）。 */
+#include <execinfo.h>
+
+NSInteger AevonBacktrace(void **stack, int max) {
+    return (NSInteger)backtrace(stack, max);
+}
+
+void AevonBacktraceSymbolsFD(void **stack, int size, int fd) {
+    backtrace_symbols_fd(stack, size, fd);
+}
