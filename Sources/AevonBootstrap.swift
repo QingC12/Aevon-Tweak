@@ -21,8 +21,11 @@ enum AevonBootstrap {
                                queue: .main) { _ in
             AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势 / 备用悬浮球）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-                AevonEdgeEntry.install(attempt: 1, reason: "didFinishLaunching")
+                // 顺序有意义：先建悬浮球窗口、后建边缘窗口，
+                // 让「边缘窗口（圆盘的宿主）」处于同级窗口的最上层，
+                // 否则悬浮球窗口连同它的面板会盖住圆盘，造成"呼不出/点了没反应"。
                 AevonBubble.shared.install(attempt: 1, reason: "didFinishLaunching")
+                AevonEdgeEntry.install(attempt: 1, reason: "didFinishLaunching")
             }
         }
 
@@ -32,8 +35,8 @@ enum AevonBootstrap {
                                queue: .main) { _ in
             guard !AevonEdgeEntry.isVisible || !AevonBubble.shared.isVisible else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                AevonEdgeEntry.install(attempt: 1, reason: "didBecomeActive")
                 AevonBubble.shared.install(attempt: 1, reason: "didBecomeActive")
+                AevonEdgeEntry.install(attempt: 1, reason: "didBecomeActive")
             }
         }
 

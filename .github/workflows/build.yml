@@ -144,7 +144,10 @@ jobs:
           # V0.0.16：整圆形态 + 自接管触摸（图标不再挂手势识别器）
           strings "$DYLIB" | grep -q 'AevonRingFullCircle' \
             || { echo "::error::圆盘不是整圆版本（缺少 AevonRingFullCircle 标记）"; exit 1; }
-          echo "圆盘校验: 边缘入口 + 整圆形态 + 图标单元 已编入"
+          # V0.0.17：边缘条自己接管原生触摸（不再用 UIScreenEdgePanGestureRecognizer）
+          strings "$DYLIB" | grep -q 'AevonEdgeTouch' \
+            || { echo "::error::边缘入口仍是手势识别器版本（缺少 AevonEdgeTouch 标记）"; exit 1; }
+          echo "圆盘校验: 边缘入口（原生触摸）+ 整圆形态 + 图标单元 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"

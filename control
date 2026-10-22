@@ -1,8 +1,8 @@
 Package: com.aevon
 Name: Aevon
-Version: 0.0.16
+Version: 0.0.17
 Architecture: iphoneos-arm64e
-Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.16：圆盘选择器改为屏幕正中的整圆（图标绕满 360°，带圆周描边），并修掉「点圆盘里的图标没反应」——旧版图标靠手势识别器，被圆盘自身的拖动手势取消，现改为圆盘统一接管触摸、按几何命中判定；点击、拖动旋转、长按移除、点空白收起互不干扰。入口仍为屏幕右侧下半边缘向左滑，悬浮球默认关闭作备用。浮窗可直接触摸操作，支持左右分屏与边缘吸附。默认关闭，请在 设置 → Aevon 开启。
+Description: Aevon 分屏插件（Swift 实现，arm64e / roothide）。V0.0.17：修掉「右边缘左滑呼不出圆盘」——不再使用系统边缘手势识别器（与左滑返回类插件争抢，日志显示整场零触发），改为手势条自己接管原始触摸：左滑≥30pt 或 在边缘原地按住 0.42 秒均可呼出；坐标层级也调整为圆盘宿主窗口在最上层。圆盘为屏幕正中整圆，点图标开窗、拖动旋转、长按移除、点空白收起。浮窗可触摸操作，支持左右分屏与边缘吸附。默认关闭，请在 设置 → Aevon 开启。
 Maintainer: Aevon Dev <aevon@local>
 Author: Aevon Dev
 Section: Tweaks
