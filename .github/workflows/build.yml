@@ -130,8 +130,8 @@ jobs:
             || { echo "::error::主插件缺少吸附几何（AevonSnap）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonSnapSlot' \
             || { echo "::error::主插件缺少吸附槽位类型（AevonSnapSlot）"; exit 1; }
-          strings "$DYLIB" | grep -q 'openSplit' \
-            || { echo "::error::主插件缺少左右分屏流程（openSplit）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSplitFlow' \
+            || { echo "::error::主插件缺少左右分屏流程（AevonSplitFlow）"; exit 1; }
           echo "分屏校验: 吸附几何 + 左右分屏流程 已编入"
 
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"

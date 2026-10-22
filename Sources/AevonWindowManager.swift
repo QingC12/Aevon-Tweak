@@ -169,7 +169,7 @@ enum AevonWindowManager {
             AevonLog.warn("[分屏] 两侧选了同一个 App，忽略")
             return
         }
-        AevonLog.info("[分屏] 左右分屏：\(left) ｜ \(right)")
+        AevonLog.info("[分屏] 左右分屏：\(left) ｜ \(right)（AevonSplitFlow）")
         launchAndOpen(bundleID: left, slot: .left) { ok in
             guard ok else {
                 AevonLog.warn("[分屏] 左侧 \(left) 开窗失败，放弃本次分屏")
