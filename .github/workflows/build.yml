@@ -685,14 +685,15 @@ jobs:
               sys.exit(1)
           print("V0.0.56 校验: 移动关投影 + 主窗矩形下发 + 底部热区加宽 已编入")
           PY
+          # 旧实现用 UITouch 指针当 CFMutableSet 的 key（地址复用导致误吞）——
+          # 新实现改用关联对象标记。此处只做标记确认：外部函数名留在 __LINKEDIT 的
+          # 符号表里（压缩存储），strings 抓不到，不能再拿它当校验条件。
           for m in AevonGuardTouchMarkV56 AevonGuardFloatRectV56 AevonAdaptiveWindowV56; do
             strings "$GUARD_DYLIB" | grep -q "$m" \
               || { echo "::error::V0.0.56 Guard 标记缺失: $m"; exit 1; }
           done
           # 旧实现用 UITouch 指针当 CFMutableSet 的 key（地址复用导致误吞）——
-          # 新实现必须改用关联对象标记，这里正向确认它真的在里面
-          strings "$GUARD_DYLIB" | grep -q 'objc_setAssociatedObject' \
-            || { echo "::error::Guard 没有用关联对象标记触摸（AevonGuardTouchMarkV56）"; exit 1; }
+          # 新实现必须改用关联对象标记，见 AevonGuardTouchMarkV56 那段注释
           echo "V0.0.56 Guard 校验: 关联对象标记 + 主窗矩形 + 窗口尺寸通道 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
