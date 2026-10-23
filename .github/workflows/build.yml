@@ -1089,8 +1089,10 @@ jobs:
           python3 - "$GUARD_DYLIB" <<'PY78G'
           import sys
           data = open(sys.argv[1],'rb').read()
+          # 注意：Guard 里的中文格式串存在 __ustring 段（UTF-16-LE），
+          # 标记串若拼在中文串里就只能按 utf-16-le 找到 —— 两种编码都认。
           for s in ["AevonGuardTapWideV78", "AevonGuardLeakWitnessV78", "Aevon.alive."]:
-              if s.encode('utf-8') not in data:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.78 Guard dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.78 校验: Guard 时间戳宽窗 + 泄漏取证 + 文件存活登记 已编入")
           PY78G
