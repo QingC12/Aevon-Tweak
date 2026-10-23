@@ -73,6 +73,8 @@ __attribute__((used)) static const char AevonGuardFloatBit36V59Marker[] = "Aevon
 /// CI 标记（V0.0.61）：扩展进程（.appex）绝不装 Guard —— 修「桌面部分小组件空白」
 __attribute__((used)) static const char AevonGuardNoExtV61Marker[] = "AevonGuardNoExtV61";
 __attribute__((used)) static const char AevonGuardGhostRecordV67Marker[] = "AevonGuardGhostRecordV67";
+/// CI 标记（V0.0.68）：「设置」App 解除整体排除（装 Guard、热区禁用）+ 注入自检日志
+__attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
