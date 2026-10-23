@@ -16,11 +16,16 @@ static NSArray<UIWindow *> *AevonOverlayAllWindows(void) {
                 [result addObject:window];
             }
         }
-        // 有些窗口不属于任何已连接场景（比如系统临时窗口），补一遍
+        // 有些窗口不属于任何已连接场景（比如系统临时窗口），补一遍。
+        // `UIApplication.windows` 在 iOS 15 起被标弃用，但这里正是要找「所有窗口」，
+        // CI 开着 -Werror，必须显式压掉这条弃用警告。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         for (UIWindow *window in [UIApplication sharedApplication].windows) {
             if (window == nil || [result containsObject:window]) { continue; }
             [result addObject:window];
         }
+#pragma clang diagnostic pop
     } @catch (NSException *exception) {
     }
     return result;
