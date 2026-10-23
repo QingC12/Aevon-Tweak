@@ -47,7 +47,7 @@ final class AevonSceneDriver: NSObject {
     }
 
     /// 统一异常隔离壳
-    private func tryRun(_ tag: String, _ body: () -> Void) {
+    private func tryRun(_ tag: String, _ body: @escaping () -> Void) {
         var exName: NSString? = nil
         var exReason: NSString? = nil
         AevonTryExecute(body, &exName, &exReason)
@@ -188,6 +188,7 @@ final class AevonSceneDriver: NSObject {
             AevonLog.warn("[场景] P1 第 3 步失败：拿不到 \(AevonSceneDriver.experimentBundleID) 的 SBApplication（AevonSceneDriverP1）")
             return
         }
+        guard let app else { return }
         self.step4SceneEntity(manager: manager, app: app, mainDC: mainDC)
     }
 
@@ -196,10 +197,11 @@ final class AevonSceneDriver: NSObject {
     private func step4SceneEntity(manager: NSObject, app: NSObject, mainDC: NSObject?) {
         var entity: NSObject? = nil
         tryRun("第4步") {
-            guard let cls = NSClassFromString("SBDeviceApplicationSceneEntity") as? NSObject.Type else { return }
+            guard let cls = NSClassFromString("SBDeviceApplicationSceneEntity") else { return }
             let sel = NSSelectorFromString("initWithApplication:generatingNewPrimarySceneIfRequired:sceneHandleProvider:displayIdentity:")
-            let alloced = cls.alloc()
-            guard let imp = type(of: alloced).instanceMethod(for: sel) else { return }
+            guard let alloced = AevonSceneDriver.allocObj(cls) else { return }
+            guard let method = class_getInstanceMethod(type(of: alloced), sel) else { return }
+            let imp = method_getImplementation(method)
             // @convention(c)：receiver + SEL + (SBApplication, BOOL, provider?, identity?) → Unmanaged
             typealias Init4 = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             let fn = unsafeBitCast(imp, to: Init4.self)
@@ -231,12 +233,12 @@ final class AevonSceneDriver: NSObject {
             if manager.responds(to: sel) {
                 // initialParameters：FBSSceneParameters 构造（多路），失败给裸 alloc
                 var params: NSObject? = nil
-                if let pcls = NSClassFromString("FBSSceneParameters") as? NSObject.Type {
+                if let pcls = NSClassFromString("FBSSceneParameters"),
+                   let alloced = AevonSceneDriver.allocObj(pcls) {
                     let single = NSSelectorFromString("initWithSettings:")
-                    let alloced = pcls.alloc()
-                    if let imp = type(of: alloced).instanceMethod(for: single) {
+                    if let method = class_getInstanceMethod(type(of: alloced), single) {
                         typealias Fn1 = @convention(c) (NSObject, Selector, NSObject?) -> Unmanaged<NSObject>?
-                        params = unsafeBitCast(imp, to: Fn1.self)(alloced, single, settings)?.takeRetainedValue()
+                        params = unsafeBitCast(method_getImplementation(method), to: Fn1.self)(alloced, single, settings)?.takeRetainedValue()
                     }
                     if params == nil { params = alloced }
                 }
@@ -246,9 +248,9 @@ final class AevonSceneDriver: NSObject {
             // 私有全家桶兜底（P0 dump 到的 7 参版）
             if created == nil {
                 let sel2 = NSSelectorFromString("_createSceneWithDefinition:settings:initialClientSettings:transitionContext:fromRemnant:usingClientProvider:completion:")
-                if let imp = type(of: manager).instanceMethod(for: sel2) {
+                if let method = class_getInstanceMethod(type(of: manager), sel2) {
                     typealias C7 = @convention(c) (NSObject, Selector, NSObject, NSObject?, NSObject?, NSObject?, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
-                    let fn = unsafeBitCast(imp, to: C7.self)
+                    let fn = unsafeBitCast(method_getImplementation(method), to: C7.self)
                     created = fn(manager, sel2, definition, settings, nil, nil, false, nil, nil)?
                         .takeRetainedValue()
                 }
@@ -294,11 +296,19 @@ final class AevonSceneDriver: NSObject {
     /// 可变场景设置构造（UIMutableApplicationSceneSettings 系）
     private func makeMutableSettings() -> NSObject {
         for clsName in ["UIMutableApplicationSceneSettings", "FBMutableSceneSettings"] {
-            if let cls = NSClassFromString(clsName) as? NSObject.Type {
-                return cls.alloc()
+            if let cls = NSClassFromString(clsName), let obj = AevonSceneDriver.allocObj(cls) {
+                return obj
             }
         }
         return NSObject()
+    }
+
+    /// Swift 里 NSObject.alloc() 不可用 —— 走 ObjC 运行时 alloc（全工程统一走这里）
+    static func allocObj(_ cls: AnyClass) -> NSObject? {
+        let sel = NSSelectorFromString("alloc")
+        guard (cls as AnyObject).responds(to: sel) else { return nil }
+        guard let obj = (cls as AnyObject).perform(sel)?.takeUnretainedValue() as? NSObject else { return nil }
+        return obj
     }
 
     /// 把 dc 母本 + 小窗尺寸烙进 settings（创建时烙定 = ScreenCore 路线）
