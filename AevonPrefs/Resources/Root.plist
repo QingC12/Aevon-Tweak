@@ -154,6 +154,18 @@
 		</dict>
 		<dict>
 			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>AevonTrueResizeP1</string>
+			<key>label</key>
+			<string>真小胖屏 P1：自建场景实验（给「设置」按小窗尺寸开新场景，只写日志不改浮窗）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>细节调整</string>

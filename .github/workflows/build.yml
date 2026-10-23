@@ -897,6 +897,19 @@ jobs:
                   print(f"::error::V0.0.67 缺串: {s}"); sys.exit(1)
           print("V0.0.67 校验: 还原宽限期（0.7s 覆盖动画）已编入")
           PY67
+          # V0.0.68：Guard 修复（设置 App 解除整体排除）+ P1 自建场景实验
+          strings "$DYLIB" | grep -q 'AevonSceneDriverP1' \
+            || { echo "::error::V0.0.68 标记缺失: AevonSceneDriverP1（P1 自建场景实验）"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardPrefsAliveV68' \
+            || { echo "::error::V0.0.68 Guard 标记缺失: AevonGuardPrefsAliveV68（设置 App 解除排除）"; exit 1; }
+          python3 - "$DYLIB" <<'PY68'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["P1 实验开始","自建场景实验","场景探测："]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.68 缺串: {s}"); sys.exit(1)
+          print("V0.0.68 校验: Guard 设置 App 解除排除 + P1 自建场景实验 已编入")
+          PY68
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
@@ -1004,6 +1017,10 @@ jobs:
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'TrueResizeScene' \
             || { echo "::error::Root.plist 缺少 TrueResizeScene（真小胖屏 P0 探测）开关"; exit 1; }
           echo "V0.0.66 校验: P0 探测开关（TrueResizeScene）已就位"
+          # ── V0.0.68（AevonSceneDriverP1）：P1 自建场景实验开关必须在一级 Root.plist ──
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'AevonTrueResizeP1' \
+            || { echo "::error::Root.plist 缺少 AevonTrueResizeP1（真小胖屏 P1 自建场景实验）开关"; exit 1; }
+          echo "V0.0.68 校验: P1 自建场景实验开关（AevonTrueResizeP1）已就位"
           # V0.0.25 新增：触发区域三个滑杆必须在「细节调整」二级页（V0.0.30 起 Root 只放开关）
           for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
             plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q "$K" \

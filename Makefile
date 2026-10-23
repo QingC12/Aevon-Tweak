@@ -39,6 +39,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonSceneHelper.swift \
     Sources/AevonSceneProbe.swift \
     Sources/AevonSceneHost.swift \
+    Sources/AevonSceneDriver.swift \
     Sources/AevonHostWindow.swift \
     Sources/AevonWindowView.swift \
     Sources/AevonSnap.swift \

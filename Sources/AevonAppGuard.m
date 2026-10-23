@@ -78,6 +78,17 @@ static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
 static BOOL AevonGuardEnabled = NO;
 static CGRect AevonGuardZone = {{0, 0}, {0, 0}};
+/* V0.0.68（AevonGuardPrefsAliveV68）：「设置」App 专用的热区禁用标志。
+ *
+ * V0.0.28 起 Guard 整体排除 com.apple.Preferences —— 当时热区是「began 无条件吞」，
+ * 设置页滑杆跨在热区里向左拖会被吞，只好整个不装。但这留下了大洞：
+ * 用户拿「设置」App 浮窗测试时（com.apple.Preferences 正是前台），停靠小窗的
+ * 触摸在 App 进程里无人吞 —— 轻点还原合成一次 App 内点击（穿透），多版本反复。
+ * V56 之后热区已改「移动才吞 + 只吞向左滑」，但向左拖滑杆仍会被吞，
+ * 所以不能简单去掉排除 —— 改为：**照常装 Guard，只是热区恒空**。
+ * 浮窗判据（停靠格几何 / 主窗矩形 / bit48 / 圆盘期）全部保留 ——
+ * 这些都以「浮窗状态激活」为前提，不会碰设置页的滑杆。 */
+static BOOL gAevonGuardPrefsNoZone = NO;
 static CFTimeInterval AevonGuardConfigAt = 0;
 /// 配置最长缓存时间（秒）。设置里改完会发 Darwin 通知立即失效，这里只是兜底。
 static CFTimeInterval const AevonGuardConfigTTL = 2.0;
@@ -533,6 +544,7 @@ static void AevonGuardReloadConfig(void) {
     if (AevonGuardReadNotifyZone(&zone, &enabled)) {
         AevonGuardEnabled = enabled;
         AevonGuardZone = enabled ? zone : CGRectZero;
+        if (gAevonGuardPrefsNoZone) { AevonGuardZone = CGRectZero; }   /* V0.0.68 */
         return;
     }
 
@@ -540,6 +552,7 @@ static void AevonGuardReloadConfig(void) {
     if (AevonGuardReadConfFile(&zone, &enabled)) {
         AevonGuardEnabled = enabled;
         AevonGuardZone = enabled ? zone : CGRectZero;
+        if (gAevonGuardPrefsNoZone) { AevonGuardZone = CGRectZero; }   /* V0.0.68 */
         return;
     }
 
@@ -558,6 +571,7 @@ static void AevonGuardReloadConfig(void) {
             CGFloat bottomY = bounds.size.height * ratio;
             CGFloat y = MIN(MAX(bottomY - height, 0.0), bounds.size.height - height);
             AevonGuardZone = CGRectMake(bounds.size.width - width, y, width, height);
+            if (gAevonGuardPrefsNoZone) { AevonGuardZone = CGRectZero; }   /* V0.0.68 */
             return;
         }
     }
@@ -572,12 +586,15 @@ static void AevonGuardReloadConfig(void) {
             CGFloat y = MIN(MAX(bottomY - height, 0.0), bounds.size.height - height);
             AevonGuardEnabled = YES;
             AevonGuardZone = CGRectMake(bounds.size.width - width, y, width, height);
+            if (gAevonGuardPrefsNoZone) { AevonGuardZone = CGRectZero; }   /* V0.0.68 */
             return;
         }
     }
 
     AevonGuardEnabled = NO;
     AevonGuardZone = CGRectZero;
+    /* V0.0.68（AevonGuardPrefsAliveV68）：设置页热区恒空（滑杆保护），浮窗判据照常。 */
+    if (gAevonGuardPrefsNoZone) { AevonGuardZone = CGRectZero; }
 }
 
 #pragma mark - 事件拦截
@@ -888,6 +905,17 @@ static void AevonGuardInstall(void) {
     }
 
     NSLog(@"[Aevon] App 侧热区拦截已安装（%s %s）", AevonAppGuardMarker, AevonGuardNotifyMarker);
+
+    /* V0.0.68（AevonGuardPrefsAliveV68）：注入自检 —— 每个 GUI App 进程装好后
+     * 写一条到 /var/mobile/Aevon.log。下一轮日志能直接看出 Guard 活在哪些 App 里
+     * （Aevon(61) 靠圆盘 ack 警告倒推出 Preferences 被排除，太绕）。 */
+    @try {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"?";
+        AevonGuardWriteLog(YES, @"Guard 已注入：%@（热区=%@，进程=%s）",
+                           bid,
+                           gAevonGuardPrefsNoZone ? @"禁用（设置页滑杆保护）" : @"启用",
+                           getprogname());
+    } @catch (NSException *e) { }
     /* V0.0.34（AevonGuardLogV34）：注入确认日志 —— 用户日志里出现这行就说明 Guard 真的进了这个 App */
     AevonGuardWriteLog(YES, @"已注入进程 %@（bundle %@），sendEvent 拦截就绪（AevonGuardStateRingV34 AevonGuardLogV34 AevonGuardRingExactV37）",
                        [NSString stringWithUTF8String:getprogname() ?: "?"],
@@ -910,13 +938,20 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
          */
         if ([UIApplication sharedApplication] == nil) { return; }
         /*
-         * V0.0.28：**排除「设置」App**。
-         * 设置页里的三个触发区滑杆跨在热区里，若在 Preferences 进程也被接管，
-         * 滑杆右半截就拖不动（用户会以为「滑条只能拖到最小值」）。
-         * Aevon 自己的设置页永远不需要热区手势。
+         * V0.0.68（AevonGuardPrefsAliveV68）：**「设置」App 不再整体排除**。
+         *
+         * V0.0.28 排除 com.apple.Preferences 是因为当时热区「began 无条件吞」会吃掉
+         * 设置页滑杆的向左拖动。代价是一个多版本反复的大洞：用户拿「设置」App 测浮窗时
+         * （Preferences 正是前台 App），停靠小窗 / 主窗矩形 / bit48 所有判据全部失效 ——
+         * 轻点停靠小窗还原主窗必然穿透合成一次 App 内点击（Aevon(60)/(61) 日志 +
+         * 圆盘三次呼出全部无回执实锤）。现在改为：照常装 Guard，
+         * 只把 gAevonGuardPrefsNoZone 置位（热区恒空，滑杆保护），
+         * 浮窗判据全部恢复 —— 这些判据都以浮窗状态激活为前提，不碰滑杆。
          */
         NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-        if ([bundleID isEqualToString:@"com.apple.Preferences"]) { return; }
+        if ([bundleID isEqualToString:@"com.apple.Preferences"]) {
+            gAevonGuardPrefsNoZone = YES;
+        }
 
         /*
          * V0.0.61（AevonGuardNoExtV61）：**扩展进程（.appex）绝不装 Guard**。

@@ -288,6 +288,8 @@ __attribute__((used)) static const char AevonReflowAppGateV64Marker[] = "AevonRe
 __attribute__((used)) static const char AevonTrueResizeWritesOffV65Marker[] = "AevonTrueResizeWritesOffV65";
 __attribute__((used)) static const char AevonFrontmostRepreV61Marker[] = "AevonFrontmostRepreV61";
 __attribute__((used)) static const char AevonSceneProbeP0Marker[] = "AevonSceneProbeP0";
+__attribute__((used)) static const char AevonSceneDriverP1Marker[] = "AevonSceneDriverP1";
+__attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
 __attribute__((used)) static const char AevonRestoreGraceV67Marker[] = "AevonRestoreGraceV67";
 
 /* V0.0.39 CI 标记：

@@ -1302,6 +1302,9 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         AevonEdgeEntry.checkTriggerZoneChange()
         AevonEdgeEntry.checkContentModeChange()
         AevonEdgeEntry.syncGuardConfig()
+        // V0.0.68（AevonSceneDriverP1）：真小胖屏 P1 自建场景实验（开关从关→开触发，
+        // 内部防重入 + 全程异常隔离，失败只写日志不影响任何现有功能）
+        AevonSceneDriver.shared.maybeRunExperiment()
     }
 }
 
