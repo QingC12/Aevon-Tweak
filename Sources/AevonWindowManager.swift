@@ -111,6 +111,8 @@ enum AevonWindowManager {
             // V0.0.51（AevonSingleMainV51）：新窗是"唯一主窗"，旧的主窗自动吸附成停靠小窗。
             // 圆盘选图标开新窗走的正是这条路径，于是天然满足用户第 2 条要求。
             AevonEntryHost.demoteMainWindows(except: windowView)
+            // V0.0.56：新窗成为主窗 → 立刻把它的矩形同步给 Guard
+            AevonEntryHost.syncFloatRectToGuard()
             // 有新窗 → 需要压住系统空闲锁屏（看视频时不能黑屏）
             AevonIdleGuard.shared.refresh()
 
@@ -222,6 +224,10 @@ enum AevonWindowManager {
         windowView.playDismissAnimation {
             AevonSceneHelper.sleep(bundleID)
             windowView.teardown()
+            // V0.0.56：视图已拆 → 必须重算主窗矩形重新下发。
+            // 漏掉这一步，Guard 会一直以为那块屏幕还盖着浮窗，把 App 的触摸白白吞掉
+            // （「关掉浮窗后某一块区域点不动」就是这么来的）。
+            AevonEntryHost.syncFloatRectToGuard()
             // 真正拆完视图后再判定（退场动画期间窗还在，计数不能提前减）
             AevonIdleGuard.shared.refresh()
         }

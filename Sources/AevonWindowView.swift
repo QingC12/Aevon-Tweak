@@ -115,15 +115,21 @@ final class AevonWindowView: UIView {
     private static let minContentWidth: CGFloat = 118
     /// 左右侧条厚度（手势区）。Stheno 的 edgeWidth 同位概念。
     static let barThickness: CGFloat = 20
-    /// 底边条厚度 V0.0.44：用户要求加宽底部手势热区（原 18pt 太窄不好按）
-    static let bottomBarThickness: CGFloat = 30
+    /// 底边条厚度。V0.0.44 原 18pt → 30；V0.0.56（AevonBigBottomBarV56）30 → 46。
+    ///
+    /// 用户 Aevon(50) 第 2 条：「底部手势热区可以加宽一点，因为在全屏 App 中
+    /// 双击浮窗底部关闭时会触发全屏 App 的点击操作」。
+    /// 加宽解决"按不准"，漏点击的根治在两条跨进程判据上（浮窗矩形 + 停靠格几何），
+    /// 见 `AevonEntryHost.syncFloatRectToGuard`。
+    static let bottomBarThickness: CGFloat = 46
     /// 外角块边长。V0.0.45（AevonCornerHotV45）：36 → 48。
     /// 用户 Aevon(38)：「右下角的缩放手势有点不灵敏」—— 36pt 贴在窗角外侧，
     /// 手指要正好压在上面才开始缩放，实际很难命中。边长加到 48，另加 10pt 命中外扩。
     static let cornerSize: CGFloat = 48
     /// 角块的命中外扩（手指落点容错），侧条 / 底边条用小一点的外扩
     static let cornerHitSlop: CGFloat = 10
-    static let barHitSlop: CGFloat = 4
+    /// V0.0.56：条状手柄的外扩 4 → 6（手指落点容错再宽一点）
+    static let barHitSlop: CGFloat = 6
     /// 命中判定 / 避让外扩距离。
     /// V0.0.45：不再把 `cornerSize` 算进来 —— 否则整圈窗外 48pt 都被判成浮窗，
     /// 会连带把 App 边缘的触摸一起吞掉。角块自己的命中走 `cornerHitSlop`。
@@ -199,6 +205,20 @@ final class AevonWindowView: UIView {
 
     /// 手势进行中（此时只允许改 transform，不允许改 frame）
     private var isLiveResizing = false
+
+    /// 窗口正在被**移动**（不是缩放）。V0.0.56（AevonMoveSmoothV56）。
+    ///
+    /// 用户 Aevon(50) 第 1 条：「主悬浮窗滑动底部移动位置时，前 1.5 秒会卡顿，
+    /// 然后才恢复正常」。移动期间每帧只有 `center` 在变，但窗口有一层
+    /// `shadowRadius=16` 的离屏高斯模糊投影 —— 位置一变就要重新合成一整张阴影位图，
+    /// 叠在「跨进程场景图层整体位移」上，正好把主线程和渲染线程都压住。
+    /// 缩放早就用 `shadowOpacity = 0` 规避了（V0.0.45），移动这一路一直漏着。
+    /// 这里在**真正产生位移**的那一刻关投影，抬手立刻恢复。
+    private var isLiveMoving = false
+
+    /// 上一次写过的投影路径参数（V0.0.56：幂等化，避免每帧重建 CGPath）
+    private var lastShadowBounds: CGRect = .null
+    private var lastShadowRadius: CGFloat = -1
 
     /// 几何动画进行中（V0.0.48，AevonGeomAnimV48）。
     ///
@@ -495,6 +515,8 @@ final class AevonWindowView: UIView {
                 self.pendingDockY = nil
                 self.setDockedY(pending)
             }
+            // V0.0.56：几何落定 → 同步主窗矩形给 Guard
+            AevonEntryHost.syncFloatRectToGuard()
             completion?()
         }
         if spring {
@@ -575,8 +597,16 @@ final class AevonWindowView: UIView {
     }
 
     /// 投影路径与圆角矩形严格一致，避免系统按 alpha 逐帧重算（滚动 App 画面时开销很大）
+    ///
+    /// V0.0.56（AevonMoveSmoothV56）：**幂等化**。
+    /// 以前每次 `layoutSubviews` 都无条件新建一条 CGPath 并赋值给 `layer.shadowPath` ——
+    /// 即使几何一点没变，CA 也会认为路径变了，重新做一次离屏高斯模糊。
+    /// 拖动 / 缩放这种高频布局场景下，这就是「移动窗口时画面一卡一卡」的直接原因。
     private func updateShadowPath() {
         let radius = contentClip.layer.cornerRadius
+        if lastShadowBounds == bounds, abs(lastShadowRadius - radius) < 0.05 { return }
+        lastShadowBounds = bounds
+        lastShadowRadius = radius
         layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: radius).cgPath
     }
 
@@ -630,7 +660,12 @@ final class AevonWindowView: UIView {
         // 拖动 / 缩放期间不请求：每一帧改场景尺寸会让 App 疯狂重排。
         // 停靠小窗也不请求：它是**缩略预览**，跟着主窗那套场景尺寸缩放就行；
         // 不然每次停靠 / 还原都改一次场景，App 会连续重排三次卡顿。
-        if !isLiveResizing && !isDocked {
+        // V0.0.56（AevonMoveSmoothV56）：**任何手势进行中都不请求场景尺寸**。
+        // 旧条件只挡了 isLiveResizing（缩放），移动 / 侧条拖动这一路仍然会在每个布局周期
+        // 走到 `updateAdaptiveSize` —— 一旦尺寸差超过 1.5pt 就会发一次
+        // `FBScene updateSettings:`，App 立刻整屏重排，正是「拖着拖着突然卡一下」的来源。
+        // 抬手后 `grabEnd` → setNeedsLayout 会补做一次，尺寸最终仍是对齐的。
+        if !isLiveResizing && !isLiveMoving && !isDocked && activeGrab == nil && !isAnimatingGeometry {
             _ = sceneHost.updateAdaptiveSize(clipSize)
         }
         let adaptive = sceneHost.isAdaptiveContent
@@ -726,18 +761,28 @@ final class AevonWindowView: UIView {
         let cornerY: CGFloat = gapBottom < c ? h - c : h
 
         // 侧条在底部给底边条留出整条空间（避免两套手势帧重叠）
+        //
+        // V0.0.56（AevonMoveSmoothV56）：改成幂等写入 —— 移动时每帧都会走到这里，
+        // 而 `view.frame = 相同值` 仍会让 UIKit 走一遍 setFrame → 标记布局。
+        // 拖动时的「卡」有一部分就来自每帧 5 次无意义的手柄重排。
         let sideHeight = max(40, h - bb)
-        leftBar.frame = CGRect(x: sideInsetL, y: 0, width: b, height: sideHeight)
-        rightBar.frame = CGRect(x: sideInsetR, y: 0, width: b, height: sideHeight)
-        bottomLeftCorner.frame = CGRect(x: cornerInsetL, y: cornerY, width: c, height: c)
-        bottomRightCorner.frame = CGRect(x: cornerInsetR, y: cornerY, width: c, height: c)
+        setHandleFrame(leftBar, CGRect(x: sideInsetL, y: 0, width: b, height: sideHeight))
+        setHandleFrame(rightBar, CGRect(x: sideInsetR, y: 0, width: b, height: sideHeight))
+        setHandleFrame(bottomLeftCorner, CGRect(x: cornerInsetL, y: cornerY, width: c, height: c))
+        setHandleFrame(bottomRightCorner, CGRect(x: cornerInsetR, y: cornerY, width: c, height: c))
 
         // 底边条夹在两个下角块之间，厚度用 bottomBarThickness（用户要求加宽）
         let barLeft: CGFloat = gapLeft < c ? c : 0
         let barRight: CGFloat = gapRight < c ? w - c : w
         let barY: CGFloat = gapBottom < bb ? h - bb : h
-        bottomBar.frame = CGRect(x: barLeft, y: barY,
-                                 width: max(40, barRight - barLeft), height: bb)
+        setHandleFrame(bottomBar, CGRect(x: barLeft, y: barY,
+                                         width: max(40, barRight - barLeft), height: bb))
+    }
+
+    /// 手柄 frame 幂等写入（值没变就完全不碰 UIKit 布局）
+    private func setHandleFrame(_ handle: UIView, _ rect: CGRect) {
+        if handle.frame == rect { return }
+        handle.frame = rect
     }
 
     // MARK: - 全局触摸驱动（V0.0.41，AevonFloatGlobalV41）
@@ -877,6 +922,16 @@ final class AevonWindowView: UIView {
     /// 抬手。`commit` = false 表示这段拖拽被取消（不落盘几何）。
     func grabEnd(at layerPoint: CGPoint, commit: Bool) {
         guard let grab = activeGrab else { return }
+        // V0.0.56：几何一变就把主窗矩形同步给 Guard（浮窗盖住的区域，App 一律别收到输入）
+        defer { AevonEntryHost.syncFloatRectToGuard() }
+        // 投影在抬手时恢复 —— 必须在下面可能触发的 snap / restore 动画之前，
+        // 否则 animateGeometry 读到的 savedShadowOpacity 是 0，动画结束后投影就再也不回来了。
+        if isLiveMoving {
+            isLiveMoving = false
+            layer.shadowOpacity = AevonWindowView.shadowOpacity
+            AevonLog.info("[窗口] 移动结束：拖动全程关闭投影，抬手恢复"
+                + "（投影离屏模糊 + 场景图层整体位移叠加 = 移动卡顿的主因）（AevonMoveSmoothV56）")
+        }
         // 合帧可能把最后一段位移留在 pending 里 —— 抬手时用终点补一次，手感才不「掉尾」
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -924,6 +979,10 @@ final class AevonWindowView: UIView {
     /// 取消当前拖拽（超时 / 系统打断 / 侧条其实只是轻点）：几何退回原样，不落盘。
     func grabCancel() {
         stopDragLink()
+        if isLiveMoving {
+            isLiveMoving = false
+            layer.shadowOpacity = AevonWindowView.shadowOpacity
+        }
         guard let grab = activeGrab else { return }
         activeGrab = nil
         switch grab {
@@ -968,6 +1027,12 @@ final class AevonWindowView: UIView {
         // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews，
         // 所以手势区的内外位置要手动跟着重算（贴边时侧条要挪进窗内）
         self.center = center
+        // V0.0.56（AevonMoveSmoothV56）：真正产生位移的那一刻关投影（见 isLiveMoving）。
+        // 只在这里关（不在 grabBegin），所以纯点击不会有「边缘闪一下」（AevonCornerNoFlashV54 的同样思路）。
+        if !isLiveMoving, abs(dx) + abs(dy) > 0.5 {
+            isLiveMoving = true
+            layer.shadowOpacity = 0
+        }
         // V0.0.45：这里不再每帧算避让 —— `AevonEntryHost.dockedObstacles()` 每次都会
         // 遍历所有窗并构造矩形，120Hz 下是纯浪费；避让改到抬手时做一次。
         layoutGestureHandles()

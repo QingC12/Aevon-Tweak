@@ -239,12 +239,80 @@ enum AevonEntryHost {
             }
         }
         AevonNotifySetDockState(Int32(right), Int32(left))
+        // V0.0.56：停靠列一变，主窗集合也跟着变（还原会多出一个主窗 / 降级会少一个），
+        // 顺手把主窗矩形同步过去（内部有节流）。
+        syncFloatRectToGuard()
         guard right != lastDockStateRight || left != lastDockStateLeft else { return }
         lastDockStateRight = right
         lastDockStateLeft = left
         AevonLog.info("[窗口] 停靠列已同步给 Guard：右 \(right) 格 / 左 \(left) 格"
             + "（按固定槽位几何吞摸，快速连点也不会点到 App）（\(reason)）"
             + "（AevonGuardDockZoneV54）")
+    }
+
+    /// 把「主悬浮窗（含外侧手势区）的矩形」同步给 App 侧的 AevonGuard
+    /// （V0.0.56，AevonGuardFloatRectV56）。
+    ///
+    /// Aevon(50) 第 2 / 5 条：全屏 App 里双击浮窗底边关闭、快速连点停靠小窗切换主窗，
+    /// App 都会吃到一次点击。bit48 只有 350ms 宽（双击间隔 0.36s 正好错过），
+    /// 停靠格几何又不覆盖主窗本体 —— 所以主窗矩形必须单独下发。
+    /// Guard 命中就吞，与触摸时序彻底无关。
+    private static var lastGuardFloatRect: CGRect = .zero
+    private static var guardFloatRectAt: CFTimeInterval = 0
+    private static var guardFloatRectPending = false
+
+    static func syncFloatRectToGuard() {
+        // 拖动 / 动画期会调用得很密，节流到 ~8Hz，且保证最后一次一定写到
+        let now = CACurrentMediaTime()
+        if now - guardFloatRectAt < 0.12 {
+            if !guardFloatRectPending {
+                guardFloatRectPending = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                    guardFloatRectPending = false
+                    syncFloatRectToGuard()
+                }
+            }
+            return
+        }
+        guardFloatRectAt = now
+
+        var union = CGRect.null
+        if let layer = floatLayer, !layer.subviews.isEmpty {
+            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+                // 停靠小窗有独立的槽位几何（Guard 自己算），这里只发主窗
+                guard let win = view as? AevonWindowView, !win.isDocked else { continue }
+                /* V0.0.56 关键取舍：**只下发「底边手势环带」，不是整个窗口**。
+                 *
+                 * 一开始想的是把整个窗口矩形都交给 Guard 常驻吞，但浮窗里的内容
+                 * 本身也是一条真实的 App 触摸（经 presenter 转发进 App 进程的
+                 * `UIApplication -sendEvent:`）—— 整窗吞会把浮窗内容也一起吞掉，
+                 * 抖音在浮窗里就完全点不动了。
+                 * 而漏点击真正发生的地方只有底边条：它挂在窗口**下方**
+                 * （`layoutGestureHandles` 里 barY = h），双击间隔 0.36s 又刚好越过
+                 * bit48 的 350ms 放行窗口。所以只需要把这一条环带常驻吞：
+                 * 窗内 12pt（手指压边时的落点）+ 窗外整条 barThickness。 */
+                let bandHeight = 12 + AevonWindowView.bottomBarThickness + AevonWindowView.barHitSlop
+                let band = CGRect(x: win.frame.minX,
+                                  y: win.frame.maxY - 12,
+                                  width: win.frame.width,
+                                  height: bandHeight)
+                union = union.union(band)
+            }
+        }
+        let rect = union.isNull ? CGRect.zero : union
+        if rect == lastGuardFloatRect { return }
+        lastGuardFloatRect = rect
+        if rect.isEmpty {
+            AevonNotifySetFloatRect(0, 0, 0, 0)
+            AevonLog.info("[窗口] 已清空主窗矩形（没有主悬浮窗了，App 恢复全屏触摸）"
+                + "（AevonGuardFloatRectV56）")
+            return
+        }
+        AevonNotifySetFloatRect(Double(rect.minX), Double(rect.minY),
+                                Double(rect.width), Double(rect.height))
+        AevonLog.info("[窗口] 主窗矩形已下发给 Guard：\(Int(rect.width))x\(Int(rect.height))"
+            + " 位置 \(Int(rect.minX)),\(Int(rect.minY))"
+            + "（浮窗盖住的区域 App 不再收到触摸，双击/连点都不会漏）（AevonGuardFloatRectV56）")
     }
 
     /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。

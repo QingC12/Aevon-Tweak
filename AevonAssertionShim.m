@@ -380,6 +380,98 @@ void AevonNotifySetDockState(int rightCount, int leftCount) {
     }
 }
 
+/* ──────────────────────────────────────────────────────────────────
+ * V0.0.56（AevonGuardFloatRectV56）：主悬浮窗矩形通道（独立 token）
+ *
+ * Aevon(50) 第 2 / 第 5 条：在全屏 App 里双击浮窗底边关闭、或快速连点停靠小窗
+ * 切换主窗时，App 仍然会收到一次点击。
+ *
+ * 根因（日志 Aevon(50) 第 390 行 `入口窗口收到触摸 (x=205,y=698，宽容区内=否)` 佐证）：
+ * backboardd 会把同一根手指**同时**投给 SpringBoard 与前台 App 两个进程。
+ * SB 侧那份被浮窗吃掉了，App 那份只能靠 Guard 在 sendEvent 里丢 ——
+ * 而 Guard 只有两条判据：bit48（按下写、抬手清，有竞态）和停靠格几何。
+ * 主窗（非停靠态）本体压根没有几何判据，双击的第二下（间隔 0.36s > 350ms 放行）
+ * 就落在"已放行"的窗口里，App 于是合成一次点击。
+ *
+ * 这里直接把「主窗矩形（含外侧手势区）」写进共享内存：只要手指落在浮窗盖住的
+ * 那块屏幕上，App 一份就一律吞掉 —— 与触摸时序完全无关，双击 / 连点都不会漏。
+ * 打包：x:10 y:10 w:10 h:10 valid:1(bit40) 版本:8(bit48~55)
+ * （这两个通道用独立 token，版本位放在 48 就不会跟 guardzone 的布局打架）
+ * ────────────────────────────────────────────────────────────────── */
+#define AEVON_WIN_VER (0x36ULL << 48)
+
+static int AevonNotifyFloatRectToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.guardfloat", &token);
+    });
+    return token;
+}
+
+/// rect 传 CGRectZero 表示「当前没有主悬浮窗」→ Guard 不再按矩形吞摸。
+void AevonNotifySetFloatRect(double x, double y, double w, double h) {
+    @try {
+        int token = AevonNotifyFloatRectToken();
+        if (token < 0) { return; }
+        uint64_t pack = 0;
+        if (w >= 1.0 && h >= 1.0) {
+            pack |= ((uint64_t)llround(x) & 0x3FFULL);
+            pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
+            pack |= (((uint64_t)llround(w)) & 0x3FFULL) << 20;
+            pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 30;
+            pack |= (1ULL << 40);
+        }
+        pack |= AEVON_WIN_VER;
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        if (old == pack) { return; }   // 幂等：几何没变就不做跨进程写
+        notify_set_state(token, pack);
+        notify_post("com.aevon.guardfloat");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* V0.0.56（AevonAdaptiveWindowV56）：App 窗口目标尺寸通道。
+ *
+ * Aevon(50) 第 4 条：改成场景尺寸后「字体变大、画面被剪裁、抖音右侧工具栏依旧不显示」。
+ * 说明 `FBSMutableSceneSettings.setFrame:` 只改了**渲染视口**（scene layer 被裁到 267x458），
+ * App 自己的 UIWindow 仍是整屏 430x932 —— 于是内容按 430 排版、视口只露出左边 62%，
+ * 右边框（抖音右侧工具栏）被切掉，字看起来也就"变大"了。
+ *
+ * 真正的 Stheno 效果需要 App 端窗口一起变小。Guard 就注入在 App 进程里（UIKit），
+ * 所以这里把目标尺寸写进共享内存，由 Guard 直接改 keyWindow.frame，App 随之重排。
+ * 打包：w:10 h:10 valid:1(bit20) 版本:8(bit48~55)；w/h 传 0 = 恢复整屏。
+ * ────────────────────────────────────────────────────────────────── */
+static int AevonNotifyWindowSizeToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.guardwinsize", &token);
+    });
+    return token;
+}
+
+void AevonNotifySetWindowSize(double w, double h) {
+    @try {
+        int token = AevonNotifyWindowSizeToken();
+        if (token < 0) { return; }
+        uint64_t pack = 0;
+        if (w >= 40.0 && h >= 40.0) {
+            pack |= ((uint64_t)llround(w) & 0x3FFULL);
+            pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 10;
+            pack |= (1ULL << 20);
+        }
+        pack |= AEVON_WIN_VER;
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        if (old == pack) { return; }
+        notify_set_state(token, pack);
+        notify_post("com.aevon.guardwinsize");
+    } @catch (NSException *exception) {
+    }
+}
+
 int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled) {
     @try {
         int token = AevonNotifyZoneToken();

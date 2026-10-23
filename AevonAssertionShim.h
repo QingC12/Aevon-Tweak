@@ -48,6 +48,21 @@ void AevonNotifySetFloatTouch(int on);
 /// rightCount / leftCount 传 -1 表示该侧保持原值。
 void AevonNotifySetDockState(int rightCount, int leftCount);
 
+/// V0.0.56（AevonGuardFloatRectV56）：主悬浮窗矩形通道（独立 notify token `com.aevon.guardfloat`）。
+///
+/// Aevon(50) 第 2 / 5 条：双击底边关闭、快速连点停靠小窗时，App 仍会吃到一次点击。
+/// 主窗本体没有几何判据，光靠 bit48（有竞态）堵不住。这里把「主窗 + 外侧手势区」
+/// 的矩形写进共享内存，Guard 命中就吞 —— 与触摸时序无关。
+/// 传 w/h < 1 表示当前没有主悬浮窗（Guard 不再按矩形吞）。
+void AevonNotifySetFloatRect(double x, double y, double w, double h);
+
+/// V0.0.56（AevonAdaptiveWindowV56）：App 窗口目标尺寸（独立 token `com.aevon.guardwinsize`）。
+///
+/// Aevon(50) 第 4 条：只改场景 frame 只裁了渲染视口，App 的 UIWindow 仍是整屏 →
+/// 内容按整屏排版、右边框被切掉。Guard（注入 App 进程）读到尺寸后直接改 keyWindow.frame，
+/// App 才会真正按窗口尺寸重排。w/h < 40 表示恢复整屏。
+void AevonNotifySetWindowSize(double w, double h);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，

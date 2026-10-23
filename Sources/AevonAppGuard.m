@@ -30,6 +30,7 @@
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
+#import <math.h>
 #import <notify.h>
 
 /// CI 标记：构建后校验这段逻辑确实编进了 __cstring
@@ -60,10 +61,15 @@ __attribute__((used)) static const char AevonGuardRingExactV37Marker[] = "AevonG
 __attribute__((used)) static const char AevonGuardFloatTouchV49Marker[] = "AevonGuardFloatTouchV49";
 /// CI 标记（V0.0.54）：按停靠列**固定几何**吞摸 —— 与触摸时序无关，快速连点也不会漏
 __attribute__((used)) static const char AevonGuardDockZoneV54Marker[] = "AevonGuardDockZoneV54";
+/// CI 标记（V0.0.56）：触摸接管标记改 associated object —— 修「屏幕部分位置无法点击」
+__attribute__((used)) static const char AevonGuardTouchMarkV56Marker[] = "AevonGuardTouchMarkV56";
+/// CI 标记（V0.0.56）：主悬浮窗矩形通道（双击底边 / 快速连点仍点到 App 的根治）
+__attribute__((used)) static const char AevonGuardFloatRectV56Marker[] = "AevonGuardFloatRectV56";
+/// CI 标记（V0.0.56）：App 窗口尺寸通道（内容被放大 / 剪裁、右侧工具栏不显示的根治）
+__attribute__((used)) static const char AevonAdaptiveWindowV56Marker[] = "AevonAdaptiveWindowV56";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
-static CFMutableSetRef AevonGuardSwallowed = NULL;
 static BOOL AevonGuardEnabled = NO;
 static CGRect AevonGuardZone = {{0, 0}, {0, 0}};
 static CFTimeInterval AevonGuardConfigAt = 0;
@@ -100,9 +106,16 @@ static BOOL AevonGuardRingOpen(void) {
     if (token >= 0) {
         uint64_t pack = 0;
         notify_get_state(token, &pack);
-        /* V0.0.49：版本 0x34（旧 SB）与 0x35（本版，多一个浮窗位）都算有效状态 */
+        /* V0.0.56（AevonGuardRingExactV37 修正）：白名单补 0x36。
+         *
+         * V0.0.54 起 SpringBoard 写的版本号已经升到 0x36（多停靠列状态位），
+         * 这里却仍只认 0x34 / 0x35 —— 于是共享内存状态位**整条被跳过**，
+         * 掉进下面那条 60 秒时间窗兜底。结果就是圆盘收起之后最长 60 秒内
+         * Guard 仍然整屏吞触摸：用户 Aevon(50) 第 3 条说的
+         * 「插件会导致屏幕部分位置无法点击、全屏幕操作失效」正是它。
+         * 版本号只有一处来源，这里必须跟着升。 */
         uint64_t ver = (pack >> 40) & 0xFFULL;
-        if (ver == 0x34ULL || ver == 0x35ULL) {
+        if (ver == 0x34ULL || ver == 0x35ULL || ver == 0x36ULL) {
             if ((pack >> 39) & 1ULL) {
                 AevonGuardRingOpenAt = CACurrentMediaTime();  /* 诊断用，不再参与判定 */
                 return YES;
@@ -220,29 +233,194 @@ static NSUInteger AevonGuardDockCounts(NSUInteger *outRight, NSUInteger *outLeft
     return r + l;
 }
 
+/// 停靠小窗「刚被点走」留下的幽灵格（V0.0.56）。
+///
+/// 轻点还原后小窗立刻离开该槽位、下方整列上移补位，而用户第二根手指往往
+/// 几十毫秒后就落回**原槽位**——那里已经是 App 画面了。所以命中过的那一格
+/// 在 1 秒内继续吞摸（同一只手连点 5 个也不会漏）。
+static CGRect gAevonDockGhost = {{0, 0}, {0, 0}};
+static CFTimeInterval gAevonDockGhostUntil = 0;
+
 /// 点是否落在某一格停靠小窗上（外扩 3pt 容错，卡片的描边也能算进去）。
+///
+/// V0.0.56：命中后把那一格记成「幽灵格」保留 1 秒 —— 轻点还原后小窗立刻离开槽位、
+/// 下方整列上移补位，用户第二根手指几十毫秒后落回原位置时那里已经是 App 画面了。
 static BOOL AevonGuardDockHitTest(CGPoint pt) {
     @try {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now < gAevonDockGhostUntil && !CGRectIsEmpty(gAevonDockGhost)
+            && CGRectContainsPoint(gAevonDockGhost, pt)) {
+            return YES;
+        }
         NSUInteger right = 0, left = 0;
         if (AevonGuardDockCounts(&right, &left) == 0) { return NO; }
         if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
         if (gAevonDockW < 1.0) { return NO; }
         CGFloat sw = [UIScreen mainScreen].bounds.size.width;
         const CGFloat slop = 3.0;
-        for (NSUInteger i = 0; i < right; i++) {
-            CGRect r = CGRectMake(sw - gAevonDockW, gAevonDockTop + (CGFloat)i * gAevonDockStep,
-                                 gAevonDockW, gAevonDockH);
-            if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) { return YES; }
-        }
-        for (NSUInteger i = 0; i < left; i++) {
-            CGRect r = CGRectMake(0, gAevonDockTop + (CGFloat)i * gAevonDockStep,
-                                 gAevonDockW, gAevonDockH);
-            if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) { return YES; }
+        for (NSUInteger side = 0; side < 2; side++) {
+            NSUInteger count = (side == 0) ? right : left;
+            CGFloat originX = (side == 0) ? (sw - gAevonDockW) : 0;
+            for (NSUInteger i = 0; i < count; i++) {
+                CGRect r = CGRectMake(originX, gAevonDockTop + (CGFloat)i * gAevonDockStep,
+                                      gAevonDockW, gAevonDockH);
+                if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) {
+                    gAevonDockGhost = CGRectInset(r, -slop, -slop);
+                    gAevonDockGhostUntil = now + 1.0;
+                    return YES;
+                }
+            }
         }
     } @catch (NSException *exception) {
         return NO;
     }
     return NO;
+}
+
+/* V0.0.56（AevonGuardFloatRectV56）：主悬浮窗矩形吞摸。
+ *
+ * Aevon(50) 第 2 / 5 条：全屏 App 里双击浮窗底边关闭、快速连点停靠小窗切换主窗，
+ * 都会让 App 吃到一次点击。已有两条判据都不够：
+ *   · bit48 是「按下写、抬手 350ms 后清」——双击间隔 0.36s，第二下正好落在放行之后；
+ *   · 停靠格几何只覆盖停靠态，主窗本体没有任何判据。
+ * 主窗（含外侧手势区）的矩形是**确定**的，SB 一变几何就写进共享内存，
+ * 落在这块屏幕上的触摸一律吞 —— 浮窗盖住的地方本来就不该让 App 收到输入。 */
+/// 主悬浮窗矩形（含外侧手势区），由 SpringBoard 写入 `com.aevon.guardfloat`。
+static CGRect AevonGuardFloatRectRect(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.guardfloat", &token);
+    });
+    if (token < 0) { return CGRectZero; }
+    uint64_t pack = 0;
+    notify_get_state(token, &pack);
+    uint64_t ver = (pack >> 48) & 0xFFULL;
+    if (ver != 0x36ULL) { return CGRectZero; }
+    if (((pack >> 40) & 1ULL) == 0) { return CGRectZero; }
+    CGFloat x = (CGFloat)(pack & 0x3FFULL);
+    CGFloat y = (CGFloat)((pack >> 10) & 0x3FFULL);
+    CGFloat w = (CGFloat)((pack >> 20) & 0x3FFULL);
+    CGFloat h = (CGFloat)((pack >> 30) & 0x3FFULL);
+    if (w < 1 || h < 1) { return CGRectZero; }
+    return CGRectMake(x, y, w, h);
+}
+
+/// 停靠小窗「刚被点走」留下的幽灵格 —— 变量定义已上移到 AevonGuardDockHitTest 之前。
+
+/* V0.0.56（AevonAdaptiveWindowV56）：App 窗口尺寸 —— 让 App 真正按浮窗尺寸重排。
+ *
+ * Aevon(50) 第 4 条：「内容比例被放大（字体变大）、画面被剪裁，抖音依旧不显示右侧工具栏」。
+ * SB 侧 `FBSMutableSceneSettings.setFrame:` 只改了**渲染视口**，App 的 UIWindow 还是整屏：
+ * 内容按 430 宽排版、视口只露出左边 62% → 右边框被切、字看起来变大。
+ * Guard 就在 App 进程里，直接改 keyWindow.frame，UIKit 会带着整棵视图树重排。
+ * 恢复（w/h = 0）由 SB 在关窗时下发。 */
+static NSUInteger gAevonWindowApplyCount = 0;
+/// 兜底：App 真的进了后台（用户回桌面 / 切走）→ 立刻把窗口还原成整屏。
+/// `gAevonWindowSuppressPack` 记下「已经被作废的那份尺寸」，避免下一次 sendEvent
+/// 又把旧状态重新套用回去（那样 App 会被永久困在小窗口里）。
+static BOOL gAevonWindowSuppressed = NO;
+static uint64_t gAevonWindowSuppressPack = 0;
+
+static uint64_t AevonGuardWindowSizePack(void);   /* 定义在下方 ApplyWindowSize 之前 */
+
+static void AevonGuardForceFullWindow(void) {
+    @try {
+        /* 先把「当前这份尺寸」记成作废，再还原窗口 ——
+         * 否则下一次 sendEvent 读到同一个值又会把窗口缩小回去。 */
+        gAevonWindowSuppressPack = AevonGuardWindowSizePack();
+        gAevonWindowSuppressed = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        UIApplication *app = [UIApplication sharedApplication];
+        NSArray<UIWindow *> *wins = (app != nil) ? app.windows : nil;
+        UIWindow *win = nil;
+        for (UIWindow *candidate in wins) {
+            if (candidate.isKeyWindow) { win = candidate; break; }
+        }
+        if (win == nil) { win = wins.firstObject; }
+        if (win == nil) { return; }
+        CGRect screen = [UIScreen mainScreen].bounds;
+        if (!CGRectEqualToRect(win.frame, screen)) {
+            win.frame = screen;
+            [win.rootViewController.view setNeedsLayout];
+            [win.rootViewController.view layoutIfNeeded];
+            AevonGuardWriteLog(YES, @"App 进入后台 → 已把窗口还原成整屏"
+                               @"（防止关窗后 App 一直停在小窗口）（AevonAdaptiveWindowV56）");
+        }
+#pragma clang diagnostic pop
+    } @catch (NSException *exception) {
+    }
+}
+
+/// 读 `com.aevon.guardwinsize` 的原始 64 位状态（0 = 没有有效状态）
+static uint64_t AevonGuardWindowSizePack(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.guardwinsize", &token);
+    });
+    if (token < 0) { return 0; }
+    uint64_t pack = 0;
+    notify_get_state(token, &pack);
+    return pack;
+}
+
+static void AevonGuardApplyWindowSize(void) {
+    @try {
+        /* 每条 sendEvent 都会调到这里 —— 0.5 秒节流，避免 notify_get_state 打满主线程 */
+        static CFTimeInterval lastAt = 0;
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - lastAt < 0.5) { return; }
+        lastAt = now;
+        uint64_t pack = AevonGuardWindowSizePack();
+        if (((pack >> 48) & 0xFFULL) != 0x36ULL) { return; }
+        // 已被「进后台还原」作废的那份尺寸，不要再套用
+        if (gAevonWindowSuppressed) {
+            if (pack == gAevonWindowSuppressPack) { return; }
+            gAevonWindowSuppressed = NO;
+        }
+        BOOL valid = ((pack >> 20) & 1ULL) ? YES : NO;
+        CGSize size = CGSizeMake((CGFloat)(pack & 0x3FFULL),
+                                 (CGFloat)((pack >> 10) & 0x3FFULL));
+        if (valid && (size.width < 40 || size.height < 40)) { return; }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            /* 防重入：改窗口尺寸会让 App 立即重排，重排过程中可能再产生触摸事件 */
+            static BOOL applying = NO;
+            if (applying) { return; }
+            applying = YES;
+            @try {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                UIApplication *app = [UIApplication sharedApplication];
+                NSArray<UIWindow *> *wins = (app != nil) ? app.windows : nil;
+                UIWindow *win = nil;
+                for (UIWindow *candidate in wins) {
+                    if (candidate.isKeyWindow) { win = candidate; break; }
+                }
+                if (win == nil) { win = wins.firstObject; }
+                if (win != nil) {
+                    CGRect screen = [UIScreen mainScreen].bounds;
+                    CGRect want = valid ? CGRectMake(0, 0, size.width, size.height) : screen;
+                    if (!CGRectEqualToRect(win.frame, want)) {
+                        /* 抖动保护：系统若反复把窗口尺寸改回去，最多重设 40 次就放弃，
+                         * 避免「重设 → 被改回 → 再重设」的死循环把 App 卡住。 */
+                        gAevonWindowApplyCount += 1;
+                        if (gAevonWindowApplyCount <= 40) {
+                            win.frame = want;
+                            [win.rootViewController.view setNeedsLayout];
+                            [win.rootViewController.view layoutIfNeeded];
+                        }
+                    }
+                }
+#pragma clang diagnostic pop
+            } @catch (NSException *exception) {
+            }
+            applying = NO;
+        });
+    } @catch (NSException *exception) {
+    }
 }
 
 /* V0.0.35（AevonGuardAckV35）：ack 回执。
@@ -392,9 +570,10 @@ static BOOL AevonGuardReadNotifyZone(CGRect *outZone, BOOL *outEnabled) {
     uint64_t pack = 0;
     notify_get_state(token, &pack);
     /* 读失败时 pack 保持 0，版本标记对不上就当没有配置。
-     * V0.0.49：0x34（旧 SB）与 0x35（本版，bit48 = 浮窗触摸期）都按同一套 zone 布局解析。 */
+     * V0.0.56：0x36 也必须认（SB 从 V54 起就写 0x36，旧白名单只到 0x35，
+     * 导致热区配置一直退回 guard.conf 文件通道）。 */
     uint64_t ver = (pack >> 40) & 0xFFULL;
-    if (ver != 0x34ULL && ver != 0x35ULL) { return NO; }
+    if (ver != 0x34ULL && ver != 0x35ULL && ver != 0x36ULL) { return NO; }
     double x = (double)(pack & 0x3FFULL);
     double y = (double)((pack >> 10) & 0x3FFULL);
     double w = (double)((pack >> 20) & 0xFFULL);
@@ -471,6 +650,48 @@ static void AevonGuardReloadConfig(void) {
  *   · 只有**整条事件里所有活动触摸都被接管**时才整条丢弃 —— 混进别的手指就整体照常投递，
  *     绝不因为用户在热区按了一下就把另一根手指的输入也吃掉。
  */
+/* V0.0.56（AevonGuardTouchMarkV56）：触摸接管标记改用 associated object。
+ *
+ * Aevon(50) 第 3 条（严重）：「插件会导致屏幕部分位置无法点击，全屏幕操作失效」。
+ *
+ * 根因就在旧实现 —— 它用 **UITouch 对象指针** 当 `CFMutableSet` 的 key：
+ *   CFSetAddValue(swallowed, (__bridge const void *)touch)
+ * UITouch 由 UIKit 池化复用，一次触摸结束、对象释放后，**同一个地址会被下一根手指复用**。
+ * 只要有一条触摸没走到 Ended/Cancelled（系统打断、进程切场景、手指滑出屏幕），
+ * 它的地址就永久留在集合里 —— 之后任何一个复用到该地址的新触摸，began 时
+ * `CFSetContainsValue` 命中，被当成「已接管的旧手指」直接吞掉。
+ * 表现正是「某些位置突然点不动，且越用越严重」，重启 App 才好。
+ *
+ * 关联对象挂在 UITouch 自身生命周期上：对象销毁 → 标记一起销毁，地址复用不会误判。
+ * 顺便把「热区」从「按下即吞」改成「移动超过阈值才吞」—— 见 sendEvent 里的注释。
+ */
+static const void *AevonGuardTouchOwnKey = &AevonGuardTouchOwnKey;
+static const void *AevonGuardTouchStartKey = &AevonGuardTouchStartKey;
+
+static BOOL AevonGuardTouchOwned(UITouch *touch) {
+    id value = objc_getAssociatedObject(touch, AevonGuardTouchOwnKey);
+    return value != nil;
+}
+
+static void AevonGuardSetTouchOwned(UITouch *touch, BOOL owned) {
+    objc_setAssociatedObject(touch, AevonGuardTouchOwnKey,
+                             owned ? @YES : nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void AevonGuardSetTouchStart(UITouch *touch, CGPoint point) {
+    objc_setAssociatedObject(touch, AevonGuardTouchStartKey,
+                             [NSValue valueWithCGPoint:point],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL AevonGuardGetTouchStart(UITouch *touch, CGPoint *outPoint) {
+    NSValue *value = objc_getAssociatedObject(touch, AevonGuardTouchStartKey);
+    if (value == nil) { return NO; }
+    if (outPoint) { *outPoint = value.CGPointValue; }
+    return YES;
+}
+
 static void AevonGuardCallOriginal(id self, SEL _cmd, UIEvent *event) {
     if (AevonGuardOrigSendEvent == NULL) { return; }
     ((void (*)(id, SEL, UIEvent *))AevonGuardOrigSendEvent)(self, _cmd, event);
@@ -497,6 +718,12 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     /* V0.0.54（AevonGuardDockZoneV54）：停靠列**几何**通道，与触摸时序无关 ——
      * 只要那一格停着一个小窗，落在它上面的触摸一律吞，快速连点也不会漏。 */
     BOOL docked = (AevonGuardDockCounts(NULL, NULL) > 0);
+    /* V0.0.56（AevonGuardFloatRectV56）：主悬浮窗矩形 —— 浮窗盖住的那块屏幕，
+     * App 一律收不到输入（双击底边 / 快速连点都不会漏）。 */
+    CGRect floatRect = AevonGuardFloatRectRect();
+    BOOL hasFloatRect = !CGRectIsEmpty(floatRect);
+    /* V0.0.56（AevonAdaptiveWindowV56）：App 窗口尺寸跟随浮窗内容区（内部 0.5s 节流）。 */
+    AevonGuardApplyWindowSize();
     {
         static BOOL lastLogged = NO;
         static BOOL hasLogged = NO;
@@ -509,19 +736,15 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                AevonGuardEnabled ? @"热区拦截启用" : @"仅圆盘期拦截");
         }
     }
-    if (!AevonGuardEnabled && !ringOpen && !floatTouch && !docked) {
-        /* 浮窗触摸期结束：把上一轮留在集合里的 touch 清掉，避免指针复用后误判 */
-        if (AevonGuardSwallowed != NULL && CFSetGetCount(AevonGuardSwallowed) > 0) {
-            CFSetRemoveAllValues(AevonGuardSwallowed);
-        }
+    if (!AevonGuardEnabled && !ringOpen && !floatTouch && !docked && !hasFloatRect) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
-    if (AevonGuardSwallowed == NULL || event == nil) {
+    if (event == nil) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
-    if (!ringOpen && !floatTouch && !docked && CGRectIsEmpty(AevonGuardZone)) {
+    if (!ringOpen && !floatTouch && !docked && !hasFloatRect && CGRectIsEmpty(AevonGuardZone)) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
@@ -539,30 +762,29 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         if (phase == UITouchPhaseStationary) { continue; }
         active += 1;
 
-        const void *identity = (__bridge const void *)touch;
-        BOOL owned = CFSetContainsValue(AevonGuardSwallowed, identity) ? YES : NO;
+        BOOL owned = AevonGuardTouchOwned(touch);
 
         if (phase == UITouchPhaseBegan) {
             CGPoint pt = [touch locationInView:nil];
-            BOOL inZone = NO;
+            BOOL hardZone = NO;
             if (floatTouch) {
                 /* V0.0.49：浮窗手势期 —— 整屏吞。手指压在浮窗上时，
                  * App 不该收到任何输入（这是「点小窗还原 → 抖音暂停」的正面修法）。 */
-                inZone = YES;
+                hardZone = YES;
             } else if (ringOpen) {
                 /* V0.0.35：圆盘开着 —— **整屏**吞掉（连顶部 18% 也吞，状态栏区无交互需求）。
                  * 旧版留 18% 是给「万一圆盘需要顶部交互」，实际不存在这个场景，
                  * 反而多留一条缝。图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */
-                inZone = YES;
-                if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
-                    inZone = YES;
-                }
-            } else if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
-                inZone = YES;
+                hardZone = YES;
+            } else if (hasFloatRect && CGRectContainsPoint(floatRect, pt)) {
+                /* V0.0.56：落在主悬浮窗（含外侧手势区）上 —— 这块屏幕本来就被浮窗盖着，
+                 * App 不该收到任何输入。双击的第二下（间隔 0.36s > bit48 的 350ms 放行）
+                 * 就靠这条判据兜住。 */
+                hardZone = YES;
             } else if (AevonGuardDockHitTest(pt)) {
                 /* V0.0.54：落在某一格停靠小窗上 —— 这本来就是浮窗自己的那块屏幕，
                  * App 不该收到任何输入（点它 = 还原主窗，不是点 App）。 */
-                inZone = YES;
+                hardZone = YES;
                 static NSUInteger dockSwallowCount = 0;
                 dockSwallowCount += 1;
                 if (dockSwallowCount % 20 == 1) {
@@ -570,16 +792,42 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                        (unsigned long)dockSwallowCount);
                 }
             }
-            if (inZone) {
-                CFSetAddValue(AevonGuardSwallowed, identity);
+            if (hardZone) {
+                AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
+            } else if (!CGRectIsEmpty(AevonGuardZone)
+                       && CGRectContainsPoint(AevonGuardZone, pt)) {
+                /* V0.0.56：**热区改为「移动才吞」**。
+                 *
+                 * 热区（屏幕右边缘 18pt 宽、底边往上 258pt）是呼出圆盘用的，
+                 * 触发条件是「左滑 ≥ 30pt」——纯点击根本不该被吞。
+                 * 但旧实现 began 就无条件吞，于是这条 18pt 竖条上的 App 按钮
+                 * （抖音右侧工具栏最后几个正好压在 x≈412~430）永远点不动，
+                 * 用户 Aevon(50) 第 3 条「屏幕部分位置无法点击」的另一半就是它。
+                 * 现在只记起点、先放行；真正出现横向拖动（> 8pt）才接管，
+                 * 手势照样呼得出圆盘，纯点击则完整交给 App。 */
+                AevonGuardSetTouchStart(touch, pt);
+            }
+        } else if (phase == UITouchPhaseMoved && !owned) {
+            CGPoint start;
+            if (AevonGuardGetTouchStart(touch, &start)) {
+                CGPoint now = [touch locationInView:nil];
+                CGFloat dx = now.x - start.x;
+                CGFloat dy = now.y - start.y;
+                /* 只有「往左划」才接管 —— 那才是呼出圆盘的手势（SB 侧判据：左滑 ≥30pt）。
+                 * 纯点击、竖向滚动（抖音右侧上下滑）、向右划一律放行，
+                 * App 拿到的是完整触摸序列，不会出现「按钮点不动」或「滑到一半断掉」。 */
+                if (dx < -8.0 && fabs(dx) >= fabs(dy)) {
+                    AevonGuardSetTouchOwned(touch, YES);
+                    owned = YES;
+                }
             }
         }
 
         if (owned) {
             swallowed += 1;
             if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled) {
-                CFSetRemoveValue(AevonGuardSwallowed, identity);
+                AevonGuardSetTouchOwned(touch, NO);
             }
         }
     }
@@ -637,9 +885,6 @@ static void AevonGuardInstall(void) {
     Method method = class_getInstanceMethod(applicationClass, sel_registerName("sendEvent:"));
     if (method == NULL) { return; }
 
-    if (AevonGuardSwallowed == NULL) {
-        AevonGuardSwallowed = CFSetCreateMutable(kCFAllocatorDefault, 8, NULL);
-    }
     // 构造函数阶段不读 UIScreen / 偏好，等第一次 sendEvent 再加载（主线程、UIKit 已就绪）
     AevonGuardConfigAt = 0;
     AevonGuardOrigSendEvent = method_setImplementation(method, (IMP)AevonGuardSendEvent);
@@ -668,6 +913,19 @@ static void AevonGuardInstall(void) {
     /* V0.0.32：notify(3) 状态写入时 SpringBoard 会 post com.aevon.prefschanged，
      * 上面的 prefschanged 观察者已把 ConfigAt 清零 → 下一次 sendEvent 重读 notify 状态。
      * 不额外 register notify 回调，避免 blocks / dispatch 依赖。 */
+
+    /* V0.0.56（AevonAdaptiveWindowV56）：安全兜底 —— App 真的进后台就还原窗口。
+     *
+     * 窗口尺寸是 SB 通过 notify 下发的，正常路径由「关窗」下发 0 恢复。
+     * 但万一 SB 崩溃 / 注销 / 下发丢失，App 会带着一个 267x458 的窗口回到桌面，
+     * 用户从图标打开时就是一小块 —— 那是最坏的情况。
+     * 进后台是最可靠的「这段浮窗会话结束」信号，这里无条件还原整屏。 */
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
+                                                      object:nil
+                                                       queue:nil
+                                                  usingBlock:^(NSNotification *note) {
+        AevonGuardForceFullWindow();
+    }];
 
     NSLog(@"[Aevon] App 侧热区拦截已安装（%s %s）", AevonAppGuardMarker, AevonGuardNotifyMarker);
     /* V0.0.34（AevonGuardLogV34）：注入确认日志 —— 用户日志里出现这行就说明 Guard 真的进了这个 App */

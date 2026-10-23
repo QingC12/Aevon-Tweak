@@ -104,9 +104,17 @@ final class AevonSceneHost {
             if !isAdaptiveContent || abs(adaptiveContentSize.width - rounded.width) > 0.5 {
                 AevonLog.info("[场景] 内容自适应已生效：场景改为 \(Int(rounded.width))x\(Int(rounded.height))"
                     + "，App 按窗口尺寸重排（顶栏/底栏/右侧工具栏完整，无黑边不裁切）"
-                    + "（AevonAdaptiveContentV55）")
+                    + "；同时已把窗口尺寸下发给 App 进程，由 Guard 改 keyWindow 让 App 真正重排"
+                    + "（AevonAdaptiveContentV55 AevonAdaptiveWindowV56）")
             }
             adaptiveContentSize = rounded
+            /* V0.0.56（AevonAdaptiveWindowV56）：把目标尺寸也下发给 App 进程的 Guard。
+             *
+             * Aevon(50) 第 4 条：只改场景 frame 只裁了**渲染视口**（scene layer 被裁到
+             * 267x458），App 的 UIWindow 仍是整屏 430x932 → 内容按整屏排版、
+             * 视口只露出左边 62%，于是「字体变大、画面被剪裁、抖音右侧工具栏不显示」。
+             * Guard 注入在 App 进程里，读到尺寸就改 keyWindow.frame，App 才会真正重排。 */
+            AevonNotifySetWindowSize(Double(rounded.width), Double(rounded.height))
         } else {
             if !isAdaptiveContent {
                 AevonLog.info("[场景] 内容自适应未生效（本机场景设置不支持 frame），"
@@ -118,6 +126,9 @@ final class AevonSceneHost {
 
     /// 关窗时把场景尺寸还原成整屏，避免这个 App 下次前台打开只有一小块。
     func resetAdaptiveSize() {
+        // V0.0.56：无论当前是否自适应，都下发一次「恢复整屏」——
+        // 万一 Guard 那边已经改了窗口尺寸而这边状态对不上，也要让它还原。
+        AevonNotifySetWindowSize(0, 0)
         guard isAdaptiveContent else { return }
         adaptiveContentSize = .zero
         lastRequestedSize = .zero
