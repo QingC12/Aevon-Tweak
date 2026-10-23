@@ -833,7 +833,15 @@ static CFTimeInterval AevonGuardFloatTapAge(void) {
 static BOOL AevonGuardRecentFloatTap(void) {
     CFTimeInterval age = AevonGuardFloatTapAge();
     if (age < 0) { return NO; }
-    return (age >= -0.05 && age <= 0.35);
+    /* V0.0.78（AevonGuardTapWideV78）：窗口 350ms → 1500ms。
+     *
+     * Aevon(70) 复盘：350ms 只够「快速轻点」。用户报的是**慢速**轻点 —— 手指按在
+     * 浮窗上停留几百毫秒再抬手，抬手那一刻 SB 的按下时间戳早就过期 350ms，
+     * 而位移阈值 25pt 又被指尖漂移越过，两条判据同时落空 → 完整 began+ended
+     * 进 App，合成一次点击。这正好解释「快速点没事、慢速点 100%」。
+     * 1.5s 的代价：浮窗按下后 1.5s 内该 App 进程的触摸一并吞掉 —— 那段时间
+     * 用户本来就在操作浮窗，App 不收触摸才是对的。 */
+    return (age >= -0.05 && age <= 1.5);
 }
 
 static BOOL AevonGuardLateRejudgeHit(CGPoint winPt, CGPoint scrPt) {
@@ -993,10 +1001,15 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * 坐标错位 / 度量偏差一眼可辨。 */
                 CGFloat sw2 = [UIScreen mainScreen].bounds.size.width;
                 if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
-                if (spt.x >= sw2 - gAevonDockW - 30.0 || pt.x >= sw2 - gAevonDockW - 30.0) {
+                /* V0.0.78（AevonGuardLeakWitnessV78）：**只要存在任何浮窗态就记**。
+                 * 旧实现只在「右缘停靠带 30pt 内」才打放行日志，而限频 1s 又会把
+                 * 同一秒里的第二条淹没 —— 于是「App 到底有没有拿到 began」永远无法证明。
+                 * 现在 float / ring / docked / 主窗矩形 任一成立就记，限频 0.5s。 */
+                if (floatTouch || ringOpen || docked || hasFloatRect
+                    || spt.x >= sw2 - gAevonDockW - 30.0 || pt.x >= sw2 - gAevonDockW - 30.0) {
                     static CFTimeInterval lastProbe = 0;
                     CFTimeInterval now2 = CACurrentMediaTime();
-                    if (now2 - lastProbe > 1.0) {
+                    if (now2 - lastProbe > 0.5) {
                         lastProbe = now2;
                         NSUInteger r2 = 0, l2 = 0;
                         AevonGuardDockCounts(&r2, &l2);
@@ -1041,7 +1054,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 if (dx < -8.0 && fabs(dx) >= fabs(dy)) {
                     AevonGuardSetTouchOwned(touch, YES);
                     owned = YES;
-                } else if (hypot(dx, dy) < 25.0 && AevonGuardLateRejudgeHit(now, snow)) {
+                } else if (AevonGuardRecentFloatTap()
+                           || (hypot(dx, dy) < 25.0 && AevonGuardLateRejudgeHit(now, snow))) {
                     /* V0.0.71（AevonGuardLateRejudgeV71）：began 竞态泄漏的回收 ——
                      * 位移还很小（仍是轻点）且此刻任一浮窗判据已成立，立刻接管。 */
                     AevonGuardSetTouchOwned(touch, YES);
@@ -1071,7 +1085,10 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 dist = hypot(snow.x - start.x, snow.y - start.y);
             }
             BOOL stampHit = AevonGuardRecentFloatTap();
-            if (dist < 25.0 && (stampHit || AevonGuardLateRejudgeHit(now, snow))) {
+            /* V0.0.78（AevonGuardTapWideV78）：stampHit 命中就**不再看位移**。
+             * 时间戳通道本身就意味着「浮窗刚被按下」，App 这一份触摸绝不该生效；
+             * 再叠一条「位移 <25pt」等于给自己留了个慢速轻点的漏口（见上）。 */
+            if (stampHit || (dist < 25.0 && AevonGuardLateRejudgeHit(now, snow))) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
                 /* V0.0.72：取证（限频 1s）——ended 闸生效证据
@@ -1260,6 +1277,19 @@ static void AevonGuardInstall(void) {
     /* V0.0.77（AevonGuardAliveV77）：存活登记 —— 让 SpringBoard 侧能查出「这个 App 进程里有没有 Guard」。 */
     AevonGuardPublishAlive();
     AevonGuardWriteLog(YES, @"Guard 版本 V77 激活（存活登记 com.aevon.alive.<bundle>，pid=%d）（AevonGuardAliveV77）", (int)getpid());
+    /* V0.0.78（AevonAliveFileV78）：notify state 读不回来（Aevon(70)：6 个进程全被判成「无 Guard」），
+     * 补一条文件登记 —— Aevon.log 已证明 App 进程能写 /var/mobile，这条路可靠。 */
+    @try {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier]
+            ?: [NSString stringWithUTF8String:getprogname() ?: "?"];
+        /* Guard 是独立 dylib（只编本文件），不能调垫片里的实现 —— 直接写文件。 */
+        NSString *alivePath = [@"/var/mobile/Aevon.alive." stringByAppendingString:bid];
+        [[NSString stringWithFormat:@"%d", (int)getpid()] writeToFile:alivePath
+                                                          atomically:YES
+                                                            encoding:NSUTF8StringEncoding
+                                                               error:NULL];
+        AevonGuardWriteLog(YES, @"Guard 版本 V78 激活（文件存活登记 Aevon.alive.<bundle> + 时间戳窗口 1.5s + 放行取证不节流）（AevonAliveFileV78 AevonGuardTapWideV78 AevonGuardLeakWitnessV78）");
+    } @catch (NSException *e) { }
 }
 
 /*

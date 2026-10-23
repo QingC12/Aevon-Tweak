@@ -397,6 +397,44 @@ final class AevonSceneDriver: NSObject {
                 return proxy
             }
         }
+        /* 2.5) V0.0.78（AevonProviderGraphV78）：**顺着对象图把 provider 找出来**。
+         *
+         * Aevon(70) 第 4 步预习已经把真实现类打出来了：
+         *   实现类=…,SBSceneIdentityProvider,SBLayoutStateSceneIdentityProvider,
+         *           SBSceneManager,SBSecureMainDisplaySceneManager
+         * Stheno 蓝图 v3 也早写着 `SBSceneManager` 实现
+         * `-sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:`
+         * （编码 @36@0:8@16B24@28）。所以 provider 不是 SBMainWorkspace 本体
+         * （iOS 17 挪到了 sceneManager 上），而我们按属性名取的 WS.sceneManager 等全是 nil。
+         * 与其继续猜属性名，不如从 workspace / coordinator 出发做对象图 BFS
+         * （深度 2、节点封顶 600、只走 '@' 编码的 ivar），把实例直接捞出来。 */
+        let roots: [(NSObject?, String)] = [(ws, "SBMainWorkspace"),
+                                            (tryShared(classNamed: "SBSceneManagerCoordinator", selector: "sharedInstance"), "SBSceneManagerCoordinator")]
+        for (root, rootLabel) in roots {
+            guard let root else { continue }
+            for token in ["MainDisplay", "SceneManager", "SceneIdentity"] {
+                if let hit = AevonFindResponderInGraph(root, entityProviderSelector, token, 2) {
+                    diag.items.append("provider=对象图命中（\(rootLabel) 下 \(AevonSafeClassName(hit) ?? "nil")，优选=\(token)）")
+                    return hit
+                }
+            }
+        }
+        for (root, rootLabel) in roots {
+            guard let root else { continue }
+            for token in ["MainDisplay", "SceneManager", "SceneIdentity"] {
+                if let hit = AevonFindResponderInGraph(root, entityProviderAltSelector, token, 2),
+                   let proxy = AevonProviderProxyCreate(hit) {
+                    diag.items.append("provider=对象图命中→ObjC代理（\(rootLabel) 下 \(AevonSafeClassName(hit) ?? "nil")._sceneIdentity…）")
+                    return proxy
+                }
+            }
+        }
+        for (root, rootLabel) in roots {
+            guard let root else { continue }
+            let rep = AevonGraphResponderReport(root, entityProviderSelector, 2, 6) ?? ""
+            diag.items.append("图报告(\(rootLabel))=\(rep.isEmpty ? "无" : rep)")
+        }
+
         /* 3) 全类扫描留证（下一轮按真实实现类补链路）
          * V0.0.77：整段下沉到 ObjC —— Aevon(69) 第二次自动注销就崩在这个循环里的
          * `swift_dynamicCast`（反汇编 img+0x51ad8 实锤）。这里只拿一个字符串。 */

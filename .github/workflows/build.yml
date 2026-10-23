@@ -1066,6 +1066,34 @@ jobs:
             exit 1
           fi
           echo "V0.0.77 校验: SceneDriver 已无 Swift 类扫描"
+          # V0.0.78（AevonProviderGraphV78 / AevonContentGateV78）：
+          # ①P1 第 4 步 provider 真身 —— Aevon(70) 实现类表白纸黑字写着
+          #   SBSceneIdentityProvider / SBSceneManager / SBSecureMainDisplaySceneManager，
+          #   Stheno 蓝图 v3 亦证 SBSceneManager 实现 sceneIdentityForApplication:…。
+          #   本版改成对象图 BFS 捞实例（深度 2、只走 '@' 编码 ivar、节点封顶）。
+          # ②内容触摸强制门 —— presentationView 归系统所有，场景激活会把它变回可交互，
+          #   那是「小窗轻点还点穿」的复活通道；每 0.5s 重新施加并递归关子树。
+          # ③Guard 时间戳窗口 350ms→1500ms 且命中即不看位移（慢速轻点 100% 的漏口）。
+          for s in AevonProviderGraphV78 AevonAliveFileV78; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.0.78 标记缺失: $s"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY78'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["对象图命中", "内容触摸被系统重新打开", "AevonContentGateV78"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.78 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.78 校验: 对象图 provider + 内容触摸强制门 已编入")
+          PY78
+          python3 - "$GUARD_DYLIB" <<'PY78G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonGuardTapWideV78", "AevonGuardLeakWitnessV78", "Aevon.alive."]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.78 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.78 校验: Guard 时间戳宽窗 + 泄漏取证 + 文件存活登记 已编入")
+          PY78G
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

@@ -51,6 +51,18 @@ final class AevonSceneHost {
     /// 这种进程只能从宿主侧断掉转发：内容触摸一律关掉，宁可不给滑，也不让点穿。
     private(set) var guardAbsent = false
 
+    /// V0.0.78（AevonContentGateV78）：**宿主请求的**内容交互状态。
+    ///
+    /// 之前只有 `setContentInteraction(_:)` 把结果往两个视图上一写了事，而
+    /// presentationView 是**系统拥有**的视图：场景激活 / 重连 / 重新挂载时，
+    /// UIKit 会按自己的意愿把它重新设成 `isUserInteractionEnabled = true`，
+    /// 还可能塞进新的交互子视图。一旦翻转，SB 侧又恢复了「触摸 → presenter UI
+    /// 连接 → App 进程」的转发，而这条通道不经过 `UIApplication.sendEvent:` 的
+    /// 常规判定顺序，Guard 那套吞摸判据未必来得及 —— 于是「小窗轻点还是点穿」。
+    /// 所以把「想要的」状态记下来，每次探测都重新施加一遍，翻转本身也记日志。
+    private var desiredInteractive = true
+    private var enforcementCount = 0
+
     /// 开关内容的触摸（V0.0.55，AevonDockNoTouchV55）。
     ///
     /// 用户 Aevon(48) 第 4 条：「快速点击停靠小窗切换到主悬浮窗时，依旧会触发 app 内点击操作」。
@@ -63,11 +75,50 @@ final class AevonSceneHost {
     /// 停靠小窗根本不需要和内容交互（它的唯一操作是「轻点还原」），
     /// 所以停靠态直接把内容的触摸关掉，从源头断掉转发。
     func setContentInteraction(_ enabled: Bool) {
-        guard contentInteractiveByPref else { return }
-        /* V0.0.77：该 App 进程里没有 Guard → 永远不允许转发触摸进去。 */
-        let allow = enabled && !guardAbsent
-        container.isUserInteractionEnabled = allow
-        presentationView.isUserInteractionEnabled = allow
+        desiredInteractive = enabled
+        applyContentInteraction(reason: "显式切换")
+    }
+
+    /// 把「想要的内容交互状态」施加到实际视图树（V0.0.78，AevonContentGateV78）。
+    ///
+    /// 只在 `allow == false` 时递归关子树：系统在场景激活后会重建 presentationView
+    /// 的下级视图，只关根节点等于没关。
+    private func applyContentInteraction(reason: String) {
+        let allow = contentInteractiveByPref && desiredInteractive && !guardAbsent
+        var flipped = 0
+        if container.isUserInteractionEnabled != allow {
+            container.isUserInteractionEnabled = allow
+            flipped += 1
+        }
+        if presentationView.isUserInteractionEnabled != allow {
+            presentationView.isUserInteractionEnabled = allow
+            flipped += 1
+        }
+        if !allow {
+            flipped += disableInteractionTree(presentationView, depth: 0)
+        }
+        if flipped > 0 && reason != "显式切换" {
+            enforcementCount += 1
+            if enforcementCount <= 6 || enforcementCount % 20 == 0 {
+                AevonLog.warn("[场景] 内容触摸被系统重新打开 → 已强制关闭（第 \(enforcementCount) 次，"
+                    + "\(reason)，bundle=\(bundleID)，本轮改动 \(flipped) 处）（AevonContentGateV78）")
+            }
+        }
+    }
+
+    /// 递归关掉整棵子树的交互（返回实际改动数量）
+    @discardableResult
+    private func disableInteractionTree(_ view: UIView, depth: Int) -> Int {
+        guard depth < 6 else { return 0 }
+        var n = 0
+        for sub in view.subviews {
+            if sub.isUserInteractionEnabled {
+                sub.isUserInteractionEnabled = false
+                n += 1
+            }
+            n += disableInteractionTree(sub, depth: depth + 1)
+        }
+        return n
     }
 
     // MARK: - 真 resize（V0.0.59，AevonTrueResizeV59）
@@ -297,6 +348,7 @@ final class AevonSceneHost {
         view.isUserInteractionEnabled = interactive
         host.addSubview(view)
         self.container = host
+        applyContentInteraction(reason: "初始化")
 
         AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")）")
 
@@ -326,6 +378,11 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         ticks += 1
 
+        /* V0.0.78（AevonContentGateV78）：每拍重新施加一次内容交互状态。
+         * presentationView 归系统所有，场景激活 / 重连 / 重新挂载时 UIKit 会把它
+         * 变回可交互 —— 那正是「小窗轻点还是点穿」的复活通道。 */
+        applyContentInteraction(reason: "每拍复查")
+
         /* V0.0.77（AevonGuardAliveV77）：Guard 存活复检。
          * 刚拉起的 App 里 Guard 可能比这层晚几十毫秒才登记，别把它误判成「没有 Guard」
          * 而永久关掉内容触摸。前 4 秒（8 次探测）每隔一拍复查一次，一旦登记上就放开。 */
@@ -333,8 +390,7 @@ final class AevonSceneHost {
             let pid = AevonGuardAliveState(bundleID)
             if pid > 0 {
                 guardAbsent = false
-                container.isUserInteractionEnabled = contentInteractiveByPref
-                presentationView.isUserInteractionEnabled = contentInteractiveByPref
+                applyContentInteraction(reason: "存活复检")
                 AevonLog.info("[场景] Guard 存活复检：\(bundleID) 已登记（pid=\(pid)），内容触摸恢复跟随设置（AevonGuardAliveV77）")
             }
         }

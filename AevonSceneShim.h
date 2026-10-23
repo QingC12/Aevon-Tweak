@@ -180,3 +180,23 @@ NSString *AevonClassNameOfClass(Class cls);
 /// 读回登记值：>0 = 登记过的 pid，0 = 该 bundle 的进程里没有 Guard。
 /// （写入端在 Guard 自己进程里，见 AevonAppGuard.m 的 AevonGuardPublishAlive。）
 int AevonGuardAliveState(NSString *bundleID);
+
+#pragma mark - V0.0.78（AevonProviderGraphV78）：对象图 BFS 找 provider + 文件式存活探测
+
+/* 为什么改成对象图搜索（Aevon(70) 日志铁证）：
+ *   第 4 步预习把**真实现类**打出来了：
+ *     实现类=…,SBSceneIdentityProvider,SBLayoutStateSceneIdentityProvider,SBSceneManager,SBSecureMainDisplaySceneManager
+ *   Stheno 蓝图 v3 也早就写着 `SBSceneManager` 实现
+ *   `-sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:`（编码 @36@0:8@16B24@28）。
+ *   也就是说 provider **不是** SBMainWorkspace 本体（iOS 17 把它挪到了 sceneManager 上），
+ *   而我们那个候选链上 WS.sceneManager / Coord.mainDisplaySceneManager 全是 nil ——
+ *   属性名对不上。与其继续猜属性名，不如顺着对象图把它的 ivar 找出来：
+ *   从 SBMainWorkspace / SBSceneManagerCoordinator 出发，深度 2、节点数封顶，
+ *   只沿 '@' 编码的 ivar 走，找到第一个响应目标选择子的实例。 */
+NSObject *AevonFindResponderInGraph(id root, NSString *selName, NSString *preferToken, int depth);
+/// 对象图里响应某选择子的实例清单（日志用，`类名` 逗号分隔，最多 limit 个）。
+NSString *AevonGraphResponderReport(id root, NSString *selName, int depth, int limit);
+
+/// 文件式存活登记（比 notify state 稳；Aevon.log 已证明 App 进程能写 /var/mobile）
+void AevonGuardAlivePublishFile(NSString *bundleID);
+int AevonGuardAliveFileState(NSString *bundleID);

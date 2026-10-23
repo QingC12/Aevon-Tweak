@@ -6,6 +6,9 @@ __attribute__((used)) static const char AevonSceneSafeCallV75Marker[] = "AevonSc
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <notify.h>
+#import <signal.h>
+#import <errno.h>
+#import <unistd.h>
 #import <math.h>
 #import <stdio.h>
 #import <string.h>
@@ -1051,6 +1054,13 @@ NSString *AevonClassNameOfClass(Class cls) {
 
 int AevonGuardAliveState(NSString *bundleID) {
     if (bundleID.length == 0) { return 0; }
+    /* V0.0.78（AevonAliveFileV78）：**文件优先**。
+     * Aevon(70) 实测：Guard 明明在 6 个 App 进程里都在打日志（吞摸取证带着对应 bundle），
+     * notify state 读回来全是 0 —— 6 个浮窗全被误判成「无 Guard」而关掉了内容触摸。
+     * 文件 + kill(pid,0) 这条路 Aevon.log 已经证明可用（App 进程能写 /var/mobile），
+     * 读到就直接返回；读不到再退回 notify state。 */
+    int filePid = AevonGuardAliveFileState(bundleID);
+    if (filePid > 0) { return filePid; }
     @try {
         NSString *name = [@"com.aevon.alive." stringByAppendingString:bundleID];
         int token = -1;
@@ -1067,4 +1077,148 @@ int AevonGuardAliveState(NSString *bundleID) {
     } @catch (NSException *e) {
         return 0;
     }
+}
+
+#pragma mark - V0.0.78（AevonProviderGraphV78）：对象图 BFS + 文件式存活
+
+/* CI 标记（V0.0.78）：本段必须编进主 dylib —— P1 第 4 步 provider 真身。 */
+__attribute__((used)) static const char AevonProviderGraphV78Marker[] = "AevonProviderGraphV78";
+__attribute__((used)) static const char AevonAliveFileV78Marker[] = "AevonAliveFileV78";
+
+/// 这些类只是容器 / 值对象，继续往下钻既没意义又会爆炸
+static BOOL AevonGraphSkipClass(Class c) {
+    if (c == Nil) { return YES; }
+    static NSArray<NSString *> *prefixes = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        prefixes = @[@"NSString", @"NSArray", @"NSDictionary", @"NSSet", @"NSNumber", @"NSValue",
+                     @"NSData", @"NSDate", @"NSURL", @"NSError", @"NSIndexSet", @"NSOrderedSet",
+                     @"NSAttributedString", @"FBSSceneSettings", @"FBSDisplayConfiguration",
+                     @"CALayer", @"NSMutable", @"__NS"];
+    });
+    const char *n = class_getName(c);
+    if (n == NULL) { return YES; }
+    NSString *name = [NSString stringWithUTF8String:n];
+    if (name.length == 0) { return YES; }
+    if ([name hasPrefix:@"Swift."] || [name hasPrefix:@"_NS"]) { return YES; }
+    for (NSString *p in prefixes) {
+        if ([name hasPrefix:p]) { return YES; }
+    }
+    return NO;
+}
+
+/// 收集对象自身的对象型 ivar（只认 '@' 编码 —— V62 崩溃教训）
+static NSArray *AevonGraphObjectIvars(id obj) {
+    if (obj == nil) { return @[]; }
+    NSMutableArray *out = [NSMutableArray array];
+    @try {
+        Class c = object_getClass(obj);
+        if (c == Nil || class_isMetaClass(c)) { return @[]; }
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList(c, &count);
+        if (ivars == NULL) { return @[]; }
+        for (unsigned int i = 0; i < count; i++) {
+            Ivar iv = ivars[i];
+            const char *enc = ivar_getTypeEncoding(iv);
+            if (enc == NULL || enc[0] != '@') { continue; }   /* 非对象，直接跳过 */
+            id v = object_getIvar(obj, iv);
+            if (v == nil) { continue; }
+            if (AevonGraphSkipClass(object_getClass(v))) { continue; }
+            [out addObject:v];
+        }
+        free(ivars);
+    } @catch (NSException *e) { }
+    return out;
+}
+
+NSObject *AevonFindResponderInGraph(id root, NSString *selName, NSString *preferToken, int depth) {
+    if (root == nil || selName.length == 0) { return nil; }
+    SEL sel = NSSelectorFromString(selName);
+    if (sel == NULL) { return nil; }
+    NSMutableArray *level = [NSMutableArray arrayWithObject:root];
+    NSMutableArray *seen = [NSMutableArray array];
+    NSObject *firstHit = nil;
+    int nodes = 0;
+    for (int d = 0; d <= MAX(depth, 0) && level.count > 0 && nodes < 600; d++) {
+        NSMutableArray *next = [NSMutableArray array];
+        for (id node in level) {
+            if (node == nil || nodes >= 600) { continue; }
+            nodes += 1;
+            @try {
+                /* 用 respondsToSelector（真实判定），命中就按 preferToken 择优返回 */
+                if ([node respondsToSelector:sel]) {
+                    const char *cn = class_getName(object_getClass(node));
+                    NSString *cname = cn ? [NSString stringWithUTF8String:cn] : @"";
+                    if (preferToken.length > 0 && [cname containsString:preferToken]) {
+                        return node;
+                    }
+                    if (firstHit == nil) { firstHit = node; }
+                }
+                /* 防止环 / 重复 */
+                NSString *ptr = [NSString stringWithFormat:@"%p", node];
+                if ([seen containsObject:ptr]) { continue; }
+                [seen addObject:ptr];
+                for (id child in AevonGraphObjectIvars(node)) {
+                    [next addObject:child];
+                }
+            } @catch (NSException *e) { }
+        }
+        level = next;
+    }
+    return firstHit;
+}
+
+NSString *AevonGraphResponderReport(id root, NSString *selName, int depth, int limit) {
+    if (root == nil || selName.length == 0 || limit <= 0) { return @""; }
+    SEL sel = NSSelectorFromString(selName);
+    if (sel == NULL) { return @""; }
+    NSMutableArray *level = [NSMutableArray arrayWithObject:root];
+    NSMutableArray *seen = [NSMutableArray array];
+    NSMutableArray<NSString *> *hits = [NSMutableArray array];
+    int nodes = 0;
+    for (int d = 0; d <= MAX(depth, 0) && level.count > 0 && nodes < 600 && (int)hits.count < limit; d++) {
+        NSMutableArray *next = [NSMutableArray array];
+        for (id node in level) {
+            if (node == nil || nodes >= 600 || (int)hits.count >= limit) { continue; }
+            nodes += 1;
+            @try {
+                if ([node respondsToSelector:sel]) {
+                    const char *cn = class_getName(object_getClass(node));
+                    NSString *cname = cn ? [NSString stringWithUTF8String:cn] : @"?";
+                    if (![hits containsObject:cname]) { [hits addObject:cname]; }
+                }
+                NSString *ptr = [NSString stringWithFormat:@"%p", node];
+                if ([seen containsObject:ptr]) { continue; }
+                [seen addObject:ptr];
+                for (id child in AevonGraphObjectIvars(node)) { [next addObject:child]; }
+            } @catch (NSException *e) { }
+        }
+        level = next;
+    }
+    return hits.count ? [hits componentsJoinedByString:@","] : @"";
+}
+
+#pragma mark - 文件式存活登记
+
+void AevonGuardAlivePublishFile(NSString *bundleID) {
+    if (bundleID.length == 0) { return; }
+    @try {
+        NSString *path = [@"/var/mobile/Aevon.alive." stringByAppendingString:bundleID];
+        NSString *body = [NSString stringWithFormat:@"%d", (int)getpid()];
+        [body writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    } @catch (NSException *e) { }
+}
+
+int AevonGuardAliveFileState(NSString *bundleID) {
+    if (bundleID.length == 0) { return 0; }
+    @try {
+        NSString *path = [@"/var/mobile/Aevon.alive." stringByAppendingString:bundleID];
+        NSString *s = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+        if (s.length == 0) { return 0; }
+        int pid = s.intValue;
+        if (pid <= 0) { return 0; }
+        /* 进程还活着才算数（App 被杀掉后旧文件不该让人误判） */
+        if (kill((pid_t)pid, 0) != 0 && errno != EPERM) { return 0; }
+        return pid;
+    } @catch (NSException *e) { return 0; }
 }
