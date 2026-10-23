@@ -118,12 +118,14 @@ final class AevonSceneDriver: NSObject {
         if let dc {
             AevonLog.info("[场景] P1 第 2 步通过：主屏 dc 母本 = \(String(describing: type(of: dc)))（AevonSceneDriverP1）")
         } else {
-            AevonLog.warn("[场景] P1 第 2 步降级：没拿到主屏 dc 母本，走「创建参数不携带 dc」的裸创建（App 大概率仍整屏重排，日志如实记录）（AevonSceneDriverP1）")
+            AevonLog.warn("[场景] P1 第 2 步降级：没拿到主屏 dc 母本，改走「从零构造小窗 dc」（ivar 直写，日志如实记录）（AevonSceneDriverP1）")
         }
         self.step3Application(manager: manager, mainDC: dc)
     }
 
     /// 主屏 dc 多路探测（ScreenCore 的 sc_mainDisplayConfiguration 对应物）
+    /// V0.0.69 新增：FBSceneManager enumerateScenes 路线（P0 dump 实锤管理器上有
+    /// enumerateScenesWithBlock:/scenesPassingTest:）+ 失败时诊断输出，帮助下一轮定位。
     static func findMainDisplayConfiguration(manager: NSObject) -> NSObject? {
         for sel in ["mainDisplayConfiguration", "displayConfiguration", "primaryDisplayConfiguration"] {
             if manager.responds(to: NSSelectorFromString(sel)),
@@ -131,12 +133,34 @@ final class AevonSceneDriver: NSObject {
                 return r
             }
         }
+        // 路线 B（新）：遍历管理器持有的全部场景，取任一 settings.displayConfiguration
+        let enumSel = NSSelectorFromString("enumerateScenesWithBlock:")
+        if manager.responds(to: enumSel),
+           let enumMethod = class_getInstanceMethod(type(of: manager), enumSel) {
+            var found: NSObject? = nil
+            let block: @convention(block) (NSObject) -> Void = { scene in
+                if found == nil, let dc = AevonSceneDriver.displayConfigFromScene(scene) {
+                    found = dc
+                }
+            }
+            typealias EnumFn = @convention(c) (NSObject, Selector, @convention(block) (NSObject) -> Void) -> Void
+            unsafeBitCast(method_getImplementation(enumMethod), to: EnumFn.self)(manager, enumSel, block)
+            if let found { return found }
+        }
         for (clsName, selName) in [("SBFDisplayManager", "sharedInstance"), ("SBFDisplayManager", "mainDisplayManager")] {
             if let dm = tryShared(classNamed: clsName, selector: selName) {
-                for sel in ["mainDisplayConfiguration", "displayConfiguration", "mainScreenDisplayConfiguration"] {
+                for sel in ["mainDisplayConfiguration", "displayConfiguration", "mainScreenDisplayConfiguration", "mainSBFDisplay"] {
                     if dm.responds(to: NSSelectorFromString(sel)),
                        let r = dm.perform(NSSelectorFromString(sel))?.takeUnretainedValue() as? NSObject {
-                        return r
+                        if String(describing: type(of: r)).contains("DisplayConfiguration") { return r }
+                        // SBFDisplay 之类再向下钻一层
+                        for sel2 in ["displayConfiguration", "mainDisplayConfiguration"] {
+                            if r.responds(to: NSSelectorFromString(sel2)),
+                               let r2 = r.perform(NSSelectorFromString(sel2))?.takeUnretainedValue() as? NSObject,
+                               String(describing: type(of: r2)).contains("DisplayConfiguration") {
+                                return r2
+                            }
+                        }
                     }
                 }
             }
@@ -172,24 +196,65 @@ final class AevonSceneDriver: NSObject {
 
     private func step3Application(manager: NSObject, mainDC: NSObject?) {
         var app: NSObject? = nil
+        let diag = StringBox()
         tryRun("第3步") {
-            let ctrlSel = NSSelectorFromString("sharedApplicationController")
-            if let cls = NSClassFromString("SBApplicationController") as? NSObject.Type,
-               cls.responds(to: ctrlSel),
-               let ctrl = cls.perform(ctrlSel)?.takeUnretainedValue() as? NSObject {
-                app = ctrl.perform(NSSelectorFromString("applicationWithBundleIdentifier:"),
-                                   with: AevonSceneDriver.experimentBundleID)?
-                    .takeUnretainedValue() as? NSObject
+            // V0.0.69 修复：V68 用的类方法是 "sharedApplicationController" —— 这个选择子
+            // 在 SBApplicationController 上不存在（经典路径是 sharedInstance），
+            // responds(to:) 恒 false → app 恒 nil → 第 3 步必然失败。
+            let ctrl = AevonSceneDriver.findApplicationController(diag: diag)
+            if let ctrl {
+                for selName in ["applicationWithBundleIdentifier:", "applicationWithDisplayIdentifier:", "runningApplicationWithBundleIdentifier:"] {
+                    let sel = NSSelectorFromString(selName)
+                    if ctrl.responds(to: sel),
+                       let a = ctrl.perform(sel, with: AevonSceneDriver.experimentBundleID)?
+                           .takeUnretainedValue() as? NSObject {
+                        app = a
+                        break
+                    }
+                }
             }
         }
         if let app {
             AevonLog.info("[场景] P1 第 3 步通过：SBApplication = \(String(describing: type(of: app)))（AevonSceneDriverP1）")
         } else {
-            AevonLog.warn("[场景] P1 第 3 步失败：拿不到 \(AevonSceneDriver.experimentBundleID) 的 SBApplication（AevonSceneDriverP1）")
+            let d = diag.items.isEmpty ? "" : "｜诊断：\(diag.items.joined(separator: "；"))"
+            AevonLog.warn("[场景] P1 第 3 步失败：拿不到 \(AevonSceneDriver.experimentBundleID) 的 SBApplication\(d)（AevonSceneDriverP1）")
             return
         }
         guard let app else { return }
         self.step4SceneEntity(manager: manager, app: app, mainDC: mainDC)
+    }
+
+    /// @escaping 闭包可变捕获用的小盒子
+    final class StringBox {
+        var items: [String] = []
+    }
+
+    /// SBApplicationController 多路获取 + 失败诊断（方法表取样）
+    static func findApplicationController(diag: StringBox) -> NSObject? {
+        let cls = NSClassFromString("SBApplicationController")
+        guard let cls else {
+            diag.items.append("SBApplicationController 类不存在")
+            return nil
+        }
+        for selName in ["sharedInstance", "sharedApplicationController", "defaultController", "sharedController"] {
+            let sel = NSSelectorFromString(selName)
+            if (cls as AnyObject).responds(to: sel),
+               let c = (cls as AnyObject).perform(sel)?.takeUnretainedValue() as? NSObject {
+                return c
+            }
+        }
+        // 全部失败：取样类方法名（下一轮按真实名补）
+        var names: [String] = []
+        var count: UInt32 = 0
+        if let list = class_copyMethodList(objc_getMetaClass("SBApplicationController"), &count) {
+            for i in 0..<Int(count) {
+                let n = NSStringFromSelector(method_getName(list[i]))
+                if n.lowercased().contains("shared") || n.lowercased().contains("default") { names.append("+" + n) }
+            }
+        }
+        diag.items.append(names.isEmpty ? "类方法里无 sharedInstance/default 系" : "类方法候选=\(names.prefix(5).joined(separator: ","))")
+        return nil
     }
 
     // MARK: 第 4 步：SBDeviceApplicationSceneEntity 四段 init
@@ -311,17 +376,39 @@ final class AevonSceneDriver: NSObject {
         return obj
     }
 
-    /// 把 dc 母本 + 小窗尺寸烙进 settings（创建时烙定 = ScreenCore 路线）
+    /// 把「小窗尺寸的 dc」烙进 settings（创建时烙定 = ScreenCore/Mango 路线）
     private func bakeGeometry(settings: NSObject, mainDC: NSObject?) {
-        let dcSel = NSSelectorFromString("setDisplayConfiguration:")
-        if settings.responds(to: dcSel), let mainDC {
-            settings.perform(dcSel, with: mainDC)
-            AevonLog.info("[场景] P1 已把主屏 dc 母本烙进 settings.displayConfiguration（创建时拷贝定尺寸）（AevonSceneDriverP1）")
-        } else {
-            AevonLog.warn("[场景] P1 settings 无 setDisplayConfiguration: 入口或无 dc 母本（AevonSceneDriverP1）")
-        }
         let size = AevonSceneDriver.canvasSize
         let frame = CGRect(origin: .zero, size: size)
+
+        // 1) 造小窗 dc：优先拷贝主屏母本后按小窗尺寸改写几何 ivar；无母本则从零构造
+        var smallDC: NSObject? = nil
+        if let mainDC {
+            smallDC = AevonSceneDriver.smallDisplayConfig(from: mainDC, canvas: size)
+        }
+        if smallDC == nil, let dcls = NSClassFromString("FBSDisplayConfiguration"),
+           let fresh = AevonSceneDriver.allocObj(dcls) {
+            let initSel = NSSelectorFromString("init")
+            if let m = class_getInstanceMethod(type(of: fresh), initSel) {
+                typealias Fn0 = @convention(c) (NSObject, Selector) -> Unmanaged<NSObject>?
+                _ = unsafeBitCast(method_getImplementation(m), to: Fn0.self)(fresh, initSel)
+            }
+            AevonSceneDriver.writeCGRectIvar(fresh, "_nativeBounds", frame)
+            AevonSceneDriver.writeCGRectIvar(fresh, "_bounds", frame)
+            AevonSceneDriver.writeCGSizeIvar(fresh, "_pixelSize",
+                                             CGSize(width: size.width * 3, height: size.height * 3))
+            smallDC = fresh
+            AevonLog.info("[场景] P1 小窗 dc 从零构造（无母本，ivar 直写 266x458 / 3x 像素）（AevonSceneDriverP1）")
+        }
+
+        // 2) 烙进 settings
+        let dcSel = NSSelectorFromString("setDisplayConfiguration:")
+        if settings.responds(to: dcSel), let smallDC {
+            settings.perform(dcSel, with: smallDC)
+            AevonLog.info("[场景] P1 已把小窗 dc（266x458）烙进 settings.displayConfiguration（AevonSceneDriverP1）")
+        } else {
+            AevonLog.warn("[场景] P1 settings 无 setDisplayConfiguration: 入口或小窗 dc 构造失败（AevonSceneDriverP1）")
+        }
         var baked = false
         for (selName, key) in [("setFrame:", "frame"), ("setSceneFrame:", "sceneFrame"), ("setSize:", "size")] {
             if settings.responds(to: NSSelectorFromString(selName)) {
@@ -335,5 +422,64 @@ final class AevonSceneDriver: NSObject {
         if !baked {
             AevonLog.warn("[场景] P1 settings 无 frame/sceneFrame/size 写入口（本轮裸创建，下一轮按取证名单补）（AevonSceneDriverP1）")
         }
+    }
+
+    /// 拷贝母本 dc 并把几何 ivar 改写成小窗尺寸（保持 mode/scale 等字段与主屏一致）
+    static func smallDisplayConfig(from mainDC: NSObject, canvas: CGSize) -> NSObject? {
+        var copyObj: NSObject? = nil
+        for selName in ["mutableCopy", "copy"] {
+            let sel = NSSelectorFromString(selName)
+            if mainDC.responds(to: sel), let c = mainDC.perform(sel)?.takeUnretainedValue() as? NSObject {
+                copyObj = c
+                break
+            }
+        }
+        guard let dc = copyObj else { return nil }
+        // 从母本读出像素比（pixelSize.width / bounds.width），小窗按同比例换算像素尺寸
+        var scale: CGFloat = 3.0
+        if let b = readCGRectIvar(mainDC, "_bounds"), b.width > 1,
+           let p = readCGSizeIvar(mainDC, "_pixelSize"), p.width > 1 {
+            scale = p.width / b.width
+        }
+        let frame = CGRect(origin: .zero, size: canvas)
+        let ok1 = writeCGRectIvar(dc, "_nativeBounds", frame)
+        let ok2 = writeCGRectIvar(dc, "_bounds", frame)
+        let ok3 = writeCGSizeIvar(dc, "_pixelSize",
+                                  CGSize(width: canvas.width * scale, height: canvas.height * scale))
+        AevonLog.info("[场景] P1 小窗 dc：母本拷贝 + ivar 改写 nativeBounds/bounds=\(ok1 && ok2) pixelSize=\(ok3)（scale=\(String(format: "%.2f", scale))）（AevonSceneDriverP1）")
+        return (ok1 || ok2) ? dc : nil
+    }
+
+    // MARK: ivar 直写/直读（V63 技术链：先查类型编码再动字节）
+
+    private static func ivarPtr(_ obj: NSObject, _ name: String, expectPrefix: String) -> (UnsafeMutableRawPointer, Int)? {
+        guard let ivar = class_getInstanceVariable(type(of: obj) as AnyClass, name),
+              let enc = ivar_getTypeEncoding(ivar), String(cString: enc).hasPrefix(expectPrefix) else { return nil }
+        let off = ivar_getOffset(ivar)
+        guard off >= 0 else { return nil }
+        let raw = unsafeBitCast(obj, to: UnsafeMutableRawPointer.self)
+        return (raw.advanced(by: off), off)
+    }
+
+    static func writeCGRectIvar(_ obj: NSObject, _ name: String, _ value: CGRect) -> Bool {
+        guard let (ptr, _) = ivarPtr(obj, name, expectPrefix: "{CGRect") else { return false }
+        withUnsafeBytes(of: value) { memcpy(ptr, $0.baseAddress, MemoryLayout<CGRect>.size) }
+        return true
+    }
+
+    static func writeCGSizeIvar(_ obj: NSObject, _ name: String, _ value: CGSize) -> Bool {
+        guard let (ptr, _) = ivarPtr(obj, name, expectPrefix: "{CGSize") else { return false }
+        withUnsafeBytes(of: value) { memcpy(ptr, $0.baseAddress, MemoryLayout<CGSize>.size) }
+        return true
+    }
+
+    static func readCGRectIvar(_ obj: NSObject, _ name: String) -> CGRect? {
+        guard let (ptr, _) = ivarPtr(obj, name, expectPrefix: "{CGRect") else { return nil }
+        return ptr.load(as: CGRect.self)
+    }
+
+    static func readCGSizeIvar(_ obj: NSObject, _ name: String) -> CGSize? {
+        guard let (ptr, _) = ivarPtr(obj, name, expectPrefix: "{CGSize") else { return nil }
+        return ptr.load(as: CGSize.self)
     }
 }

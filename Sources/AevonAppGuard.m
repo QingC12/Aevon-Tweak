@@ -75,6 +75,7 @@ __attribute__((used)) static const char AevonGuardNoExtV61Marker[] = "AevonGuard
 __attribute__((used)) static const char AevonGuardGhostRecordV67Marker[] = "AevonGuardGhostRecordV67";
 /// CI 标记（V0.0.68）：「设置」App 解除整体排除（装 Guard、热区禁用）+ 注入自检日志
 __attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
+__attribute__((used)) static const char AevonGuardLateStartV69Marker[] = "AevonGuardLateStartV69";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -924,6 +925,43 @@ static void AevonGuardInstall(void) {
                        [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
 }
 
+/*
+ * V0.0.69（AevonGuardLateStartV69）：**constructor 时机不再要求 sharedApplication 已存在**。
+ *
+ * 铁证（52 份历史日志回执警告统计）：V0.0.59~V0.0.62 的日志全部 0 条
+ * 「未收到 App 侧回执」，V0.0.63 起每次圆盘呼出必告警 —— Guard 从 V63 起在
+ * 所有 App 进程全灭。根因是 V0.0.62 在 constructor 里加的
+ * `[UIApplication sharedApplication] == nil → return`：
+ * dylib constructor 的运行时机远早于 main()/UIApplicationMain 创建
+ * UIApplication 实例，这个检查恒为 nil → Guard 从不安装。
+ * 连锁后果：停靠还原穿透（幽灵格/bit48/主窗矩形判据全失效）、
+ * 圆盘滑动穿透成 App 左滑（bit39 吞摸失效）、所有 Guard 侧修复形同虚设。
+ *
+ * 现在的安装时机策略：
+ *  · constructor 里 sharedApplication 已存在（个别进程晚注入）→ 立即装；
+ *  · 否则延到主队列重试（100ms × 最多 100 次 = 10 秒），
+ *    等 UIApplication 真正创建后再装 —— hook sendEvent 是类级操作，
+ *    任何时候装都来得及（App 的触摸必然发生在启动完成之后）。
+ *  · headless 进程（无主 runloop 或永不创建 sharedApplication）10 秒后自然放弃，
+ *    等效于旧的「实例不存在 = headless」保险；扩展进程仍由 constructor 里的
+ *    NSExtension/.appex 检查先行拦截，两道保险都保留。
+ */
+static void AevonGuardDeferredInstall(int attempt) {
+    if ([UIApplication sharedApplication] != nil) {
+        @try {
+            AevonGuardInstall();
+        } @catch (NSException *exception) {
+            // 任何异常都不允许影响 App 启动
+        }
+        return;
+    }
+    if (attempt >= 100) { return; }   // 10 秒仍无 sharedApplication = headless，放弃
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonGuardDeferredInstall(attempt + 1);
+    });
+}
+
 __attribute__((constructor)) static void AevonGuardConstructor(void) {
     @autoreleasepool {
         const char *process = getprogname();
@@ -932,13 +970,6 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
         // 没有 UIKit 的进程（守护进程 / launchd / backboardd）直接退出，绝不做任何事
         if (objc_getClass("UIApplication") == NULL) { return; }
         if (objc_getClass("SpringBoard") != NULL) { return; }
-        /*
-         * V0.0.62（AevonGuardNoExtV61）：**UIApplication 实例不存在 = headless 进程**。
-         * 小组件/键盘等扩展进程链接 UIKit（类存在），但永远没有 sharedApplication 实例；
-         * V61 的 NSExtension/.appex 检查（按 bundle 信息判断）之外再加这层运行时保险：
-         * headless 环境绝不装 sendEvent 拦截 —— 修「桌面部分小组件空白」。
-         */
-        if ([UIApplication sharedApplication] == nil) { return; }
         /*
          * V0.0.68（AevonGuardPrefsAliveV68）：**「设置」App 不再整体排除**。
          *
@@ -969,10 +1000,7 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
         NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
         if ([bundlePath hasSuffix:@".appex"]) { return; }
 
-        @try {
-            AevonGuardInstall();
-        } @catch (NSException *exception) {
-            // 任何异常都不允许影响 App 启动
-        }
+        /* V0.0.69：constructor 时 sharedApplication 几乎必然未创建 → 走延迟安装 */
+        AevonGuardDeferredInstall(0);
     }
 }

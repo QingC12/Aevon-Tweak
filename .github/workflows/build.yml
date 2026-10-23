@@ -910,6 +910,17 @@ jobs:
                   print(f"::error::V0.0.68 缺串: {s}"); sys.exit(1)
           print("V0.0.68 校验: Guard 设置 App 解除排除 + P1 自建场景实验 已编入")
           PY68
+          # V0.0.69：Guard 延迟安装（constructor 时机不再要求 sharedApplication）+ P1 小窗 dc
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardLateStartV69' \
+            || { echo "::error::V0.0.69 Guard 标记缺失: AevonGuardLateStartV69（延迟安装）"; exit 1; }
+          python3 - "$DYLIB" <<'PY69'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["P1 实验开始","P1 实验已排程","从零构造小窗 dc","小窗 dc：母本拷贝"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.69 缺串: {s}"); sys.exit(1)
+          print("V0.0.69 校验: Guard 延迟安装 + P1 dc 母本拷贝/小窗烙定 已编入")
+          PY69
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
