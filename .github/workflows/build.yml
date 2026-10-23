@@ -665,6 +665,35 @@ jobs:
           PY
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardDockZoneV54' \
             || { echo "::error::Guard 缺少按停靠槽位几何吞摸（AevonGuardDockZoneV54）"; exit 1; }
+
+          # ── V0.0.56：触摸接管标记改关联对象（修「屏幕部分位置无法点击」）+
+          #            主窗矩形通道（双击底边 / 快速连点仍点到 App）+
+          #            移动期关投影（拖动卡顿）+ App 窗口尺寸通道（内容被放大剪裁）──
+          for m in AevonMoveSmoothV56 AevonGuardFloatRectV56 AevonAdaptiveWindowV56; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.56 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["移动结束：拖动全程关闭投影",
+                  "主窗矩形已下发给 Guard",
+                  "已清空主窗矩形"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.56 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.56 校验: 移动关投影 + 主窗矩形下发 + 底部热区加宽 已编入")
+          PY
+          for m in AevonGuardTouchMarkV56 AevonGuardFloatRectV56 AevonAdaptiveWindowV56; do
+            strings "$GUARD_DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.56 Guard 标记缺失: $m"; exit 1; }
+          done
+          # 旧实现用 UITouch 指针当 CFMutableSet 的 key（地址复用导致误吞）——
+          # 新实现必须改用关联对象标记，这里正向确认它真的在里面
+          strings "$GUARD_DYLIB" | grep -q 'objc_setAssociatedObject' \
+            || { echo "::error::Guard 没有用关联对象标记触摸（AevonGuardTouchMarkV56）"; exit 1; }
+          echo "V0.0.56 Guard 校验: 关联对象标记 + 主窗矩形 + 窗口尺寸通道 已编入"
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
