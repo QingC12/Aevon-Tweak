@@ -136,6 +136,26 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>实验功能</string>
+			<key>footerText</key>
+			<string>真小胖屏 P0 探测：开启后注销重启一次，SpringBoard 会把真重排所需系统 API 的探测结果写进日志（/var/mobile/Aevon.log，搜「场景探测」）。纯只读探测，不改任何行为；关闭 = 与旧版完全一致。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>TrueResizeScene</string>
+			<key>label</key>
+			<string>真小胖屏 P0 探测（只写日志，不改行为）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>细节调整</string>
 			<key>footerText</key>
 			<string>触发条位置 / 宽度 / 高度、圆盘 App 编辑等细节调整都在二级页（AevonDetailPageV30）。</string>

@@ -95,6 +95,17 @@ enum AevonBootstrap {
     private static func installEntries(reason: String) {
         guard AevonPrefs.bool("Enabled", default: false) else { return }
 
+        // V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 运行时探测（开关 TrueResizeScene 默认关；
+        // 只读探测不建对象，一次进程一遍，独立异常隔离，绝不影响入口安装）。
+        var probeEx: NSString? = nil
+        var probeWhy: NSString? = nil
+        AevonTryExecute({
+            AevonSceneProbe.runOnceIfNeeded()
+        }, &probeEx, &probeWhy)
+        if let n = probeEx {
+            AevonLog.warn("[引导] 场景探测抛异常（\(n): \(probeWhy ?? "无")），已拦截（AevonSceneProbeP0）")
+        }
+
         var exName: NSString?
         var exReason: NSString?
         var installed: UIView?

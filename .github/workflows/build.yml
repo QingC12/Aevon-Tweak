@@ -870,6 +870,22 @@ jobs:
           print("V0.0.65 校验: 场景几何写入停用（V58 整屏前提恢复）已编入")
           PY65
 
+          # ── V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 运行时探测 ──
+          strings "$DYLIB" | grep -q 'AevonSceneProbeP0' \
+            || { echo "::error::V0.0.66 标记缺失: AevonSceneProbeP0"; exit 1; }
+          python3 - "$DYLIB" <<'PY66'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["场景探测：","P0 判据汇总","SBDeviceApplicationSceneEntity",
+                    "FBSSceneParameters","FBSMutableSceneDefinition","FBSceneManager",
+                    "createSceneWithDefinition:initialParameters:",
+                    "FBApplicationProcessLaunchTransaction","FBSDisplayConfiguration",
+                    "TrueResizeScene"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.66 缺串: {s}"); sys.exit(1)
+          print("V0.0.66 校验: P0 运行时探测（五项判据）已编入")
+          PY66
+
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
@@ -903,6 +919,11 @@ jobs:
           find . -name 'icon@3x.png' -path '*AevonPrefs.bundle*' | grep -q . \
             || { echo "::error::AevonPrefs.bundle 缺少 icon@3x.png（系统设置不显示插件图标）"; exit 1; }
           echo "V0.0.40 图标校验: Sileo Icon 纯路径 + 图标文件 已就位"
+
+          # ── V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 探测开关必须在一级 Root.plist ──
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'TrueResizeScene' \
+            || { echo "::error::Root.plist 缺少 TrueResizeScene（真小胖屏 P0 探测）开关"; exit 1; }
+          echo "V0.0.66 校验: P0 探测开关（TrueResizeScene）已就位"
 
           PKG="$(grep -i '^Package:' ctl/control | cut -d' ' -f2-)"
           echo "deb Package: $PKG"
