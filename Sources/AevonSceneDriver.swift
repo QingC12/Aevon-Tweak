@@ -148,7 +148,7 @@ final class AevonSceneDriver: NSObject {
             AevonLog.warn("[场景] P1 第 1 步失败：拿不到 FBSceneManager 实例（AevonSceneDriverP1）")
             return
         }
-        AevonLog.info("[场景] P1 第 1 步通过：FBSceneManager = \(AevonSafeClassName(manager))（AevonSceneDriverP1）")
+        AevonLog.info("[场景] P1 第 1 步通过：FBSceneManager = \(AevonSafeClassName(manager) ?? "nil")（AevonSceneDriverP1）")
         self.step2MainDisplayConfig(manager: manager)
     }
 
@@ -165,7 +165,7 @@ final class AevonSceneDriver: NSObject {
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["sceneManager", "workspaceSceneCoordinator", "sceneCoordinator"] {
                 if let m = AevonSafeObjCall(ws, sel) {
-                    if AevonSafeClassName(m).contains("SceneManager") { return m }
+                    if (AevonSafeClassName(m) ?? "nil").contains("SceneManager") { return m }
                 }
             }
         }
@@ -188,7 +188,7 @@ final class AevonSceneDriver: NSObject {
             dc = AevonSceneDriver.findMainDisplayConfiguration(manager: manager)
         }
         if let dc {
-            AevonLog.info("[场景] P1 第 2 步通过：主屏 dc 母本 = \(AevonSafeClassName(dc))（AevonSceneDriverP1）")
+            AevonLog.info("[场景] P1 第 2 步通过：主屏 dc 母本 = \(AevonSafeClassName(dc) ?? "nil")（AevonSceneDriverP1）")
         } else {
             AevonLog.warn("[场景] P1 第 2 步降级：没拿到主屏 dc 母本，改走「从零构造小窗 dc」（ivar 直写，日志如实记录）（AevonSceneDriverP1）")
         }
@@ -219,11 +219,11 @@ final class AevonSceneDriver: NSObject {
             if let dm = tryShared(classNamed: clsName, selector: selName) {
                 for sel in ["mainDisplayConfiguration", "displayConfiguration", "mainScreenDisplayConfiguration", "mainSBFDisplay"] {
                     if let r = AevonSafeObjCall(dm, sel) {
-                        if AevonSafeClassName(r).contains("DisplayConfiguration") { return r }
+                        if (AevonSafeClassName(r) ?? "nil").contains("DisplayConfiguration") { return r }
                         // SBFDisplay 之类再向下钻一层
                         for sel2 in ["displayConfiguration", "mainDisplayConfiguration"] {
                             if let r2 = AevonSafeObjCall(r, sel2),
-                               AevonSafeClassName(r2).contains("DisplayConfiguration") {
+                               (AevonSafeClassName(r2) ?? "nil").contains("DisplayConfiguration") {
                                 return r2
                             }
                         }
@@ -246,7 +246,7 @@ final class AevonSceneDriver: NSObject {
         if let settings = AevonSafeObjCall(scene, "settings") {
             for sel in ["displayConfiguration", "displayConfigurationLayout"] {
                 if let r = AevonSafeObjCall(settings, sel),
-                   AevonSafeClassName(r).contains("DisplayConfiguration") {
+                   (AevonSafeClassName(r) ?? "nil").contains("DisplayConfiguration") {
                     return r
                 }
             }
@@ -272,7 +272,7 @@ final class AevonSceneDriver: NSObject {
             }
         }
         if let app {
-            AevonLog.info("[场景] P1 第 3 步通过：SBApplication = \(AevonSafeClassName(app))（AevonSceneDriverP1）")
+            AevonLog.info("[场景] P1 第 3 步通过：SBApplication = \(AevonSafeClassName(app) ?? "nil")（AevonSceneDriverP1）")
         } else {
             let d = diag.items.isEmpty ? "" : "｜诊断：\(diag.items.joined(separator: "；"))"
             AevonLog.warn("[场景] P1 第 3 步失败：拿不到 \(AevonSceneDriver.experimentBundleID) 的 SBApplication\(d)（AevonSceneDriverP1）")
@@ -302,7 +302,7 @@ final class AevonSceneDriver: NSObject {
         // 全部失败：取样类方法名（下一轮按真实名补）
         var names: [String] = []
         var count: UInt32 = 0
-        if let metaCls = objc_getMetaClass("SBApplicationController"),
+        if let metaCls = AevonMetaClassNamed("SBApplicationController"),
            let list = class_copyMethodList(metaCls, &count) {
             for i in 0..<Int(count) {
                 let n = NSStringFromSelector(method_getName(list[i]))
@@ -427,12 +427,12 @@ final class AevonSceneDriver: NSObject {
         // 路线 1：主屏 dc 母本的 _identity ivar（P0 dump 实锤存在）
         if let mainDC {
             if let id = AevonSafeObjIvar(mainDC, "_identity"),
-               AevonSafeClassName(id).contains("DisplayIdentity") {
+               (AevonSafeClassName(id) ?? "nil").contains("DisplayIdentity") {
                 return id
             }
             // FBSDisplayConfiguration 的 _identity 可能另叫 _displayIdentity
             if let id = AevonSafeObjIvar(mainDC, "_displayIdentity"),
-               AevonSafeClassName(id).contains("DisplayIdentity") {
+               (AevonSafeClassName(id) ?? "nil").contains("DisplayIdentity") {
                 return id
             }
         }
@@ -442,14 +442,14 @@ final class AevonSceneDriver: NSObject {
                 if let scene = AevonSafeObjCall(ws, sel),
                    let settings = AevonSafeObjCall(scene, "settings"),
                    let id = AevonSafeObjCall(settings, "displayIdentity"),
-                   AevonSafeClassName(id).contains("DisplayIdentity") {
+                   (AevonSafeClassName(id) ?? "nil").contains("DisplayIdentity") {
                     return id
                 }
             }
         }
         // 路线 3：App 自己身上的 displayIdentity
         if let app, let id = AevonSafeObjCall(app, "displayIdentity"),
-           AevonSafeClassName(id).contains("DisplayIdentity") {
+           (AevonSafeClassName(id) ?? "nil").contains("DisplayIdentity") {
             return id
         }
         return nil
@@ -498,10 +498,10 @@ final class AevonSceneDriver: NSObject {
                 if ok.boolValue { diag.items.append("app.\(s)=\(v ? 1 : 0)") }
             }
         }
-        diag.items.append("entity=\(AevonSafeClassName(cls as AnyObject))")
-        diag.items.append("app=\(AevonSafeClassName(app))")
-        let displayName: String = (displayID != nil) ? AevonSafeClassName(displayID!) : "nil"
-        let providerName: String = (provider != nil) ? AevonSafeClassName(provider!) : "nil"
+        diag.items.append("entity=\(AevonSafeClassName(cls as AnyObject) ?? "nil")")
+        diag.items.append("app=\(AevonSafeClassName(app) ?? "nil")")
+        let displayName: String = displayID.map { AevonSafeClassName($0) ?? "nil" } ?? "nil"
+        let providerName: String = provider.map { AevonSafeClassName($0) ?? "nil" } ?? "nil"
         diag.items.append("displayID=\(displayName)")
         diag.items.append("provider=\(providerName)")
         AevonLog.info("[场景] P1 第 4 步预习：将尝试 \(usable.count) 个 init（\(usable.map { $0.0.components(separatedBy: ":")[0] }.joined(separator: "/"))）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
@@ -611,7 +611,7 @@ final class AevonSceneDriver: NSObject {
         }
         AevonCrumbClear()
         if let created {
-            AevonLog.info("[场景] P1 第 5 步通过：createScene 已调用，返回 \(AevonSafeClassName(created))——若创建链成立，屏幕应出现按 266x458 排版的设置场景（AevonSceneDriverP1）")
+            AevonLog.info("[场景] P1 第 5 步通过：createScene 已调用，返回 \(AevonSafeClassName(created) ?? "nil")——若创建链成立，屏幕应出现按 266x458 排版的设置场景（AevonSceneDriverP1）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 self?.step6Verify(created: created)
             }
@@ -718,9 +718,9 @@ final class AevonSceneDriver: NSObject {
                 typealias Fn0 = @convention(c) (NSObject, Selector) -> Unmanaged<NSObject>?
                 _ = unsafeBitCast(method_getImplementation(m), to: Fn0.self)(fresh, initSel)
             }
-            AevonSceneDriver.writeCGRectIvar(fresh, "_nativeBounds", frame)
-            AevonSceneDriver.writeCGRectIvar(fresh, "_bounds", frame)
-            AevonSceneDriver.writeCGSizeIvar(fresh, "_pixelSize",
+            _ = AevonSceneDriver.writeCGRectIvar(fresh, "_nativeBounds", frame)
+            _ = AevonSceneDriver.writeCGRectIvar(fresh, "_bounds", frame)
+            _ = AevonSceneDriver.writeCGSizeIvar(fresh, "_pixelSize",
                                              CGSize(width: size.width * 3, height: size.height * 3))
             dc = fresh
             AevonLog.info("[场景] P1 小窗 dc 从零构造（无母本，ivar 直写 266x458 / 3x 像素）（AevonSceneDriverP1）")

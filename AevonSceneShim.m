@@ -995,3 +995,8 @@ NSObject *AevonSafeValueForKeyPath(id obj, NSString *keyPath) {
     @try { return AevonVerifiedObject([obj valueForKeyPath:keyPath]); }
     @catch (NSException *e) { return nil; }
 }
+
+Class AevonMetaClassNamed(NSString *name) {
+    if (name.length == 0) { return Nil; }
+    return objc_getMetaClass(name.UTF8String);
+}

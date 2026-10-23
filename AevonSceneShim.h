@@ -153,3 +153,6 @@ BOOL AevonSafeSetValueForKey(id obj, id value, NSString *key);
 BOOL AevonSafeSetValueForKeyPath(id obj, id value, NSString *keyPath);
 NSObject *AevonSafeValueForKey(id obj, NSString *key);
 NSObject *AevonSafeValueForKeyPath(id obj, NSString *keyPath);
+
+/// 元类（objc_getMetaClass 在 Swift 里是 `Any`，不能直接喂 class_copyMethodList）
+Class AevonMetaClassNamed(NSString *name);
