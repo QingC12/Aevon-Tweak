@@ -97,10 +97,15 @@ enum AevonEntryHost {
     /// 不加这道判断，浮窗压住热区时拖浮窗就会误呼圆盘。
     /// V0.0.37（AevonSthenoEdgeBarV37）：手势区伸到浮窗外侧 barThickness pt，
     /// 判定矩形同步外扩，防止拖边条 / 缩放时被当成热区触摸接管。
-    static func pointHitsFloatingWindow(at point: CGPoint) -> Bool {
+    ///
+    /// V0.0.50（AevonDockPassThroughV50）：`ignoringDocked = true` 时**跳过停靠小窗**。
+    /// 停靠列贴右边缘，必然压在「呼出圆盘」的热区上；热区判定如果还被它拦住，
+    /// 用户在停靠列覆盖的那一段就永远划不出圆盘（用户 Aevon(43) 说的手势冲突）。
+    static func pointHitsFloatingWindow(at point: CGPoint, ignoringDocked: Bool = false) -> Bool {
         let margin = AevonWindowView.maxHandleMargin
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return false }
         for win in layer.subviews where !win.isHidden && win.alpha > 0.01 {
+            if ignoringDocked, let w = win as? AevonWindowView, w.isDocked { continue }
             if win.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return true }
         }
         return false
@@ -140,12 +145,14 @@ enum AevonEntryHost {
         return list.sorted { $0.frame.minY < $1.frame.minY }
     }
 
-    /// 重排某一侧的整列停靠小窗（V0.0.48，AevonGrowFromCenterV48）。
+    /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。
     ///
-    /// Aevon(41) 第 4 条：「第一个在中间，后续的在中下段，如果放不下了，
-    /// 中间的会自动向上移动」。所以停靠完成后不是只摆新窗，
-    /// 而是把**整列**按 `AevonSnap.dockColumnYs` 重新对齐 ——
-    /// 底部放不下时整列上移，第一个窗从屏幕中心往上走。
+    /// 用户 Aevon(43)：「第一个小窗在屏幕右上角、距离顶部 10% 处，然后向下依次类推，
+    /// 总数量只有 5 个，当其中一个被还原成主悬浮窗时，下面的自动补空缺（这里需要有动画）」。
+    /// 槽位算法见 `AevonSnap.dockColumnYs`（顶部 10% 锚点、固定 5 格），
+    /// 落位动画走 `setDockedY` —— 只改 y 的短弹簧，**带**过渡，不是瞬移。
+    /// 还原时调用方会先把被还原窗的 `currentSlot` 置回 `.free`，于是它不再进这一列，
+    /// 下面的窗依次上移一格把空缺补上。
     static func relayoutDockedColumn(side: AevonSnapSlot) {
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
         var column: [AevonWindowView] = []
@@ -156,7 +163,7 @@ enum AevonEntryHost {
         }
         // V0.0.49（AevonDockColumnFillV49）：原来这里要求 `count > 1`，
         // 于是「三个小窗还原中间那个」之后若只剩一个就不重排，它孤零零留在原位。
-        // 现在剩一个也要重排 —— `dockColumnYs(count:1)` 会把它送回屏幕垂直中心。
+        // 现在剩一个也要重排 —— 它会回到第 1 格（顶部 10%）。
         guard !column.isEmpty else { return }
         column.sort { $0.frame.minY < $1.frame.minY }
         let height = column[0].frame.height
@@ -165,8 +172,9 @@ enum AevonEntryHost {
         for (index, win) in column.enumerated() {
             win.setDockedY(ys[index])
         }
-        AevonLog.info("[窗口] 停靠列已重排：\(column.count) 个小窗，中心锚点向下排列"
-            + "（\(ys.map { Int($0) })，AevonGrowFromCenterV48）")
+        AevonLog.info("[窗口] 停靠列已重排：\(column.count) 个小窗，顶部 10% 锚点向下、"
+            + "下方自动补位（\(ys.map { Int($0) })，尺寸 \(Int(column[0].frame.width))x\(Int(height))"
+            + "，AevonDockTop5V50 AevonDockFillAnimV50）")
     }
 
     /// 已停靠小窗的**原始**矩形（不外扩）。

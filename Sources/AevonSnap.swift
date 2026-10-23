@@ -66,6 +66,59 @@ enum AevonSnap {
     /// 停靠档的宽度下限：**不能**沿用 `minContentWidth`，
     /// 否则 430 × 0.30 = 129 会被 150 抬回去，看起来「收不小」（V0.0.44 的隐形坑）。
     static let dockMinWidth: CGFloat = 96
+
+    // MARK: - 停靠列（V0.0.50，AevonDockTop5V50）
+
+    /// 停靠小窗的最大数量。用户 Aevon(43)：「总数量只有 5 个」。
+    ///
+    /// 超过就拒绝新的停靠（保持主悬浮窗原样），而不是无限往下堆 ——
+    /// 一列超过 5 个时必然有窗被挤出屏幕，用户根本点不到。
+    static let dockMaxCount = 5
+
+    /// 第一个停靠小窗的顶边位置 = 屏高 × 10%（用户 Aevon(43)：「第一个小窗在屏幕
+    /// 右上角，距离顶部 10% 处」）。
+    ///
+    /// Stheno 的 `leftHeightPecent` / `rightHeightPecent` 正是这种「按屏高百分比定位」
+    /// 的模型（高度百分比与宽度独立），所以这里也用比例而不是绝对 pt。
+    static let dockTopRatio: CGFloat = 0.10
+
+    /// 停靠列底部留白：最后一格不压到底（home indicator 那一条）。
+    static let dockBottomMargin: CGFloat = 16
+
+    /// 停靠档宽度的绝对下限（V0.0.50）。
+    ///
+    /// 比 `dockMinWidth` 小 —— 5 个 9:16 小窗要在「顶部 10% ~ 底部留白」之间排下，
+    /// 单窗高度上限只有屏高约 17%，对应宽度约屏宽 19%（430 屏 ≈ 82pt）。
+    /// 如果沿用 96 的下限，高度会被抬回去，5 个就排不下了。
+    static let dockSlotMinWidth: CGFloat = 48
+
+    /// 停靠小窗的**统一**尺寸（宽, 高）。
+    ///
+    /// V0.0.50 的核心变化：不再用「屏宽 28%」直接当宽度，而是先算
+    /// 「5 格必须排得下」的高度上限，再按 9:16 反推宽度：
+    ///   · 高度上限 = (屏高 − 屏高×10% − 底部留白 − 4×间隙) ÷ 5；
+    ///   · 单窗高度 ≤ 上限（同时也不超过 28% 宽对应的 9:16 高度）；
+    ///   · 宽度 = (高度 − 顶部留白) × 9/16。
+    /// iPhone 15 Pro Max（430×932）算出来约 82×160 —— 比 V0.0.49 的 120×228 小一档，
+    /// 但 5 个一定能完整落在屏内（这是用户明确要求的「总数只有 5 个」的前提）。
+    static var dockSize: CGSize {
+        let screen = UIScreen.main.bounds
+        let fallbackW = max(dockSlotMinWidth, dockMinWidth)
+        guard screen.width > 1, screen.height > 200 else {
+            return CGSize(width: fallbackW, height: dockHeight(forWidth: fallbackW))
+        }
+        let top = screen.height * dockTopRatio
+        let avail = max(160, screen.height - top - dockBottomMargin)
+        let slotGap = obstacleGap * CGFloat(max(1, dockMaxCount - 1))
+        let maxH = (avail - slotGap) / CGFloat(max(1, dockMaxCount))
+        var height = min(dockHeight(forWidth: dockWidth), maxH)
+        var width = (height - titleBarHeight - contentTopPadding) * dockAspect
+        if width < dockSlotMinWidth {
+            width = dockSlotMinWidth
+            height = dockHeight(forWidth: width)
+        }
+        return CGSize(width: width, height: height)
+    }
     /// 读历史几何时的宽度上限：旧版本可能存着 66%~94% 的巨窗，读出来必须收回来
     static let maxRestoredRatio: CGFloat = 0.62
     /// 自动避让时和别的浮窗之间留的缝
@@ -217,63 +270,54 @@ enum AevonSnap {
                       obstacles: [CGRect] = []) -> CGRect {
         let screen = UIScreen.main.bounds
         guard slot != .free else { return clamped(base) }
-        var width = dockWidth
-        // V0.0.47（AevonDock916V47）：停靠走独立的 9:16，不再套主窗的整屏比例
-        var height = dockHeight(forWidth: width)
-        if height > maxHeight {
-            height = maxHeight
-            width = max(dockMinWidth, (height - titleBarHeight - contentTopPadding) * dockAspect)
-        }
-        var f = CGRect(x: 0, y: 0, width: width, height: height)
+        // V0.0.50（AevonDockTop5V50）：统一尺寸（保证 5 个排得下），不再逐窗算宽度
+        let size = dockSize
+        var f = CGRect(x: 0, y: 0, width: size.width, height: size.height)
         switch slot {
         case .free:
             return clamped(base)
         case .left:
             f.origin.x = edgeInset
         case .right:
-            f.origin.x = screen.width - edgeInset - width
+            f.origin.x = screen.width - edgeInset - size.width
         }
-        f.origin.y = dockColumnY(index: obstacles.count, height: height)
+        f.origin.y = dockColumnY(index: obstacles.count, height: size.height)
         return clamped(f)
     }
 
-    /// 停靠小窗的纵向落点（V0.0.48，AevonDockColumnV48）。
+    /// 停靠小窗的纵向落点（V0.0.50，AevonDockTop5V50）。
     ///
-    /// Aevon(41) 第 4 条：「停靠小窗应该是第一个在中间，后续的在中下段，
-    /// 如果放不下了，中间的会自动向上移动」——
-    /// 所以这是一列**从屏幕垂直中心向下生长**的栈，锚点永远在中心：
-    ///   · index 0 = 屏幕正中；
-    ///   · 后续依次往下排（间隔 `obstacleGap`）；
-    ///   · 底部放不下时**整列上移**（第一个窗就是从中心往上走），而不是把新窗塞到别处。
+    /// 用户 Aevon(43) 重新定义了整列：
+    ///   · 第 1 个窗贴**右上角**，顶边在屏高 10% 处；
+    ///   · 之后依次向下排（间隔 `obstacleGap`）；
+    ///   · 最多 5 个（`dockMaxCount`），超出的停靠请求会被拒绝；
+    ///   · 中间某个被还原时，下面的窗整列上移补空缺（由 `relayoutDockedColumn` 驱动动画）。
+    ///
+    /// 旧实现（V0.0.48~49）是「第一个在屏幕正中、放不下整列上移」——
+    /// 那套锚点会随窗数不断变化（1 个在正中、3 个整体偏上），用户看到的就是
+    /// 「第一个在边缘中间、第二个跑到上面」。现在锚点固定在屏高 10%，永不动摇。
     static func dockColumnY(index: Int, height: CGFloat) -> CGFloat {
         let ys = dockColumnYs(count: max(1, index + 1), height: height)
-        guard !ys.isEmpty else { return edgeInset }
+        guard !ys.isEmpty else { return UIScreen.main.bounds.height * dockTopRatio }
         return ys[min(index, ys.count - 1)]
     }
 
-    /// 一列停靠小窗的全部纵向落点（V0.0.48）。
+    /// 一列停靠小窗的全部纵向落点（V0.0.50，顶部 10% 锚点向下）。
     static func dockColumnYs(count: Int, height: CGFloat) -> [CGFloat] {
         let screen = UIScreen.main.bounds
         guard count > 0, height > 0, screen.height > height else { return [] }
-        let minY = edgeInset
-        let limit = screen.height - edgeInset
+        let top = screen.height * dockTopRatio
         let step = height + obstacleGap
-
-        // 理想：第一个窗垂直居中，之后依次向下
-        var ys: [CGFloat] = (0..<count).map { (screen.height - height) / 2.0 + CGFloat($0) * step }
-        // 底部溢出 → 整列上移（第一个跟着往上，正是用户要的「中间的自动向上移动」）
-        let overflow = (ys[count - 1] + height) - limit
-        if overflow > 0 {
-            let shifted = ys.map { $0 - overflow }
-            if let first = shifted.first, first >= minY {
-                ys = shifted
-            } else {
-                // 整列比屏幕还高：从顶部开始排，宁可底部溢出也不越过状态栏
-                ys = (0..<count).map { minY + CGFloat($0) * step }
+        var ys: [CGFloat] = (0..<count).map { top + CGFloat($0) * step }
+        // 极端情况（小屏 / 横屏）排到屏底之外：整列等量上移，保证最后一格不越界。
+        // 尺寸本身已按「5 格装得下」反算，正常机型不会走到这里。
+        if let last = ys.last {
+            let overflow = (last + height) - (screen.height - dockBottomMargin)
+            if overflow > 0 {
+                ys = ys.map { max(0, $0 - overflow) }
             }
         }
-        let maxY = max(minY, limit - height)
-        return ys.map { min(max($0, minY), maxY) }
+        return ys
     }
 
     /// 松手时按窗口位置判断想吸附到哪一格；不需要吸附时返回 nil。

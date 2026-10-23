@@ -208,6 +208,10 @@ final class AevonWindowView: UIView {
     /// 于是内容先缩成一小块、四周露出窗口黑底，再在动画结束的瞬间对齐。
     /// 这正是 Aevon(41) 第 1 条「停靠成小窗时先黑屏再出现画面」的根因。
     private var isAnimatingGeometry = false
+
+    /// 停靠列的重排目标 y（V0.0.50）。
+    /// 缩放动画期间到来的重排请求先存这里，动画结束再补做 —— 否则会被 `isAnimatingGeometry` 丢掉。
+    private var pendingDockY: CGFloat?
     /// 正在播退场动画（关窗），期间不接受任何手势
     private(set) var isDismissing = false
     /// 退场动画开始前已经落盘过几何（teardown 里不要再用缩小后的 frame 覆盖它）
@@ -392,11 +396,22 @@ final class AevonWindowView: UIView {
             container.layer.anchorPoint = .zero
         }
 
+        // V0.0.50（AevonDockShadowV50）：这里是「点边缘变停靠小窗时屏幕右边冒出一块黑色阴影」的根因。
+        //
+        // `layer.shadowPath` 只在 `layoutSubviews` 里按当前 bounds 重算，而动画期间
+        // layoutSubviews 被 `isAnimatingGeometry` 拦住了 —— 于是整个停靠动画期间，
+        // 投影用的还是**主窗尺寸**（266×560）的圆角矩形路径。窗口本身已经缩到 82 宽并
+        // 贴到右边，阴影却仍按 266 宽画，尾部直接溢出屏外，看起来就是右侧一块死黑。
+        // 动画一结束 layoutSubviews 重算路径，黑影立刻消失 —— 正是用户描述的
+        // 「停靠小窗出现时阴影消失」。
+        // 修法：动画期间投影整体淡出，落位后再按新尺寸重算路径并淡入。
+        let savedShadowOpacity = layer.shadowOpacity
         let steps: () -> Void = { [weak self] in
             guard let self = self else { return }
             self.frame = target
             self.contentClip.frame = clipTarget
             self.contentClip.layer.cornerRadius = radius
+            self.layer.shadowOpacity = 0
             container.transform = CGAffineTransform(scaleX: scale, y: scale)
             container.layer.position = CGPoint(x: 0, y: topPad - cropTop * scale)
             if let a = targetAlpha { self.alpha = a }
@@ -409,6 +424,19 @@ final class AevonWindowView: UIView {
             self.lastAppliedScale = -1
             self.setNeedsLayout()
             self.layoutIfNeeded()
+            // 几何已落定：按新 bounds 写一次 shadowPath，再让投影淡回来
+            self.updateShadowPath()
+            if savedShadowOpacity > 0.001 {
+                UIView.animate(withDuration: 0.18, delay: 0,
+                               options: [.beginFromCurrentState, .allowUserInteraction]) {
+                    self.layer.shadowOpacity = savedShadowOpacity
+                }
+            }
+            // 动画期间被挡下的停靠列重排：现在补做（带弹簧，不会瞬移）
+            if let pending = self.pendingDockY {
+                self.pendingDockY = nil
+                self.setDockedY(pending)
+            }
             completion?()
         }
         if spring {
@@ -644,6 +672,16 @@ final class AevonWindowView: UIView {
     func grab(at layerPoint: CGPoint) -> AevonFloatGrab? {
         guard let parent = superview else { return nil }
         let local = convert(layerPoint, from: parent)
+        // V0.0.50（AevonDockNoMoveV50）：停靠小窗**不做任何手柄命中**。
+        //
+        // 用户 Aevon(43)：「停靠的小窗无法被手动移动（避免与呼出圆盘手势冲突），
+        // 只能通过点击卡片还原成主悬浮窗」。
+        // 旧实现下停靠小窗贴右边，右侧 20pt 侧条正好压在「边缘左滑呼出圆盘」的热区上，
+        // 于是用户想划出圆盘，结果把小窗拖走了。现在整窗只有一种交互：
+        // 轻点 = 还原主窗（拖动 / 缩放 / 底边双击全部停用）。
+        if isDocked {
+            return bounds.contains(local) ? .body : nil
+        }
         // 命中顺序：角块 → 底边条 → 左右侧条。角块最具体，先判；
         // 侧条帧比底边条长，放最后才不会把底边条整条吃掉。
         let order: [AevonEdgeHandleView] = [bottomLeftCorner, bottomRightCorner,
@@ -658,9 +696,6 @@ final class AevonWindowView: UIView {
             if handle === bottomBar { return .bottom }
             return .side(handle.edges)
         }
-        // V0.0.46（AevonDockTapRestoreV46）：停靠小窗的**整块窗身**也算抓取区 ——
-        // 轻点还原主窗、拖动移动。只有停靠态才这样，自由态窗身必须留给 App。
-        if isDocked, bounds.contains(local) { return .body }
         return nil
     }
 
@@ -772,14 +807,10 @@ final class AevonWindowView: UIView {
             }
             persistFrame()
         case .body:
-            // V0.0.46：拖窗身 = 移动；松手若还在停靠态，就贴回最近的那一侧（保持小窗）
-            if commit, isDocked {
-                let slot = AevonSnap.slot(for: frame) ?? currentSlot
-                if slot != .free {
-                    snap(to: slot)
-                    return
-                }
-            }
+            // V0.0.50（AevonDockNoMoveV50）：停靠小窗**不移动、不换边**。
+            // 拖动一律无效（`applyBarMove` 也拦了一道），只有轻点才还原 —— 还原由
+            // 全局通道的「轻点」判定直接调 `restoreMainWindow()`，不走这里。
+            if isDocked { return }
             persistFrame()
         case .corner:
             finishEdgeResize()
@@ -817,6 +848,10 @@ final class AevonWindowView: UIView {
     /// V0.0.42（AevonSthenoDockV42）：夹边距离从原来的 60pt 改成 `AevonSnap.edgeInset`
     /// —— 拖到屏幕边上时窗口自动停在内侧，四个外角块始终留在屏内可抓。
     private func applyBarMove(to point: CGPoint) {
+        // V0.0.50（AevonDockNoMoveV50）：停靠小窗禁止移动。
+        // 这是「避免与呼出圆盘手势冲突」的落地点 —— 用户在停靠列上左滑本意是呼出圆盘，
+        // 旧版会把这根手指当成拖动，小窗跟着跑。现在几何一格都不动。
+        if isDocked { return }
         let dx = point.x - moveOriginPoint.x
         let dy = point.y - moveOriginPoint.y
         let screen = UIScreen.main.bounds
@@ -951,6 +986,15 @@ final class AevonWindowView: UIView {
         if !isDocked { preDockFrame = frame }
         // 同侧已有的小窗（按纵向顺序），它们决定本窗落在这一列的第几格
         let peers = AevonEntryHost.dockedPeers(side: slot, excluding: self)
+        // V0.0.50（AevonDockTop5V50）：这一侧已经排满 5 个 → 拒绝新的停靠。
+        // 用户 Aevon(43)：「总数量只有 5 个」。不拒绝的话第 6 个会被挤到屏外，
+        // 用户点不到也还原不了，等于丢了一个窗。
+        if !isDocked, peers.count >= AevonSnap.dockMaxCount {
+            persistFrame()
+            AevonLog.info("[窗口] 停靠位已满，这一侧最多 \(AevonSnap.dockMaxCount) 个停靠小窗，"
+                + "本次停靠已取消（保持主悬浮窗原样）（AevonDockTop5V50）")
+            return
+        }
         let target = AevonSnap.frame(for: slot, from: frame,
                                      obstacles: peers.map { $0.frame })
         guard target.width > 1, target.height > 0 else { return }
@@ -978,16 +1022,22 @@ final class AevonWindowView: UIView {
         }
         AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 9:16 · 屏宽 "
-            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 中心锚点向下成列 · 统一弹簧动效）"
-            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockColumnV48 AevonGrowFromCenterV48 AevonFineMotionV49）")
+            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 9:16 · 顶部 10% 锚点向下第 "
+            + "\(peers.count + 1) 格 / 最多 \(AevonSnap.dockMaxCount) 个 · 统一弹簧动效）"
+            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockTop5V50 AevonDockNoMoveV50 AevonFineMotionV49）")
     }
 
     /// 把自己挪到停靠列的指定纵向位置（V0.0.48，AevonGrowFromCenterV48）。
     ///
     /// 只改 y、不动尺寸 —— 内容缩放不变，所以不会出现停靠黑屏那种问题。
     func setDockedY(_ y: CGFloat) {
-        guard isDocked, !isAnimatingGeometry, !isDismissing else { return }
+        guard isDocked, !isDismissing else { return }
+        // V0.0.50（AevonDockFillAnimV50）：自己正在做停靠 / 还原的缩放动画时，
+        // 不能同时改 frame（两段动画会互相覆盖，落点就偏了）。先记下来，动画结束补做。
+        if isAnimatingGeometry {
+            pendingDockY = y
+            return
+        }
         guard abs(frame.minY - y) > 0.5 else { return }
         var t = frame
         t.origin.y = y
@@ -1022,6 +1072,9 @@ final class AevonWindowView: UIView {
     ///   ② 再走一次 `AevonSnap.avoid(...)` 让别人把它推开。
     /// 现在两处都删掉：`preDockFrame` 原样用，位置/尺寸与停靠前逐点一致。
     func restoreMainWindow() {
+        // V0.0.50：停靠动画还没结束就再点一下（手指快）时直接忽略，
+        // 否则两段几何动画叠在一起，落点会算错。
+        guard !isAnimatingGeometry, !isDismissing else { return }
         var target: CGRect
         if let previous = preDockFrame,
            previous.width > AevonSnap.minContentWidth,
@@ -1048,8 +1101,8 @@ final class AevonWindowView: UIView {
         }
         AevonLog.info("[窗口] 轻点已停靠小窗 → 还原主悬浮窗 \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（回到停靠前的位置与尺寸 · 不再贴边改写 · 停靠列已回填 · 弹簧动画）"
-            + "（AevonDockRestoreV44 AevonRestorePosV47 AevonGeomAnimV48 AevonDockColumnFillV49）")
+            + "（回到停靠前的位置与尺寸 · 下方整列上移补位（带动画）· 弹簧动画）"
+            + "（AevonDockRestoreV44 AevonRestorePosV47 AevonGeomAnimV48 AevonDockColumnFillV49 AevonDockFillAnimV50）")
     }
 
     /// 关闭自己（底边条双击时由全局通道调用）。

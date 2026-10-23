@@ -603,6 +603,11 @@ enum AevonEdgeEntry {
     private static var floatEngaged = false
     /// 越过多少点算拖动（不超过它抬手 = 轻点）
     private static let floatMoveSlop: CGFloat = 10
+    /// 停靠小窗的轻点阈值（V0.0.50）。
+    ///
+    /// 停靠小窗**不可拖动**，所以位移根本没有「拖动」这种解释 —— 放宽到 18pt 只会让
+    /// 手指的轻微抖动仍然被认成轻点（宽松一点，卡片更好点中），不会有副作用。
+    private static let floatDockMoveSlop: CGFloat = 18
     /// 轻点允许的最长按压时间
     private static let floatTapLimit: CFTimeInterval = 0.45
     /// 拖拽硬上限：拖到 30 秒一定解除，杜绝「窗口一直吸着手指」的最坏情况
@@ -714,7 +719,8 @@ enum AevonEdgeEntry {
             guard zone.contains(point) else { return }
             // V0.0.36（AevonFloatInEntryV36）：落点在浮窗上 = 用户在操作浮窗，
             // 绝不能当成热区触摸接管（浮窗压住右缘热区时，拖浮窗会误呼圆盘）。
-            if AevonEntryHost.pointHitsFloatingWindow(at: point) { return }
+            // V0.0.50：停靠小窗例外 —— 它不可拖动，压在热区上时必须让圆盘照常可呼出。
+            if AevonEntryHost.pointHitsFloatingWindow(at: point, ignoringDocked: true) { return }
             globalTouchID = touchID
             globalStart = point
             globalFired = false
@@ -819,6 +825,19 @@ enum AevonEdgeEntry {
         guard let hit = AevonEntryHost.grabFloatingWindow(atScreenPoint: point) else {
             return false
         }
+        // V0.0.50（AevonDockPassThroughV50）：停靠小窗压在「呼出圆盘」的热区上时，让位给热区。
+        //
+        // 停靠列贴着右边缘，热区又是右缘那条 18pt 宽的手势条 —— 两者必然重叠。
+        // 用户 Aevon(43)：「停靠的小窗无法被手动移动（避免与呼出圆盘手势冲突）」。
+        // 只把拖动禁掉还不够：手指仍然被浮窗接管，圆盘照样呼不出来。
+        // 所以这里直接放弃接管，让下面的热区流程拿走这根手指（圆盘 = 左滑）。
+        if case .body = hit.grab,
+           AevonPrefs.bool("EdgeGestureEnabled", default: true),
+           AevonTriggerZone.rect(in: UIScreen.main.bounds).contains(point) {
+            AevonLog.info("[边缘] 停靠小窗落在圆盘热区内 \(Int(point.x)),\(Int(point.y))，让位给热区"
+                + "（不拖动小窗，AevonDockPassThroughV50）")
+            return false
+        }
 
         let now = CACurrentMediaTime()
         floatTouchID = touchID
@@ -843,10 +862,18 @@ enum AevonEdgeEntry {
         case .bottom:
             AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
         case .body:
-            // V0.0.46：停靠小窗整块窗身 —— 轻点还原主窗，拖动移动
-            AevonLog.info("[窗口] 停靠小窗窗身按下 \(Int(point.x)),\(Int(point.y))（轻点还原主窗 · 拖动移动）（AevonDockTapRestoreV46）")
+            // V0.0.50：停靠小窗整块窗身 —— 轻点还原主窗，**不可拖动**
+            AevonLog.info("[窗口] 停靠小窗窗身按下 \(Int(point.x)),\(Int(point.y))"
+                + "（轻点还原主窗 · 已锁定不可拖动）（AevonDockTapRestoreV46 AevonDockNoMoveV50）")
         }
         return true
+    }
+
+    /// 当前抓取目标对应的「算拖动」阈值（V0.0.50）。
+    /// 停靠小窗走更宽的 18pt —— 它反正不能拖，宽一点只会让卡片更好点中。
+    private static func floatSlopForCurrentGrab() -> CGFloat {
+        if case .some(.body) = floatGrab { return floatDockMoveSlop }
+        return floatMoveSlop
     }
 
     /// 拖动中。返回 true = 已消费，调用方 return。
@@ -867,8 +894,17 @@ enum AevonEdgeEntry {
         if !floatEngaged {
             // 侧条 / 底边条：越过阈值才算拖动，之前都只是「可能的轻点」
             let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
-            guard moved > floatMoveSlop else { return true }
+            // V0.0.50：停靠小窗不可拖动，阈值放宽（纯为了更好点中卡片）
+            let slop = floatSlopForCurrentGrab()
+            guard moved > slop else { return true }
             floatEngaged = true
+            // V0.0.50（AevonDockNoMoveV50）：停靠小窗锁定 —— 手指继续被我们吞着
+            // （避免滑到 App 里），但窗口一格都不动。还原只认「轻点」。
+            if win.isDocked {
+                AevonLog.info("[窗口] 停靠小窗锁定，拖动已忽略 \(Int(point.x)),\(Int(point.y))"
+                    + "（只能轻点还原，AevonDockNoMoveV50）")
+                return true
+            }
             // 基准点重设到当前点，否则第一帧会瞬移一个阈值距离，手感发跳
             win.rebaseGrab(at: AevonEntryHost.floatLayerPoint(fromScreen: point))
             if case .some(.bottom) = floatGrab {
@@ -890,7 +926,8 @@ enum AevonEdgeEntry {
         let elapsed = CACurrentMediaTime() - floatStartAt
         let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
         // 轻点 = 没越阈值、时间短、位移小
-        let isTap = !cancelled && !floatEngaged && elapsed <= floatTapLimit && moved <= floatMoveSlop
+        let isTap = !cancelled && !floatEngaged && elapsed <= floatTapLimit
+            && moved <= floatSlopForCurrentGrab()
 
         if cancelled {
             win?.grabCancel()

@@ -169,6 +169,18 @@ __attribute__((used)) static const char AevonFloatTouchBitV49Marker[] = "AevonFl
 __attribute__((used)) static const char AevonDockColumnFillV49Marker[] = "AevonDockColumnFillV49";
 __attribute__((used)) static const char AevonFineMotionV49Marker[] = "AevonFineMotionV49";
 
+/* V0.0.50 CI 标记（Aevon(43)：重写停靠列 + 阴影 bug）：
+ * AevonDockTop5V50      = 停靠列重写：第一个贴右上角、顶边在屏高 10%，向下依次，最多 5 个；
+ * AevonDockNoMoveV50    = 停靠小窗锁定，不可拖动 / 不可缩放，只能轻点还原；
+ * AevonDockFillAnimV50  = 还原后下方整列上移补位（弹簧动画，不瞬移）；
+ * AevonDockPassThroughV50 = 停靠小窗压在圆盘热区上时让位给热区（不再抢手指）；
+ * AevonDockShadowV50    = 修「停靠时屏幕右边冒出黑色阴影」：动画期投影淡出 + 落位后重算 shadowPath。 */
+__attribute__((used)) static const char AevonDockTop5V50Marker[] = "AevonDockTop5V50";
+__attribute__((used)) static const char AevonDockNoMoveV50Marker[] = "AevonDockNoMoveV50";
+__attribute__((used)) static const char AevonDockFillAnimV50Marker[] = "AevonDockFillAnimV50";
+__attribute__((used)) static const char AevonDockPassThroughV50Marker[] = "AevonDockPassThroughV50";
+__attribute__((used)) static const char AevonDockShadowV50Marker[] = "AevonDockShadowV50";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

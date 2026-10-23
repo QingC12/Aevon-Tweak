@@ -494,10 +494,11 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          # V0.0.48：跨窗自动避让早已停用，V47 的「不再挪动其它窗」串也随之改为成列语义
+          # V0.0.50：停靠列锚点从「屏幕中心」改成「顶部 10%」，
+          # V47/V48/V49 里引用旧锚点文案的串同步换成仍然存在的「成列 / 重排」语义
           need = ["回到停靠前的位置与尺寸",
                   "停靠小窗 9:16",
-                  "中心锚点向下成列"]
+                  "停靠列已重排"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.47 日志串: " + ", ".join(miss))
@@ -518,7 +519,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["中心锚点向下排列", "缩放缓出退场", "停靠列已重排"]
+          need = ["停靠列已重排", "缩放缓出退场", "侧条轻点"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.48 日志串: " + ", ".join(miss))
@@ -538,12 +539,30 @@ jobs:
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
           # 注意：Swift 会把 ≤15 字节的字面量内联进寄存器，日志串必须够长才落进二进制
-          need = ["停靠列已回填", "已通知 App 侧 Guard 接管输入", "统一弹簧动效"]
+          need = ["下方整列上移补位", "已通知 App 侧 Guard 接管输入", "统一弹簧动效"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.49 日志串: " + ", ".join(miss))
               sys.exit(1)
           print("V0.0.49 校验: 浮窗期跨进程吞摸 + 停靠列回填 + 统一弹簧动效 已编入")
+          PY
+
+          # ── V0.0.50：停靠列重写（顶部 10% / 最多 5 个）/ 小窗锁定 / 补位动画 / 阴影修复 ──
+          for m in AevonDockTop5V50 AevonDockNoMoveV50 AevonDockFillAnimV50 \
+                   AevonDockPassThroughV50 AevonDockShadowV50; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.50 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["顶部 10% 锚点向下", "停靠位已满", "停靠小窗锁定",
+                  "停靠小窗落在圆盘热区内"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.50 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.50 校验: 顶部 10% 五格停靠列 + 小窗锁定 + 补位动画 + 阴影同步 已编入")
           PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
