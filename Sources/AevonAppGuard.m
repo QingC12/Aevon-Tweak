@@ -968,6 +968,24 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             if (hardZone) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
+                /* V0.0.77（AevonGuardSwallowProbeV77）：**正向**取证。
+                 * 旧日志只在「放行」时说话，于是「App 到底有没有收到这次轻点」
+                 * 永远只能靠推理。这里把每一次吞掉的 began 也记下来（限频 1s），
+                 * 下一轮日志就能三选一：①压根没这行 = 触摸没进这个进程
+                 * （问题在转发端/别的 App 进程）；②有这行且没放行 = 吞了，
+                 * 那就得去别的 App 进程找点击；③有放行 = 判据漏了。 */
+                static CFTimeInterval lastSwallowProbe = 0;
+                CFTimeInterval swNow = CACurrentMediaTime();
+                if (swNow - lastSwallowProbe > 1.0) {
+                    lastSwallowProbe = swNow;
+                    AevonGuardWriteLog(NO, @"吞摸取证（began win=%.0f,%.0f scr=%.0f,%.0f float=%d ring=%d rect=%d dock=%d app=%@）",
+                                       pt.x, pt.y, spt.x, spt.y,
+                                       floatTouch ? 1 : 0,
+                                       ringOpen ? 1 : 0,
+                                       AevonGuardPointInRect(floatRect, pt, spt) ? 1 : 0,
+                                       dockHit ? 1 : 0,
+                                       [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+                }
             } else {
                 /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
                  * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。
@@ -1077,6 +1095,21 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         }
     }
 
+    /* V0.0.77（AevonGuardPartialSwallowV77）：**只要有一条被接管，整条事件丢弃**。
+     * 旧实现是 `swallowed == active` 才丢，否则整条交给 App —— 等于把刚刚判定为
+     * 「压在浮窗上，App 不该收到」的那根手指**又原样投递**给了 App。多指 / 前后脚
+     * 触摸时这就是一条完整的泄漏通道（判据全对、日志也显示接管了，App 照样被点中）。
+     * 代价：浮窗手势期里另一根手指的滚动会被一起丢掉 —— 这本来就是想要的行为。 */
+    if (swallowed > 0 && swallowed != active) {
+        static CFTimeInterval lastPartial = 0;
+        CFTimeInterval pnow = CACurrentMediaTime();
+        if (pnow - lastPartial > 1.0) {
+            lastPartial = pnow;
+            AevonGuardWriteLog(NO, @"部分吞 → 整条丢弃（接管 %lu / 活跃 %lu，含多指）",
+                               (unsigned long)swallowed, (unsigned long)active);
+        }
+        swallowed = active;
+    }
     if (active > 0 && swallowed == active) {
         /* V0.0.34：吞摸计数（每 40 条打一次，限频内），下一版日志可量化拦截效果 */
         static NSUInteger swallowCount = 0;
@@ -1090,6 +1123,30 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
 }
 
 #pragma mark - 安装
+
+
+/* V0.0.77（AevonGuardAliveV77）：Guard 存活登记。
+ *
+ * Aevon(69) 日志实锤：只有「tweak 加载之后新启动的 App」才有注入日志
+ * （Spotlight / BatteryInfo / Sileo / Preferences / Filza 有，浮窗里的 GitHub 一条都没有）。
+ * 老进程里没有 Guard，浮窗内容一旦把触摸转发进去，App 自己就合成了一次点击 ——
+ * 这才是「轻点停靠小窗还原主窗 → App 内被点一下」活过多版本的真身。
+ *
+ * 这里把本进程的 pid 写进 `com.aevon.alive.<bundleID>`，SpringBoard 侧创建浮窗时
+ * 读一下就知道该 App 进程里到底有没有 Guard；没有就当场降级（关掉内容触摸）+ 写日志点名。 */
+static void AevonGuardPublishAlive(void) {
+    @try {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        if (bid.length == 0) { bid = [NSString stringWithUTF8String:getprogname() ?: "?"]; }
+        NSString *name = [@"com.aevon.alive." stringByAppendingString:bid];
+        int token = -1;
+        if (notify_register_check(name.UTF8String, &token) == 0 && token >= 0) {
+            notify_set_state(token, (uint64_t)(getpid() & 0x7FFFFFFF));
+            notify_post(name.UTF8String);
+            notify_cancel(token);
+        }
+    } @catch (NSException *e) { }
+}
 
 static void AevonGuardPrefsChanged(CFNotificationCenterRef center,
                                    void *observer,
@@ -1200,6 +1257,9 @@ static void AevonGuardInstall(void) {
     AevonGuardWriteLog(YES, @"Guard 版本 V73 激活（窗口/屏幕双坐标系判据 + 停靠格纵向外扩 24pt）（AevonGuardScreenPtV73）");
     /* V0.0.74（AevonGuardTapStampV74）：与坐标无关的时间戳兜底 —— 抬手时浮窗刚被按下就吞 ended。 */
     AevonGuardWriteLog(YES, @"Guard 版本 V74 激活（浮窗按下时间戳兜底 + 双坐标系几何）（AevonGuardTapStampV74）");
+    /* V0.0.77（AevonGuardAliveV77）：存活登记 —— 让 SpringBoard 侧能查出「这个 App 进程里有没有 Guard」。 */
+    AevonGuardPublishAlive();
+    AevonGuardWriteLog(YES, @"Guard 版本 V77 激活（存活登记 com.aevon.alive.<bundle>，pid=%d）（AevonGuardAliveV77）", (int)getpid());
 }
 
 /*

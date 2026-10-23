@@ -43,6 +43,14 @@ final class AevonSceneHost {
     /// 用户是否允许浮窗内容接收触摸（设置里的 TouchEnabled）
     private let contentInteractiveByPref: Bool
 
+    /// V0.0.77（AevonGuardAliveV77）：这个 App 进程里**没有** Guard。
+    ///
+    /// Aevon(69) 日志实锤：只有 tweak 加载之后新启动的 App 才有注入日志；
+    /// 浮窗里的 GitHub（更新前就在跑的老进程）一条都没有。触摸由 presenter 的
+    /// UI 连接转发进 App 进程，那边没有 Guard 就没人拦 —— App 自己合成一次点击。
+    /// 这种进程只能从宿主侧断掉转发：内容触摸一律关掉，宁可不给滑，也不让点穿。
+    private(set) var guardAbsent = false
+
     /// 开关内容的触摸（V0.0.55，AevonDockNoTouchV55）。
     ///
     /// 用户 Aevon(48) 第 4 条：「快速点击停靠小窗切换到主悬浮窗时，依旧会触发 app 内点击操作」。
@@ -56,8 +64,10 @@ final class AevonSceneHost {
     /// 所以停靠态直接把内容的触摸关掉，从源头断掉转发。
     func setContentInteraction(_ enabled: Bool) {
         guard contentInteractiveByPref else { return }
-        container.isUserInteractionEnabled = enabled
-        presentationView.isUserInteractionEnabled = enabled
+        /* V0.0.77：该 App 进程里没有 Guard → 永远不允许转发触摸进去。 */
+        let allow = enabled && !guardAbsent
+        container.isUserInteractionEnabled = allow
+        presentationView.isUserInteractionEnabled = allow
     }
 
     // MARK: - 真 resize（V0.0.59，AevonTrueResizeV59）
@@ -263,8 +273,22 @@ final class AevonSceneHost {
         // 以前这里硬关掉交互，等于只能看画面。presentationView 的触摸会由 UIKit
         // 通过 presenter 的 UI 连接转发进 App 进程，不需要我们自己造触摸事件。
         // 开关默认开，若怀疑触摸引发异常可在 设置 → Aevon 关掉。
-        let interactive = AevonPrefs.bool("TouchEnabled", default: true)
+        var interactive = AevonPrefs.bool("TouchEnabled", default: true)
         self.contentInteractiveByPref = interactive
+        /* V0.0.77（AevonGuardAliveV77）：先问一句「这个 App 进程里有没有 Guard」。
+         * 有 → 正常（App 进程自己拦得住）；没有 → 内容触摸直接关掉，
+         * 否则触摸经 presenter 的 UI 连接转发进去，App 自己合成一次点击
+         * —— 这就是「轻点停靠小窗还原主窗，App 内被点一下」活过多版本的真身。 */
+        let alivePid = AevonGuardAliveState(bundleID)
+        let absent = (alivePid <= 0)
+        self.guardAbsent = absent
+        if absent {
+            interactive = false
+            AevonLog.warn("[场景] Guard 存活探测：\(bundleID) → **无 Guard**（该 App 是 tweak 加载前就在跑的老进程）"
+                + "；浮窗内容触摸已强制关闭，避免触摸转发进去被 App 合成点击（AevonGuardAliveV77）")
+        } else {
+            AevonLog.info("[场景] Guard 存活探测：\(bundleID) → 有（pid=\(alivePid)），内容触摸跟随设置（AevonGuardAliveV77）")
+        }
         host.isUserInteractionEnabled = interactive
         host.clipsToBounds = true
         view.frame = host.bounds
@@ -301,6 +325,19 @@ final class AevonSceneHost {
     private func probe() {
         guard !invalidated else { return }
         ticks += 1
+
+        /* V0.0.77（AevonGuardAliveV77）：Guard 存活复检。
+         * 刚拉起的 App 里 Guard 可能比这层晚几十毫秒才登记，别把它误判成「没有 Guard」
+         * 而永久关掉内容触摸。前 4 秒（8 次探测）每隔一拍复查一次，一旦登记上就放开。 */
+        if guardAbsent && ticks <= 8 {
+            let pid = AevonGuardAliveState(bundleID)
+            if pid > 0 {
+                guardAbsent = false
+                container.isUserInteractionEnabled = contentInteractiveByPref
+                presentationView.isUserInteractionEnabled = contentInteractiveByPref
+                AevonLog.info("[场景] Guard 存活复检：\(bundleID) 已登记（pid=\(pid)），内容触摸恢复跟随设置（AevonGuardAliveV77）")
+            }
+        }
 
         // V0.0.59（AevonReflowCheckV59）：真重排确认走这里 —— 每 0.5s 看一眼
         // App 的画布有没有真的变成目标尺寸，确认或超时回退都会翻转状态。

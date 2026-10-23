@@ -1036,6 +1036,36 @@ jobs:
             exit 1
           fi
           echo "V0.0.76 校验: SceneDriver 无动态转换（as?/as!/type(of:)）已确认"
+          # V0.0.77（AevonSceneScanObjCV77）：第二次自动注销的根治点 ——
+          # Aevon(69) 崩溃帧 img+0x51ad8 就是 classesResponding 里的
+          # `swift_dynamicCast`（跑在 objc_copyClassList 的逐类循环里）。
+          # 本版把整段类扫描下沉到 ObjC，并加 Guard 存活登记。
+          for s in AevonSceneScanObjCV77 AevonGuardAliveV77; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.0.77 标记缺失: $s"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY77'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["Guard 存活探测", "AevonGuardAliveV77"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.77 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.77 校验: 类扫描下沉 ObjC + Guard 存活探测 已编入")
+          PY77
+          # Guard 侧两条中文串在 __ustring 段，是 UTF-16-LE —— 必须按 utf-16-le 比对
+          python3 - "$GUARD_DYLIB" <<'PY77G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["吞摸取证", "部分吞 → 整条丢弃", "AevonGuardAliveV77"]:
+              if s.encode('utf-16-le') not in data and s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.77 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.77 校验: Guard 吞摸正向取证 + 部分吞修正 已编入")
+          PY77G
+          if grep -n "classesResponding" Sources/AevonSceneDriver.swift; then
+            echo "::error::V0.0.77 回退: SceneDriver 又出现 Swift 版 classesResponding（会重新触发 swift_dynamicCast 崩溃）"
+            exit 1
+          fi
+          echo "V0.0.77 校验: SceneDriver 已无 Swift 类扫描"
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

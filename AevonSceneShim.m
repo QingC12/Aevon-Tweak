@@ -5,6 +5,7 @@ __attribute__((used)) static const char AevonSceneSafeCallV75Marker[] = "AevonSc
 #import "AevonSceneShim.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <notify.h>
 #import <math.h>
 #import <stdio.h>
 #import <string.h>
@@ -999,4 +1000,71 @@ NSObject *AevonSafeValueForKeyPath(id obj, NSString *keyPath) {
 Class AevonMetaClassNamed(NSString *name) {
     if (name.length == 0) { return Nil; }
     return objc_getMetaClass(name.UTF8String);
+}
+
+#pragma mark - V0.0.77（AevonSceneScanObjCV77）：类扫描 + Guard 存活登记
+
+/* CI 标记（V0.0.77）：本段必须编进主 dylib —— Aevon(69) 第二次自动注销的根治点。 */
+__attribute__((used)) static const char AevonSceneScanObjCV77Marker[] = "AevonSceneScanObjCV77";
+__attribute__((used)) static const char AevonGuardAliveV77Marker[] = "AevonGuardAliveV77";
+
+NSString *AevonClassScanForSelector(NSString *selName, int limit) {
+    if (selName.length == 0 || limit <= 0) { return @""; }
+    @try {
+        SEL sel = NSSelectorFromString(selName);
+        if (sel == NULL) { return @""; }
+        unsigned int count = 0;
+        Class *list = objc_copyClassList(&count);
+        if (list == NULL) { return @""; }
+        NSMutableArray<NSString *> *out = [NSMutableArray array];
+        for (unsigned int i = 0; i < count && (int)out.count < limit; i++) {
+            Class c = list[i];
+            if (c == Nil) { continue; }
+            /* 纯 ObjC：只看方法表，不碰对象、不做任何转换 */
+            if (class_getInstanceMethod(c, sel) != NULL) {
+                const char *n = class_getName(c);
+                if (n != NULL) {
+                    [out addObject:[NSString stringWithUTF8String:n]];
+                }
+            }
+        }
+        free(list);
+        return out.count ? [out componentsJoinedByString:@","] : @"";
+    } @catch (NSException *e) {
+        return @"";
+    }
+}
+
+NSString *AevonClassNameOfClass(Class cls) {
+    if (cls == Nil) { return @"nil"; }
+    @try {
+        const char *n = class_getName(cls);
+        if (n == NULL) { return @"nil"; }
+        if (class_isMetaClass(cls)) {
+            return [NSString stringWithFormat:@"%s(元类)", n];
+        }
+        return [NSString stringWithUTF8String:n];
+    } @catch (NSException *e) {
+        return @"nil";
+    }
+}
+
+int AevonGuardAliveState(NSString *bundleID) {
+    if (bundleID.length == 0) { return 0; }
+    @try {
+        NSString *name = [@"com.aevon.alive." stringByAppendingString:bundleID];
+        int token = -1;
+        if (notify_register_check(name.UTF8String, &token) != 0 || token < 0) {
+            return 0;
+        }
+        uint64_t st = 0;
+        if (notify_get_state(token, &st) != 0) {
+            notify_cancel(token);
+            return 0;
+        }
+        notify_cancel(token);
+        return (int)(st & 0x7FFFFFFF);
+    } @catch (NSException *e) {
+        return 0;
+    }
 }

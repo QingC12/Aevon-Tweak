@@ -156,3 +156,27 @@ NSObject *AevonSafeValueForKeyPath(id obj, NSString *keyPath);
 
 /// 元类（objc_getMetaClass 在 Swift 里是 `Any`，不能直接喂 class_copyMethodList）
 Class AevonMetaClassNamed(NSString *name);
+
+#pragma mark - V0.0.77（AevonSceneScanObjCV77）：类扫描搬进 ObjC + Guard 存活登记
+
+/* 为什么把类扫描搬进 ObjC（Aevon(69) 崩溃栈铁证）：
+ *   img+0x51ad8 就是 `classesResponding` 里的 `swift_dynamicCast` ——
+ *   它跑在 `objc_copyClassList` 的**逐类循环**里（反汇编可见：取列表 → 逐 8 字节
+ *   取类指针 → swift_dynamicCast(type=…, class=…) → 追加 String → 比 limit）。
+ *   这类「拿裸类指针喂给 Swift 做动态转换」的写法，任何一次指针不干净就是
+ *   第二次自动注销（熔断计数已到 1，再崩一次实验就被锁死）。
+ *   所以这一段整体下沉到 ObjC：不产生任何转化指令，异常不外泄，只回一个字符串。 */
+NSString *AevonClassScanForSelector(NSString *selName, int limit);
+
+/// 取 Class 的名字（不要让 Swift 把元类塞进 Any 再转换）。
+NSString *AevonClassNameOfClass(Class cls);
+
+/* Guard 存活登记（跨进程、零风险）。
+ * Guard 在每个 App 进程里启动时把 `com.aevon.alive.<bundleID>` 写成自己的 pid，
+ * SpringBoard 侧在创建浮窗时读一下就知道「这个 App 进程里到底有没有 Guard」。
+ * Aevon(69) 日志实锤：只有「tweak 加载之后新启动的 App」才有注入日志
+ * （Spotlight / BatteryInfo / Sileo / Preferences / Filza 有，浮窗里的 GitHub 没有）
+ * —— 老进程里的浮窗内容一旦把触摸转发进去，App 自己就合成了一次点击。 */
+/// 读回登记值：>0 = 登记过的 pid，0 = 该 bundle 的进程里没有 Guard。
+/// （写入端在 Guard 自己进程里，见 AevonAppGuard.m 的 AevonGuardPublishAlive。）
+int AevonGuardAliveState(NSString *bundleID);

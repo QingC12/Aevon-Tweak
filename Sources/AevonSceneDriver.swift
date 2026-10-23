@@ -397,29 +397,15 @@ final class AevonSceneDriver: NSObject {
                 return proxy
             }
         }
-        // 3) 全类扫描留证（下一轮按真实实现类补链路）
-        let exact = classesResponding(to: entityProviderSelector, limit: 10)
-        let alt = classesResponding(to: entityProviderAltSelector, limit: 10)
-        diag.items.append("实现类=\(exact.isEmpty ? "无" : exact.joined(separator: ","))")
-        diag.items.append("下划线实现类=\(alt.isEmpty ? "无" : alt.joined(separator: ","))")
+        /* 3) 全类扫描留证（下一轮按真实实现类补链路）
+         * V0.0.77：整段下沉到 ObjC —— Aevon(69) 第二次自动注销就崩在这个循环里的
+         * `swift_dynamicCast`（反汇编 img+0x51ad8 实锤）。这里只拿一个字符串。 */
+        let exact = AevonClassScanForSelector(entityProviderSelector, 10)
+        let alt = AevonClassScanForSelector(entityProviderAltSelector, 10)
+        diag.items.append("实现类=\(exact.isEmpty ? "无" : exact)")
+        diag.items.append("下划线实现类=\(alt.isEmpty ? "无" : alt)")
         diag.items.append("候选链=\(labels.isEmpty ? "空" : labels.joined(separator: ","))")
         return nil
-    }
-
-    /// 全类扫描：哪些类实现了某个选择子（只在候选全失败时跑，日志留证）
-    static func classesResponding(to selName: String, limit: Int = 6) -> [String] {
-        var out: [String] = []
-        let sel = NSSelectorFromString(selName)
-        var count: UInt32 = 0
-        guard let list = objc_copyClassList(&count) else { return out }
-        defer { free(UnsafeMutableRawPointer(list)) }
-        for i in 0..<Int(count) {
-            if class_getInstanceMethod(list[i], sel) != nil {
-                out.append(NSStringFromClass(list[i]))
-                if out.count >= limit { break }
-            }
-        }
-        return out
     }
 
     /// 主屏 dc 的 displayIdentity（四段 init 的第 5 个参数）
@@ -498,7 +484,7 @@ final class AevonSceneDriver: NSObject {
                 if ok.boolValue { diag.items.append("app.\(s)=\(v ? 1 : 0)") }
             }
         }
-        diag.items.append("entity=\(AevonSafeClassName(cls as AnyObject) ?? "nil")")
+        diag.items.append("entity=\(AevonClassNameOfClass(cls) ?? "nil")")
         diag.items.append("app=\(AevonSafeClassName(app) ?? "nil")")
         let displayName: String = displayID.map { AevonSafeClassName($0) ?? "nil" } ?? "nil"
         let providerName: String = provider.map { AevonSafeClassName($0) ?? "nil" } ?? "nil"
