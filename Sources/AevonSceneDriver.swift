@@ -205,12 +205,13 @@ final class AevonSceneDriver: NSObject {
         if let cls = AevonClassOfObject(manager), AevonClassHasInstanceMethod(cls, selName),
            let enumMethod = class_getInstanceMethod(cls, NSSelectorFromString(selName)) {
             var found: NSObject? = nil
-            let block: @convention(block) (NSObject) -> Void = { scene in
+            let block: @convention(block) (NSObject?) -> Void = { scene in
+                guard let scene else { return }
                 if found == nil, let dc = AevonSceneDriver.displayConfigFromScene(scene) {
                     found = dc
                 }
             }
-            typealias EnumFn = @convention(c) (NSObject, Selector, @convention(block) (NSObject) -> Void) -> Void
+            typealias EnumFn = @convention(c) (NSObject, Selector, @convention(block) (NSObject?) -> Void) -> Void
             unsafeBitCast(method_getImplementation(enumMethod), to: EnumFn.self)(manager, NSSelectorFromString(selName), block)
             if let found { return found }
         }
