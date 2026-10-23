@@ -920,11 +920,6 @@ jobs:
             || { echo "::error::AevonPrefs.bundle 缺少 icon@3x.png（系统设置不显示插件图标）"; exit 1; }
           echo "V0.0.40 图标校验: Sileo Icon 纯路径 + 图标文件 已就位"
 
-          # ── V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 探测开关必须在一级 Root.plist ──
-          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'TrueResizeScene' \
-            || { echo "::error::Root.plist 缺少 TrueResizeScene（真小胖屏 P0 探测）开关"; exit 1; }
-          echo "V0.0.66 校验: P0 探测开关（TrueResizeScene）已就位"
-
           PKG="$(grep -i '^Package:' ctl/control | cut -d' ' -f2-)"
           echo "deb Package: $PKG"
           [ "$PKG" = "com.aevon" ] || { echo "::error::包名应为 com.aevon（dpkg 要求全小写），实际: $PKG"; exit 1; }
@@ -990,6 +985,10 @@ jobs:
           # V0.0.15 新增：边缘手势主入口开关必须在
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'EdgeGestureEnabled' \
             || { echo "::error::Root.plist 缺少 EdgeGestureEnabled（边缘圆盘入口）开关"; exit 1; }
+          # ── V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 探测开关必须在一级 Root.plist ──
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'TrueResizeScene' \
+            || { echo "::error::Root.plist 缺少 TrueResizeScene（真小胖屏 P0 探测）开关"; exit 1; }
+          echo "V0.0.66 校验: P0 探测开关（TrueResizeScene）已就位"
           # V0.0.25 新增：触发区域三个滑杆必须在「细节调整」二级页（V0.0.30 起 Root 只放开关）
           for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
             plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q "$K" \
