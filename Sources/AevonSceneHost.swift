@@ -119,6 +119,12 @@ final class AevonSceneHost {
         startSyncing()
         AevonLog.info("[场景] 真重排请求已下发（\(AevonSceneHelper.describeApplyBits(bits, target: size))"
             + "，\(reason)，等探测确认，AevonTrueResizeV59）")
+        // V0.0.64：首次下发时带出 scene 方法表诊断（找 setResizesHostedContext: 的
+        // 正确调用对象 —— Stheno 实锤该选择子存在，但我们手里的 FBScene 不响应）。
+        if bits & 0x20 == 0 {
+            AevonLog.warn("[场景] 托管上下文开关未被 scene 接受（\(AevonSceneHelper.sceneMethodDiag())"
+                + "，AevonReflowAppGateV64）")
+        }
     }
 
     /// 关窗 / 还原：场景恢复整屏（帧+显示配置一起还原）。
@@ -142,30 +148,52 @@ final class AevonSceneHost {
     /// probe 里调用：确认 App 画布是否真的变成了目标尺寸。
     /// 确认 → contentReflowConfirmed = true（内容管线切 1:1 原生）；
     /// 10 次探测（5 秒）仍未确认 → 自动回退整屏等比缩放（V58 形态）。
+    ///
+    /// V0.0.64（AevonReflowAppGateV64）终审结论：**SB 侧没有任何信号能证明
+    /// App 进程真的重排了。** presentationView 的子树 frame 全部由系统按我们
+    /// 写入的 settings 直接设置（恒等于目标）——V59/V60 的「首子视图 ≈ 目标 +
+    /// 无超尺寸视图」两道检查都是假阳性；V63 dc ivar 直写成功 + diff 下发 +
+    /// 回读一致，App 进程照样没重排（画面放大 = 整屏画面被 1:1 塞进小窗）。
+    /// 远程场景事后改 dc 只影响 SB 侧布局（Stheno/TrollOpen/Mango 三家逆向
+    /// 交叉印证：真重排必须 App 进程内动手）。
+    /// 所以：确认门 = **App 进程证据**（本版证据源尚未建立，开关恒关），
+    /// 关着的时候内容恒走整屏等比缩放（V58 形态）——绝不再放大。
+    private static let appProcessConfirmEnabled =
+        AevonPrefs.bool("AppProcessReflowConfirm", default: false)
+
+    /// 画布证据（每轮探测第 1 次采样，落日志供下一版判断）。
+    private var evidenceLogged = false
+
     private func checkReflow() {
         guard reflowChecking, adaptiveContentSize != .zero else { return }
         reflowCheckTicks += 1
         let inner = presentationView.subviews.first?.frame.size ?? .zero
         let target = reflowCheckTarget
-        // App 真重排的证据：呈现视图内的首个子视图尺寸 ≈ 目标（±2pt）。
-        // V0.0.60（AevonReflowGateV60）二道闸：只在 displayConfiguration 已成功
-        // 下发（0x10，updateAdaptiveSize 已把关）后才会走到这里 —— 外层 frame
-        // 是我们自己随时能改的，绝不能作为确认证据；同时子树里只要还有比目标
-        // 大一圈的内容视图（App 仍在按整屏渲染的残留证据），一律不予确认。
-        var oversizedFound = false
+        // 证据采样（不参与判定）：子树里超过目标一圈的视图 = App 仍按整屏渲染的
+        // 残留痕迹（如果 App 真重排了，这类视图应消失）。只在第 1 次落日志。
+        var oversizedDesc = "无"
         var queue = presentationView.subviews
         var visited = 0
         while visited < 64, let view = queue.popLast() {
             visited += 1
             if view.frame.width > target.width + 20 || view.frame.height > target.height + 20 {
-                oversizedFound = true
+                oversizedDesc = "\(AevonRuntime.className(view) ?? "?") \(Int(view.frame.width))x\(Int(view.frame.height))"
                 break
             }
             queue.append(contentsOf: view.subviews)
         }
+        if !evidenceLogged {
+            evidenceLogged = true
+            AevonLog.info("[场景] 画布证据收集：首子=\(AevonRuntime.className(presentationView.subviews.first) ?? "?")"
+                + " \(Int(inner.width))x\(Int(inner.height))，超尺寸视图=\(oversizedDesc)"
+                + "（SB 侧信号不作为确认依据，AevonReflowAppGateV64）")
+        }
         let innerOK = inner.width > 1 && abs(inner.width - target.width) <= 2
             && abs(inner.height - target.height) <= 2
-        if innerOK && !oversizedFound {
+        // 确认门：只有 App 进程证据通道建立（开关打开）时才允许确认。
+        // 本版恒关 —— innerOK 只说明系统把 SB 侧 frame 设成了目标，不代表
+        // App 进程重排（V59/V60/V63 三版真机实证），绝不据此切 1:1。
+        if innerOK && Self.appProcessConfirmEnabled {
             contentReflowConfirmed = true
             reflowChecking = false
             AevonLog.info("[场景] App 已按小窗尺寸重新排版（画布 \(Int(inner.width))"

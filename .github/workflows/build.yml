@@ -846,6 +846,18 @@ jobs:
             || { echo "::error::V0.0.63 标记缺失: AevonIvarSafeV63"; exit 1; }
           echo "V0.0.63 校验: ivar 类型安全已编入"
 
+          # ── V0.0.64（AevonReflowAppGateV64）：探测确认门=App 进程证据 ──
+          strings "$DYLIB" | grep -q 'AevonReflowAppGateV64' \
+            || { echo "::error::V0.0.64 标记缺失: AevonReflowAppGateV64"; exit 1; }
+          python3 - "$DYLIB" <<'PY64'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["画布证据收集","确认门=App 进程证据","托管上下文开关未被 scene 接受"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.64 缺串: {s}"); sys.exit(1)
+          print("V0.0.64 校验: App 进程证据门 + scene 方法表诊断 已编入")
+          PY64
+
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

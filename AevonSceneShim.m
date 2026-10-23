@@ -223,6 +223,69 @@ static void AevonDcDiag(id obj) {
              methods[0] ? methods : "无", ivars[0] ? ivars : "无");
 }
 
+/* ── V0.0.64（AevonReflowAppGateV64）：scene 方法表诊断 ──
+ * V63 真机实锤：dc 尺寸用 ivar 直写写进了 settings 且随 diff 下发（回读一致），
+ * 但 App 进程没有重排（画面放大）——远程场景事后改 dc 只影响 SB 侧布局。
+ * Stheno.dylib 里 `setResizesHostedContext:` 实锤存在（我们调用的是 FBScene，
+ * 它不响应该选择子）→ 调用对象一定不是 FBScene 本身。
+ * 这里 dump scene 类（含父类）方法表中 host/Context/resize 相关选择子 +
+ * scene 上 context 类键的取值类名，下一版照单精准打。 */
+static char s_sceneDiag[512];
+
+const char *AevonSceneMethodDiag(void) { return s_sceneDiag; }
+
+static void AevonSceneMethodDiagDump(id scene) {
+    if (scene == nil || s_sceneDiag[0] != '\0') { return; }   /* 只 dump 一次 */
+    @try {
+        char sels[384] = "";
+        size_t used = 0;
+        Class cls = object_getClass(scene);
+        for (int depth = 0; depth < 3 && cls != Nil; depth++) {
+            unsigned int count = 0;
+            Method *list = class_copyMethodList(cls, &count);
+            for (unsigned int i = 0; i < count && list != NULL; i++) {
+                const char *name = sel_getName(method_getName(list[i]));
+                if (name == NULL) { continue; }
+                size_t len = strlen(name);
+                BOOL hit = NO;
+                for (size_t j = 0; j + 4 <= len && !hit; j++) {
+                    if (strncasecmp(name + j, "host", 4) == 0) { hit = YES; }
+                    if (strncasecmp(name + j, "cont", 4) == 0 &&
+                        strncasecmp(name + j, "constraint", 10) != 0) { hit = YES; }
+                }
+                for (size_t j = 0; j + 5 <= len && !hit; j++) {
+                    if (strncasecmp(name + j, "resiz", 5) == 0) { hit = YES; }
+                }
+                if (!hit) { continue; }
+                int n = snprintf(sels + used, sizeof(sels) - used, "%s%s",
+                                 used == 0 ? "" : " ", name);
+                if (n < 0 || (size_t)n >= sizeof(sels) - used) { break; }
+                used += (size_t)n;
+            }
+            free(list);
+            cls = class_getSuperclass(cls);
+        }
+        /* context 类键取值（KVC，拿不到就空） */
+        const char *ctxCls = "?";
+        char ctxBuf[64] = "";
+        @try {
+            id ctx = [scene valueForKey:@"context"];
+            if (ctx != nil) { ctxCls = object_getClassName(ctx); }
+        } @catch (NSException *unused) {}
+        @try {
+            id ctx = [scene valueForKey:@"hostedContext"];
+            if (ctx != nil) {
+                snprintf(ctxBuf, sizeof(ctxBuf), " hosted=%s", object_getClassName(ctx));
+            }
+        } @catch (NSException *unused) {}
+        snprintf(s_sceneDiag, sizeof(s_sceneDiag),
+                 "scene=%s 方法[%s] context=%s%s",
+                 object_getClassName(scene), sels[0] ? sels : "无命中", ctxCls, ctxBuf);
+    } @catch (NSException *unused) {
+        snprintf(s_sceneDiag, sizeof(s_sceneDiag), "scene 诊断异常");
+    }
+}
+
 /* ── V0.0.61（AevonReflowIvarV61）：ivar 内存直写 ──
  * V60 真机日志（Aevon(54)）：class=FBSDisplayConfiguration，setSize:N sizeInPoints:N
  * mutableCopy:Y —— 选择子/KVC 层面没有任何写入口。剩下唯一没试过的写入口是 ivar：
@@ -430,6 +493,7 @@ CGSize AevonSceneDisplaySize(id scene) {
 
 int AevonSceneApplyDisplaySize(id scene, CGSize size, BOOL floatMode) {
     int bits = 0;
+    AevonSceneMethodDiagDump(scene);
     if (scene == nil || size.width < 1.0 || size.height < 1.0) { return bits; }
     @try {
         SEL settingsSel = NSSelectorFromString(@"settings");

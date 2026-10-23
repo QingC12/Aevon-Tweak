@@ -61,3 +61,7 @@ CGSize AevonSceneDisplaySize(id scene);
 
 /// 在（可变）settings 上把 displayConfiguration 尺寸顶到目标 —— FBScene 钩子用。
 BOOL AevonSettingsApplyDisplaySize(id settings, CGSize size);
+
+/// V0.0.64（AevonReflowAppGateV64）：scene 方法表诊断（host/Context/resize 选择子
+/// + context 类键取值），只在首次 AevonSceneApplyDisplaySize 时 dump 一次。
+const char *AevonSceneMethodDiag(void);

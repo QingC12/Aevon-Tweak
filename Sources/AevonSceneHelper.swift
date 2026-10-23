@@ -198,6 +198,12 @@ enum AevonSceneHelper {
         String(cString: AevonDisplayConfigDiag())
     }
 
+    /// V0.0.64：scene 方法表诊断（host/Context/resize 选择子 + context 取值类名，
+    /// 垫片侧只 dump 一次）——下一版找 `setResizesHostedContext:` 正确调用对象用。
+    static func sceneMethodDiag() -> String {
+        String(cString: AevonSceneMethodDiag())
+    }
+
     /// 位掩码 → 人话（真机日志可读）。
     static func describeApplyBits(_ bits: Int, target: CGSize) -> String {
         guard bits != 0 else { return "完全失败（settings 不可写）" }
