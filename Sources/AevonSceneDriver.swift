@@ -260,29 +260,49 @@ final class AevonSceneDriver: NSObject {
 
     // MARK: 第 4 步：SBDeviceApplicationSceneEntity 构造（V0.0.71 诊断增强版）
 
-    /// 多路找 sceneHandleProvider / displayIdentity —— 四段 init 传 nil 可能返回 nil 实体
-    /// （ScreenCore 构造 entity 时 provider/displayIdentity 都给的真实对象）。
+    /// V0.0.72：读对象型 ivar（V62 教训：先查类型编码 '@' 才可用 object_getIvar）
+    static func readObjectIvar(_ obj: NSObject, _ name: String) -> NSObject? {
+        guard let ivar = class_getInstanceVariable(type(of: obj) as AnyClass, name),
+              let enc = ivar_getTypeEncoding(ivar), String(cString: enc).hasPrefix("@") else { return nil }
+        return object_getIvar(obj, ivar) as? NSObject
+    }
+
+    /// 多路找 sceneHandleProvider —— 四段 init 有断言 `sceneHandleProvider != nil`
+    /// （Aevon(65) 实锤异常：Invalid parameter not satisfying: sceneHandleProvider）。
+    ///
+    /// ScreenCore 逆向实锤（SCSystemSceneDriver.sc_mainDisplaySceneHandleProvider）：
+    /// provider 就是 **SBMainWorkspace 本体**（iOS 17 上 SBMainWorkspace 实现了
+    /// FBSSceneHandleProvider 协议），其次是 FBSceneManager 本体。
     private static func findSceneHandleProvider() -> NSObject? {
-        // 路线 1：SBMainWorkspace / FBSceneManager 上的 sceneHandleProvider 属性
-        for (clsName, selName) in [("SBMainWorkspace", "sharedInstance"), ("FBSceneManager", "sharedInstance")] {
-            guard let host = tryShared(classNamed: clsName, selector: selName) else { continue }
+        // 路线 1：SBMainWorkspace 实例（本体即 provider，ScreenCore 同款）
+        if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
+            // 若 workspace 上有 sceneHandleProvider 属性则优先用属性值
             for sel in ["sceneHandleProvider", "handleProvider"] {
                 let s = NSSelectorFromString(sel)
-                if host.responds(to: s),
-                   let r = host.perform(s)?.takeUnretainedValue() as? NSObject {
+                if ws.responds(to: s),
+                   let r = ws.perform(s)?.takeUnretainedValue() as? NSObject {
                     return r
                 }
             }
+            return ws
         }
-        // 路线 2：FBSSceneHandleProvider 类自身的 sharedInstance / defaultProvider
+        // 路线 2：FBSceneManager 本体
+        if let m = tryShared(classNamed: "FBSceneManager", selector: "sharedInstance") {
+            return m
+        }
+        // 路线 3：FBSSceneHandleProvider 自身的 sharedInstance 系
         for selName in ["sharedInstance", "defaultProvider", "sharedProvider"] {
             if let p = tryShared(classNamed: "FBSSceneHandleProvider", selector: selName) { return p }
         }
         return nil
     }
 
-    private static func findDisplayIdentity() -> NSObject? {
-        // 主屏 SBFDisplay 的 displayIdentity
+    private static func findDisplayIdentity(mainDC: NSObject?) -> NSObject? {
+        // 路线 1（V0.0.72）：主屏 dc 母本的 _identity ivar（P0 dump 实锤存在）
+        if let mainDC, let id = readObjectIvar(mainDC, "_identity") {
+            return id
+        }
+        // 路线 2：主屏 SBFDisplay 的 displayIdentity
         if let dm = tryShared(classNamed: "SBFDisplayManager", selector: "sharedInstance") {
             for sel in ["mainDisplay", "mainSBFDisplay"] {
                 let s = NSSelectorFromString(sel)
@@ -296,7 +316,7 @@ final class AevonSceneDriver: NSObject {
                 }
             }
         }
-        // 主场景 settings 上的 displayIdentity
+        // 路线 3：主场景 settings 上的 displayIdentity
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["mainScene", "mainWorkspaceScene"] {
                 let s = NSSelectorFromString(sel)
@@ -343,7 +363,7 @@ final class AevonSceneDriver: NSObject {
             }
             let provider = AevonSceneDriver.findSceneHandleProvider()
             diag.items.append("provider=\(provider.map { String(describing: type(of: $0)) } ?? "nil")")
-            let displayID = AevonSceneDriver.findDisplayIdentity()
+            let displayID = AevonSceneDriver.findDisplayIdentity(mainDC: mainDC)
             diag.items.append("displayID=\(displayID.map { String(describing: type(of: $0)) } ?? "nil")")
             // 依次尝试 P0 方法表里确认存在的全部 init 候选
             typealias Init4 = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
@@ -393,7 +413,7 @@ final class AevonSceneDriver: NSObject {
             AevonLog.warn("[场景] P1 第 4 步失败：SBDeviceApplicationSceneEntity 全部候选 init 都构造不出实体\(d)（AevonSceneDriverP1 AevonSceneP1V71）")
             return
         }
-        AevonLog.info("[场景] P1 第 4 步通过：sceneEntity 已构造（AevonSceneDriverP1 AevonSceneP1V71）")
+        AevonLog.info("[场景] P1 第 4 步通过：sceneEntity 已构造（AevonSceneDriverP1 AevonSceneP1V72）")
         self.step5Create(manager: manager, entity: entity, mainDC: mainDC)
     }
 

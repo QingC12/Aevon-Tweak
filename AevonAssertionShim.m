@@ -294,6 +294,8 @@ __attribute__((used)) static const char AevonRestoreGraceV67Marker[] = "AevonRes
 __attribute__((used)) static const char AevonRestoreGraceAllV70Marker[] = "AevonRestoreGraceAllV70";
 /// CI 标记（V0.0.71）：P1 第 4/5 步修复（多 init 候选 + ScreenCore 正路）
 __attribute__((used)) static const char AevonSceneP1V71Marker[] = "AevonSceneP1V71";
+/// CI 标记（V0.0.72）：P1 provider=SBMainWorkspace 本体 + displayIdentity 走 dc._identity
+__attribute__((used)) static const char AevonSceneP1V72Marker[] = "AevonSceneP1V72";
 
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；

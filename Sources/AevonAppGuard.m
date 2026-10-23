@@ -79,6 +79,8 @@ __attribute__((used)) static const char AevonGuardLateStartV69Marker[] = "AevonG
 __attribute__((used)) static const char AevonGuardGhostWideV70Marker[] = "AevonGuardGhostWideV70";
 /// CI 标记（V0.0.71）：moved/ended 晚到重判 —— began 竞态泄漏的短触摸回收
 __attribute__((used)) static const char AevonGuardLateRejudgeV71Marker[] = "AevonGuardLateRejudgeV71";
+/// CI 标记（V0.0.72）：幽灵格自动记录 + began 放行取证 + 版本日志
+__attribute__((used)) static const char AevonGuardGhostAutoV72Marker[] = "AevonGuardGhostAutoV72";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -273,6 +275,75 @@ static NSUInteger AevonGuardDockCounts(NSUInteger *outRight, NSUInteger *outLeft
 static CGRect gAevonDockGhosts[8];
 static CFTimeInterval gAevonDockGhostUntil[8];
 static NSInteger gAevonDockGhostCount = 0;
+
+/* V0.0.72（AevonGuardGhostAutoV72）：幽灵格**自动记录** —— SB 侧无从告知
+ * 「哪一格刚被点走」，但 Guard 自己观察 bit50~55 的数量变化就够了：
+ * 停靠数减少 = 有小窗离开槽位（轻点还原 / 自动吸附），把被移除的那几格
+ * 矩形记入幽灵表 2s。与触摸时序完全无关（状态位是确定事件），
+ * 补上「began 竞态失败 + 命中格已从几何位移除」的最后一类漏网。 */
+static NSUInteger gAevonDockLastRight = 0;
+static NSUInteger gAevonDockLastLeft = 0;
+static BOOL gAevonDockLastValid = NO;
+
+static void AevonGuardDockGhostAdd(CGRect rect, CFTimeInterval now) {
+    NSInteger slot = -1;
+    for (NSInteger gi = 0; gi < gAevonDockGhostCount; gi++) {
+        if (CGRectEqualToRect(gAevonDockGhosts[gi], rect)) { slot = gi; break; }
+    }
+    if (slot < 0) {
+        if (gAevonDockGhostCount < 8) {
+            slot = gAevonDockGhostCount++;
+        } else {
+            slot = 0;
+            for (NSInteger gi = 1; gi < 8; gi++) {
+                if (gAevonDockGhostUntil[gi] < gAevonDockGhostUntil[slot]) { slot = gi; }
+            }
+        }
+        gAevonDockGhosts[slot] = rect;
+    }
+    gAevonDockGhostUntil[slot] = now + 2.0;
+}
+
+static void AevonGuardDockGhostAutoRecord(void) {
+    @try {
+        NSUInteger right = 0, left = 0;
+        NSUInteger total = AevonGuardDockCounts(&right, &left);
+        if (!gAevonDockLastValid) {
+            if (total > 0) {
+                gAevonDockLastRight = right;
+                gAevonDockLastLeft = left;
+                gAevonDockLastValid = YES;
+            }
+            return;
+        }
+        if (right == gAevonDockLastRight && left == gAevonDockLastLeft) { return; }
+        /* 只记「减少」：增加（新停靠）不需要幽灵格 */
+        if (right < gAevonDockLastRight || left < gAevonDockLastLeft) {
+            if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
+            if (gAevonDockW >= 1.0) {
+                CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+                const CGFloat slop = 3.0;
+                CFTimeInterval now = CACurrentMediaTime();
+                /* 补位上移的语义：被点走的那格内容已离开，剩余格整体上移补位，
+                 * 所以「消失的位置」= 原列尾（i >= 新数量）的那几格。 */
+                for (NSUInteger side = 0; side < 2; side++) {
+                    NSUInteger oldCount = (side == 0) ? gAevonDockLastRight : gAevonDockLastLeft;
+                    NSUInteger newCount = (side == 0) ? right : left;
+                    if (newCount >= oldCount) { continue; }
+                    CGFloat originX = (side == 0) ? (sw - gAevonDockW) : 0;
+                    for (NSUInteger i = newCount; i < oldCount && i < 5; i++) {
+                        CGRect r = CGRectMake(originX, gAevonDockTop + (CGFloat)i * gAevonDockStep,
+                                              gAevonDockW, gAevonDockH);
+                        AevonGuardDockGhostAdd(CGRectInset(r, -slop, -slop), now);
+                    }
+                }
+            }
+        }
+        gAevonDockLastRight = right;
+        gAevonDockLastLeft = left;
+    } @catch (NSException *exception) {
+    }
+}
 
 /// 点是否落在某一格停靠小窗上（外扩 3pt 容错，卡片的描边也能算进去）。
 ///
@@ -776,6 +847,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
 
     NSUInteger active = 0;
     NSUInteger swallowed = 0;
+    /* V0.0.72：每条事件先做一次停靠数量变化检测（幽灵格自动记录，轻量状态比较） */
+    AevonGuardDockGhostAutoRecord();
     for (UITouch *touch in touches) {
         UITouchPhase phase = [touch phase];
         if (phase == UITouchPhaseStationary) { continue; }
@@ -827,8 +900,29 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             if (hardZone) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
-            } else if (!CGRectIsEmpty(AevonGuardZone)
-                       && CGRectContainsPoint(AevonGuardZone, pt)) {
+            } else {
+                /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
+                 * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。 */
+                CGFloat sw2 = [UIScreen mainScreen].bounds.size.width;
+                if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
+                if (pt.x >= sw2 - gAevonDockW - 30.0) {
+                    static CFTimeInterval lastProbe = 0;
+                    CFTimeInterval now2 = CACurrentMediaTime();
+                    if (now2 - lastProbe > 1.0) {
+                        lastProbe = now2;
+                        NSUInteger r2 = 0, l2 = 0;
+                        AevonGuardDockCounts(&r2, &l2);
+                        AevonGuardWriteLog(NO, @"began 放行（x=%.0f,y=%.0f float=%d ring=%d rect=%d dockR=%lu ghost=%lu）",
+                                           pt.x, pt.y,
+                                           floatTouch ? 1 : 0,
+                                           ringOpen ? 1 : 0,
+                                           (hasFloatRect && CGRectContainsPoint(floatRect, pt)) ? 1 : 0,
+                                           (unsigned long)r2,
+                                           (unsigned long)gAevonDockGhostCount);
+                    }
+                }
+            }
+            if (!owned && !CGRectIsEmpty(AevonGuardZone)
                 /* V0.0.56：**热区改为「移动才吞」**。
                  *
                  * 热区（屏幕右边缘 18pt 宽、底边往上 258pt）是呼出圆盘用的，
@@ -857,6 +951,14 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                      * 位移还很小（仍是轻点）且此刻任一浮窗判据已成立，立刻接管。 */
                     AevonGuardSetTouchOwned(touch, YES);
                     owned = YES;
+                    /* V0.0.72：取证（限频 1s）——确认晚到重判真的在工作 */
+                    static CFTimeInterval lastRejudgeMoved = 0;
+                    CFTimeInterval now3 = CACurrentMediaTime();
+                    if (now3 - lastRejudgeMoved > 1.0) {
+                        lastRejudgeMoved = now3;
+                        AevonGuardWriteLog(NO, @"晚到重判接管（moved，位移 %.0fpt，x=%.0f,y=%.0f）",
+                                           hypot(dx, dy), now.x, now.y);
+                    }
                 }
             }
         }
@@ -875,6 +977,14 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             if (dist < 25.0 && AevonGuardLateRejudgeHit(now)) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
+                /* V0.0.72：取证（限频 1s）——ended 闸生效证据 */
+                static CFTimeInterval lastRejudgeEnded = 0;
+                CFTimeInterval now4 = CACurrentMediaTime();
+                if (now4 - lastRejudgeEnded > 1.0) {
+                    lastRejudgeEnded = now4;
+                    AevonGuardWriteLog(NO, @"晚到重判接管（ended，位移 %.0fpt，x=%.0f,y=%.0f）",
+                                       dist, now.x, now.y);
+                }
             }
         }
 
@@ -1001,6 +1111,9 @@ static void AevonGuardInstall(void) {
     AevonGuardWriteLog(YES, @"已注入进程 %@（bundle %@），sendEvent 拦截就绪（AevonGuardStateRingV34 AevonGuardLogV34 AevonGuardRingExactV37）",
                        [NSString stringWithUTF8String:getprogname() ?: "?"],
                        [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+    /* V0.0.72（AevonGuardGhostAutoV72）：版本取证 —— 驻留 App 进程 respring 后不会重启，
+     * 里面跑的可能还是旧版 Guard；下一轮日志靠版本号直接区分新旧进程。 */
+    AevonGuardWriteLog(YES, @"Guard 版本 V72 激活（晚到重判 + 幽灵自动记录）（AevonGuardGhostAutoV72）");
 }
 
 /*

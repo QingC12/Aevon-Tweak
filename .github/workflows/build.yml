@@ -945,6 +945,27 @@ jobs:
                   print(f"::error::V0.0.71 缺串: {s}"); sys.exit(1)
           print("V0.0.71 校验: Guard 晚到重判 + P1 第 4/5 步修复 已编入")
           PY71
+          # V0.0.72：P1 provider=SBMainWorkspace（sceneHandleProvider 非 nil 断言）+ Guard 幽灵自动记录/取证
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostAutoV72' \
+            || { echo "::error::V0.0.72 Guard 标记缺失: AevonGuardGhostAutoV72（幽灵自动记录）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSceneP1V72' \
+            || { echo "::error::V0.0.72 标记缺失: AevonSceneP1V72（P1 provider 修复）"; exit 1; }
+          python3 - "$DYLIB" <<'PY72'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonSceneP1V72","本体即 provider","_identity"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.72 缺串: {s}"); sys.exit(1)
+          print("V0.0.72 校验: P1 provider/displayID 修复 已编入")
+          PY72
+          python3 - "$GUARD_DYLIB" <<'PY72G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["晚到重判接管","began 放行","Guard 版本 V72 激活","幽灵自动"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.72 Guard 缺串: {s}"); sys.exit(1)
+          print("V0.0.72 校验: Guard 幽灵自动记录/取证/版本日志 已编入")
+          PY72G
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
