@@ -284,7 +284,14 @@ enum AevonSnap {
               windowSize.width > 1, windowSize.height > topPad + 1 else {
             return (1, .zero)
         }
-        let crop = max(0, min(cropTop ?? AevonSnap.cropTop, screen.height * 0.2))
+        // V0.0.59（AevonTrueResizeV59）：来源是真重排后的场景逻辑尺寸（≠整屏）时，
+        // **不再裁顶部**——「状态栏空白」只存在于整屏场景（宿主 App 不画系统状态栏）；
+        // App 按小窗重排后顶部留白由它自己的安全区决定，裁了会切掉真实内容。
+        let adaptiveSource = source != nil
+            && (abs(source!.width - UIScreen.main.bounds.width) > 1
+                || abs(source!.height - UIScreen.main.bounds.height) > 1)
+        let crop = adaptiveSource ? 0
+            : max(0, min(cropTop ?? AevonSnap.cropTop, screen.height * 0.2))
         let usableHeight = max(screen.height * 0.5, screen.height - crop)
         let availH = max(1, windowSize.height - topPad)
         let byWidth = windowSize.width / screen.width

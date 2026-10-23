@@ -162,25 +162,54 @@ enum AevonSceneHelper {
         }
     }
 
-    // MARK: - 自适应场景尺寸（V0.0.55，AevonAdaptiveContentV55）
+    // MARK: - 真 resize（V0.0.59，AevonTrueResizeV59）
 
-    /// 场景标识 → 目标尺寸。由 `AevonSceneHost.updateAdaptiveSize` 写入，
+    /// 场景标识 → 目标尺寸。由 `AevonSceneHost` 写入，
     /// `AevonFBSceneHooks` 在系统推送新 settings 时按它把 frame 顶回去
     /// （否则 SpringBoard 一次布局更新就会把场景重置回整屏）。
     private static var adaptiveFrames: [String: CGSize] = [:]
 
-    static func applyAdaptiveFrame(scene: AnyObject, sceneID: String, size: CGSize) -> Bool {
-        guard !sceneID.isEmpty, size.width > 1, size.height > 1 else { return false }
-        let ok = AevonSceneSetFrameSize(scene, size)
-        if ok {
+    /// 把场景改成指定逻辑尺寸（帧 + displayConfiguration 一起下发）。
+    ///
+    /// V0.0.55 的教训：只写 frame 只会裁渲染视口（App 的 UIWindow 仍整屏，
+    /// 内容照旧按整屏排版 → 字变大右边被切）。V0.0.59 按 Mango 实证补上
+    /// displayConfiguration 与 `setResizesHostedContext:` 三路杠杆，
+    /// 结果位掩码原样落日志 —— 真机日志能直接看出哪一路生效（AevonTrueResizeV59）。
+    @discardableResult
+    static func applyDisplaySize(scene: AnyObject, sceneID: String, size: CGSize,
+                                 floatMode: Bool) -> Int {
+        guard !sceneID.isEmpty, size.width > 1, size.height > 1 else { return 0 }
+        let bits = AevonSceneApplyDisplaySize(scene, size, floatMode)
+        // 记录条件：diff 通道推出去了就记（0x40）—— 回读（0x80）可能因系统时序差一点，
+        // 但 FBScene 钩子要从**下一次**系统推送起就把 frame 顶回去，不能等回读确认。
+        if bits & 0x40 != 0 {
             adaptiveFrames[sceneID] = size
+        } else {
+            adaptiveFrames.removeValue(forKey: sceneID)
         }
-        return ok
+        return bits
+    }
+
+    /// 位掩码 → 人话（真机日志可读）。
+    static func describeApplyBits(_ bits: Int, target: CGSize) -> String {
+        guard bits != 0 else { return "完全失败（settings 不可写）" }
+        var parts: [String] = []
+        if bits & 0x1 != 0 { parts.append("帧已写") }
+        if bits & 0x2 != 0 { parts.append("旧显示配置在场") }
+        if bits & 0x4 != 0 { parts.append("显示配置尺寸已改(size)") }
+        if bits & 0x8 != 0 { parts.append("显示配置尺寸已改(sizeInPoints)") }
+        if bits & 0x10 != 0 { parts.append("显示配置已随帧下发") }
+        if bits & 0x20 != 0 { parts.append("托管上下文可resize已开") }
+        if bits & 0x40 != 0 { parts.append("diff通道已推") } else { parts.append("diff通道不可用") }
+        if bits & 0x80 != 0 { parts.append("回读一致") } else { parts.append("回读不一致") }
+        return "目标 \(Int(target.width))x\(Int(target.height))：\(parts.joined(separator: "·"))"
     }
 
     static func restoreSceneFrame(scene: AnyObject, sceneID: String) {
         if !sceneID.isEmpty { adaptiveFrames.removeValue(forKey: sceneID) }
-        _ = AevonSceneSetFrameSize(scene, UIScreen.main.bounds.size)
+        // V0.0.59：还原也带 displayConfiguration（floatMode=false 不再开 resize 开关）
+        _ = AevonSceneApplyDisplaySize(scene, UIScreen.main.bounds.size, false)
+        AevonLog.info("[场景] 场景几何已还原整屏（帧+显示配置一起下发，AevonTrueResizeV59）")
     }
 
     /// 按场景标识查目标尺寸（identifier 各系统版本前缀不同，做双向包含匹配）。

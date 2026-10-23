@@ -388,12 +388,9 @@ static NSArray *AevonBuildFallbackDetail(id target) {
         [result addObject:ringButton];
     }
 
-    /* V0.0.58（AevonCardVisPanV58）：小胖屏可视区位置（PullOverMF 同款） */
-    id groupPan = AevonNewGroup(@"小胖屏内容位置",
-                                @"0 = 贴顶（默认，顶栏完整），100 = 贴底（看抖音底栏就拉到这里）。");
-    if (groupPan != nil) [result addObject:groupPan];
-    id p1 = AevonNewSlider(@"内容位置：0 = 贴顶，100 = 贴底", target, @"CardVisPan", 0, 100, 0);
-    if (p1 != nil) [result addObject:p1];
+    /* V0.0.59（AevonNoPanSliderV59）：小胖屏可视区位置滑杆已移除 ——
+     * 真重排（App 按小窗尺寸排版）后顶栏/底栏/右侧工具栏原生在场，
+     * 不存在「竖向溢出选哪段」的问题，滑杆随之失去意义。 */
 
     id groupZone1 = AevonNewGroup(@"① 触发位置（底边锚定）",
                                   @"热区底边在屏幕高度的百分比。100% = 区底边贴住屏幕底部，"

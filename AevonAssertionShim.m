@@ -253,6 +253,20 @@ __attribute__((used)) static const char AevonPomoCoverV58Marker[] = "AevonPomoCo
 __attribute__((used)) static const char AevonCardVisPanV58Marker[] = "AevonCardVisPanV58";
 __attribute__((used)) static const char AevonPomoDefaultV58Marker[] = "AevonPomoDefaultV58";
 
+/* V0.0.59（真 resize + 关窗休眠修复）：
+ *   AevonTrueResizeV59     真 resize 开跑（TrollOpen/Mango 路线）：场景 settings
+ *                          帧 + displayConfiguration + setResizesHostedContext:
+ *                          三路杠杆一起下发，App 按小窗尺寸真重排
+ *   AevonReflowCheckV59    探测自证：App 画布变成目标尺寸才确认，5 秒未确认
+ *                          自动回退整屏等比缩放（最坏 = V58 形态）
+ *   AevonFrontmostCloseV59 关窗休眠修复：浮窗 App 即当前全屏前台 App 时跳过
+ *                          sleep()（修「关掉浮窗后屏幕无法滑动」）
+ *   AevonNoPanSliderV59    小胖屏可视区滑杆移除（真重排后无溢出可调） */
+__attribute__((used)) static const char AevonTrueResizeV59Marker[] = "AevonTrueResizeV59";
+__attribute__((used)) static const char AevonReflowCheckV59Marker[] = "AevonReflowCheckV59";
+__attribute__((used)) static const char AevonFrontmostCloseV59Marker[] = "AevonFrontmostCloseV59";
+__attribute__((used)) static const char AevonNoPanSliderV59Marker[] = "AevonNoPanSliderV59";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

@@ -60,43 +60,105 @@ final class AevonSceneHost {
         presentationView.isUserInteractionEnabled = enabled
     }
 
-    // MARK: - 自适应尺寸（V0.0.55 引入，V0.0.57 停用）
+    // MARK: - 真 resize（V0.0.59，AevonTrueResizeV59）
 
-    /// V0.0.57（AevonNoSceneResizeV57）：**恒为 false**。
+    /// V0.0.57 曾把这条路线整条停用（只改 frame = 只裁渲染视口）。
+    /// V0.0.59 按 Mango 实证补齐 displayConfiguration + `setResizesHostedContext:`
+    /// 三路杠杆重开 —— 且加了**探测自证**：场景写完之后，呈现视图里 App 的实际
+    /// 画布尺寸若没有跟着变成目标尺寸（App 真的重排了），5 秒内自动回退到
+    /// 整屏等比缩放（V58 形态），最坏情况 = 上一版行为，绝不会更糟。
     ///
-    /// 改场景 frame 这件事本身能成功（日志「内容自适应已生效：场景改为 267x458」），
-    /// 但它只改**渲染视口**：App 的 UIWindow 仍然是 430×932，内容照旧按整屏排版，
-    /// 视口只露出左边 62% —— 用户看到的就是「字被放大、右边被切、抖音右侧工具栏消失」。
-    /// 在 App 进程里改 keyWindow.frame 也救不回来（抖音按 UIScreen 排版），
-    /// 而且关窗后小窗口残留 → 全屏打开大面积黑屏（Aevon(51) 第 4 条）。
-    /// 所以这条路线整条停用，回到整屏等比缩放。
+    /// 「场景已按我们的请求改小」的目标尺寸（App 应当按它排版）。
     private(set) var adaptiveContentSize: CGSize = .zero
 
-    var isAdaptiveContent: Bool { false }
+    /// 探测确认：App 的画布真的变成了 adaptiveContentSize（重排成功）。
+    private(set) var contentReflowConfirmed = false
 
-    /// 内容来源尺寸：V0.0.57 起恒为整屏（不再改场景 / 窗口）。
+    var isAdaptiveContent: Bool { adaptiveContentSize != .zero && contentReflowConfirmed }
+
+    /// 内容来源尺寸：确认重排后 = 场景逻辑尺寸（scale=1 原生显示）；
+    /// 未确认 / 回退 = 整屏（V58 等比缩放路径）。
     var sourceSize: CGSize {
-        UIScreen.main.bounds.size
+        if isAdaptiveContent { return adaptiveContentSize }
+        return UIScreen.main.bounds.size
     }
 
-    /// 保留签名（调用点已经删掉），只用来打一行「本版不再改场景尺寸」的说明。
-    @discardableResult
-    func updateAdaptiveSize(_ size: CGSize) -> Bool {
-        if !Self.loggedNoResize {
-            Self.loggedNoResize = true
-            AevonLog.info("[场景] 本版不再改场景 / 窗口尺寸：只裁渲染视口会让内容按整屏排版后"
-                + "被切掉右边（字变大、右侧工具栏消失），关窗残留还会导致全屏黑屏；"
-                + "改为整屏等比完整显示（永不裁切）（AevonNoSceneResizeV57 AevonContentFitV57）")
+    /// 请求场景按指定逻辑尺寸重排。bits=0 表示垫片层完全失败。
+    func updateAdaptiveSize(_ size: CGSize, reason: String) {
+        guard size.width > 1, size.height > 1 else { return }
+        let bits = AevonSceneHelper.applyDisplaySize(scene: scene, sceneID: sceneID,
+                                                     size: size, floatMode: true)
+        if bits == 0 {
+            AevonLog.warn("[场景] 真重排请求被垫片拒绝（\(reason)，AevonTrueResizeV59）")
+            return
         }
-        return false
+        adaptiveContentSize = size
+        contentReflowConfirmed = false
+        reflowCheckTicks = 0
+        reflowCheckTarget = size
+        reflowChecking = true
+        // 探测定时器可能早已停止（首帧确认后就停了）：重启它，确认/回退后自然再停。
+        startSyncing()
+        AevonLog.info("[场景] 真重排请求已下发（\(AevonSceneHelper.describeApplyBits(bits, target: size))"
+            + "，\(reason)，等探测确认，AevonTrueResizeV59）")
     }
 
-    private static var loggedNoResize = false
-
-    /// 关窗时清掉跨进程的窗口尺寸状态（V0.0.56 遗留通道，留着「归零」以防旧版残留）。
+    /// 关窗 / 还原：场景恢复整屏（帧+显示配置一起还原）。
     func resetAdaptiveSize() {
+        guard adaptiveContentSize != .zero || AevonSceneHelper.adaptiveFrame(for: sceneID) != nil else {
+            AevonNotifySetWindowSize(0, 0)
+            return
+        }
+        adaptiveContentSize = .zero
+        contentReflowConfirmed = false
+        reflowChecking = false
+        AevonSceneHelper.restoreSceneFrame(scene: scene, sceneID: sceneID)
         AevonNotifySetWindowSize(0, 0)
     }
+
+    /// 探测状态（probe 每 0.5s 一次）
+    private var reflowChecking = false
+    private var reflowCheckTicks = 0
+    private var reflowCheckTarget: CGSize = .zero
+
+    /// probe 里调用：确认 App 画布是否真的变成了目标尺寸。
+    /// 确认 → contentReflowConfirmed = true（内容管线切 1:1 原生）；
+    /// 10 次探测（5 秒）仍未确认 → 自动回退整屏等比缩放（V58 形态）。
+    private func checkReflow() {
+        guard reflowChecking, adaptiveContentSize != .zero else { return }
+        reflowCheckTicks += 1
+        let inner = presentationView.subviews.first?.frame.size ?? .zero
+        let outer = presentationView.bounds.size
+        let target = reflowCheckTarget
+        // App 真重排的证据：呈现视图或其首个子视图的尺寸 ≈ 目标（±2pt）。
+        // 注意不能只看外层 —— 那是 presentationView 自己的 frame，我们随时可以改；
+        // 必须是「里面的内容」自己变成了小窗尺寸。
+        let innerOK = inner.width > 1 && abs(inner.width - target.width) <= 2
+            && abs(inner.height - target.height) <= 2
+        let outerOK = outer.width > 1 && abs(outer.width - target.width) <= 2
+            && abs(outer.height - target.height) <= 2
+        if innerOK || outerOK {
+            contentReflowConfirmed = true
+            reflowChecking = false
+            AevonLog.info("[场景] App 已按小窗尺寸重新排版（画布 \(Int(innerOK ? inner.width : outer.width))"
+                + "x\(Int(innerOK ? inner.height : outer.height)) ≈ 目标 \(Int(target.width))x\(Int(target.height))"
+                + "，顶栏/底栏/右侧工具栏原生在场，内容 1:1 显示）（AevonReflowCheckV59）")
+            onReflowChanged?()
+            return
+        }
+        if reflowCheckTicks >= 10 {
+            reflowChecking = false
+            adaptiveContentSize = .zero
+            contentReflowConfirmed = false
+            AevonLog.warn("[场景] 5 秒内未确认 App 重排（画布 \(Int(inner.width))x\(Int(inner.height))"
+                + " ≠ 目标 \(Int(target.width))x\(Int(target.height))），自动回退整屏等比缩放"
+                + "（场景拒绝真 resize：帧+显示配置+托管开关三路都未让 App 重排）（AevonReflowCheckV59）")
+            onReflowChanged?()
+        }
+    }
+
+    /// 重排状态翻转时回调（窗口视图据此重算内容管线）。
+    var onReflowChanged: (() -> Void)?
 
     init?(scene: AnyObject, sceneID: String, bundleID: String) {
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
@@ -165,6 +227,10 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         ticks += 1
 
+        // V0.0.59（AevonReflowCheckV59）：真重排确认走这里 —— 每 0.5s 看一眼
+        // App 的画布有没有真的变成目标尺寸，确认或超时回退都会翻转状态。
+        checkReflow()
+
         if !hasContent && contentLooksAlive() {
             hasContent = true
             // 记下呈现视图与首个子视图的实际尺寸：两者比例不一致就说明系统在内部留边
@@ -178,6 +244,8 @@ final class AevonSceneHost {
         }
 
         if hasContent {
+            // V0.0.59：重排确认期内不能停探测（确认/回退后这里自然变 false）
+            if reflowChecking { return }
             if ticks >= 2 { stopProbing() }
             return
         }
@@ -234,6 +302,7 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         invalidated = true
         onFirstContent = nil
+        onReflowChanged = nil
         teardownPresenter()
         AevonLog.info("[场景] 已释放 presenter（\(bundleID)）")
     }

@@ -67,6 +67,9 @@ __attribute__((used)) static const char AevonGuardTouchMarkV56Marker[] = "AevonG
 __attribute__((used)) static const char AevonGuardFloatRectV56Marker[] = "AevonGuardFloatRectV56";
 /// CI 标记（V0.0.57）：停用 App 窗口改写 —— 只保留「还原整屏」的单向兜底
 __attribute__((used)) static const char AevonNoWinResizeV57Marker[] = "AevonNoWinResizeV57";
+/// CI 标记（V0.0.59）：浮窗手势期状态位白名单补 0x36 —— V56 重构时漏了新版本号，
+/// bit48 自 V54 起整条失效（SB 写 0x36，Guard 只认 0x34/0x35）
+__attribute__((used)) static const char AevonGuardFloatBit36V59Marker[] = "AevonGuardFloatBit36V59";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -152,8 +155,12 @@ static BOOL AevonGuardFloatTouch(void) {
     if (token < 0) { onSince = 0; return NO; }
     uint64_t pack = 0;
     notify_get_state(token, &pack);
+    /* V0.0.59（AevonGuardFloatBit36V59）：白名单补 0x36。
+     * V0.0.54 起 SB 写的版本号是 0x36，这里却只认 0x34/0x35 —— 于是浮窗手势期
+     * （bit48）整条失效，Guard 只能靠浮窗矩形 / 停靠格两条几何判据兜底。
+     * 补上后恢复「手指压在浮窗上 → App 进程整屏吞」的 V49 语义（8 秒防呆保留）。 */
     uint64_t ver = (pack >> 40) & 0xFFULL;
-    if ((ver != 0x34ULL && ver != 0x35ULL) || ((pack >> 48) & 1ULL) == 0) {
+    if ((ver != 0x34ULL && ver != 0x35ULL && ver != 0x36ULL) || ((pack >> 48) & 1ULL) == 0) {
         onSince = 0;
         return NO;
     }

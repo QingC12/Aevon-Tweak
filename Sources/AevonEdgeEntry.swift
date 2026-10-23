@@ -438,13 +438,13 @@ enum AevonEdgeEntry {
         syncGuardConfig()
     }
 
-    /// V0.0.58（AevonCardVisPanV58）：内容模式 / 小胖屏可视区位置指纹。
-    /// 变了就让所有浮窗按新偏好立即重排内容（0.2s 轮询 + prefschanged 都会调）。
+    /// V0.0.58（AevonCardVisPanV58）→ V0.0.59（AevonNoPanSliderV59）：
+    /// 内容模式指纹。滑杆已移除，指纹只看「完整显示内容」开关 ——
+    /// 它改变窗口比例，主窗场景要按新比例重新排版（真重排）。
     private static var contentModeSignature = ""
 
     static func checkContentModeChange() {
         let signature = "\(AevonPrefs.bool("FullContent", default: false))"
-            + "|\(Int(AevonPrefs.double("CardVisPan", default: 0)))"
         // 首次只是记录基线（启动时没有必要重排）
         if contentModeSignature.isEmpty {
             contentModeSignature = signature
@@ -453,8 +453,8 @@ enum AevonEdgeEntry {
         guard signature != contentModeSignature else { return }
         contentModeSignature = signature
         AevonEntryHost.refreshContentLayoutForPrefs()
-        AevonLog.info("[窗口] 内容模式 / 小胖屏可视区位置已更新，浮窗内容立即重排"
-            + "（签名 \(signature)，AevonCardVisPanV58）")
+        AevonLog.info("[窗口] 内容模式已更新，浮窗内容与场景重排立即生效"
+            + "（签名 \(signature)，AevonCardVisPanV58 AevonTrueResizeV59）")
     }
 
     /// V0.0.32（AevonGuardNotifyV32）：把当前热区几何同步给 AevonGuard。

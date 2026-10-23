@@ -733,6 +733,47 @@ jobs:
               sys.exit(1)
           print("V0.0.58 校验: PullOverMF 同款小胖屏（可视区铺满 + 位置可调）已编入")
           PY58
+
+          # ── V0.0.59：真 resize（TrollOpen/Mango 路线：帧 + displayConfiguration +
+          #            setResizesHostedContext: 三路杠杆，App 按小窗尺寸真重排）+
+          #            探测自证 / 自动回退 + 关窗休眠修复（前台 App 跳过 sleep）+
+          #            小胖屏可视区滑杆移除 ──
+          for m in AevonTrueResizeV59 AevonReflowCheckV59 AevonFrontmostCloseV59 \
+                   AevonNoPanSliderV59; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.59 标记缺失: $m"; exit 1; }
+          done
+          # 真重排垫片必须真的在调 displayConfiguration / setResizesHostedContext:
+          strings "$DYLIB" | grep -q 'setDisplayConfiguration:' \
+            || { echo "::error::V0.0.59 缺 setDisplayConfiguration:（Mango 实证的关键杠杆没编入）"; exit 1; }
+          strings "$DYLIB" | grep -q 'setResizesHostedContext:' \
+            || { echo "::error::V0.0.59 缺 setResizesHostedContext:（Stheno 同款托管开关没编入）"; exit 1; }
+          python3 - "$DYLIB" <<'PY59'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["App 已按小窗尺寸重新排版",
+                  "自动回退整屏等比缩放",
+                  "跳过场景休眠、保持前台",
+                  "真重排请求已下发",
+                  "内容模式=完整显示", "内容模式=小胖屏铺满",
+                  "可视区位置", "PullOverMF 同款",
+                  "0.600 小胖屏", "铺满裁切", "内容按宽度铺满",
+                  "停靠小窗小胖屏 3:5", "整屏等比缩放",
+                  "停靠列落地校验"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.59 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          # V0.0.59：滑杆已移除 —— Detail.plist 层面在下面 plutil 段校验
+          print("V0.0.59 校验: 真重排（三路杠杆+探测自证）+ 前台关窗跳过休眠 已编入")
+          PY59
+          DETAIL_PLIST_V59="$(find . -name 'Detail.plist' -path '*AevonPrefs.bundle*' | head -n1)"
+          if plutil -convert xml1 -o - "$DETAIL_PLIST_V59" | grep -q 'CardVisPan'; then
+            echo "::error::Detail.plist 仍残留小胖屏可视区滑杆（V0.0.59 已移除）"
+            exit 1
+          fi
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardFloatBit36V59' \
+            || { echo "::error::V0.0.59 Guard 缺浮窗期状态位 0x36 白名单修复（AevonGuardFloatBit36V59）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

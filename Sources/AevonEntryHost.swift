@@ -89,6 +89,14 @@ enum AevonEntryHost {
     /// 当前 App 场景的容器视图（弱引用；App 关掉后自动失效）
     static private(set) weak var appSceneView: UIView?
 
+    /// 当前全屏前台场景的标识（V0.0.59，AevonFrontmostCloseV59）。
+    ///
+    /// 由 `AevonSceneVCDidAppear` 从 `SBDeviceApplicationSceneViewController` 上探测
+    /// （scene / representedScene → identifier）。用它判断「浮窗的 App 是不是就是
+    /// 当前全屏前台的那个 App」—— 是的话关窗绝不能把场景睡掉，否则前台 App 被设为
+    /// 后台：画面停在最后一帧、触摸不再投递 = 用户说的「关掉浮窗后屏幕无法滑动」。
+    static private(set) var appSceneIdentity: String?
+
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
 
@@ -111,13 +119,15 @@ enum AevonEntryHost {
         return false
     }
 
-    /// V0.0.58（AevonCardVisPanV58）：设置里改了「完整显示内容 / 小胖屏内容位置」后
-    /// 让所有浮窗立即按新偏好重排内容（PullOverMF 的可视中心也是改设置立刻生效）。
+    /// V0.0.58（AevonCardVisPanV58）→ V0.0.59：设置里改了「完整显示内容」后
+    /// 让所有浮窗立即重排 —— 内容管线打脏之外，主窗场景还要按新比例
+    /// 重新排版（真重排：比例变了场景逻辑尺寸必须跟着变）。
     static func refreshContentLayoutForPrefs() {
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
         for view in layer.subviews {
             guard let win = view as? AevonWindowView else { continue }
             win.invalidateContentLayout()
+            win.applySceneResize(reason: "内容模式变更")
         }
     }
 
@@ -653,12 +663,16 @@ enum AevonEntryHost {
     /// 这是 V0.0.22 解决「全屏 App 里看不到触发条」的关键：
     /// SpringBoard 的前台 App 画面不是 UIWindow，而是挂在这个控制器的 view 里，
     /// 窗口层级对它无效；把容器直接塞进同一个 view 才能压在上面。
-    static func appSceneAppeared(_ view: UIView, reason: String) {
+    static func appSceneAppeared(_ view: UIView, reason: String, identity: String? = nil) {
         guard container != nil else { return }
         // App 切换器里的小卡片、分屏窄条、被推到后台的场景容器都不接管，
         // 只认「真的铺满整屏、并且确实在窗口里显示着」的那一个。
         guard coversScreen(view) else { return }
         appSceneView = view
+        // V0.0.59（AevonFrontmostCloseV59）：记下全屏前台场景的标识
+        if let identity = identity, !identity.isEmpty {
+            appSceneIdentity = identity
+        }
         attach(to: view, reason: reason)
         // 场景出现后系统会继续往这个 view 里塞内容，延后再顶一次
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -692,6 +706,7 @@ enum AevonEntryHost {
     static func appSceneDisappeared(_ view: UIView) {
         guard appSceneView === view else { return }
         appSceneView = nil
+        appSceneIdentity = nil
         attachToWindowRoot(reason: "App 场景消失")
     }
 
@@ -847,13 +862,37 @@ enum AevonEntryHost {
 
 // MARK: - C 入口（供 AevonSceneHook.m 调用）
 
+/// 从 `SBDeviceApplicationSceneViewController` 上多策略探测它承载的场景标识
+/// （V0.0.59，AevonFrontmostCloseV59）。拿不到返回 nil（只影响关窗休眠的精确性，
+/// 不影响任何显示功能）。
+private func aevonSceneIdentity(fromVC vc: UIViewController) -> String? {
+    for name in ["scene", "representedScene", "hostScene", "_scene"] {
+        let sel = Selector((name))
+        guard vc.responds(to: sel), let scene = AevonRuntime.send(vc, sel) else { continue }
+        for key in ["identifier", "persistentIdentifier"] {
+            if let id = AevonRuntime.send(scene, Selector((key))) as? String, !id.isEmpty {
+                return id
+            }
+        }
+        for ivar in ["_identifier", "_persistentIdentifier", "_sceneIdentifier"] {
+            if let id = AevonRuntime.ivarString(scene, ivar), !id.isEmpty { return id }
+        }
+    }
+    for ivar in ["_sceneIdentifier", "_sceneID"] {
+        if let id = AevonRuntime.ivarString(vc, ivar), !id.isEmpty { return id }
+    }
+    return nil
+}
+
 /// App 画面容器出现：把它交给宿主，容器会搬进去，从而压在全屏 App 之上。
 @_cdecl("AevonSceneVCDidAppear")
 public func AevonSceneVCDidAppear(_ vc: UIViewController) {
     guard vc.isViewLoaded else { return }
     let view = vc.view!
+    let identity = aevonSceneIdentity(fromVC: vc)
     DispatchQueue.main.async {
-        AevonEntryHost.appSceneAppeared(view, reason: "App 画面进入（AevonSceneVCHookV22）")
+        AevonEntryHost.appSceneAppeared(view, reason: "App 画面进入（AevonSceneVCHookV22）",
+                                        identity: identity)
     }
 }
 

@@ -105,6 +105,9 @@ enum AevonWindowManager {
             // V0.0.48（AevonFloatAnimV48）：入场动画 —— 从下方 22pt 处浮上来 + 淡入。
             // 只动位置和透明度、不动尺寸，所以不会触发内容缩放，第一帧不会闪黑。
             windowView.playEntryAnimation()
+            // V0.0.59（AevonTrueResizeV59）：开窗即请求场景按小窗尺寸真重排 ——
+            // App 自己按小窗排版，顶栏/底栏/右侧工具栏原生在场（场景拒绝会自动回退）。
+            windowView.applySceneResize(reason: "开窗")
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)
@@ -222,7 +225,24 @@ enum AevonWindowManager {
         // V0.0.48（AevonFloatAnimV48）：先播退场动画，动画结束再休眠场景 + 拆视图。
         // 顺序不能反 —— 先把场景睡掉，动画中途画面就变黑了。
         windowView.playDismissAnimation {
-            AevonSceneHelper.sleep(bundleID)
+            // V0.0.59（AevonFrontmostCloseV59）：**关的是当前全屏前台的那个 App 自己时，
+            // 绝不能把它睡掉。**
+            //
+            // 用户长期问题：「全屏 App 里打开悬浮窗，双击底边关闭后屏幕无法滑动」。
+            // 根因就在无条件 `sleep()`：它把场景 settings.foreground 写成 false ——
+            // 当浮窗的 App 恰好就是全屏前台的那个 App（用户在 A 里把 A 浮窗化），
+            // 这等于把正在显示的 App 设成了后台：画面停在最后一帧、触摸不再投递，
+            // 屏幕自然滑不动。现在按「全屏前台场景标识」精确跳过休眠，
+            // 场景保持前台（几何已由 teardown 还原整屏），App 立刻恢复交互。
+            if AevonEntryHost.mountedInAppScene,
+               let identity = AevonEntryHost.appSceneIdentity,
+               identity.contains(bundleID) {
+                AevonLog.info("[窗口] 浮窗 App 即当前全屏前台 App：跳过场景休眠、保持前台"
+                    + "（\(bundleID)，几何已还原整屏，修复关窗后屏幕无法滑动）"
+                    + "（AevonFrontmostCloseV59）")
+            } else {
+                AevonSceneHelper.sleep(bundleID)
+            }
             windowView.teardown()
             // V0.0.56：视图已拆 → 必须重算主窗矩形重新下发。
             // 漏掉这一步，Guard 会一直以为那块屏幕还盖着浮窗，把 App 的触摸白白吞掉
