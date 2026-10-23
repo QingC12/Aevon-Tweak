@@ -13,6 +13,43 @@ enum AevonSnapSlot: String {
     case right
 }
 
+/// 主悬浮窗形态（V0.0.51，AevonWindowShapeV51）。
+///
+/// 用户 Aevon(44) 第 3 条：「Stheno 中主悬浮窗有一个功能，点击右下角会改变窗口尺寸，
+/// 我们可以复刻吗？……现在的桌面等比例窗口看起来非常细长」。
+///
+/// 细长的根因：高度一直被钉死成「宽度 ÷ 屏宽高比」—— 266 宽的窗必须 560 高才叫"整屏等比"，
+/// 于是永远是 1:2.1 的细长条。Stheno 的逆向键里有 `_heightScale` / `_userHeightScale` /
+/// `_systemHeightScale` 三个**独立于宽度的高度缩放**，说明它的高度本来就是一个自由度，
+/// 所谓"点右下角变形"就是在几档高度比例之间切换。
+///
+/// 这里复刻两档：`tall`（旧形态，整屏等比）↔ `card`（卡片，默认）。
+enum AevonWindowShape: String {
+    /// 整屏等比（V0.0.50 及以前的行为）：内容 1:1 铺满，不裁切
+    case tall
+    /// 卡片（V0.0.51 默认）：约 3:4，比整屏矮一截，内容底部裁掉一部分
+    case card
+
+    var label: String {
+        switch self {
+        case .tall: return "整屏"
+        case .card: return "卡片"
+        }
+    }
+
+    /// 内容可视区宽高比（宽 ÷ 高）
+    func contentAspect(screen: CGRect) -> CGFloat {
+        switch self {
+        case .tall:
+            let usable = max(screen.height * 0.6, screen.height - AevonSnap.cropTop)
+            return screen.width / usable
+        case .card:
+            // 3:4.17 —— 视觉上接近系统卡片，不再细长
+            return 0.72
+        }
+    }
+}
+
 /// 吸附与安全区几何（V0.0.44，AevonSthenoDockV44）。
 ///
 /// 按 Stheno 主浮窗的百分比几何模型（逆向键：`leftPecent` / `rightPecent` /
@@ -112,7 +149,7 @@ enum AevonSnap {
         let slotGap = obstacleGap * CGFloat(max(1, dockMaxCount - 1))
         let maxH = (avail - slotGap) / CGFloat(max(1, dockMaxCount))
         var height = min(dockHeight(forWidth: dockWidth), maxH)
-        var width = (height - titleBarHeight - contentTopPadding) * dockAspect
+        var width = (height - titleBarHeight - dockTopPadding) * dockAspect
         if width < dockSlotMinWidth {
             width = dockSlotMinWidth
             height = dockHeight(forWidth: width)
@@ -140,6 +177,14 @@ enum AevonSnap {
     /// 看起来像把内容截断了；顶部那条之所以要留，是因为窗口圆角会啃掉导航栏返回按钮的角。
     /// 底部没有需要保护的控件（内容底边距窗口底边本来就有 home indicator 区），所以归零。
     static let contentBottomPadding: CGFloat = 0
+
+    /// 停靠态顶部留白 = **0**（V0.0.51，AevonDockNoTopBarV51）。
+    ///
+    /// 用户 Aevon(44) 第 1 条：「停靠小窗的顶部出现黑条」。
+    /// 主窗那 14pt 是为圆角保护导航栏返回按钮的；停靠小窗只有 158pt 高，
+    /// 14pt 的深色边占了 9%，而小窗圆角只有 8pt，根本不需要这层保护 ——
+    /// 于是在小窗顶部就是一条死黑。停靠态改为 0，内容直接铺到顶边。
+    static let dockTopPadding: CGFloat = 0
 
     /// 停靠小窗的内容宽高比（V0.0.47，AevonDock916V47）= 9:16。
     ///
@@ -170,13 +215,28 @@ enum AevonSnap {
         return height > 800 ? 59 : 20
     }
 
-    /// 内容可视区的宽高比 = 屏宽 ÷（屏高 − 顶部裁剪量）。
-    /// iPhone 15 Pro Max：430 ÷ (932 − 51) ≈ 0.4875。
+    /// 内容可视区的宽高比 = 屏宽 ÷（屏高 − 顶部裁剪量），按当前形态取值。
+    /// iPhone 15 Pro Max：整屏形态 430 ÷ (932 − 51) ≈ 0.4875；卡片形态 0.72。
     static var aspect: CGFloat {
         let screen = UIScreen.main.bounds
         guard screen.width > 1, screen.height > 1 else { return 9.0 / 19.5 }
-        let usableHeight = max(screen.height * 0.6, screen.height - cropTop)
-        return screen.width / usableHeight
+        return shape.contentAspect(screen: screen)
+    }
+
+    /// 主窗形态的存取键（V0.0.51）。全窗共享一份，和几何记忆一样是全局的。
+    static let shapeKey = "AevonWindowShapeLast"
+
+    /// 主窗形态（V0.0.51）。默认卡片 —— 用户嫌整屏等比太细长。
+    static var shape: AevonWindowShape {
+        get {
+            guard let store = UserDefaults(suiteName: "com.Aevon"),
+                  let raw = store.string(forKey: shapeKey),
+                  let value = AevonWindowShape(rawValue: raw) else { return .card }
+            return value
+        }
+        set {
+            UserDefaults(suiteName: "com.Aevon")?.set(newValue.rawValue, forKey: shapeKey)
+        }
     }
 
     /// 窗口高度 = 内容高度 + 上下留白（V0.0.46）
@@ -191,7 +251,7 @@ enum AevonSnap {
     /// 两者混用就是旧版「小窗又瘦又高」的来源 —— 停靠窗比屏幕内容区更宽，
     /// 所以宽度贴合后底部会裁掉一截（被 `clipsToBounds` 吃掉），换来整体尺寸明显变小。
     static func dockHeight(forWidth width: CGFloat) -> CGFloat {
-        return width / max(0.2, dockAspect) + titleBarHeight + contentTopPadding
+        return width / max(0.2, dockAspect) + titleBarHeight + dockTopPadding
     }
 
     /// 安全区最大宽度（左右各留 edgeInset）
@@ -456,4 +516,9 @@ enum AevonMotion {
     /// 停靠列重排（只动 y）：轻、快，不抢停靠动画的视线
     static let columnDuration: TimeInterval = 0.36
     static let columnDamping: CGFloat = 0.86
+
+    /// 形态切换（V0.0.51，AevonWindowShapeV51）：只改高度，锚在左上角。
+    /// 比停靠略快一点 —— 这是用户主动点出来的，要"立刻有反馈"。
+    static let shapeDuration: TimeInterval = 0.38
+    static let shapeDamping: CGFloat = 0.86
 }

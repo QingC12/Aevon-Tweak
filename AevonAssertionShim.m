@@ -181,6 +181,16 @@ __attribute__((used)) static const char AevonDockFillAnimV50Marker[] = "AevonDoc
 __attribute__((used)) static const char AevonDockPassThroughV50Marker[] = "AevonDockPassThroughV50";
 __attribute__((used)) static const char AevonDockShadowV50Marker[] = "AevonDockShadowV50";
 
+/* V0.0.51 CI 标记（Aevon(44) 的 4 条反馈）：
+ * AevonDockNoTopBarV51 = 停靠小窗顶部留白归零（修「小窗顶部黑条」）；
+ * AevonSingleMainV51   = 只允许一个主悬浮窗，旧主窗自动吸附成停靠小窗（修还原时堆叠）；
+ * AevonIdleNoLockV51   = 有浮窗时压住系统空闲锁屏（看视频不再自动黑屏）；
+ * AevonWindowShapeV51  = 主窗形态（整屏 ↔ 卡片），右下角轻点切换；默认卡片不再细长。 */
+__attribute__((used)) static const char AevonDockNoTopBarV51Marker[] = "AevonDockNoTopBarV51";
+__attribute__((used)) static const char AevonSingleMainV51Marker[] = "AevonSingleMainV51";
+__attribute__((used)) static const char AevonIdleNoLockV51Marker[] = "AevonIdleNoLockV51";
+__attribute__((used)) static const char AevonWindowShapeV51Marker[] = "AevonWindowShapeV51";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

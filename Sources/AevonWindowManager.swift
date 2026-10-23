@@ -108,6 +108,11 @@ enum AevonWindowManager {
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)
+            // V0.0.51（AevonSingleMainV51）：新窗是"唯一主窗"，旧的主窗自动吸附成停靠小窗。
+            // 圆盘选图标开新窗走的正是这条路径，于是天然满足用户第 2 条要求。
+            AevonEntryHost.demoteMainWindows(except: windowView)
+            // 有新窗 → 需要压住系统空闲锁屏（看视频时不能黑屏）
+            AevonIdleGuard.shared.refresh()
 
             // presenter 激活后画面是异步出来的，由承载器自己探测首帧
             sceneHost.startSyncing()
@@ -217,6 +222,8 @@ enum AevonWindowManager {
         windowView.playDismissAnimation {
             AevonSceneHelper.sleep(bundleID)
             windowView.teardown()
+            // 真正拆完视图后再判定（退场动画期间窗还在，计数不能提前减）
+            AevonIdleGuard.shared.refresh()
         }
         AevonLog.info("[窗口] \(bundleID) 已关闭（缩放缓出退场）（AevonFloatAnimV48）")
     }

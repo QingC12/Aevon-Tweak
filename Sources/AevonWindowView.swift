@@ -386,7 +386,9 @@ final class AevonWindowView: UIView {
         isAnimatingGeometry = true
         let screenW = max(1, UIScreen.main.bounds.width)
         let scale = target.width / screenW
-        let topPad = AevonSnap.contentTopPadding
+        // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
+        // 目标若是停靠态（本窗已 isDocked）就用 dockTopPadding，否则用主窗的 14pt。
+        let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
         let cropTop = AevonSnap.cropTop
         let container = sceneHost.container
         let radius = AevonWindowView.cornerRadius(forWidth: target.width)
@@ -566,7 +568,8 @@ final class AevonWindowView: UIView {
         // V0.0.47（AevonNoBottomPadV47）：底部那条深色边已删除（任何 App 里都是死黑），
         // 所以内容一直铺到窗口底边 —— 裁剪交给 contentClip 的 clipsToBounds。
         let cropTop = AevonSnap.cropTop
-        let topPad = AevonSnap.contentTopPadding
+        // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）
+        let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
 
         let clipSize = contentClip.bounds.size
         if abs(clipSize.width - lastClipSize.width) < 0.01,
@@ -718,7 +721,10 @@ final class AevonWindowView: UIView {
                 : (edges.contains(.right) ? 0.0 : 0.5)
             let ay: CGFloat = edges.contains(.top) ? 1.0
                 : (edges.contains(.bottom) ? 0.0 : 0.5)
-            beginLiveResize(anchor: CGPoint(x: ax, y: ay))
+            // V0.0.51（AevonWindowShapeV51）：按下**不**进入实时缩放。
+            // 右下角轻点现在是「切换窗口形态」，若按下就关投影 + 重设圆角，
+            // 轻点时画面会闪一下。改成越过 10pt 阈值（真正开始缩放）才进入。
+            resizeAnchor = CGPoint(x: ax, y: ay)
         }
         parent.bringSubviewToFront(self)
     }
@@ -732,7 +738,8 @@ final class AevonWindowView: UIView {
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner:
-            break
+            // V0.0.51：越阈值才真正进入实时缩放（见 `grabBegin` 的说明）
+            beginLiveResize(anchor: resizeAnchor)
         }
     }
 
@@ -940,6 +947,7 @@ final class AevonWindowView: UIView {
 
     /// 进入「实时缩放」：记锚点、暂时关投影，圆角与裁剪一律保留。
     private func beginLiveResize(anchor: CGPoint) {
+        if isLiveResizing { return }
         isLiveResizing = true
         resizeAnchor = anchor
         resizeStepCount = 0
@@ -1064,6 +1072,29 @@ final class AevonWindowView: UIView {
         snap(to: slot)
     }
 
+    /// 切换主窗形态（V0.0.51，AevonWindowShapeV51）。
+    ///
+    /// 复刻 Stheno「点右下角改变窗口尺寸」：宽度**不变**，只换高度比例，
+    /// 在「整屏等比（细长）」和「卡片（约 3:4）」之间来回切，锚点固定在左上角，
+    /// 所以窗口不会上下乱跳。切换结果写进 `AevonSnap.shape`（全局记忆），
+    /// 之后新开的窗也是这个形态。
+    func toggleShape() {
+        guard !isDocked, !isDismissing, !isAnimatingGeometry else { return }
+        let next: AevonWindowShape = (AevonSnap.shape == .card) ? .tall : .card
+        AevonSnap.shape = next
+        let height = min(AevonSnap.height(forWidth: frame.width), AevonSnap.maxHeight)
+        var target = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: height)
+        target = AevonSnap.clamped(target)
+        animateGeometry(to: target,
+                        duration: AevonMotion.shapeDuration,
+                        damping: AevonMotion.shapeDamping) { [weak self] in
+            self?.persistFrame()
+        }
+        AevonLog.info("[窗口] 右下角轻点 → 窗口形态切换为「\(next.label)」"
+            + " \(Int(target.width))x\(Int(target.height))"
+            + "（宽度不变、只改高度，锚点左上角 · 弹簧动画）（AevonWindowShapeV51）")
+    }
+
     /// 还原成主悬浮窗：**位置和尺寸都回到停靠前那一块**。
     ///
     /// V0.0.47（AevonRestorePosV47）：Aevon(40)「主悬浮窗吸附停靠后，点击还原时
@@ -1075,6 +1106,9 @@ final class AevonWindowView: UIView {
         // V0.0.50：停靠动画还没结束就再点一下（手指快）时直接忽略，
         // 否则两段几何动画叠在一起，落点会算错。
         guard !isAnimatingGeometry, !isDismissing else { return }
+        // V0.0.51（AevonSingleMainV51）：先让其它主悬浮窗自动吸附成停靠小窗，
+        // 街上只留自己这一个主窗 —— 否则几个窗都会回到同一份几何记忆（同一点）上叠起来。
+        AevonEntryHost.demoteMainWindows(except: self)
         var target: CGRect
         if let previous = preDockFrame,
            previous.width > AevonSnap.minContentWidth,

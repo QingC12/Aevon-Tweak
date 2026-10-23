@@ -145,6 +145,46 @@ enum AevonEntryHost {
         return list.sorted { $0.frame.minY < $1.frame.minY }
     }
 
+    /// 当前浮窗总数（含停靠小窗）。用于「有浮窗时禁止系统空闲锁屏」。
+    static var floatingWindowCount: Int {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return 0 }
+        var count = 0
+        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+            if view is AevonWindowView { count += 1 }
+        }
+        return count
+    }
+
+    /// 只允许一个主悬浮窗（V0.0.51，AevonSingleMainV51）。
+    ///
+    /// 用户 Aevon(44) 第 2 条：「点击小窗还原成主悬浮窗时，它会依次堆叠在一起，
+    /// 我建议只能有一个主悬浮窗；主悬浮窗打开时，再次点击停靠小窗或者操作圆盘选中图标时，
+    /// 主悬浮窗的应用自动吸附停靠」。
+    ///
+    /// 堆叠的真正原因：所有新窗 / 还原窗都恢复**同一份**全局几何记忆
+    /// （日志里全是 `58,164 266x560`），于是几个主窗逐点重合，视觉上就是"叠在一起"。
+    /// 现在把「除自己之外的所有自由态窗」全部自动吸附成停靠小窗 ——
+    /// 街上永远只有一个主窗，且旧的自动让位，不需要用户手动整理。
+    @discardableResult
+    static func demoteMainWindows(except keep: AevonWindowView?) -> Int {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return 0 }
+        var demoted = 0
+        for view in layer.subviews {
+            guard let win = view as? AevonWindowView else { continue }
+            if win === keep { continue }
+            guard !win.isHidden, win.alpha > 0.01, !win.isDocked else { continue }
+            // 停到离它当前位置最近的一侧；在屏幕中间（两侧都够远）就默认右侧
+            let slot = AevonSnap.slot(for: win.frame) ?? .right
+            win.snap(to: slot)
+            demoted += 1
+        }
+        if demoted > 0 {
+            AevonLog.info("[窗口] 只允许一个主悬浮窗：\(demoted) 个旧主窗已自动吸附成停靠小窗"
+                + "（AevonSingleMainV51）")
+        }
+        return demoted
+    }
+
     /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。
     ///
     /// 用户 Aevon(43)：「第一个小窗在屏幕右上角、距离顶部 10% 处，然后向下依次类推，

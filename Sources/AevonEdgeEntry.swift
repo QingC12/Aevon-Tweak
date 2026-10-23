@@ -857,8 +857,11 @@ enum AevonEdgeEntry {
             // 先不移动：到底是「轻点停靠 / 还原」还是「长按移动」，要等抬手/阈值才知道
             AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点停靠/还原）（AevonSthenoGestureV44）")
         case .corner:
-            floatEngaged = true
-            AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
+            // V0.0.51（AevonWindowShapeV51）：按下先不进入缩放 —— 下角块现在一口气管两件事：
+            // 拖动 = 缩放，轻点 = 切换窗口形态（复刻 Stheno 右下角变形）。
+            // 要等越过阈值才知道是哪一种。
+            AevonLog.info("[窗口] 下角块按下 \(Int(point.x)),\(Int(point.y))"
+                + "（拖动缩放 · 轻点切换形态）（AevonWindowShapeV51）")
         case .bottom:
             AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
         case .body:
@@ -909,6 +912,8 @@ enum AevonEdgeEntry {
             win.rebaseGrab(at: AevonEntryHost.floatLayerPoint(fromScreen: point))
             if case .some(.bottom) = floatGrab {
                 AevonLog.info("[窗口] 底边条拖动 → 移动窗口 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV44）")
+            } else if case .some(.corner) = floatGrab {
+                AevonLog.info("[窗口] 下角块拖动 → 缩放 \(Int(point.x)),\(Int(point.y))（AevonLiveResizeV44）")
             } else {
                 AevonLog.info("[窗口] 侧条开始移动 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV44）")
             }
@@ -951,7 +956,16 @@ enum AevonEdgeEntry {
                     win.grabCancel()
                 }
             case .corner:
-                win.grabEnd(at: layerPoint, commit: true)
+                // V0.0.51（AevonWindowShapeV51）：轻点 = 切换窗口形态（整屏 ↔ 卡片）；
+                // 拖过阈值才是缩放。轻点要走 `grabCancel`，把「只按下没缩放」的基准丢掉。
+                if isTap {
+                    win.grabCancel()
+                    win.toggleShape()
+                    AevonLog.info("[窗口] 右下角轻点 → 切换形态（按住 \(Int(elapsed * 1000))ms，"
+                        + "位移 \(Int(moved))pt）（AevonWindowShapeV51）")
+                } else {
+                    win.grabEnd(at: layerPoint, commit: true)
+                }
             case .bottom:
                 if floatEngaged {
                     // V0.0.44：底边条拖动 = 移动窗口（用户 Aevon(37) 指定）
