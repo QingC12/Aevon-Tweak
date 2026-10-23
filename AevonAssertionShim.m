@@ -191,6 +191,11 @@ __attribute__((used)) static const char AevonSingleMainV51Marker[] = "AevonSingl
 __attribute__((used)) static const char AevonIdleNoLockV51Marker[] = "AevonIdleNoLockV51";
 __attribute__((used)) static const char AevonWindowShapeV51Marker[] = "AevonWindowShapeV51";
 
+// V0.0.52：主窗只保留小胖屏一档 + 内容宽高双向完整适配 + 右下角只缩放
+__attribute__((used)) static const char AevonFatWindowV52Marker[] = "AevonFatWindowV52";
+__attribute__((used)) static const char AevonFitContentV52Marker[] = "AevonFitContentV52";
+__attribute__((used)) static const char AevonNoShapeTapV52Marker[] = "AevonNoShapeTapV52";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

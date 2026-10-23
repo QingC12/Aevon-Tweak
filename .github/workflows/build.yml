@@ -576,12 +576,29 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["只允许一个主悬浮窗", "已压住系统空闲锁屏", "窗口形态切换为", "下角块按下"]
+          need = ["只允许一个主悬浮窗", "已压住系统空闲锁屏", "停靠小窗窗身按下", "全局通道开始拖动（缩放）"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.51 日志串: " + ", ".join(miss))
               sys.exit(1)
-          print("V0.0.51 校验: 小窗无顶黑条 + 单一主窗 + 空闲锁屏 + 形态切换 已编入")
+          print("V0.0.51 校验: 小窗无顶黑条 + 单一主窗 + 空闲锁屏 已编入")
+          PY
+
+          # ── V0.0.52：小胖屏唯一形态 / 内容完整适配 / 右下角只缩放 ──
+          for m in AevonFatWindowV52 AevonFitContentV52 AevonNoShapeTapV52; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.52 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["小胖屏 3:5", "内容完整适配不裁底", "右下角只缩放",
+                  "点击切换形态已移除", "停靠小窗窗身按下"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.52 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.52 校验: 小胖屏唯一形态 + 内容完整适配 + 右下角只缩放 已编入")
           PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }

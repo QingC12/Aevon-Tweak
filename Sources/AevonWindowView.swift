@@ -321,10 +321,11 @@ final class AevonWindowView: UIView {
         layoutGestureHandles()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角缩放，"
-            + "内容比例 \(String(format: "%.3f", aspect))（已去掉顶部状态栏空白），"
+            + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角只缩放，"
+            + "主窗形态：小胖屏 3:5（唯一形态，其余比例已移除），"
+            + "内容比例 \(String(format: "%.3f", aspect))，内容完整适配不裁底（AevonFitContentV52），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
-            + "\(sizeSource)）（AevonSthenoGestureV44）")
+            + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
     }
 
     required init?(coder: NSCoder) {
@@ -385,11 +386,16 @@ final class AevonWindowView: UIView {
         guard target.width > 1, target.height > 1 else { completion?(); return }
         isAnimatingGeometry = true
         let screenW = max(1, UIScreen.main.bounds.width)
-        let scale = target.width / screenW
         // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
         // 目标若是停靠态（本窗已 isDocked）就用 dockTopPadding，否则用主窗的 14pt。
         let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
         let cropTop = AevonSnap.cropTop
+        // V0.0.52（AevonFitContentV52）：动画中间态的缩放也必须和 `applyContentScale`
+        // 用同一条公式，否则动画期按宽度、落位后按完整适配，画面会在结束的一瞬间跳一下。
+        let scale = AevonSnap.contentScale(windowWidth: target.width,
+                                          clipHeight: target.height,
+                                          topPad: topPad)
+        let xOffset = (target.width - screenW * scale) / 2.0
         let container = sceneHost.container
         let radius = AevonWindowView.cornerRadius(forWidth: target.width)
         let clipTarget = CGRect(origin: .zero, size: target.size)
@@ -415,7 +421,7 @@ final class AevonWindowView: UIView {
             self.contentClip.layer.cornerRadius = radius
             self.layer.shadowOpacity = 0
             container.transform = CGAffineTransform(scaleX: scale, y: scale)
-            container.layer.position = CGPoint(x: 0, y: topPad - cropTop * scale)
+            container.layer.position = CGPoint(x: xOffset, y: topPad - cropTop * scale)
             if let a = targetAlpha { self.alpha = a }
             self.layoutGestureHandles()
         }
@@ -551,17 +557,22 @@ final class AevonWindowView: UIView {
         return false
     }
 
-    /// 把整屏尺寸的容器等比铺满内容区，并把顶部状态栏那条空白裁掉。
+    /// 把整屏尺寸的容器等比铺进内容区，并把顶部状态栏那条空白裁掉。
     ///
     /// V0.0.44（AevonSthenoDockV44）：`scale` 只由宽度决定，场景整体上移
     /// `visualTopInset * scale` —— 宿主 App 不画状态栏，那块在浮窗里是纯空白，
     /// 上移之后窗口顶部就是 App 真正的第一行内容（用户 Aevon(37) 的核心抱怨）。
+    ///
+    /// V0.0.52（AevonFitContentV52）：**改成宽高双向完整适配**。
+    /// Aevon(45)：「复刻的 Stheno 多形态窗口改成小胖屏时，内容展示不完整，
+    /// 丢失下半部分（例如应用底栏）」—— 旧公式只管宽度，窗口一矮内容就纵向溢出，
+    /// 底栏被 `clipsToBounds` 直接吃掉。现在取「按宽度」与「按高度」两个比例的**较小值**：
+    /// 内容永远完整，宽度方向多余的部分左右均分（窗口深色底），高度方向贴顶不留白。
     private func applyContentScale() {
         let screen = UIScreen.main.bounds.size
         guard screen.width > 0, screen.height > 0,
               contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
 
-        let scale = contentClip.bounds.width / screen.width
         // V0.0.46（AevonTopCropV46 AevonFloatPaddingV46）：
         // 裁的是 `cropTop`（状态栏空白 − 8pt，保证导航栏一行不缺），
         // 内容整体再往下让 `contentTopPadding`，窗口圆角就啃不到左上角的返回按钮。
@@ -572,6 +583,13 @@ final class AevonWindowView: UIView {
         let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
 
         let clipSize = contentClip.bounds.size
+        // V0.0.52：宽、高各自能容纳的比例取小值 → 内容完整
+        let scale = AevonSnap.contentScale(windowWidth: clipSize.width,
+                                           clipHeight: clipSize.height,
+                                           topPad: topPad)
+        // 内容比窗口窄时左右均分留边（贴左会在右边留一大块，看着像错位）
+        let xOffset = (clipSize.width - screen.width * scale) / 2.0
+
         if abs(clipSize.width - lastClipSize.width) < 0.01,
            abs(clipSize.height - lastClipSize.height) < 0.01,
            abs(scale - lastAppliedScale) < 0.0001,
@@ -594,7 +612,7 @@ final class AevonWindowView: UIView {
             container.bounds = targetBounds
         }
         container.transform = CGAffineTransform(scaleX: scale, y: scale)
-        container.layer.position = CGPoint(x: 0, y: topPad - cropTop * scale)
+        container.layer.position = CGPoint(x: xOffset, y: topPad - cropTop * scale)
     }
 
     // MARK: - 手势区（V0.0.43，AevonSthenoGestureV43）
@@ -721,10 +739,11 @@ final class AevonWindowView: UIView {
                 : (edges.contains(.right) ? 0.0 : 0.5)
             let ay: CGFloat = edges.contains(.top) ? 1.0
                 : (edges.contains(.bottom) ? 0.0 : 0.5)
-            // V0.0.51（AevonWindowShapeV51）：按下**不**进入实时缩放。
-            // 右下角轻点现在是「切换窗口形态」，若按下就关投影 + 重设圆角，
-            // 轻点时画面会闪一下。改成越过 10pt 阈值（真正开始缩放）才进入。
-            resizeAnchor = CGPoint(x: ax, y: ay)
+            // V0.0.52（AevonNoShapeTapV52）：恢复「按下即进入实时缩放」。
+            // V0.0.51 曾把按下延后到越阈值，为的是让右下角轻点能切换窗口形态；
+            // 现在形态切换与轻点手势都已删除，右下角只负责缩放 —— 越晚进入缩放，
+            // 手感就越「黏」，所以改回按下立即进入（轻点不再有任何副作用）。
+            beginLiveResize(anchor: CGPoint(x: ax, y: ay))
         }
         parent.bringSubviewToFront(self)
     }
@@ -738,8 +757,10 @@ final class AevonWindowView: UIView {
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner:
-            // V0.0.51：越阈值才真正进入实时缩放（见 `grabBegin` 的说明）
-            beginLiveResize(anchor: resizeAnchor)
+            // V0.0.52：缩放已在 `grabBegin` 里就绪，越阈值只需把基准点对齐到当前点，
+            // 否则第一帧会按旧基准算出一段位移（窗口「跳一下」）。
+            resizeOriginFrame = frame
+            resizeOriginPoint = layerPoint
         }
     }
 
@@ -1072,28 +1093,12 @@ final class AevonWindowView: UIView {
         snap(to: slot)
     }
 
-    /// 切换主窗形态（V0.0.51，AevonWindowShapeV51）。
+    /// 切换主窗形态 —— **V0.0.52 已删除**（AevonNoShapeTapV52）。
     ///
-    /// 复刻 Stheno「点右下角改变窗口尺寸」：宽度**不变**，只换高度比例，
-    /// 在「整屏等比（细长）」和「卡片（约 3:4）」之间来回切，锚点固定在左上角，
-    /// 所以窗口不会上下乱跳。切换结果写进 `AevonSnap.shape`（全局记忆），
-    /// 之后新开的窗也是这个形态。
-    func toggleShape() {
-        guard !isDocked, !isDismissing, !isAnimatingGeometry else { return }
-        let next: AevonWindowShape = (AevonSnap.shape == .card) ? .tall : .card
-        AevonSnap.shape = next
-        let height = min(AevonSnap.height(forWidth: frame.width), AevonSnap.maxHeight)
-        var target = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: height)
-        target = AevonSnap.clamped(target)
-        animateGeometry(to: target,
-                        duration: AevonMotion.shapeDuration,
-                        damping: AevonMotion.shapeDamping) { [weak self] in
-            self?.persistFrame()
-        }
-        AevonLog.info("[窗口] 右下角轻点 → 窗口形态切换为「\(next.label)」"
-            + " \(Int(target.width))x\(Int(target.height))"
-            + "（宽度不变、只改高度，锚点左上角 · 弹簧动画）（AevonWindowShapeV51）")
-    }
+    /// Aevon(45)：「如果可以的话，主悬浮窗默认尺寸改为小胖屏，移除其他的比例
+    /// （同时移除右下角点击手势，保留缩放手势）」。
+    /// 现在只存在小胖屏一档（`AevonSnapWindowShape.fatAspect = 0.60`），
+    /// 右下角角块只负责拖动缩放，点击不再有任何动作。
 
     /// 还原成主悬浮窗：**位置和尺寸都回到停靠前那一块**。
     ///

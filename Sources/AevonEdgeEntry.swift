@@ -857,11 +857,12 @@ enum AevonEdgeEntry {
             // 先不移动：到底是「轻点停靠 / 还原」还是「长按移动」，要等抬手/阈值才知道
             AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点停靠/还原）（AevonSthenoGestureV44）")
         case .corner:
-            // V0.0.51（AevonWindowShapeV51）：按下先不进入缩放 —— 下角块现在一口气管两件事：
-            // 拖动 = 缩放，轻点 = 切换窗口形态（复刻 Stheno 右下角变形）。
-            // 要等越过阈值才知道是哪一种。
-            AevonLog.info("[窗口] 下角块按下 \(Int(point.x)),\(Int(point.y))"
-                + "（拖动缩放 · 轻点切换形态）（AevonWindowShapeV51）")
+            // V0.0.52（AevonNoShapeTapV52）：下角块**只做缩放**。
+            // V0.0.51 曾让它「拖动缩放 / 轻点切形态」，现已按用户要求删掉点击手势，
+            // 于是按下就可以直接算作拖动，不用再等阈值判断是哪一种。
+            floatEngaged = true
+            AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))"
+                + "（右下角只缩放 · 点击切换形态已移除）（AevonNoShapeTapV52）")
         case .bottom:
             AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
         case .body:
@@ -956,16 +957,10 @@ enum AevonEdgeEntry {
                     win.grabCancel()
                 }
             case .corner:
-                // V0.0.51（AevonWindowShapeV51）：轻点 = 切换窗口形态（整屏 ↔ 卡片）；
-                // 拖过阈值才是缩放。轻点要走 `grabCancel`，把「只按下没缩放」的基准丢掉。
-                if isTap {
-                    win.grabCancel()
-                    win.toggleShape()
-                    AevonLog.info("[窗口] 右下角轻点 → 切换形态（按住 \(Int(elapsed * 1000))ms，"
-                        + "位移 \(Int(moved))pt）（AevonWindowShapeV51）")
-                } else {
-                    win.grabEnd(at: layerPoint, commit: true)
-                }
+                // V0.0.52（AevonNoShapeTapV52）：右下角只缩放，没有点击分支。
+                // 轻点等于「按下即缩放但没位移」，几何没变，直接走 grabEnd 收尾即可
+                // （它会重算圆角 / 投影并落盘，不会产生任何形状变化）。
+                win.grabEnd(at: layerPoint, commit: true)
             case .bottom:
                 if floatEngaged {
                     // V0.0.44：底边条拖动 = 移动窗口（用户 Aevon(37) 指定）
