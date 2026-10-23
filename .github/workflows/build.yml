@@ -961,9 +961,10 @@ jobs:
           python3 - "$GUARD_DYLIB" <<'PY72G'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["晚到重判接管","began 放行","Guard 版本 V72 激活","幽灵自动"]:
-              if s.encode('utf-8') not in data:
-                  print(f"::error::V0.0.72 Guard 缺串: {s}"); sys.exit(1)
+          # Guard 中文串在 __ustring 段，是 UTF-16-LE 编码（历史铁律），不能用 utf-8 查
+          for s in ["晚到重判接管","began 放行","Guard 版本 V72 激活"]:
+              if s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.72 Guard 缺串(utf16): {s}"); sys.exit(1)
           print("V0.0.72 校验: Guard 幽灵自动记录/取证/版本日志 已编入")
           PY72G
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
