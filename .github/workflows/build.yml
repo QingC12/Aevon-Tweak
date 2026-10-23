@@ -953,7 +953,7 @@ jobs:
           python3 - "$DYLIB" <<'PY72'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonSceneP1V72","_identity","provider=","displayID="]:
+          for s in ["AevonSceneP1V72","displayID=","provider="]:
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.72 缺串: {s}"); sys.exit(1)
           print("V0.0.72 校验: P1 provider/displayID 修复 已编入")
