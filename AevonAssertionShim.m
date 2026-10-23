@@ -267,6 +267,13 @@ __attribute__((used)) static const char AevonReflowCheckV59Marker[] = "AevonRefl
 __attribute__((used)) static const char AevonFrontmostCloseV59Marker[] = "AevonFrontmostCloseV59";
 __attribute__((used)) static const char AevonNoPanSliderV59Marker[] = "AevonNoPanSliderV59";
 
+/* V0.0.60（真 resize 假阳性修复）：
+ *   AevonReflowGateV60  探测硬闸门：displayConfiguration 写不进 settings 就整单
+ *                       放弃（不写 frame 不推 diff，场景保持整屏），自动回退
+ *                       V58 整屏等比缩放 —— 修「内容放大 + 显示不全」
+ *                       （V59 探测假阳性 + 只推 frame 的组合症状）。 */
+__attribute__((used)) static const char AevonReflowGateV60Marker[] = "AevonReflowGateV60";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

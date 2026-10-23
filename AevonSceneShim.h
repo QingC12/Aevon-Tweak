@@ -39,15 +39,22 @@ BOOL AevonSceneFrameSupported(id scene);
 /* ── V0.0.59（AevonTrueResizeV59）：帧 + 显示配置一起下发 ── */
 
 // 结果位掩码（Swift 侧按位打日志）：
-//   bit0  frame 写入成功
-//   bit1  旧 displayConfiguration 读到了
-//   bit2  displayConfiguration 尺寸写入成功（size 键）
-//   bit3  displayConfiguration 尺寸写入成功（sizeInPoints 键）
-//   bit4  setDisplayConfiguration: 下发成功
-//   bit5  setResizesHostedContext: 接受（YES）
-//   bit6  updateSettings diff 通道接受
-//   bit7  回读 frame 与目标一致
+//   0x01 frame 写入成功
+//   0x02 旧 displayConfiguration 读到了
+//   0x04 displayConfiguration 尺寸写入成功（size / _size 通道）
+//   0x08 displayConfiguration 尺寸写入成功（sizeInPoints / _sizeInPoints 通道）
+//   0x10 setDisplayConfiguration: 下发成功
+//   0x20 setResizesHostedContext: 接受（YES）
+//   0x40 updateSettings diff 通道接受
+//   0x80 回读 frame 与目标一致
+// V0.0.60（AevonReflowGateV60）新增写入策略位：
+//   0x100 策略=旧配置拷贝 / 0x200 策略=原对象直写 / 0x400 策略=新建配置
+// 硬闸门：displayConfiguration 写不进 → 只返回 0x02+策略诊断位，
+//         **不写 frame、不推 diff**（V55 教训：单推 frame = 裁视口 = 内容放大显示不全）。
 int AevonSceneApplyDisplaySize(id scene, CGSize size, BOOL floatMode);
+
+/// 最近一次 displayConfiguration 诊断串（类名 + 能力表），供日志使用。
+const char *AevonDisplayConfigDiag(void);
 
 /// 读场景 displayConfiguration 里的尺寸（拿不到返回 CGSizeZero，仅诊断用）。
 CGSize AevonSceneDisplaySize(id scene);

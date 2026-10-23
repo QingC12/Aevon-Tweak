@@ -181,14 +181,21 @@ enum AevonSceneHelper {
         guard !sceneID.isEmpty, size.width > 1, size.height > 1 else { return 0 }
         let bits32 = AevonSceneApplyDisplaySize(scene, size, floatMode)
         let bits = Int(bits32)
-        // 记录条件：diff 通道推出去了就记（0x40）—— 回读（0x80）可能因系统时序差一点，
-        // 但 FBScene 钩子要从**下一次**系统推送起就把 frame 顶回去，不能等回读确认。
-        if bits & 0x40 != 0 {
+        // V0.0.60（AevonReflowGateV60）记录条件收紧：displayConfiguration 真正
+        // 写进 settings 并下发（0x10）才记 —— 写不进时垫片整单放弃（不写 frame
+        // 不推 diff），FBScene 钩子绝不顶回小窗 frame（那正是「内容放大 + 显示
+        // 不全」的 V55 裁视口症状）。此时场景保持整屏，走 V58 等比缩放回退。
+        if bits & 0x10 != 0 {
             adaptiveFrames[sceneID] = size
         } else {
             adaptiveFrames.removeValue(forKey: sceneID)
         }
         return bits
+    }
+
+    /// 最近一次 displayConfiguration 诊断（类名 + 能力表，垫片侧记录）。
+    static func displayConfigDiag() -> String {
+        String(cString: AevonDisplayConfigDiag())
     }
 
     /// 位掩码 → 人话（真机日志可读）。
@@ -203,6 +210,10 @@ enum AevonSceneHelper {
         if bits & 0x20 != 0 { parts.append("托管上下文可resize已开") }
         if bits & 0x40 != 0 { parts.append("diff通道已推") } else { parts.append("diff通道不可用") }
         if bits & 0x80 != 0 { parts.append("回读一致") } else { parts.append("回读不一致") }
+        // V0.0.60：写入策略（哪条路把尺寸写进去的）
+        if bits & 0x100 != 0 { parts.append("策略=拷贝旧配置") }
+        if bits & 0x200 != 0 { parts.append("策略=原对象直写") }
+        if bits & 0x400 != 0 { parts.append("策略=新建配置") }
         return "目标 \(Int(target.width))x\(Int(target.height))：\(parts.joined(separator: "·"))"
     }
 

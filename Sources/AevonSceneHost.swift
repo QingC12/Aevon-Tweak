@@ -92,6 +92,24 @@ final class AevonSceneHost {
             AevonLog.warn("[场景] 真重排请求被垫片拒绝（\(reason)，AevonTrueResizeV59）")
             return
         }
+        // V0.0.60（AevonReflowGateV60）硬闸门：displayConfiguration 没写进
+        // settings（0x10 未置位）= App 进程拿不到小窗显示配置，**绝不会重排**。
+        // 垫片此时也已整单放弃（没写 frame、没推 diff），场景保持整屏 ——
+        // 这里直接回退 V58 整屏等比缩放，绝不进入 1:1 分支。
+        // （V0.0.59 的「内容放大 + 显示不全」= 探测假阳性 + 只推 frame 的组合：
+        //   presentationView 首子视图是我们自己的承载容器，永远等于目标尺寸，
+        //   第 1 次探测就假确认，于是 1:1 分支吃到了 430x932 的整屏画面。）
+        guard bits & 0x10 != 0 else {
+            adaptiveContentSize = .zero
+            contentReflowConfirmed = false
+            reflowChecking = false
+            AevonLog.warn("[场景] displayConfiguration 未能写入场景（\(reason)，"
+                + "\(AevonSceneHelper.describeApplyBits(bits, target: size))，"
+                + "诊断 \(AevonSceneHelper.displayConfigDiag())）"
+                + "—— 场景保持整屏，回退整屏等比缩放（AevonTrueResizeV60）")
+            onReflowChanged?()
+            return
+        }
         adaptiveContentSize = size
         contentReflowConfirmed = false
         reflowCheckTicks = 0
@@ -128,20 +146,30 @@ final class AevonSceneHost {
         guard reflowChecking, adaptiveContentSize != .zero else { return }
         reflowCheckTicks += 1
         let inner = presentationView.subviews.first?.frame.size ?? .zero
-        let outer = presentationView.bounds.size
         let target = reflowCheckTarget
-        // App 真重排的证据：呈现视图或其首个子视图的尺寸 ≈ 目标（±2pt）。
-        // 注意不能只看外层 —— 那是 presentationView 自己的 frame，我们随时可以改；
-        // 必须是「里面的内容」自己变成了小窗尺寸。
+        // App 真重排的证据：呈现视图内的首个子视图尺寸 ≈ 目标（±2pt）。
+        // V0.0.60（AevonReflowGateV60）二道闸：只在 displayConfiguration 已成功
+        // 下发（0x10，updateAdaptiveSize 已把关）后才会走到这里 —— 外层 frame
+        // 是我们自己随时能改的，绝不能作为确认证据；同时子树里只要还有比目标
+        // 大一圈的内容视图（App 仍在按整屏渲染的残留证据），一律不予确认。
+        var oversizedFound = false
+        var queue = presentationView.subviews
+        var visited = 0
+        while visited < 64, let view = queue.popLast() {
+            visited += 1
+            if view.frame.width > target.width + 20 || view.frame.height > target.height + 20 {
+                oversizedFound = true
+                break
+            }
+            queue.append(contentsOf: view.subviews)
+        }
         let innerOK = inner.width > 1 && abs(inner.width - target.width) <= 2
             && abs(inner.height - target.height) <= 2
-        let outerOK = outer.width > 1 && abs(outer.width - target.width) <= 2
-            && abs(outer.height - target.height) <= 2
-        if innerOK || outerOK {
+        if innerOK && !oversizedFound {
             contentReflowConfirmed = true
             reflowChecking = false
-            AevonLog.info("[场景] App 已按小窗尺寸重新排版（画布 \(Int(innerOK ? inner.width : outer.width))"
-                + "x\(Int(innerOK ? inner.height : outer.height)) ≈ 目标 \(Int(target.width))x\(Int(target.height))"
+            AevonLog.info("[场景] App 已按小窗尺寸重新排版（画布 \(Int(inner.width))"
+                + "x\(Int(inner.height)) ≈ 目标 \(Int(target.width))x\(Int(target.height))"
                 + "，顶栏/底栏/右侧工具栏原生在场，内容 1:1 显示）（AevonReflowCheckV59）")
             onReflowChanged?()
             return

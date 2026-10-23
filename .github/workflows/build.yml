@@ -774,6 +774,28 @@ jobs:
           fi
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardFloatBit36V59' \
             || { echo "::error::V0.0.59 Guard 缺浮窗期状态位 0x36 白名单修复（AevonGuardFloatBit36V59）"; exit 1; }
+
+          # ── V0.0.60：真 resize 假阳性修复（探测硬闸门：displayConfiguration
+          #            写不进 settings 就整单放弃，场景保持整屏，自动回退 V58
+          #            等比缩放 —— 修「内容放大 + 显示不全」）──
+          strings "$DYLIB" | grep -q 'AevonReflowGateV60' \
+            || { echo "::error::V0.0.60 标记缺失: AevonReflowGateV60"; exit 1; }
+          python3 - "$DYLIB" <<'PY60'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["场景保持整屏，回退整屏等比缩放",
+                  "displayConfiguration 未能写入场景",
+                  # V59 历史串必须原样保留
+                  "App 已按小窗尺寸重新排版",
+                  "自动回退整屏等比缩放",
+                  "真重排请求已下发"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.60 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.60 校验: 探测硬闸门 + 干净回退 已编入")
+          PY60
+
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <math.h>
+#import <stdio.h>
 
 /// 场景尺寸改写（V0.0.55）。全部私有 API，全部走运行时探测 + 异常保护。
 
@@ -136,64 +137,158 @@ static id AevonSceneDisplayConfiguration(id settings) {
     }
 }
 
-/// 尽力把一个 displayConfiguration 的逻辑尺寸改成 target。
-/// 成功返回新对象（调用方负责 setDisplayConfiguration: 下发），失败返回 nil。
-static id AevonResizeDisplayConfiguration(id oldDC, CGSize target, int *outBits) {
+/* ── V0.0.60（AevonReflowGateV60）：displayConfiguration 写入重构 ──
+ *
+ * V0.0.59 真机日志（Aevon(53)）教训：位掩码只有 0x1|0x2|0x40|0x80 ——
+ *   size / sizeInPoints 写入（0x4/0x8）、setDisplayConfiguration:（0x10）全失败。
+ * 根因：旧代码只找 UIDisplayConfiguration 类做拷贝构造，而 settings.displayConfiguration
+ *   里的真实对象很可能是 FBSDisplayConfiguration（FrontBoard 系）—— 类找错了。
+ *   并且探测假阳性（测的是我们自己的承载视图）导致 1:1 分支吃到整屏画面 =
+ *   「内容放大 + 显示不全」。
+ * V0.0.60 三条硬规矩：
+ *   ① 以 oldDC 的真实类为操作对象，多策略写尺寸（拷贝/直写/新建），全记位；
+ *   ② 每次把 oldDC 的类名与能力表写进诊断串（AevonDisplayConfigDiag），日志直接看；
+ *   ③ displayConfiguration 写不进 → 整单放弃（绝不只推 frame —— 那是 V55 的
+ *      裁视口症状），Swift 侧据此自动回退整屏等比缩放（V58 形态）。
+ */
+
+static char s_dcDiag[224];
+
+/// 最近一次 displayConfiguration 诊断（类名 + 能力表），供 Swift 日志使用。
+const char *AevonDisplayConfigDiag(void) { return s_dcDiag; }
+
+static void AevonDcDiag(id obj) {
+    if (obj == nil) {
+        snprintf(s_dcDiag, sizeof(s_dcDiag), "class=nil（settings 没带 displayConfiguration）");
+        return;
+    }
+    const char *cls = object_getClassName(obj);
+    Class realClass = object_getClass(obj);
+    BOOL hasSetSize = [obj respondsToSelector:NSSelectorFromString(@"setSize:")];
+    BOOL hasSetPts = [obj respondsToSelector:NSSelectorFromString(@"setSizeInPoints:")];
+    BOOL hasCopy = [obj respondsToSelector:NSSelectorFromString(@"mutableCopy")];
+    BOOL hasDCInit = [realClass instancesRespondToSelector:NSSelectorFromString(@"initWithDisplayConfiguration:")];
+    snprintf(s_dcDiag, sizeof(s_dcDiag),
+             "class=%s setSize:%s sizeInPoints:%s mutableCopy:%s initWithDC:%s",
+             cls, hasSetSize ? "Y" : "N", hasSetPts ? "Y" : "N",
+             hasCopy ? "Y" : "N", hasDCInit ? "Y" : "N");
+}
+
+/// 尽力把 candidate 的逻辑尺寸改成 target。
+/// bit4 = size 写入 / bit8 = sizeInPoints 写入。全部失败返回 NO。
+static BOOL AevonWriteDcSize(id candidate, CGSize target, int *outBits) {
+    if (candidate == nil) { return NO; }
     @try {
-        Class cls = NSClassFromString(@"UIDisplayConfiguration");
-        if (cls == Nil) { return nil; }
-
-        /* 策略 1：从旧配置拷贝（保留 displayID / mode 等现场），再 KVC 改尺寸 */
-        id candidate = nil;
-        if (oldDC != nil) {
-            SEL copySel = NSSelectorFromString(@"initWithDisplayConfiguration:");
-            if ([cls instancesRespondToSelector:copySel]) {
-                id (*allocFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
-                id raw = allocFn(cls, NSSelectorFromString(@"alloc"));
-                id (*initFn)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
-                candidate = initFn(raw, copySel, oldDC);
-            }
-        }
-        /* 策略 2：全新配置（拷贝失败 / 没有旧配置时） */
-        if (candidate == nil) {
-            SEL initSel = NSSelectorFromString(@"init");
-            if ([cls instancesRespondToSelector:initSel]) {
-                id (*allocFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
-                id raw = allocFn(cls, NSSelectorFromString(@"alloc"));
-                id (*initFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
-                candidate = initFn(raw, initSel);
-            }
-        }
-        if (candidate == nil) { return nil; }
-
-        NSValue *boxed = [NSValue valueWithCGSize:target];
-        /* KVC 写尺寸：Foundation 对结构体 ivar 支持 NSValue 直写（_size / size 回退）。
-         * 只读属性也会因为 ivar 回退而成功 —— 写不进就 @catch 返回 nil。 */
         SEL setSel = NSSelectorFromString(@"setSize:");
         if ([candidate respondsToSelector:setSel]) {
             void (*fn)(id, SEL, CGSize) = (void (*)(id, SEL, CGSize))objc_msgSend;
             fn(candidate, setSel, target);
             *outBits |= 0x4;
-            return candidate;
+            return YES;
         }
+        NSValue *boxed = [NSValue valueWithCGSize:target];
         @try {
             [candidate setValue:boxed forKey:@"size"];
             *outBits |= 0x4;
-            return candidate;
+            return YES;
+        } @catch (NSException *unused) {}
+        @try {
+            [candidate setValue:boxed forKey:@"_size"];
+            *outBits |= 0x4;
+            return YES;
         } @catch (NSException *unused) {}
         SEL setPointsSel = NSSelectorFromString(@"setSizeInPoints:");
         if ([candidate respondsToSelector:setPointsSel]) {
             void (*fn)(id, SEL, CGSize) = (void (*)(id, SEL, CGSize))objc_msgSend;
             fn(candidate, setPointsSel, target);
             *outBits |= 0x8;
-            return candidate;
+            return YES;
         }
         @try {
             [candidate setValue:boxed forKey:@"sizeInPoints"];
             *outBits |= 0x8;
-            return candidate;
+            return YES;
         } @catch (NSException *unused) {}
-        if (candidate != nil && candidate != oldDC) { candidate = nil; }
+        @try {
+            [candidate setValue:boxed forKey:@"_sizeInPoints"];
+            *outBits |= 0x8;
+            return YES;
+        } @catch (NSException *unused) {}
+        return NO;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+static id AevonAllocInit(Class cls) {
+    if (cls == Nil) { return nil; }
+    id (*allocFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+    id raw = allocFn((id)cls, NSSelectorFromString(@"alloc"));
+    if (raw == nil) { return nil; }
+    id (*initFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+    return initFn(raw, NSSelectorFromString(@"init"));
+}
+
+/// 尽力把一个 displayConfiguration 的逻辑尺寸改成 target。
+/// 成功返回（可能就地改写的）配置对象，失败返回 nil。
+/// 策略位：0x100 = 旧配置拷贝 / 0x200 = 原对象直写 / 0x400 = 新建配置。
+static id AevonResizeDisplayConfiguration(id oldDC, CGSize target, int *outBits) {
+    @try {
+        AevonDcDiag(oldDC);
+        if (oldDC == nil) { return nil; }
+
+        /* 策略 A：旧配置 mutableCopy（保留 displayID / mode 现场）再写尺寸 */
+        SEL copySel = NSSelectorFromString(@"mutableCopy");
+        if ([oldDC respondsToSelector:copySel]) {
+            id (*doCopy)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+            id copied = doCopy(oldDC, copySel);
+            if (copied != nil && AevonWriteDcSize(copied, target, outBits)) {
+                *outBits |= 0x100;
+                return copied;
+            }
+        }
+
+        /* 策略 B：原对象直写（FBSDisplayConfiguration 这类可能本身可变；
+         * oldDC 本就来自我们刚 mutableCopy 出来的 settings，就地改无副作用） */
+        if (AevonWriteDcSize(oldDC, target, outBits)) {
+            *outBits |= 0x200;
+            return oldDC;
+        }
+
+        /* 策略 C：以真实类拷贝构造 / 新建（保留旧 UIDisplayConfiguration 兜底） */
+        Class realClass = object_getClass(oldDC);
+        SEL dcCopy = NSSelectorFromString(@"initWithDisplayConfiguration:");
+        id candidate = nil;
+        if ([realClass instancesRespondToSelector:dcCopy]) {
+            id (*allocFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+            id raw = allocFn((id)realClass, NSSelectorFromString(@"alloc"));
+            id (*initFn)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+            candidate = initFn(raw, dcCopy, oldDC);
+        }
+        if (candidate == nil) {
+            candidate = AevonAllocInit(realClass);
+        }
+        if (candidate != nil && AevonWriteDcSize(candidate, target, outBits)) {
+            *outBits |= 0x400;
+            return candidate;
+        }
+        Class ui = NSClassFromString(@"UIDisplayConfiguration");
+        if (ui != Nil && ui != realClass) {
+            candidate = nil;
+            if ([ui instancesRespondToSelector:dcCopy]) {
+                id (*allocFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+                id raw = allocFn((id)ui, NSSelectorFromString(@"alloc"));
+                id (*initFn)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+                candidate = initFn(raw, dcCopy, oldDC);
+            }
+            if (candidate == nil) {
+                candidate = AevonAllocInit(ui);
+            }
+            if (candidate != nil && AevonWriteDcSize(candidate, target, outBits)) {
+                *outBits |= 0x400;
+                return candidate;
+            }
+        }
         return nil;
     } @catch (NSException *exception) {
         return nil;
@@ -240,23 +335,30 @@ int AevonSceneApplyDisplaySize(id scene, CGSize size, BOOL floatMode) {
         id mutable = doCopy(settings, copySel);
         if (mutable == nil) { return bits; }
 
-        /* 杠杆 ①：frame（V55 已证有效，只是不够） */
+        /* V0.0.60（AevonReflowGateV60）：先攻 displayConfiguration ——
+         * 写不进就整单放弃。绝不只推 frame：V55 已证只改 frame = 只裁渲染视口
+         * （App 照旧按整屏渲染，塞进小视口 = 内容放大 + 显示不全），
+         * V0.0.59 的「放大 + 显示不全」正是探测假阳性 + 只推 frame 的组合。 */
+        id oldDC = AevonSceneDisplayConfiguration(mutable);
+        if (oldDC != nil) { bits |= 0x2; }
+        id newDC = AevonResizeDisplayConfiguration(oldDC, size, &bits);
+        if (newDC == nil) {
+            /* 不写 frame、不推 diff、不记 adaptiveFrames —— 场景保持整屏，
+             * Swift 侧自动回退 V58 整屏等比缩放（干净回退，最坏=上一版形态）。 */
+            return bits;
+        }
+
+        /* 杠杆 ①：frame（displayConfiguration 成立后才一起写） */
         if (AevonSettingsSetFrame(mutable, CGRectMake(0, 0, size.width, size.height))) {
             bits |= 0x1;
         }
 
         /* 杠杆 ②：displayConfiguration 随帧一起下发（Mango 实证的关键差异） */
-        id oldDC = AevonSceneDisplayConfiguration(mutable);
-        if (oldDC != nil) { bits |= 0x2; }
-        id newDC = AevonResizeDisplayConfiguration(oldDC, size, &bits);
-        if (newDC != nil) {
-            SEL setDCSel = NSSelectorFromString(@"setDisplayConfiguration:");
-            if ([mutable respondsToSelector:setDCSel]) {
-                void (*fn)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
-                fn(mutable, setDCSel, newDC);
-                bits |= 0x10;
-            }
-        }
+        SEL setDCSel = NSSelectorFromString(@"setDisplayConfiguration:");
+        if (![mutable respondsToSelector:setDCSel]) { return bits; }
+        void (*setFn)(id, SEL, id) = (void (*)(id, SEL, id))objc_msgSend;
+        setFn(mutable, setDCSel, newDC);
+        bits |= 0x10;
 
         /* 杠杆 ③：托管上下文可 resize（Stheno 同款选择子，存在才调） */
         if (floatMode) {
