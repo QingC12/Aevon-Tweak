@@ -644,7 +644,7 @@ jobs:
           # ── V0.0.55：覆盖层显示策略（锁屏/控制中心/通知中心/切换器隐藏）+
           #            停靠小窗内容不再转发触摸 + 真实改场景尺寸（内容自适应）+
           #            空闲锁屏断言 + 锁屏请求拦截 ──
-          for m in AevonOverlayPolicyV55 AevonDockNoTouchV55 AevonAdaptiveContentV55 \
+          for m in AevonOverlayPolicyV55 AevonDockNoTouchV55 \
                    AevonIdleAssertV55 AevonLockBlockV55 AevonSceneFrameV55; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::V0.0.55 标记缺失: $m"; exit 1; }
@@ -654,9 +654,7 @@ jobs:
           data = pathlib.Path(sys.argv[1]).read_bytes()
           need = ["浮窗只在桌面与全屏 App 中显示",
                   "浮窗已留在桌面层",
-                  "内容自适应已生效",
-                  "停靠小窗内容已停止接收触摸",
-                  "场景尺寸还原为整屏"]
+                  "停靠小窗内容已停止接收触摸"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.55 日志串: " + ", ".join(miss))
@@ -669,7 +667,7 @@ jobs:
           # ── V0.0.56：触摸接管标记改关联对象（修「屏幕部分位置无法点击」）+
           #            主窗矩形通道（双击底边 / 快速连点仍点到 App）+
           #            移动期关投影（拖动卡顿）+ App 窗口尺寸通道（内容被放大剪裁）──
-          for m in AevonMoveSmoothV56 AevonGuardFloatRectV56 AevonAdaptiveWindowV56; do
+          for m in AevonMoveSmoothV56 AevonGuardFloatRectV56; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::V0.0.56 标记缺失: $m"; exit 1; }
           done
@@ -688,13 +686,34 @@ jobs:
           # 旧实现用 UITouch 指针当 CFMutableSet 的 key（地址复用导致误吞）——
           # 新实现改用关联对象标记。此处只做标记确认：外部函数名留在 __LINKEDIT 的
           # 符号表里（压缩存储），strings 抓不到，不能再拿它当校验条件。
-          for m in AevonGuardTouchMarkV56 AevonGuardFloatRectV56 AevonAdaptiveWindowV56; do
+          for m in AevonGuardTouchMarkV56 AevonGuardFloatRectV56; do
             strings "$GUARD_DYLIB" | grep -q "$m" \
               || { echo "::error::V0.0.56 Guard 标记缺失: $m"; exit 1; }
           done
           # 旧实现用 UITouch 指针当 CFMutableSet 的 key（地址复用导致误吞）——
           # 新实现必须改用关联对象标记，见 AevonGuardTouchMarkV56 那段注释
           echo "V0.0.56 Guard 校验: 关联对象标记 + 主窗矩形 + 窗口尺寸通道 已编入"
+          # ── V0.0.57：内容整屏等比完整显示（不再改场景 / 窗口）+
+          #            全屏 App 中浮窗一直显示（修「圆盘看不见但能操作」）+
+          #            停靠列一次成型 + 落地校验（修第一个变第五个的断层）──
+          for m in AevonContentFitV57 AevonNoSceneResizeV57 AevonOverlayAppV57 \
+                   AevonDockAtomicV57 AevonDockSettleV57; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.57 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY57'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["整屏等比完整显示", "内容模式=完整显示", "浮窗一直显示",
+                  "停靠列落地校验", "先把「自己」从停靠列里摘出去"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.57 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.57 校验: 内容完整适配 + 全屏 App 常显 + 停靠列一次成型 已编入")
+          PY57
+          strings "$GUARD_DYLIB" | grep -q 'AevonNoWinResizeV57' \
+            || { echo "::error::Guard 没有停用窗口改写（AevonNoWinResizeV57）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
