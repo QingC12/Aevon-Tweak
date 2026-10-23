@@ -228,6 +228,21 @@ __attribute__((used)) static const char AevonIdleAssertV55Marker[] = "AevonIdleA
 __attribute__((used)) static const char AevonLockBlockV55Marker[] = "AevonLockBlockV55";
 __attribute__((used)) static const char AevonSceneFrameV55Marker[] = "AevonSceneFrameV55";
 
+/* V0.0.57（读 Aevon(51) + AevonGuard(22)）
+ *   AevonContentFitV57    内容改「整屏等比完整缩放」：不再裁切（修字变大 / 画面被剪 / 右侧工具栏消失）
+ *   AevonNoSceneResizeV57 停用改场景 frame 与改 App keyWindow 两条路线（只裁视口 / 关窗残留黑屏）
+ *   AevonOverlayAppV57    全屏 App 里浮窗常显（修「圆盘看不见但能操作、回桌面才出现」）
+ *   AevonDockAtomicV57    还原时先把自身移出停靠列再降级其它主窗（停靠列一次成型，无断层）
+ *   AevonDockSettleV57    停靠列落地校验（动画结束后按固定格对齐，消除残余缺口）
+ *
+ * 这些是**唯一可靠**的标记方式：Swift 侧的字符串常量会被 LLVM 优化掉（≤15 字节直接进寄存器），
+ * 只有 ObjC 的 `__attribute__((used)) const char` 一定留在 __cstring 里。 */
+__attribute__((used)) static const char AevonContentFitV57Marker[] = "AevonContentFitV57";
+__attribute__((used)) static const char AevonNoSceneResizeV57Marker[] = "AevonNoSceneResizeV57";
+__attribute__((used)) static const char AevonOverlayAppV57Marker[] = "AevonOverlayAppV57";
+__attribute__((used)) static const char AevonDockAtomicV57Marker[] = "AevonDockAtomicV57";
+__attribute__((used)) static const char AevonDockSettleV57Marker[] = "AevonDockSettleV57";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

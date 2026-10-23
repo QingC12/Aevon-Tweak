@@ -704,8 +704,8 @@ jobs:
           python3 - "$DYLIB" <<'PY57'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["整屏等比完整显示", "内容模式=完整显示", "浮窗一直显示",
-                  "停靠列落地校验", "先把「自己」从停靠列里摘出去"]
+          need = ["内容模式=完整显示", "整屏等比缩放", "浮窗一直显示",
+                  "停靠列落地校验"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.57 日志串: " + ", ".join(miss))
