@@ -400,8 +400,8 @@ final class AevonSceneDriver: NSObject {
         /* 3) 全类扫描留证（下一轮按真实实现类补链路）
          * V0.0.77：整段下沉到 ObjC —— Aevon(69) 第二次自动注销就崩在这个循环里的
          * `swift_dynamicCast`（反汇编 img+0x51ad8 实锤）。这里只拿一个字符串。 */
-        let exact = AevonClassScanForSelector(entityProviderSelector, 10)
-        let alt = AevonClassScanForSelector(entityProviderAltSelector, 10)
+        let exact = AevonClassScanForSelector(entityProviderSelector, 10) ?? ""
+        let alt = AevonClassScanForSelector(entityProviderAltSelector, 10) ?? ""
         diag.items.append("实现类=\(exact.isEmpty ? "无" : exact)")
         diag.items.append("下划线实现类=\(alt.isEmpty ? "无" : alt)")
         diag.items.append("候选链=\(labels.isEmpty ? "空" : labels.joined(separator: ","))")
