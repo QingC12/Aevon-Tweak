@@ -239,13 +239,26 @@ enum AevonSnap {
     }
 
     /// 是否「完整显示内容」（V0.0.57，AevonContentFitV57）。
-    /// 开：窗口按屏幕比例、整屏等比缩放，永不裁切（默认）；
-    /// 关：回到 0.60 小胖屏，按宽度铺满、从底部裁掉溢出（抖音底栏会掉）。
+    /// 开：窗口按屏幕比例、整屏等比缩放，永不裁切；
+    /// 关（**V0.0.58 起默认**，AevonPomoDefaultV58）：0.60 小胖屏 +
+    /// PullOverMF 同款「可视区铺满卡片」逻辑（AevonPomoCoverV58）。
     static var fullContentEnabled: Bool {
-        return AevonPrefs.bool("FullContent", default: true)
+        return AevonPrefs.bool("FullContent", default: false)
     }
 
-    /// 内容布局（V0.0.57）。
+    /// 小胖屏可视区位置（V0.0.58，AevonCardVisPanV58）。
+    ///
+    /// PullOverMF 逆向：`mfUserVisualCenterX/Y` + `mfUserVisualCenterValid` ——
+    /// 卡片显示的是整屏画面的**一个可视区**（`mfCardVisualScreenRect`），铺满卡片、
+    /// 溢出裁掉；可视中心存在**偏好里**（设置驱动，不是手势）。0.60 小胖屏按宽度
+    /// 铺满时底部必然溢出（几何硬约束），用户想看被裁掉的底栏就把可视区往下调。
+    /// 偏好存 0~100（0 = 贴顶，100 = 贴底），这里换算成 0~1。
+    static var cardVisPanRatio: CGFloat {
+        let v = AevonPrefs.double("CardVisPan", default: 0)
+        return max(0, min(1, CGFloat(v) / 100.0))
+    }
+
+    /// 内容布局（V0.0.57；V0.0.58 加 `panRatio`）。
     ///
     /// - `fill == false`（默认）：**等比完整适配**，永不裁切，多出来的方向居中留边。
     /// - `fill == true`：铺满（cover），从底部吃溢出 —— 只给停靠小窗当缩略图用，
@@ -255,10 +268,17 @@ enum AevonSnap {
     /// 那 50 多 pt 在浮窗里就是一条纯空白色带，切掉它才算真正「从第一行内容开始」。
     ///
     /// - Returns: scale = 缩放比；offset = 内容左上角在窗口内容区里的位置。
+    ///
+    /// V0.0.58（AevonPomoCoverV58）：`fill` 分支升级为 **PullOverMF 同款可视区逻辑** ——
+    /// 卡片 = 整屏画面的一个可视区，按单一缩放比铺满卡片（cover，`max`），溢出裁掉、
+    /// 永不留黑边；`panRatio`（0~1）决定竖向溢出段里露哪一部分
+    /// （0 = 贴顶同 V53 旧行为，1 = 贴底 —— 想看抖音底栏就调到 1）。
+    /// 对应 PullOverMF 的 `mfCardVisualScreenRect` / `mfUserVisualCenterX/Y`。
     static func contentLayout(windowSize: CGSize, topPad: CGFloat,
                               source: CGSize? = nil,
                               cropTop: CGFloat? = nil,
-                              fill: Bool = false) -> (scale: CGFloat, offset: CGPoint) {
+                              fill: Bool = false,
+                              panRatio: CGFloat = 0) -> (scale: CGFloat, offset: CGPoint) {
         let screen = source ?? UIScreen.main.bounds.size
         guard screen.width > 1, screen.height > 1,
               windowSize.width > 1, windowSize.height > topPad + 1 else {
@@ -271,8 +291,11 @@ enum AevonSnap {
         let byHeight = availH / usableHeight
         if fill {
             let scale = max(0.02, max(byWidth, byHeight))
+            // 竖向装不下的那段（内容坐标）；visTop = 可视区顶部在内容里的 y。
+            let hidden = max(0, usableHeight - availH / scale)
+            let visTop = max(0, min(hidden, panRatio * hidden))
             return (scale, CGPoint(x: (windowSize.width - screen.width * scale) / 2.0,
-                                   y: topPad - crop * scale))
+                                   y: topPad - crop * scale - visTop * scale))
         }
         let scale = max(0.02, min(byWidth, byHeight))
         return (scale, CGPoint(x: (windowSize.width - screen.width * scale) / 2.0,

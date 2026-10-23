@@ -338,10 +338,11 @@ static NSArray *AevonBuildFallback(id target) {
     if (s2 != nil) [result addObject:s2];
     id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作", target, @"TouchEnabled", @YES);
     if (s2a != nil) [result addObject:s2a];
-    /* V0.0.57（AevonContentFitV57）：完整显示内容 —— 默认开。
-     * 开：窗口按屏幕比例、整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切；
-     * 关：回到 0.60 小胖屏（按宽度铺满、底部溢出裁掉，抖音底栏会掉）。 */
-    id s2f = AevonNewSwitch(@"完整显示内容（不裁切，窗口按屏幕比例）", target, @"FullContent", @YES);
+    /* V0.0.57（AevonContentFitV57）：完整显示内容。
+     * V0.0.58（AevonPomoDefaultV58）默认**关**：默认形态回到 0.60 小胖屏 +
+     * PullOverMF 同款「可视区铺满卡片」逻辑（AevonPomoCoverV58）。
+     * 开：窗口按屏幕比例、整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切。 */
+    id s2f = AevonNewSwitch(@"完整显示内容（不裁切，窗口按屏幕比例）", target, @"FullContent", @NO);
     if (s2f != nil) [result addObject:s2f];
     id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
     if (s2c != nil) [result addObject:s2c];
@@ -386,6 +387,13 @@ static NSArray *AevonBuildFallbackDetail(id target) {
         AevonSetProperty(ringButton, @"aevonOpenRingEditor", @"buttonAction");
         [result addObject:ringButton];
     }
+
+    /* V0.0.58（AevonCardVisPanV58）：小胖屏可视区位置（PullOverMF 同款） */
+    id groupPan = AevonNewGroup(@"小胖屏内容位置",
+                                @"0 = 贴顶（默认，顶栏完整），100 = 贴底（看抖音底栏就拉到这里）。");
+    if (groupPan != nil) [result addObject:groupPan];
+    id p1 = AevonNewSlider(@"内容位置：0 = 贴顶，100 = 贴底", target, @"CardVisPan", 0, 100, 0);
+    if (p1 != nil) [result addObject:p1];
 
     id groupZone1 = AevonNewGroup(@"① 触发位置（底边锚定）",
                                   @"热区底边在屏幕高度的百分比。100% = 区底边贴住屏幕底部，"

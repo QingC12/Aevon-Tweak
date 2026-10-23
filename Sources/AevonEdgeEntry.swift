@@ -399,6 +399,9 @@ enum AevonEdgeEntry {
             // 旧版这里还顺手 AevonRingStore.invalidateCache()，0.2 秒一次跨进程重读
             // 导致圆盘 App 数与排序漂移（Aevon(24)），已删除。列表只在设置页广播时刷新。
             checkTriggerZoneChange()
+            // V0.0.58（AevonCardVisPanV58）：内容模式 / 小胖屏可视区位置变了 →
+            // 所有浮窗立即按新偏好重排（PullOverMF 的可视中心也是设置驱动）。
+            checkContentModeChange()
         }
         RunLoop.main.add(timer, forMode: .common)
         zoneTimer = timer
@@ -433,6 +436,25 @@ enum AevonEdgeEntry {
         zoneSignature = signature
         refreshLayoutIfNeeded(logChange: true)
         syncGuardConfig()
+    }
+
+    /// V0.0.58（AevonCardVisPanV58）：内容模式 / 小胖屏可视区位置指纹。
+    /// 变了就让所有浮窗按新偏好立即重排内容（0.2s 轮询 + prefschanged 都会调）。
+    private static var contentModeSignature = ""
+
+    static func checkContentModeChange() {
+        let signature = "\(AevonPrefs.bool("FullContent", default: false))"
+            + "|\(Int(AevonPrefs.double("CardVisPan", default: 0)))"
+        // 首次只是记录基线（启动时没有必要重排）
+        if contentModeSignature.isEmpty {
+            contentModeSignature = signature
+            return
+        }
+        guard signature != contentModeSignature else { return }
+        contentModeSignature = signature
+        AevonEntryHost.refreshContentLayoutForPrefs()
+        AevonLog.info("[窗口] 内容模式 / 小胖屏可视区位置已更新，浮窗内容立即重排"
+            + "（签名 \(signature)，AevonCardVisPanV58）")
     }
 
     /// V0.0.32（AevonGuardNotifyV32）：把当前热区几何同步给 AevonGuard。
@@ -1264,6 +1286,7 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         // 设置里可能刚改过圆盘 App 列表 / 顺序 —— V0.0.31：带快照防漂移地刷新
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
+        AevonEdgeEntry.checkContentModeChange()
         AevonEdgeEntry.syncGuardConfig()
     }
 }

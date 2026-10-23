@@ -111,6 +111,16 @@ enum AevonEntryHost {
         return false
     }
 
+    /// V0.0.58（AevonCardVisPanV58）：设置里改了「完整显示内容 / 小胖屏内容位置」后
+    /// 让所有浮窗立即按新偏好重排内容（PullOverMF 的可视中心也是改设置立刻生效）。
+    static func refreshContentLayoutForPrefs() {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
+        for view in layer.subviews {
+            guard let win = view as? AevonWindowView else { continue }
+            win.invalidateContentLayout()
+        }
+    }
+
     /// 已停靠小窗的占位矩形（V0.0.44，AevonDockAvoidV44）。
     ///
     /// 用户 Aevon(37)：停靠小窗会压在主窗的手势条上，主窗就拖不动了。

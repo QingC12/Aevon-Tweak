@@ -366,7 +366,10 @@ final class AevonWindowView: UIView {
             + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
             + (AevonSnap.fullContentEnabled
                ? "内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
-               : "内容模式=小胖屏铺满（0.600 小胖屏，铺满裁切、内容按宽度铺满、底部溢出裁掉），")
+               : "内容模式=小胖屏铺满（0.600 小胖屏，铺满裁切、内容按宽度铺满、底部溢出裁掉），"
+                 + "可视区位置 \(Int(AevonSnap.cardVisPanRatio * 100))%"
+                 + "（PullOverMF 同款：卡片=整屏画面的一个可视区，铺满裁掉溢出，"
+                 + "想看被裁的底栏就在设置里把「小胖屏内容位置」往下调）（AevonPomoCoverV58），")
             + "内容比例 \(String(format: "%.3f", aspect))（AevonContentFitV57），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
@@ -442,6 +445,14 @@ final class AevonWindowView: UIView {
             + "（避免两个主悬浮窗同时存在，AevonDockForceV53）")
     }
 
+    /// V0.0.58（AevonCardVisPanV58）：设置里改了「完整显示内容 / 小胖屏内容位置」后
+    /// 立即重排内容 —— 把内容布局的幂等缓存打脏，下个布局周期按新偏好重算。
+    func invalidateContentLayout() {
+        lastAppliedScale = -1
+        lastContentOffset = CGPoint(x: -1, y: -1)
+        setNeedsLayout()
+    }
+
     func animateGeometry(to target: CGRect,
                          duration: TimeInterval = AevonMotion.dockDuration,
                          alpha targetAlpha: CGFloat? = nil,
@@ -455,9 +466,14 @@ final class AevonWindowView: UIView {
         let source = sceneHost.sourceSize
         // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
         let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
+        // V0.0.58（AevonPomoCoverV58）：主窗在「小胖屏」模式 = PullOverMF 同款可视区
+        // 逻辑（铺满裁切 + 可视区位置可调）；停靠小窗是缩略图，保持贴顶铺满。
         let fill = self.isDocked || !AevonSnap.fullContentEnabled
+        let pan: CGFloat = (self.isDocked || AevonSnap.fullContentEnabled)
+            ? 0 : AevonSnap.cardVisPanRatio
         let layout = AevonSnap.contentLayout(windowSize: target.size, topPad: topPad,
-                                             source: source, fill: fill)
+                                             source: source, fill: fill,
+                                             panRatio: pan)
         let scale = layout.scale
         let offset = layout.offset
         let container = sceneHost.container
@@ -658,11 +674,17 @@ final class AevonWindowView: UIView {
         let source = sceneHost.sourceSize
         // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）。
         let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-        // 停靠小窗是缩略图 → 铺满（cover）；主窗在「完整显示」开启时 → 等比完整适配。
+        // V0.0.58（AevonPomoCoverV58）：主窗小胖屏模式 = PullOverMF 同款可视区逻辑；
+        // 停靠小窗是缩略图 → 贴顶铺满（cover）。拖动/动画期间窗口尺寸不变时
+        // scale 与 offset 都不会重算 —— 这就是 PullOverMF 的「拖动时可视区冻结」
+        // （mfMainCardFrozenVis*）：卡片在动、画面内容不跟着游移。
         let fill = isDocked || !AevonSnap.fullContentEnabled
+        let pan: CGFloat = (isDocked || AevonSnap.fullContentEnabled)
+            ? 0 : AevonSnap.cardVisPanRatio
 
         let layout = AevonSnap.contentLayout(windowSize: clipSize, topPad: topPad,
-                                             source: source, fill: fill)
+                                             source: source, fill: fill,
+                                             panRatio: pan)
         let scale = layout.scale
         let offset = layout.offset
 

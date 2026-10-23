@@ -243,6 +243,16 @@ __attribute__((used)) static const char AevonOverlayAppV57Marker[] = "AevonOverl
 __attribute__((used)) static const char AevonDockAtomicV57Marker[] = "AevonDockAtomicV57";
 __attribute__((used)) static const char AevonDockSettleV57Marker[] = "AevonDockSettleV57";
 
+/* V0.0.58（PullOverMF 同款小胖屏，复刻自 com.qingc12.pullovermf 0.9.40 逆向）：
+ *   AevonPomoCoverV58    小胖屏内容 = 整屏画面的一个「可视区」，铺满卡片、溢出裁掉
+ *                        （PullOverMF: mfCardVisualScreenRect / mfMainCardScale）
+ *   AevonCardVisPanV58   可视区位置可调（PullOverMF: mfUserVisualCenterX/Y，
+ *                        设置驱动存偏好，0=贴顶 100=贴底）
+ *   AevonPomoDefaultV58  「完整显示内容」默认关 —— 默认形态回到 0.60 小胖屏 */
+__attribute__((used)) static const char AevonPomoCoverV58Marker[] = "AevonPomoCoverV58";
+__attribute__((used)) static const char AevonCardVisPanV58Marker[] = "AevonCardVisPanV58";
+__attribute__((used)) static const char AevonPomoDefaultV58Marker[] = "AevonPomoDefaultV58";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

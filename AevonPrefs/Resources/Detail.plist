@@ -8,6 +8,34 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>小胖屏内容位置</string>
+			<key>footerText</key>
+			<string>「完整显示内容」关闭时（默认的小胖屏 0.60），卡片显示的是整屏画面的一个可视区：铺满卡片、溢出裁掉。0 = 贴顶（默认，顶栏完整），100 = 贴底（看抖音底栏就拉到这里）。想看哪段就把可视区挪到哪段。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>CardVisPan</string>
+			<key>label</key>
+			<string>内容位置：0 = 贴顶，100 = 贴底</string>
+			<key>minValue</key>
+			<integer>0</integer>
+			<key>maxValue</key>
+			<integer>100</integer>
+			<key>min</key>
+			<integer>0</integer>
+			<key>max</key>
+			<integer>100</integer>
+			<key>default</key>
+			<integer>0</integer>
+			<key>footerText</key>
+			<string>可视区在竖向溢出里的位置。只在主悬浮窗小胖屏模式下生效；停靠小窗始终贴顶。拖动后立即生效。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>圆盘 App</string>
 			<key>footerText</key>
 			<string>圆盘里放哪些 App、按什么顺序排，都在这里改。进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入（最多 36 个）。改完立即生效，下次呼出圆盘就是新顺序。</string>
