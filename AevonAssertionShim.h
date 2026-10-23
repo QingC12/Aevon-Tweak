@@ -39,6 +39,15 @@ void AevonNotifySetRing(int on);
 /// 读到就整屏吞掉那几帧事件（手指正压在浮窗上，App 本就不该收到输入）。
 void AevonNotifySetFloatTouch(int on);
 
+/// V0.0.54（AevonGuardDockZoneV54）：停靠列数量状态位（notify state bit50~55）。
+///
+/// Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
+/// bit48 是「按下写、抬手清」的实时位，与 backboardd 直投 App 的那一份存在时序竞态。
+/// 停靠列几何是固定的（顶部 10% 起点、每格 dockH+8、左右贴边），所以这里只传
+/// 「每侧有几个停靠小窗」，让 Guard 自己算出槽位矩形并吞摸 —— 零时序依赖。
+/// rightCount / leftCount 传 -1 表示该侧保持原值。
+void AevonNotifySetDockState(int rightCount, int leftCount);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，

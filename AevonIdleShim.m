@@ -1,6 +1,7 @@
 #import "AevonIdleShim.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 /// V0.0.51（AevonIdleNoLockV51）：有浮窗时禁止系统空闲锁屏。
 ///
@@ -21,6 +22,11 @@ static BOOL gAevonIdleActive = NO;
 static BOOL gAevonIdleInstalled = NO;
 static BOOL (*gAevonOrigIsIdleTimerDisabled)(id, SEL) = NULL;
 static BOOL (*gAevonOrigIsDisabled)(id, SEL) = NULL;
+/* V0.0.54（AevonIdleResetV54）：真正能推迟到期的那几个方法。
+ * 只 hook getter 在真机上被证明不够（Aevon(47) 第 2 条：看视频照样 1 分钟锁屏）——
+ * 系统的判定路径未必读这两个 getter。周期性调 `resetIdleTimer` 才是「模拟用户活动」，
+ * 每次都把空闲计时器重新起算，等价于用户一直在操作屏幕。 */
+static id gAevonIdleCoordinator = nil;
 
 /// 两个 getter 共用的替换实现：active 时一律 YES，否则走原实现
 static BOOL AevonIdleGet(id self, SEL _cmd) {
@@ -32,6 +38,59 @@ static BOOL AevonIdleGet(id self, SEL _cmd) {
         return gAevonOrigIsDisabled(self, _cmd);
     }
     return NO;
+}
+
+/// 拿到 `SBIdleTimerGlobalCoordinator` 的单例（不同系统版本单例方法名不一样，逐个试）。
+static id AevonIdleCoordinatorInstance(void) {
+    if (gAevonIdleCoordinator != nil) { return gAevonIdleCoordinator; }
+    Class cls = objc_getClass("SBIdleTimerGlobalCoordinator");
+    if (cls == NULL) { return nil; }
+    for (NSString *name in @[@"sharedInstance", @"sharedCoordinator", @"globalCoordinator"]) {
+        SEL sel = NSSelectorFromString(name);
+        if (![cls respondsToSelector:sel]) { continue; }
+        @try {
+            // 用 methodForSelector + 函数指针（ARC 下 cast objc_msgSend 容易被编译器拦）
+            typedef id (*AevonIdFn)(id, SEL);
+            AevonIdFn fn = (AevonIdFn)[(id)cls methodForSelector:sel];
+            id inst = fn ? fn((id)cls, sel) : nil;
+            if (inst != nil) {
+                gAevonIdleCoordinator = inst;
+                return inst;
+            }
+        } @catch (NSException *exception) {
+        }
+    }
+    return nil;
+}
+
+/// 把空闲计时器重新起算（V0.0.54）。
+///
+/// 系统里这个方法叫法随版本变，全部试一遍 —— 命中哪个都够用，重复调用是幂等的。
+/// 返回 YES = 至少命中一个，说明这条兜底路径真实存在（日志据此判断哪条通道生效）。
+static BOOL AevonIdleResetCoordinator(void) {
+    id inst = AevonIdleCoordinatorInstance();
+    if (inst == nil) { return NO; }
+    BOOL hit = NO;
+    NSArray<NSString *> *names = @[@"resetIdleTimer",
+                                   @"_resetIdleTimer",
+                                   @"resetIdleTimerAndCancelPrevious",
+                                   @"_resetIdleTimerAndCancelPrevious",
+                                   @"_updateIdleTimer",
+                                   @"_resetIdleTimerIfNecessary"];
+    for (NSString *name in names) {
+        SEL sel = NSSelectorFromString(name);
+        if (![inst respondsToSelector:sel]) { continue; }
+        @try {
+            typedef void (*AevonVoidFn)(id, SEL);
+            AevonVoidFn fn = (AevonVoidFn)[inst methodForSelector:sel];
+            if (fn != NULL) {
+                fn(inst, sel);
+                hit = YES;
+            }
+        } @catch (NSException *exception) {
+        }
+    }
+    return hit;
 }
 
 static void AevonIdleInstallHook(void) {
@@ -58,6 +117,21 @@ static void AevonIdleInstallHook(void) {
         method_setImplementation(m2, (IMP)AevonIdleGet);
         NSLog(@"[Aevon] 空闲锁屏：已 hook SBIdleTimerGlobalCoordinator isDisabled");
     }
+    /* V0.0.54：另外两个常见别名也一并接管（部分版本判定走 `_isIdleTimerDisabled`
+     * 或 `isDisabledIgnoringReasons`，hook 到就多一层保险）。 */
+    for (NSString *name in @[@"_isIdleTimerDisabled", @"isDisabledIgnoringReasons"]) {
+        SEL sel = NSSelectorFromString(name);
+        Method m = class_getInstanceMethod(cls, sel);
+        if (m == NULL) { continue; }
+        IMP old = method_getImplementation(m);
+        if (old == (IMP)AevonIdleGet) { continue; }
+        if (gAevonOrigIsDisabled == NULL) {
+            gAevonOrigIsDisabled = (BOOL (*)(id, SEL))old;
+        }
+        method_setImplementation(m, (IMP)AevonIdleGet);
+        NSLog(@"[Aevon] 空闲锁屏：已 hook SBIdleTimerGlobalCoordinator %@", name);
+    }
+    (void)AevonIdleCoordinatorInstance();
 }
 
 void AevonIdleSetActive(BOOL on) {
@@ -84,6 +158,29 @@ void AevonIdleSetActive(BOOL on) {
     if (changed) {
         NSLog(@"[Aevon] 空闲锁屏 %@（%s）", on ? @"已压住" : @"已恢复", on ? "AevonIdleNoLockV51" : "restore");
     }
+}
+
+/// V0.0.54（AevonIdleResetV54）：周期性「重新起算空闲计时器」。
+///
+/// Swift 侧的 `AevonIdleGuard` 每 12 秒调一次。原来只重申 `setIdleTimerDisabled`，
+/// 真机上 1 分钟照样锁屏 —— 说明系统不读那条路径。这里直接动计时器本体：
+/// 每一次调用都等价于「用户刚碰了一下屏幕」，看视频再久也不会黑屏。
+/// 返回 YES = 本机支持这条通道（日志据此判断哪条生效）。
+BOOL AevonIdleReassert(void) {
+    if (!gAevonIdleActive) { return NO; }
+    AevonIdleInstallHook();
+    BOOL reset = AevonIdleResetCoordinator();
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplication *app = [UIApplication sharedApplication];
+        if (app == nil) { return; }
+        SEL setter = @selector(setIdleTimerDisabled:);
+        if (![app respondsToSelector:setter]) { return; }
+        typedef void (*AevonIdleSetter)(id, SEL, BOOL);
+        AevonIdleSetter fn = (AevonIdleSetter)[app methodForSelector:setter];
+        if (fn != NULL) { fn(app, setter, YES); }
+    });
+    return reset;
 }
 
 BOOL AevonIdleIsActive(void) {

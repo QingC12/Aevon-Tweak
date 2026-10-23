@@ -869,12 +869,12 @@ enum AevonEdgeEntry {
             // 先不移动：到底是「轻点停靠 / 还原」还是「长按移动」，要等抬手/阈值才知道
             AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点停靠/还原）（AevonSthenoGestureV44）")
         case .corner:
-            // V0.0.52（AevonNoShapeTapV52）：下角块**只做缩放**。
-            // V0.0.51 曾让它「拖动缩放 / 轻点切形态」，现已按用户要求删掉点击手势，
-            // 于是按下就可以直接算作拖动，不用再等阈值判断是哪一种。
-            floatEngaged = true
-            AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))"
-                + "（右下角只缩放 · 点击切换形态已移除）（AevonNoShapeTapV52）")
+            // V0.0.54（AevonCornerNoFlashV54）：下角块只做缩放，按下**先不进入缩放**。
+            // `beginLiveResize` 会关投影（拖动期不做离屏合成），若按下就调用，
+            // 一次纯点击就是「投影消失→恢复」= 边缘闪两下（Aevon(47) 第 1 条）。
+            // 现在等 `handleFloatGestureMoved` 越过 10pt 阈值后由 `rebaseGrab` 真正进入。
+            AevonLog.info("[窗口] 下角块按下 \(Int(point.x)),\(Int(point.y))"
+                + "（拖动才缩放，轻点无动作）（AevonCornerNoFlashV54）")
         case .bottom:
             AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
         case .body:
@@ -985,10 +985,18 @@ enum AevonEdgeEntry {
                     win.grabCancel()
                 }
             case .corner:
-                // V0.0.52（AevonNoShapeTapV52）：右下角只缩放，没有点击分支。
-                // 轻点等于「按下即缩放但没位移」，几何没变，直接走 grabEnd 收尾即可
-                // （它会重算圆角 / 投影并落盘，不会产生任何形状变化）。
-                win.grabEnd(at: layerPoint, commit: true)
+                // V0.0.54（AevonCornerNoFlashV54）：右下角只缩放。
+                // 轻点（没越过阈值）= 什么都不做，只 `grabCancel` 丢掉这段「只按下没拖」的抓取。
+                // 旧版这里走 `grabEnd` → `finishEdgeResize`，而缩放一启动就把投影关了，
+                // 抬手再恢复 —— 这就是用户看到的「点右下角边缘闪烁」。
+                if floatEngaged {
+                    win.grabEnd(at: layerPoint, commit: true)
+                } else {
+                    win.grabCancel()
+                    AevonLog.info("[窗口] 右下角轻点 → 不缩放也不切换形态"
+                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt，投影全程不变）"
+                        + "（AevonCornerNoFlashV54）")
+                }
             case .bottom:
                 if floatEngaged {
                     // V0.0.44：底边条拖动 = 移动窗口（用户 Aevon(37) 指定）
@@ -1045,20 +1053,42 @@ enum AevonEdgeEntry {
     /// 写成幂等：`clearFloatGesture()` 在没接管过的情况下也会被调用，若不加标志位
     /// 会每段触摸都白写一次共享内存。
     private static var floatTouchFlagOn = false
+    /// 延迟清位的代次（V0.0.54）：每次新的按下都会让挂起中的清位作废。
+    private static var floatFlagGeneration = 0
 
     private static func setFloatTouchFlag(_ on: Bool) {
-        if floatTouchFlagOn == on { return }
-        floatTouchFlagOn = on
-        AevonNotifySetFloatTouch(on ? 1 : 0)
-        // 日志证据：下一版能确证「SB 确实写了这一位」。限频 3 秒，
-        // 免得用户连续点小窗时把日志刷满（一次手势只该有一条）。
         if on {
+            // 新的按下：把可能挂着的「延迟清零」作废
+            floatFlagGeneration += 1
+            if floatTouchFlagOn { return }
+            floatTouchFlagOn = true
+            AevonNotifySetFloatTouch(1)
+            // 日志证据：下一版能确证「SB 确实写了这一位」。限频 3 秒，
+            // 免得用户连续点小窗时把日志刷满（一次手势只该有一条）。
             let now = CACurrentMediaTime()
             if now - floatFlagLastLogAt > 3.0 {
                 floatFlagLastLogAt = now
                 AevonLog.info("[边缘] 浮窗手势期开始：已通知 App 侧 Guard 接管输入"
                     + "（notify bit48）（AevonFloatTouchBitV49）")
             }
+            return
+        }
+        // V0.0.54（AevonGuardDockZoneV54）：**不要立刻清位**。
+        //
+        // Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
+        // 抬手时立刻清 bit48，而下一指的 began 往往只有几十毫秒之后；
+        // 两个进程的 sendEvent 谁先到不确定，Guard 一旦读到 0 就放行 → App 合成一次点击。
+        // 这里把清位延后 350ms（期间又有按下就让代次作废，不清），
+        // 配合 Guard 侧新增的「按停靠槽位几何吞摸」，两条路互为兜底。
+        floatFlagGeneration += 1
+        let gen = floatFlagGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard gen == floatFlagGeneration else { return }   // 期间又按下了
+            guard floatTouchFlagOn else { return }
+            floatTouchFlagOn = false
+            AevonNotifySetFloatTouch(0)
+            AevonLog.info("[边缘] 浮窗手势期结束：延后 350ms 才放行 App 输入"
+                + "（避开快速连点的时序竞态）（AevonGuardDockZoneV54）")
         }
     }
 

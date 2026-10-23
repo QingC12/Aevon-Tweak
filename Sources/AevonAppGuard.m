@@ -58,6 +58,8 @@ __attribute__((used)) static const char AevonGuardAckMarker[] = "AevonGuardAckV3
 __attribute__((used)) static const char AevonGuardRingExactV37Marker[] = "AevonGuardRingExactV37";
 /// CI 标记（V0.0.49）：浮窗手势期 App 侧拦截 —— backboardd 双投递漏洞的最后一块补丁
 __attribute__((used)) static const char AevonGuardFloatTouchV49Marker[] = "AevonGuardFloatTouchV49";
+/// CI 标记（V0.0.54）：按停靠列**固定几何**吞摸 —— 与触摸时序无关，快速连点也不会漏
+__attribute__((used)) static const char AevonGuardDockZoneV54Marker[] = "AevonGuardDockZoneV54";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -153,6 +155,94 @@ static BOOL AevonGuardFloatTouch(void) {
     }
     if (now - onSince > 8.0) { return NO; }
     return YES;
+}
+
+/* V0.0.54（AevonGuardDockZoneV54）：停靠小窗区域的**几何**吞摸。
+ *
+ * Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击操作」。
+ *
+ * bit48（AevonGuardFloatTouch）是「SB 按下时写、抬手时清」的实时位 ——
+ * 但前台 App 的触摸由 backboardd **同时**投递给 SB 与 App 两个进程，谁先到不确定。
+ * 快速连点时抬手刚把 bit48 清掉、下一指的 began 已经在 App 进程里了，Guard 读到 0 就放行，
+ * App 于是合成一次真实点击。这条竞态无法靠调时序消除。
+ *
+ * 但停靠列几何是**完全确定的**：顶部 10% 起步、每格 dockH+8、左右贴边、
+ * 尺寸由屏宽反算成「5 格排得下」。所以 SB 只需要把「每侧几个停靠小窗」提前写进共享内存，
+ * Guard 自己算出每个槽位矩形 —— 手指一落下就知道该不该吞，与触摸时序零关系。
+ *
+ * 抖音的右侧工具栏（x≈390~420）在停靠列之外，所以这里必须逐格精确判定，
+ * 绝不能糊成「右侧一条全吞」，否则工具栏就点不动了。 */
+static CGFloat gAevonDockW = 0;
+static CGFloat gAevonDockH = 0;
+static CGFloat gAevonDockTop = 0;
+static CGFloat gAevonDockStep = 0;
+
+/// 与 Swift 侧 `AevonSnap.dockSize` / `dockColumnYs` 完全一致的一套常量。
+static void AevonGuardDockMetrics(void) {
+    @try {
+        CGRect screen = [UIScreen mainScreen].bounds;
+        CGFloat sw = screen.size.width;
+        CGFloat sh = screen.size.height;
+        if (sw < 1 || sh < 200) { return; }
+        CGFloat maxWidth = MAX(118.0, sw);                 // minContentWidth
+        CGFloat dockFullW = MAX(96.0, MIN(sw * 0.28, maxWidth));   // dockMinWidth / dockWidthRatio
+        CGFloat top = sh * 0.10;                           // dockTopRatio
+        CGFloat avail = MAX(160.0, sh - top - 16.0);       // dockBottomMargin
+        CGFloat slotGap = 8.0 * 4.0;                       // obstacleGap × (dockMaxCount − 1)
+        CGFloat maxH = (avail - slotGap) / 5.0;            // dockMaxCount
+        CGFloat h = MIN(dockFullW / 0.60, maxH);           // fatAspect
+        CGFloat w = h * 0.60;
+        if (w < 48.0) { w = 48.0; h = w / 0.60; }          // dockSlotMinWidth
+        gAevonDockW = w;
+        gAevonDockH = h;
+        gAevonDockTop = top;
+        gAevonDockStep = h + 8.0;
+    } @catch (NSException *exception) {
+    }
+}
+
+/// 读「左右各有几个停靠小窗」（bit50~52 / bit53~55）。返回总数（0 = 没有停靠列）。
+static NSUInteger AevonGuardDockCounts(NSUInteger *outRight, NSUInteger *outLeft) {
+    if (outRight) { *outRight = 0; }
+    if (outLeft) { *outLeft = 0; }
+    int token = AevonGuardNotifyToken();
+    if (token < 0) { return 0; }
+    uint64_t pack = 0;
+    notify_get_state(token, &pack);
+    uint64_t ver = (pack >> 40) & 0xFFULL;
+    if (ver != 0x36ULL) { return 0; }   // 0x34/0x35 的 SB 没写这两位 → 走 bit48 老通道
+    NSUInteger r = (NSUInteger)((pack >> 50) & 0x7ULL);
+    NSUInteger l = (NSUInteger)((pack >> 53) & 0x7ULL);
+    if (r > 5) { r = 5; }
+    if (l > 5) { l = 5; }
+    if (outRight) { *outRight = r; }
+    if (outLeft) { *outLeft = l; }
+    return r + l;
+}
+
+/// 点是否落在某一格停靠小窗上（外扩 3pt 容错，卡片的描边也能算进去）。
+static BOOL AevonGuardDockHitTest(CGPoint pt) {
+    @try {
+        NSUInteger right = 0, left = 0;
+        if (AevonGuardDockCounts(&right, &left) == 0) { return NO; }
+        if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
+        if (gAevonDockW < 1.0) { return NO; }
+        CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+        const CGFloat slop = 3.0;
+        for (NSUInteger i = 0; i < right; i++) {
+            CGRect r = CGRectMake(sw - gAevonDockW, gAevonDockTop + (CGFloat)i * gAevonDockStep,
+                                 gAevonDockW, gAevonDockH);
+            if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) { return YES; }
+        }
+        for (NSUInteger i = 0; i < left; i++) {
+            CGRect r = CGRectMake(0, gAevonDockTop + (CGFloat)i * gAevonDockStep,
+                                 gAevonDockW, gAevonDockH);
+            if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) { return YES; }
+        }
+    } @catch (NSException *exception) {
+        return NO;
+    }
+    return NO;
 }
 
 /* V0.0.35（AevonGuardAckV35）：ack 回执。
@@ -404,6 +494,9 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     /* V0.0.49：浮窗手势期（SpringBoard 写 bit48）—— 手指正压在浮窗上，
      * App 进程这一份事件也必须吞掉，否则轻点会合成一次 App 内点击。 */
     BOOL floatTouch = AevonGuardFloatTouch();
+    /* V0.0.54（AevonGuardDockZoneV54）：停靠列**几何**通道，与触摸时序无关 ——
+     * 只要那一格停着一个小窗，落在它上面的触摸一律吞，快速连点也不会漏。 */
+    BOOL docked = (AevonGuardDockCounts(NULL, NULL) > 0);
     {
         static BOOL lastLogged = NO;
         static BOOL hasLogged = NO;
@@ -416,7 +509,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                AevonGuardEnabled ? @"热区拦截启用" : @"仅圆盘期拦截");
         }
     }
-    if (!AevonGuardEnabled && !ringOpen && !floatTouch) {
+    if (!AevonGuardEnabled && !ringOpen && !floatTouch && !docked) {
         /* 浮窗触摸期结束：把上一轮留在集合里的 touch 清掉，避免指针复用后误判 */
         if (AevonGuardSwallowed != NULL && CFSetGetCount(AevonGuardSwallowed) > 0) {
             CFSetRemoveAllValues(AevonGuardSwallowed);
@@ -428,7 +521,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
-    if (!ringOpen && !floatTouch && CGRectIsEmpty(AevonGuardZone)) {
+    if (!ringOpen && !floatTouch && !docked && CGRectIsEmpty(AevonGuardZone)) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
@@ -466,6 +559,16 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 }
             } else if (!CGRectIsEmpty(AevonGuardZone) && CGRectContainsPoint(AevonGuardZone, pt)) {
                 inZone = YES;
+            } else if (AevonGuardDockHitTest(pt)) {
+                /* V0.0.54：落在某一格停靠小窗上 —— 这本来就是浮窗自己的那块屏幕，
+                 * App 不该收到任何输入（点它 = 还原主窗，不是点 App）。 */
+                inZone = YES;
+                static NSUInteger dockSwallowCount = 0;
+                dockSwallowCount += 1;
+                if (dockSwallowCount % 20 == 1) {
+                    AevonGuardWriteLog(NO, @"停靠小窗区域拦下触摸（累计 %lu 次）",
+                                       (unsigned long)dockSwallowCount);
+                }
             }
             if (inZone) {
                 CFSetAddValue(AevonGuardSwallowed, identity);

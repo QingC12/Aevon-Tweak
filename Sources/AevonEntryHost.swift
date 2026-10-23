@@ -142,7 +142,14 @@ enum AevonEntryHost {
             guard win.isDocked, win.currentSlot == side else { continue }
             list.append(win)
         }
-        return list.sorted { $0.frame.minY < $1.frame.minY }
+        // V0.0.54（AevonDockOrderV54）：与重排同口径 —— 按进入列的时间戳，
+        // 不按动画中的坐标（否则新窗的「第几格」会在快速连点时算错）。
+        return list.sorted { lhs, rhs in
+            if abs(lhs.dockSeq - rhs.dockSeq) > 0.000_1 {
+                return lhs.dockSeq < rhs.dockSeq
+            }
+            return lhs.frame.minY < rhs.frame.minY
+        }
     }
 
     /// 当前浮窗总数（含停靠小窗）。用于「有浮窗时禁止系统空闲锁屏」。
@@ -211,6 +218,35 @@ enum AevonEntryHost {
         relayoutDockedColumn(side: .right)
     }
 
+    /// 把「左右两侧各有几个停靠小窗」同步给 App 侧的 AevonGuard
+    /// （V0.0.54，AevonGuardDockZoneV54）。
+    ///
+    /// Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
+    /// 只靠 bit48（按下写 / 抬手清）挡不住 —— 它和 backboardd 直投 App 的那份存在时序竞态。
+    /// 停靠列几何是固定的，所以这里只传数量：Guard 自己算出每一格的矩形，
+    /// 手指落上去就吞，与触摸时序彻底无关。
+    private static var lastDockStateRight = -1
+    private static var lastDockStateLeft = -1
+
+    static func syncDockStateToGuard(reason: String) {
+        var left = 0
+        var right = 0
+        if let layer = floatLayer, !layer.subviews.isEmpty {
+            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+                guard let win = view as? AevonWindowView, win.isDocked else { continue }
+                if win.currentSlot == .left { left += 1 }
+                else if win.currentSlot == .right { right += 1 }
+            }
+        }
+        AevonNotifySetDockState(Int32(right), Int32(left))
+        guard right != lastDockStateRight || left != lastDockStateLeft else { return }
+        lastDockStateRight = right
+        lastDockStateLeft = left
+        AevonLog.info("[窗口] 停靠列已同步给 Guard：右 \(right) 格 / 左 \(left) 格"
+            + "（按固定槽位几何吞摸，快速连点也不会点到 App）（\(reason)）"
+            + "（AevonGuardDockZoneV54）")
+    }
+
     /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。
     ///
     /// 用户 Aevon(43)：「第一个小窗在屏幕右上角、距离顶部 10% 处，然后向下依次类推，
@@ -230,8 +266,24 @@ enum AevonEntryHost {
         // V0.0.49（AevonDockColumnFillV49）：原来这里要求 `count > 1`，
         // 于是「三个小窗还原中间那个」之后若只剩一个就不重排，它孤零零留在原位。
         // 现在剩一个也要重排 —— 它会回到第 1 格（顶部 10%）。
-        guard !column.isEmpty else { return }
-        column.sort { $0.frame.minY < $1.frame.minY }
+        // 这一侧已经空了：**也要**同步给 Guard —— 否则它会一直以为那几格还停着窗，
+        // 把 App 的触摸白白吞掉（停靠小窗全还原后点不动 App 的经典坑）。
+        guard !column.isEmpty else {
+            syncDockStateToGuard(reason: "该侧已无停靠小窗")
+            return
+        }
+        // V0.0.54（AevonDockOrderV54）：「快速点 2/3/4 位置的停靠小窗会出现缺口，
+        // 1 秒内又自动补齐」（Aevon(47) 第 6 条）。
+        // 原来按 `frame.minY` 排 —— 停靠动画要 0.42s，快速连点时拿到的是**动画中间值**，
+        // 刚被降到第 4 格的窗还飘在屏幕中间就被排到队尾，于是每格错位 = 缺口；
+        // 动画结束 `pendingDockY` 再补一次才对齐，就是那个「1 秒后自己好了」。
+        // 现在按进入这一列的时间戳排，与画面位置彻底解耦，一次就落对。
+        column.sort { lhs, rhs in
+            if abs(lhs.dockSeq - rhs.dockSeq) > 0.000_1 {
+                return lhs.dockSeq < rhs.dockSeq
+            }
+            return lhs.frame.minY < rhs.frame.minY
+        }
         // V0.0.53（AevonDockSlotFitV53）：槽位高度用**目标尺寸** `dockSize.height`。
         // 上一版取 `column[0].frame.height` —— 若第一个窗的缩放动画还没跑完，
         // 拿到的是它在半路的尺寸，于是后面每一格都按错的高度累加，
@@ -244,7 +296,10 @@ enum AevonEntryHost {
         }
         AevonLog.info("[窗口] 停靠列已重排：\(column.count) 个小窗，顶部 10% 锚点向下、"
             + "下方自动补位（\(ys.map { Int($0) })，尺寸 \(Int(AevonSnap.dockSize.width))x\(Int(height))"
-            + "，AevonDockTop5V50 AevonDockFillAnimV50 AevonDockSlotFitV53）")
+            + "，按进入顺序排序、不再按动画中间坐标（AevonDockTop5V50 AevonDockFillAnimV50 "
+            + "AevonDockSlotFitV53 AevonDockOrderV54）")
+        // 列变化 = 哪几格被停靠小窗占着变了 → 立刻告诉 Guard，它按固定槽位几何吞摸
+        syncDockStateToGuard(reason: "停靠列重排后")
     }
 
     /// 已停靠小窗的**原始**矩形（不外扩）。
@@ -482,6 +537,16 @@ enum AevonEntryHost {
             guard appSceneView === view, coversScreen(view) else { return }
             attach(to: view, reason: "\(reason)（延后重顶）")
         }
+    }
+
+    /// 当前 App 画面是否**仍然真的铺满整屏**（V0.0.54，AevonSwitcherHideV54）。
+    ///
+    /// 上滑进后台卡片视图时，系统不会让 `SBDeviceApplicationSceneViewController`
+    /// `viewDidDisappear`，只是把它 transform 缩小 —— 容器跟着缩小就成了卡片上那一小块浮窗。
+    /// 这个判定给 `AevonSwitcherGuard` 用：false = 该把浮窗藏起来。
+    static func appSceneCoversScreen() -> Bool {
+        guard let view = appSceneView else { return true }
+        return coversScreen(view)
     }
 
     /// 宿主是否真的铺满整屏并且正在显示（用于区分 App 画面容器与切换器卡片 / 后台场景）。

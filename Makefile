@@ -41,6 +41,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonSnap.swift \
     Sources/AevonWindowManager.swift \
     Sources/AevonIdleGuard.swift \
+    Sources/AevonSwitcherGuard.swift \
     Sources/AevonGestureHandler.swift \
     Sources/Hooks.swift
 

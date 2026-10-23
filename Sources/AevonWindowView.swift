@@ -248,6 +248,18 @@ final class AevonWindowView: UIView {
     /// 记住它，降级时回到原列。
     private(set) var lastDockSide: AevonSnapSlot = .free
 
+    /// 进入停靠列的时间戳（V0.0.54，AevonDockOrderV54）。
+    ///
+    /// Aevon(47) 第 6 条：「快速点击 2、3、4 位置的停靠小窗时，会出现排列的缺口，
+    /// 但 1 秒内会自动补齐」。
+    ///
+    /// 根因：`relayoutDockedColumn` 原来按 `frame.minY` 给这一列排序。可停靠动画要跑 0.42s，
+    /// 快速连点时参与排序的是**动画中间值** —— 一个刚被降到第 4 格的窗此刻还飘在屏幕中间，
+    /// 就被排到队尾，于是每格都对自己错位（缺口）；等动画跑完 `pendingDockY` 再补一次，
+    /// 就是用户说的「1 秒内自动补位」。
+    /// 现在排序只看「谁先进入这一列」（单调时间戳），与画面位置彻底解耦。
+    private(set) var dockSeq: CFTimeInterval = 0
+
     /// 是否处于停靠状态（被别的浮窗当作「要避让的障碍」）
     var isDocked: Bool { return currentSlot != .free }
 
@@ -329,9 +341,10 @@ final class AevonWindowView: UIView {
         layoutGestureHandles()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角只缩放，"
-            + "主窗比例 1:2（0.500，铺满裁切 · 无黑边 · 顶栏底栏与右侧工具栏完整），"
-            + "内容比例 \(String(format: "%.3f", aspect))，内容按宽度铺满、底部溢出自动裁掉（AevonCoverCropV53），"
+            + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
+            + "主窗比例 3:5（0.600 小胖屏，铺满裁切 · 无黑边 · 顶栏始终完整），"
+            + "内容比例 \(String(format: "%.3f", aspect))，内容按宽度铺满、底部溢出自动裁掉"
+            + "（AevonCoverCropV53 AevonFatMainV54），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
     }
@@ -768,11 +781,16 @@ final class AevonWindowView: UIView {
                 : (edges.contains(.right) ? 0.0 : 0.5)
             let ay: CGFloat = edges.contains(.top) ? 1.0
                 : (edges.contains(.bottom) ? 0.0 : 0.5)
-            // V0.0.52（AevonNoShapeTapV52）：恢复「按下即进入实时缩放」。
-            // V0.0.51 曾把按下延后到越阈值，为的是让右下角轻点能切换窗口形态；
-            // 现在形态切换与轻点手势都已删除，右下角只负责缩放 —— 越晚进入缩放，
-            // 手感就越「黏」，所以改回按下立即进入（轻点不再有任何副作用）。
-            beginLiveResize(anchor: CGPoint(x: ax, y: ay))
+            // V0.0.54（AevonCornerNoFlashV54）：按下**不**进入实时缩放。
+            //
+            // Aevon(47) 第 1 条：「点击主悬浮窗右下角时，悬浮窗边缘会闪烁」。
+            // 根因就在 `beginLiveResize`：它一进来就把 `layer.shadowOpacity` 归零
+            // （为了拖动期不做离屏合成），抬手时 `finishEdgeResize` / `grabCancel` 又把它
+            // 恢复 —— 于是一次「按下即抬起」的点击 = 投影消失再出现，看起来就是边缘闪两下。
+            // 日志里每次点击都是「全局通道开始拖动（缩放）… 合帧 0 帧」，证实压根没拖。
+            // 现在按下只记锚点，越过 10pt 阈值（`rebaseGrab`）才真正进入缩放，
+            // 纯点击全程零视觉变化。
+            resizeAnchor = CGPoint(x: ax, y: ay)
         }
         parent.bringSubviewToFront(self)
     }
@@ -786,8 +804,10 @@ final class AevonWindowView: UIView {
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner:
-            // V0.0.52：缩放已在 `grabBegin` 里就绪，越阈值只需把基准点对齐到当前点，
-            // 否则第一帧会按旧基准算出一段位移（窗口「跳一下」）。
+            // V0.0.54（AevonCornerNoFlashV54）：真正开始拖了才进入实时缩放
+            // （关投影 + 定圆角只在这时做，纯点击不会再触发任何视觉变化）。
+            beginLiveResize(anchor: resizeAnchor)
+            // 基准点对齐到当前点，否则第一帧会按旧基准算出一段位移（窗口「跳一下」）
             resizeOriginFrame = frame
             resizeOriginPoint = layerPoint
         }
@@ -1048,6 +1068,9 @@ final class AevonWindowView: UIView {
         // V0.0.46（AevonDockTapRestoreV46）：从自由态进停靠时先记住主窗几何，
         // 之后轻点窗身还原能回到原来那个位置和大小。
         if !isDocked { preDockFrame = frame }
+        // V0.0.54（AevonDockOrderV54）：记下进入这一列的时刻。
+        // 重排 / 补位按它排序，而不是按动画中的 `frame.minY` —— 后者在快速连点时会算出缺口。
+        if !isDocked { dockSeq = CACurrentMediaTime() }
         // 同侧已有的小窗（按纵向顺序），它们决定本窗落在这一列的第几格
         let peers = AevonEntryHost.dockedPeers(side: slot, excluding: self)
         // V0.0.50（AevonDockTop5V50）：这一侧已经排满 5 个 → 拒绝新的停靠。
@@ -1154,7 +1177,12 @@ final class AevonWindowView: UIView {
            previous.width > AevonSnap.minContentWidth,
            previous.height > AevonSnap.minContentWidth {
             // 原样恢复（只做屏幕边界夹取，不做任何避让 / 贴边改写）
-            target = AevonSnap.clamped(previous)
+            var p = previous
+            // V0.0.54（AevonFatMainV54）：高度一律按**当前**比例重算。
+            // `preDockFrame` 可能是旧版本（0.50 细长档）存下来的 266×547，
+            // 原样用会把「小胖屏」又还原成细长条 —— 用户 Aevon(47) 第 4 条看到的就是这个。
+            p.size.height = AevonSnap.height(forWidth: p.width)
+            target = AevonSnap.clamped(p)
         } else {
             target = AevonWindowView.defaultFrame()
         }

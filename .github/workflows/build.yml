@@ -576,7 +576,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["只允许一个主悬浮窗", "已压住系统空闲锁屏", "停靠小窗窗身按下", "全局通道开始拖动（缩放）"]
+          need = ["只允许一个主悬浮窗", "已压住系统空闲锁屏", "停靠小窗窗身按下", "下角块按下"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.51 日志串: " + ", ".join(miss))
@@ -592,13 +592,13 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["小胖屏 3:5", "内容按宽度铺满", "右下角只缩放",
-                  "点击切换形态已移除", "停靠小窗窗身按下"]
+          need = ["小胖屏 3:5", "内容按宽度铺满", "拖动才缩放，轻点无动作",
+                  "右下角轻点 → 不缩放也不切换形态", "停靠小窗窗身按下"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.52 日志串: " + ", ".join(miss))
               sys.exit(1)
-          print("V0.0.52 校验: 小胖屏停靠窗 + 右下角只缩放 已编入")
+          print("V0.0.52 校验: 小胖屏停靠窗 + 右下角只缩放（拖动）已编入")
           PY
 
           # ── V0.0.53：铺满裁切无黑边 / 停靠窗小胖屏 / 小窗接管吞摸 / 单主窗与停靠列 ──
@@ -619,6 +619,29 @@ jobs:
               sys.exit(1)
           print("V0.0.53 校验: 铺满裁切 + 停靠小胖屏 + 小窗接管 + 单主窗与两侧补位 已编入")
           PY
+
+          # ── V0.0.54：主窗回小胖屏 / 右下角不闪 / Guard 按停靠几何吞摸 /
+          #            停靠列按进入顺序排 / 后台卡片隐藏 / 空闲计时器重置 ──
+          for m in AevonFatMainV54 AevonCornerNoFlashV54 AevonGuardDockZoneV54 \
+                   AevonDockOrderV54 AevonSwitcherHideV54 AevonIdleResetV54; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.54 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["0.600 小胖屏", "拖动才缩放，轻点无动作",
+                  "右下角轻点 → 不缩放也不切换形态",
+                  "停靠列已同步给 Guard", "按进入顺序排序",
+                  "已隐藏浮窗", "已启用空闲计时器重置通道"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.54 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.54 校验: 主窗小胖屏 + 右下角零闪烁 + 停靠几何吞摸 + 顺序补位 + 后台卡片隐藏 + 锁屏重置 已编入")
+          PY
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardDockZoneV54' \
+            || { echo "::error::Guard 缺少按停靠槽位几何吞摸（AevonGuardDockZoneV54）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

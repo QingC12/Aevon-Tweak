@@ -15,7 +15,12 @@ final class AevonIdleGuard {
     private var reassertTimer: Timer?
     private var lastApplied = false
     private var lastLogAt: CFTimeInterval = 0
-    private let reassertInterval: TimeInterval = 20
+    /// V0.0.54（AevonIdleResetV54）：20 → 12 秒。
+    /// 系统最短的自动锁定档位是 30 秒，12 秒一次的重置足够把任何档位都顶住，
+    /// 同时把跨进程调用频率压在可忽略的量级。
+    private let reassertInterval: TimeInterval = 12
+    /// 只打一次「reset 通道是否可用」的证据日志
+    private var resetChannelLogged = false
 
     private init() {}
 
@@ -47,8 +52,20 @@ final class AevonIdleGuard {
             }
         }
         if on {
+            // 立刻起算一次，别等第一个 12 秒周期（用户开窗就马上看视频的场景）
+            if !resetChannelLogged {
+                resetChannelLogged = true
+                let channel = AevonIdleReassert()
+                AevonLog.info("[锁屏] 已启用空闲计时器重置通道（resetIdleTimer "
+                    + "\(channel ? "命中" : "未命中，仅保留 getter 兜底")，每 "
+                    + "\(Int(reassertInterval)) 秒一次）—— 播放视频时不再按系统时间黑屏"
+                    + "（AevonIdleResetV54）")
+            } else {
+                _ = AevonIdleReassert()
+            }
             startReassert()
         } else {
+            resetChannelLogged = false
             stopReassert()
         }
     }
@@ -63,7 +80,16 @@ final class AevonIdleGuard {
                 self.apply(false, count: 0)
                 return
             }
-            AevonIdleSetActive(true)
+            // V0.0.54（AevonIdleResetV54）：真正起作用的这一枪 —— 把空闲计时器重新起算。
+            // 旧版只重申 setIdleTimerDisabled，真机上系统根本不读那条路径（Aevon(47) 第 2 条）。
+            let channel = AevonIdleReassert()
+            if !self.resetChannelLogged {
+                self.resetChannelLogged = true
+                AevonLog.info("[锁屏] 已启用空闲计时器重置通道（resetIdleTimer "
+                    + "\(channel ? "命中" : "未命中，仅保留 getter 兜底")，每 "
+                    + "\(Int(self.reassertInterval)) 秒一次）—— 播放视频时不再按系统时间黑屏"
+                    + "（AevonIdleResetV54）")
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         reassertTimer = timer

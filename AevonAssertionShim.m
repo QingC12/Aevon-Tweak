@@ -204,6 +204,15 @@ __attribute__((used)) static const char AevonDockKeepSideV53Marker[] = "AevonDoc
 __attribute__((used)) static const char AevonDockForceV53Marker[] = "AevonDockForceV53";
 __attribute__((used)) static const char AevonDockSlotFitV53Marker[] = "AevonDockSlotFitV53";
 
+/* V0.0.54：主窗回小胖屏 / 右下角不闪 / Guard 按停靠几何吞摸 /
+ *          停靠列按进入顺序排 / 后台卡片隐藏 / 空闲计时器重置。 */
+__attribute__((used)) static const char AevonFatMainV54Marker[] = "AevonFatMainV54";
+__attribute__((used)) static const char AevonCornerNoFlashV54Marker[] = "AevonCornerNoFlashV54";
+__attribute__((used)) static const char AevonGuardDockZoneV54Marker[] = "AevonGuardDockZoneV54";
+__attribute__((used)) static const char AevonDockOrderV54Marker[] = "AevonDockOrderV54";
+__attribute__((used)) static const char AevonSwitcherHideV54Marker[] = "AevonSwitcherHideV54";
+__attribute__((used)) static const char AevonIdleResetV54Marker[] = "AevonIdleResetV54";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
@@ -239,18 +248,30 @@ static int AevonNotifyZoneToken(void) {
     return token;
 }
 
-#define AEVON_NOTIFY_VER (0x35ULL << 40)
+#define AEVON_NOTIFY_VER (0x36ULL << 40)
 #define AEVON_NOTIFY_RING_BIT (1ULL << 39)
 /* V0.0.49（AevonFloatTouchBitV49）：浮窗手势期状态位。
  * 位 0~47 已被 zone(0~37) / enabled(38) / ring(39) / 版本(40~47) 占满，
  * 所以浮窗位放到 48 —— 版本号同时升到 0x35，老 Guard 读到 0x35 也能解析 zone。 */
 #define AEVON_NOTIFY_FLOAT_BIT (1ULL << 48)
+/* V0.0.54（AevonGuardDockZoneV54）：停靠列状态位。
+ *
+ * Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
+ * bit48 是「按下时写、抬手时清」的实时位，跟 backboardd 直投 App 的那一份存在**时序竞态** ——
+ * 两个进程各自 sendEvent，谁先到不确定；快速连点时抬手刚清完、下一指又压下，Guard 读到 0 就放行。
+ * 停靠列几何是**确定的**（顶部 10% 起点、固定 5 格、尺寸由屏宽反算），
+ * 所以改成把「每侧有几个停靠小窗」写进状态位，Guard 自己算出每个槽位矩形，
+ * 命中就吞 —— 与触摸时序完全无关，提前几秒就准备好了。
+ * bit50~52 = 右侧数量(0~5)，bit53~55 = 左侧数量(0~5)。 */
+#define AEVON_NOTIFY_DOCK_R_SHIFT 50
+#define AEVON_NOTIFY_DOCK_L_SHIFT 53
+#define AEVON_NOTIFY_DOCK_MASK 0x7ULL
 
-/// 版本兼容：0x34（V46 及更早）与 0x35（本版）都算有效状态；
-/// 只认 0x34 会让「用旧版 Guard + 新版 SB」的机器上 zone 通道整条失效。
+/// 版本兼容：0x34（V46 及更早）、0x35（V49~V53）、0x36（本版，多停靠列状态）都算有效状态；
+/// 只认最新版会让「旧 Guard + 新 SB」或反过来的机器上 zone 通道整条失效。
 static inline BOOL AevonNotifyPackValid(uint64_t pack) {
     uint64_t ver = (pack >> 40) & 0xFFULL;
-    return (ver == 0x34ULL || ver == 0x35ULL);
+    return (ver == 0x34ULL || ver == 0x35ULL || ver == 0x36ULL);
 }
 
 void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
@@ -258,11 +279,15 @@ void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
         int token = AevonNotifyZoneToken();
         if (token < 0) { return; }
         /* 读-改-写：保留 bit39 圆盘状态位（圆盘开着时设置页改几何，不能把 ring 位冲掉），
-         * 以及 bit48 浮窗触摸位（设置页刷新配置时浮窗可能正被操作）。 */
+         * bit48 浮窗触摸位，以及 bit50~55 停靠列数量位（设置页刷新配置时浮窗可能正被操作）。 */
         uint64_t old = 0;
         notify_get_state(token, &old);
-        uint64_t keep = AevonNotifyPackValid(old)
-            ? (old & (AEVON_NOTIFY_RING_BIT | AEVON_NOTIFY_FLOAT_BIT)) : 0;
+        uint64_t keep = 0;
+        if (AevonNotifyPackValid(old)) {
+            keep = old & (AEVON_NOTIFY_RING_BIT | AEVON_NOTIFY_FLOAT_BIT
+                          | (AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_R_SHIFT)
+                          | (AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_L_SHIFT));
+        }
         uint64_t pack = keep;
         pack |= ((uint64_t)llround(x)) & 0x3FFULL;
         pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
@@ -304,6 +329,35 @@ void AevonNotifySetFloatTouch(int on) {
         notify_get_state(token, &pack);
         if (!AevonNotifyPackValid(pack)) { pack = 0; }
         if (on) { pack |= AEVON_NOTIFY_FLOAT_BIT; } else { pack &= ~AEVON_NOTIFY_FLOAT_BIT; }
+        pack |= AEVON_NOTIFY_VER;
+        notify_set_state(token, pack);
+        notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* V0.0.54（AevonGuardDockZoneV54）：停靠列数量状态位。
+ *
+ * SpringBoard 每次停靠 / 还原 / 关窗后调用一次，把「左右两侧各有几个停靠小窗」写进共享内存。
+ * Guard 读到数量后，用与 SB 完全一致的固定几何（顶部 10% 起点、每格 dockH+8、贴边）自己算出
+ * 每个槽位矩形，命中就吞 —— 这条路径与触摸时序无关，可彻底堵住
+ * 「快速点停靠小窗仍会点到 App」（Aevon(47) 第 5 条）。
+ * 传 -1 表示「状态未知 / 不写」，0 表示该侧没有停靠窗。 */
+void AevonNotifySetDockState(int rightCount, int leftCount) {
+    @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return; }
+        uint64_t pack = 0;
+        notify_get_state(token, &pack);
+        if (!AevonNotifyPackValid(pack)) { pack = 0; }
+        uint64_t r = (rightCount < 0) ? ((pack >> AEVON_NOTIFY_DOCK_R_SHIFT) & AEVON_NOTIFY_DOCK_MASK)
+            : (uint64_t)(rightCount & 7);
+        uint64_t l = (leftCount < 0) ? ((pack >> AEVON_NOTIFY_DOCK_L_SHIFT) & AEVON_NOTIFY_DOCK_MASK)
+            : (uint64_t)(leftCount & 7);
+        pack &= ~((AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_R_SHIFT)
+                  | (AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_L_SHIFT));
+        pack |= (r << AEVON_NOTIFY_DOCK_R_SHIFT);
+        pack |= (l << AEVON_NOTIFY_DOCK_L_SHIFT);
         pack |= AEVON_NOTIFY_VER;
         notify_set_state(token, pack);
         notify_post("com.aevon.guardzone");
