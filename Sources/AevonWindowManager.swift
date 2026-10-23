@@ -250,8 +250,9 @@ enum AevonWindowManager {
                 + "，前台场景=\(frontIdentity ?? "无")，浮窗App=\(bundleID)"
                 + "，判定关的是前台自己=\(closingFrontmost)（AevonFrontmostCloseV59）")
             if closingFrontmost {
-                AevonLog.info("[窗口] 浮窗 App 即当前全屏前台 App：跳过场景休眠"
-                    + "（\(bundleID)）（AevonFrontmostCloseV59）")
+                AevonLog.info("[窗口] 浮窗 App 即当前全屏前台 App：跳过场景休眠、保持前台"
+                    + "（\(bundleID)，V61 追加：销毁 presenter 后做前台回弹、逼系统重新呈现全屏）"
+                    + "（AevonFrontmostCloseV59 AevonFrontmostRepreV61）")
             } else {
                 AevonSceneHelper.sleep(bundleID)
             }
