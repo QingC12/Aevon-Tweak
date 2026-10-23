@@ -77,6 +77,8 @@ __attribute__((used)) static const char AevonGuardGhostRecordV67Marker[] = "Aevo
 __attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
 __attribute__((used)) static const char AevonGuardLateStartV69Marker[] = "AevonGuardLateStartV69";
 __attribute__((used)) static const char AevonGuardGhostWideV70Marker[] = "AevonGuardGhostWideV70";
+/// CI 标记（V0.0.71）：moved/ended 晚到重判 —— began 竞态泄漏的短触摸回收
+__attribute__((used)) static const char AevonGuardLateRejudgeV71Marker[] = "AevonGuardLateRejudgeV71";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -683,6 +685,30 @@ static void AevonGuardCallOriginal(id self, SEL _cmd, UIEvent *event) {
     ((void (*)(id, SEL, UIEvent *))AevonGuardOrigSendEvent)(self, _cmd, event);
 }
 
+/* V0.0.71（AevonGuardLateRejudgeV71）：began 竞态泄漏的短触摸回收。
+ *
+ * Aevon(64) 实锤：慢速轻点停靠小窗还原主窗 100% 穿透。根因不是宽限不够长，
+ * 而是判定结构洞 —— Guard 只在 UITouchPhaseBegan 那一帧决定接管与否：
+ * App 进程处理 began 几乎总比 SpringBoard 写 bit48 快几毫秒（SB 侧要先跑完
+ * 浮窗命中测试才置位），Guard 读到 0 就放行；而 moved/ended 阶段只看 owned
+ * 标记，哪怕此刻 bit48 已经是 1（0.7s 宽限全程有效）也绝不复查 —— 于是
+ * began+ended 完整穿透进 App 合成一次点击。宽限（V67/V70）、幽灵格（V67/V70）
+ * 都救不了「本条已泄漏的触摸序列」，它们只影响后续新触摸的判定输入。
+ *
+ * 修法：moved/ended/cancelled 阶段对未接管的触摸做一次**晚到重判** ——
+ * 位移 <25pt（轻点特征；滚动/拖动必然远超）且此刻命中任一浮窗判据
+ * （bit48 / 圆盘 / 主窗矩形 / 停靠格含幽灵格），立即接管吞掉。
+ * App 只收到 began（外加零星 moved），没有 ended —— UIKit 不会合成点击，
+ * 悬挂 touch 由系统自行取消。滚动 / 拖动手势位移必超阈值，完全不受影响。 */
+static BOOL AevonGuardLateRejudgeHit(CGPoint pt) {
+    if (AevonGuardFloatTouch()) { return YES; }
+    if (AevonGuardRingOpen()) { return YES; }
+    CGRect floatRect = AevonGuardFloatRectRect();
+    if (!CGRectIsEmpty(floatRect) && CGRectContainsPoint(floatRect, pt)) { return YES; }
+    if (AevonGuardDockHitTest(pt)) { return YES; }
+    return NO;
+}
+
 static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     if (AevonGuardOrigSendEvent == NULL) {
         return;
@@ -759,6 +785,9 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
 
         if (phase == UITouchPhaseBegan) {
             CGPoint pt = [touch locationInView:nil];
+            /* V0.0.71：无条件记录起点 —— 晚到重判要按「总位移」区分轻点与滚动，
+             * 不能只在热区命中时才记（旧实现只有热区路径写 start）。 */
+            AevonGuardSetTouchStart(touch, pt);
             BOOL hardZone = NO;
             /* V0.0.67（AevonGuardGhostRecordV67）：停靠格几何命中**先跑，且无论后面
              * 哪条判据吞掉这一触摸都照跑**。
@@ -823,7 +852,29 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 if (dx < -8.0 && fabs(dx) >= fabs(dy)) {
                     AevonGuardSetTouchOwned(touch, YES);
                     owned = YES;
+                } else if (hypot(dx, dy) < 25.0 && AevonGuardLateRejudgeHit(now)) {
+                    /* V0.0.71（AevonGuardLateRejudgeV71）：began 竞态泄漏的回收 ——
+                     * 位移还很小（仍是轻点）且此刻任一浮窗判据已成立，立刻接管。 */
+                    AevonGuardSetTouchOwned(touch, YES);
+                    owned = YES;
                 }
+            }
+        }
+
+        /* V0.0.71（AevonGuardLateRejudgeV71）：ended / cancelled 的最后一道闸。
+         * began 泄漏的序列若一路没动（<25pt），抬手时此刻 bit48/停靠格/主窗矩形
+         * 已全部就位 —— 命中即吞掉 ended：App 只剩一个无 ended 的 began，
+         * UIKit 不会合成点击（这正是「点小窗还原 → App 被点一下」的终结）。 */
+        if (!owned && (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled)) {
+            CGPoint now = [touch locationInView:nil];
+            CGPoint start = CGPointZero;
+            CGFloat dist = 0;
+            if (AevonGuardGetTouchStart(touch, &start)) {
+                dist = hypot(now.x - start.x, now.y - start.y);
+            }
+            if (dist < 25.0 && AevonGuardLateRejudgeHit(now)) {
+                AevonGuardSetTouchOwned(touch, YES);
+                owned = YES;
             }
         }
 
