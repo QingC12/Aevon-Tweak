@@ -222,6 +222,9 @@ final class AevonWindowView: UIView {
     /// V0.0.46：从「顶部 inset」改成「实际裁剪量 + 窗内上留白」两个缓存键
     private var lastTopCrop: CGFloat = -1
     private var lastTopPad: CGFloat = -1
+    /// V0.0.55（AevonAdaptiveContentV55）：上一次用的「内容来源尺寸」
+    /// —— 自适应开启后它是场景尺寸（= 窗口内容区），否则是整屏尺寸。
+    private var lastSourceSize: CGSize = .zero
 
     /// 合帧用的待处理拖拽目标（V0.0.45，AevonFloatSmoothV45）。
     ///
@@ -427,17 +430,22 @@ final class AevonWindowView: UIView {
                          completion: (() -> Void)? = nil) {
         guard target.width > 1, target.height > 1 else { completion?(); return }
         isAnimatingGeometry = true
-        let screenW = max(1, UIScreen.main.bounds.width)
+        // V0.0.55（AevonAdaptiveContentV55）：内容来源尺寸由场景决定 ——
+        // 自适应成功时是场景尺寸（≈ 窗口内容区），失败时退回整屏。
+        let adaptive = sceneHost.isAdaptiveContent
+        let source = sceneHost.sourceSize
         // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
-        // 目标若是停靠态（本窗已 isDocked）就用 dockTopPadding，否则用主窗的 14pt。
-        let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-        let cropTop = AevonSnap.cropTop
+        let topPad = self.isDocked ? AevonSnap.dockTopPadding
+            : (adaptive ? 0 : AevonSnap.contentTopPadding)
+        let cropTop = adaptive ? 0 : AevonSnap.cropTop
         // V0.0.52（AevonFitContentV52）：动画中间态的缩放也必须和 `applyContentScale`
         // 用同一条公式，否则动画期按宽度、落位后按完整适配，画面会在结束的一瞬间跳一下。
         let scale = AevonSnap.contentScale(windowWidth: target.width,
                                           clipHeight: target.height,
-                                          topPad: topPad)
-        let xOffset = (target.width - screenW * scale) / 2.0
+                                          topPad: topPad,
+                                          source: source,
+                                          sourceCropTop: cropTop)
+        let xOffset = (target.width - source.width * scale) / 2.0
         let container = sceneHost.container
         let radius = AevonWindowView.cornerRadius(forWidth: target.width)
         let clipTarget = CGRect(origin: .zero, size: target.size)
@@ -611,45 +619,57 @@ final class AevonWindowView: UIView {
     /// 底栏被 `clipsToBounds` 直接吃掉。现在取「按宽度」与「按高度」两个比例的**较小值**：
     /// 内容永远完整，宽度方向多余的部分左右均分（窗口深色底），高度方向贴顶不留白。
     private func applyContentScale() {
-        let screen = UIScreen.main.bounds.size
-        guard screen.width > 0, screen.height > 0,
-              contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
-
-        // V0.0.46（AevonTopCropV46 AevonFloatPaddingV46）：
-        // 裁的是 `cropTop`（状态栏空白 − 8pt，保证导航栏一行不缺），
-        // 内容整体再往下让 `contentTopPadding`，窗口圆角就啃不到左上角的返回按钮。
-        // V0.0.47（AevonNoBottomPadV47）：底部那条深色边已删除（任何 App 里都是死黑），
-        // 所以内容一直铺到窗口底边 —— 裁剪交给 contentClip 的 clipsToBounds。
-        let cropTop = AevonSnap.cropTop
-        // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）
-        let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-
         let clipSize = contentClip.bounds.size
-        // V0.0.52：宽、高各自能容纳的比例取小值 → 内容完整
+        guard clipSize.width > 0, clipSize.height > 0 else { return }
+
+        // V0.0.55（AevonAdaptiveContentV55）：把「App 场景」的尺寸真的改成窗口内容区大小，
+        // 让 App 自己按新尺寸重排 —— 这是 Stheno 的做法（它逆向里就是
+        // FBSMutableSceneSettings + setFrame: + updateSettings:…）。
+        // 成功时 source 就是窗口内容区本身，顶栏 / 底栏 / 右侧工具栏全部在原位，
+        // 既没有黑边也不用裁底（Aevon(48) 第 2 条）。
+        // 拖动 / 缩放期间不请求：每一帧改场景尺寸会让 App 疯狂重排。
+        // 停靠小窗也不请求：它是**缩略预览**，跟着主窗那套场景尺寸缩放就行；
+        // 不然每次停靠 / 还原都改一次场景，App 会连续重排三次卡顿。
+        if !isLiveResizing && !isDocked {
+            _ = sceneHost.updateAdaptiveSize(clipSize)
+        }
+        let adaptive = sceneHost.isAdaptiveContent
+        let source = sceneHost.sourceSize
+        let cropTop = adaptive ? 0 : AevonSnap.cropTop
+        // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）；
+        // 自适应生效时也不需要顶部留白（App 自己知道窗口有多高）。
+        let topPad = isDocked ? AevonSnap.dockTopPadding
+            : (adaptive ? 0 : AevonSnap.contentTopPadding)
+
         let scale = AevonSnap.contentScale(windowWidth: clipSize.width,
                                            clipHeight: clipSize.height,
-                                           topPad: topPad)
+                                           topPad: topPad,
+                                           source: source,
+                                           sourceCropTop: cropTop)
         // 内容比窗口窄时左右均分留边（贴左会在右边留一大块，看着像错位）
-        let xOffset = (clipSize.width - screen.width * scale) / 2.0
+        let xOffset = (clipSize.width - source.width * scale) / 2.0
 
         if abs(clipSize.width - lastClipSize.width) < 0.01,
            abs(clipSize.height - lastClipSize.height) < 0.01,
            abs(scale - lastAppliedScale) < 0.0001,
            abs(cropTop - lastTopCrop) < 0.5,
-           abs(topPad - lastTopPad) < 0.5 {
+           abs(topPad - lastTopPad) < 0.5,
+           abs(source.width - lastSourceSize.width) < 0.5,
+           abs(source.height - lastSourceSize.height) < 0.5 {
             return
         }
         lastClipSize = clipSize
         lastAppliedScale = scale
         lastTopCrop = cropTop
         lastTopPad = topPad
+        lastSourceSize = source
 
         let container = sceneHost.container
         // anchorPoint 只在第一次设一次：每帧写它会让 CA 重算 position，纯浪费
         if container.layer.anchorPoint != .zero {
             container.layer.anchorPoint = .zero
         }
-        let targetBounds = CGRect(origin: .zero, size: screen)
+        let targetBounds = CGRect(origin: .zero, size: source)
         if container.bounds != targetBounds {
             container.bounds = targetBounds
         }
@@ -1091,12 +1111,18 @@ final class AevonWindowView: UIView {
            abs(target.minY - frame.minY) < 0.5,
            abs(target.width - frame.width) < 0.5 {
             currentSlot = slot
+            sceneHost.setContentInteraction(false)
             persistFrame()
             AevonEntryHost.relayoutDockedColumn(side: slot)
             return
         }
 
         currentSlot = slot
+        // V0.0.55（AevonDockNoTouchV55）：停靠小窗的内容停止接收触摸 ——
+        // 它的唯一操作是「轻点还原」，绝不能把手指转发进 App（Aevon(48) 第 4 条）。
+        sceneHost.setContentInteraction(false)
+        AevonLog.info("[窗口] 停靠小窗内容已停止接收触摸（轻点只还原主窗，不再转发进 App 合成点击）"
+            + "（AevonDockNoTouchV55）")
         // V0.0.48：停靠走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
         // V0.0.49（AevonFineMotionV49）：时长 / 阻尼统一走 AevonMotion（0.42s / 0.80）
         animateGeometry(to: target,
@@ -1193,6 +1219,8 @@ final class AevonWindowView: UIView {
         // 还原前先记住自己在哪一侧，置成自由态（这样它不会被算进停靠列），
         // 然后立刻让整列重新按「中心锚点 + 向下生长」对齐 —— 空位当场被补上。
         currentSlot = .free
+        // V0.0.55（AevonDockNoTouchV55）：还原成主窗 → 内容重新接收触摸
+        sceneHost.setContentInteraction(true)
         // V0.0.53（AevonDockSlotFitV53）：两侧一起重排 —— 上面的 demote 可能刚把某个窗
         // 挪到对面那一列，只重排本侧会留下缺口（Aevon(46) 第 4 条）。
         AevonEntryHost.relayoutAllDockedColumns()
@@ -1284,6 +1312,9 @@ final class AevonWindowView: UIView {
         // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
         // NSInternalInconsistencyException: Must be invalidated before deallocating
         sceneHost.onFirstContent = nil
+        // V0.0.55（AevonAdaptiveContentV55）：关窗前把场景尺寸还原成整屏，
+        // 否则这个 App 下次真的全屏打开时只有一小块（场景设置是我们改的）。
+        sceneHost.resetAdaptiveSize()
         sceneHost.invalidate()
         sceneHost.container.removeFromSuperview()
         removeFromSuperview()

@@ -226,13 +226,19 @@ enum AevonSnap {
     ///   - windowWidth: 窗口宽度
     ///   - clipHeight: 内容区（contentClip）高度
     ///   - topPad: 内容顶部留白（主窗 14pt / 停靠窗 0）
-    static func contentScale(windowWidth: CGFloat, clipHeight: CGFloat, topPad: CGFloat) -> CGFloat {
-        let screen = UIScreen.main.bounds
+    static func contentScale(windowWidth: CGFloat, clipHeight: CGFloat, topPad: CGFloat,
+                             source: CGSize? = nil,
+                             sourceCropTop: CGFloat? = nil) -> CGFloat {
+        let screen = source ?? UIScreen.main.bounds.size
         guard screen.width > 1, screen.height > 1, windowWidth > 1, clipHeight > 1 else { return 1 }
-        let usableHeight = max(screen.height * 0.6, screen.height - cropTop)
+        let crop = sourceCropTop ?? cropTop
+        let usableHeight = max(screen.height * 0.6, screen.height - crop)
         let byWidth = windowWidth / screen.width
         let avail = max(1, clipHeight - topPad)
         let byHeight = avail / usableHeight
+        // V0.0.55（AevonAdaptiveContentV55）：场景被真的改成窗口尺寸后，
+        // source 就是窗口内容区本身 → byWidth ≈ byHeight ≈ 1，
+        // 既不会裁切也不会留黑边，App 的顶栏 / 底栏 / 右侧工具栏全部在原位。
         return max(0.02, max(byWidth, byHeight))
     }
 

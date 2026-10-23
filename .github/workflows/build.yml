@@ -640,6 +640,29 @@ jobs:
               sys.exit(1)
           print("V0.0.54 校验: 主窗小胖屏 + 右下角零闪烁 + 停靠几何吞摸 + 顺序补位 + 后台卡片隐藏 + 锁屏重置 已编入")
           PY
+
+          # ── V0.0.55：覆盖层显示策略（锁屏/控制中心/通知中心/切换器隐藏）+
+          #            停靠小窗内容不再转发触摸 + 真实改场景尺寸（内容自适应）+
+          #            空闲锁屏断言 + 锁屏请求拦截 ──
+          for m in AevonOverlayPolicyV55 AevonDockNoTouchV55 AevonAdaptiveContentV55 \
+                   AevonIdleAssertV55 AevonLockBlockV55 AevonSceneFrameV55; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.55 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["浮窗只在桌面与全屏 App 中显示",
+                  "浮窗已留在桌面层",
+                  "内容自适应已生效",
+                  "停靠小窗内容已停止接收触摸",
+                  "场景尺寸还原为整屏"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.55 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.55 校验: 覆盖层显示策略 + 停靠窗零转发 + 场景尺寸自适应 + 锁屏拦截 已编入")
+          PY
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardDockZoneV54' \
             || { echo "::error::Guard 缺少按停靠槽位几何吞摸（AevonGuardDockZoneV54）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \

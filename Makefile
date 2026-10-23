@@ -14,6 +14,8 @@ TWEAK_NAME = Aevon AevonGuard
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
     AevonIdleShim.m \
+    AevonOverlayShim.m \
+    AevonSceneShim.m \
     Sources/AevonSceneHook.m \
     Sources/AevonTouchHook.m \
     Sources/Aevon.swift \

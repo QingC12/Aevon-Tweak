@@ -161,4 +161,36 @@ enum AevonSceneHelper {
             timer.cancel()
         }
     }
+
+    // MARK: - 自适应场景尺寸（V0.0.55，AevonAdaptiveContentV55）
+
+    /// 场景标识 → 目标尺寸。由 `AevonSceneHost.updateAdaptiveSize` 写入，
+    /// `AevonFBSceneHooks` 在系统推送新 settings 时按它把 frame 顶回去
+    /// （否则 SpringBoard 一次布局更新就会把场景重置回整屏）。
+    private static var adaptiveFrames: [String: CGSize] = [:]
+
+    static func applyAdaptiveFrame(scene: AnyObject, sceneID: String, size: CGSize) -> Bool {
+        guard !sceneID.isEmpty, size.width > 1, size.height > 1 else { return false }
+        let ok = AevonSceneSetFrameSize(scene, size)
+        if ok {
+            adaptiveFrames[sceneID] = size
+        }
+        return ok
+    }
+
+    static func restoreSceneFrame(scene: AnyObject, sceneID: String) {
+        if !sceneID.isEmpty { adaptiveFrames.removeValue(forKey: sceneID) }
+        _ = AevonSceneSetFrameSize(scene, UIScreen.main.bounds.size)
+    }
+
+    /// 按场景标识查目标尺寸（identifier 各系统版本前缀不同，做双向包含匹配）。
+    static func adaptiveFrame(for identifier: String) -> CGSize? {
+        guard !identifier.isEmpty else { return nil }
+        if let exact = adaptiveFrames[identifier] { return exact }
+        for (key, value) in adaptiveFrames
+        where identifier.contains(key) || key.contains(identifier) {
+            return value
+        }
+        return nil
+    }
 }

@@ -87,7 +87,7 @@ enum AevonEntryHost {
     /// 浮窗层（V0.0.36）：容器内专门承载浮窗外壳的子视图，永远在入口控件之下。
     private static var floatLayer: AevonWindowLayerView?
     /// 当前 App 场景的容器视图（弱引用；App 关掉后自动失效）
-    private static weak var appSceneView: UIView?
+    static private(set) weak var appSceneView: UIView?
 
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
@@ -565,6 +565,34 @@ enum AevonEntryHost {
         guard appSceneView === view else { return }
         appSceneView = nil
         attachToWindowRoot(reason: "App 场景消失")
+    }
+
+    /// App 画面还剩多少高度（占屏高的比例）。上滑回家过程中这个值会一路变小。
+    static func appSceneVisibleHeightRatio() -> CGFloat {
+        guard let view = appSceneView, let window = view.window else { return 1 }
+        let rect = view.convert(view.bounds, to: window)
+        let screenHeight = max(1, UIScreen.main.bounds.height)
+        return max(0, min(1, rect.height / screenHeight))
+    }
+
+    /// 把容器从「正在缩小的 App 画面」里搬回桌面窗口（V0.0.55，AevonOverlayPolicyV55）。
+    ///
+    /// 用户 Aevon(48) 第 1 条：上滑回家时小窗消失、回到桌面又出现。
+    /// 根因是容器挂在 App 画面里，画面被系统带着缩小 / 淡出，容器只能跟着走。
+    /// 现在在画面明显缩小（不到半屏）时立刻搬回桌面窗口 ——
+    /// 容器在两个宿主里都是整屏坐标系、尺寸相同，所以画面**完全不动**，
+    /// 只是不再跟着 App 卡片一起缩。
+    static func detachFromAppScene(reason: String) {
+        guard container != nil, appSceneView != nil, mountedInAppScene else { return }
+        attachToWindowRoot(reason: reason)
+        AevonLog.info("[入口] App 画面正在缩小，浮窗已留在桌面层（\(reason)）（AevonOverlayPolicyV55）")
+    }
+
+    /// 画面恢复整屏（用户取消了上滑 / 又切回该 App）→ 把容器搬回 App 画面。
+    static func reattachAppSceneIfPossible() {
+        guard container != nil, !mountedInAppScene else { return }
+        guard let view = appSceneView, isUsableHost(view), coversScreen(view) else { return }
+        attach(to: view, reason: "App 画面恢复整屏")
     }
 
     /// 搬回入口窗口根视图。

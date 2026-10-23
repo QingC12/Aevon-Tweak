@@ -213,6 +213,21 @@ __attribute__((used)) static const char AevonDockOrderV54Marker[] = "AevonDockOr
 __attribute__((used)) static const char AevonSwitcherHideV54Marker[] = "AevonSwitcherHideV54";
 __attribute__((used)) static const char AevonIdleResetV54Marker[] = "AevonIdleResetV54";
 
+/* V0.0.55（读 Aevon(48) + AevonGuard(20)）
+ *   AevonOverlayPolicyV55    浮窗只在桌面 / 全屏 App 显示（锁屏、控制中心、通知中心、切换器隐藏）
+ *   AevonDockNoTouchV55      停靠小窗内容不接收触摸（从源头断掉转发进 App 的点击）
+ *   AevonAdaptiveContentV55  真实改场景尺寸，让 App 按窗口大小重排（Stheno 同款）
+ *   AevonIdleAssertV55       向系统申请空闲计时器禁用断言
+ *   AevonLockBlockV55        直接拦下空闲触发的锁屏请求（侧键手动锁屏放行）
+ *   AevonSceneFrameV55       场景 frame 读写垫片
+ */
+__attribute__((used)) static const char AevonOverlayPolicyV55Marker[] = "AevonOverlayPolicyV55";
+__attribute__((used)) static const char AevonDockNoTouchV55Marker[] = "AevonDockNoTouchV55";
+__attribute__((used)) static const char AevonAdaptiveContentV55Marker[] = "AevonAdaptiveContentV55";
+__attribute__((used)) static const char AevonIdleAssertV55Marker[] = "AevonIdleAssertV55";
+__attribute__((used)) static const char AevonLockBlockV55Marker[] = "AevonLockBlockV55";
+__attribute__((used)) static const char AevonSceneFrameV55Marker[] = "AevonSceneFrameV55";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

@@ -2,6 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <QuartzCore/QuartzCore.h>
 
 /// V0.0.51（AevonIdleNoLockV51）：有浮窗时禁止系统空闲锁屏。
 ///
@@ -134,11 +135,138 @@ static void AevonIdleInstallHook(void) {
     (void)AevonIdleCoordinatorInstance();
 }
 
+/* V0.0.55（AevonIdleAssertV55）：真正让系统「以为有人在用」。
+ *
+ * Aevon(48) 第 3 条已经第三次反馈「主悬浮窗开启期间还是会随着系统设置的时间黑屏锁屏」，
+ * Aevon(48) 日志里那行写得很清楚：
+ *   `已启用空闲计时器重置通道（resetIdleTimer 未命中，仅保留 getter 兜底，每 12 秒一次）`
+ * —— 单例没找到、reset 方法没命中，等于整条通道空转。
+ *
+ * 这里换成正路：SpringBoard 的 `SBIdleTimerGlobalCoordinator` 支持
+ * `acquireIdleTimerDisableAssertionForReason:`，拿到的是一个断言对象，
+ * 只要持有它就等于「本进程声明：别锁屏」（和 App 里 setIdleTimerDisabled 同语义，
+ * 但作用在 SpringBoard 自己身上，正好是我们需要的）。
+ * 关闭最后一个浮窗时 `invalidate` 归还 —— 绝不永久禁用锁屏。
+ */
+static id gAevonIdleAssertion = nil;
+
+static BOOL AevonIdleAcquireAssertion(void) {
+    if (gAevonIdleAssertion != nil) { return YES; }
+    id coordinator = AevonIdleCoordinatorInstance();
+    if (coordinator == nil) { return NO; }
+    for (NSString *name in @[@"acquireIdleTimerDisableAssertionForReason:",
+                             @"_acquireIdleTimerDisableAssertionForReason:",
+                             @"acquireIdleTimerDisableAssertionForReason"]) {
+        SEL sel = NSSelectorFromString(name);
+        if (![coordinator respondsToSelector:sel]) { continue; }
+        @try {
+            id (*fn)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+            id assertion = fn(coordinator, sel, @"Aevon 浮窗播放中");
+            if (assertion != nil) {
+                gAevonIdleAssertion = assertion;
+                NSLog(@"[Aevon] 空闲锁屏：已取得系统禁用断言（%@）", name);
+                return YES;
+            }
+        } @catch (NSException *exception) {
+        }
+    }
+    return NO;
+}
+
+static void AevonIdleReleaseAssertion(void) {
+    if (gAevonIdleAssertion == nil) { return; }
+    @try {
+        id assertion = gAevonIdleAssertion;
+        gAevonIdleAssertion = nil;
+        if ([assertion respondsToSelector:NSSelectorFromString(@"invalidate")]) {
+            void (*fn)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+            fn(assertion, NSSelectorFromString(@"invalidate"));
+        }
+        NSLog(@"[Aevon] 空闲锁屏：已归还系统禁用断言");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* V0.0.55（AevonLockBlockV55）：最后一道闸 —— 直接拦掉「空闲触发的锁屏请求」。
+ *
+ * 断言 + 重置都可能被系统某条判定路径绕过（前两版已经证明），
+ * 所以这里在真正的锁屏入口 `SBLockScreenManager -lockUIFromSource:withOptions:` 上做判定：
+ *   · 有浮窗 → 丢弃这次锁屏请求（屏幕不会黑，也不会进锁屏）；
+ *   · 侧键手动锁屏（source = 1）永远放行 —— 用户主动按电源键必须能锁。
+ * 每次请求都打一行 source 值（限频），下一版就能确证枚举是否猜对。
+ */
+typedef void (*AevonLockUIFn)(id, SEL, long long, id);
+typedef void (*AevonLockUIFnCompletion)(id, SEL, long long, id, id);
+static AevonLockUIFn gAevonOrigLockUI = NULL;
+static AevonLockUIFnCompletion gAevonOrigLockUICompletion = NULL;
+static BOOL gAevonLockBlockInstalled = NO;
+
+static const long long AevonLockSourceLockButton = 1;
+
+static void AevonLockUIFiltered(id self, SEL _cmd, long long source, id options) {
+    if (gAevonIdleActive && source != AevonLockSourceLockButton) {
+        static CFTimeInterval lastAt = 0;
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - lastAt > 2.0) {
+            lastAt = now;
+            NSLog(@"[Aevon] 已拦下空闲锁屏请求（source=%lld，有浮窗在显示）AevonLockBlockV55", source);
+        }
+        return;
+    }
+    if (gAevonOrigLockUI != NULL) { gAevonOrigLockUI(self, _cmd, source, options); }
+}
+
+static void AevonLockUIFilteredCompletion(id self, SEL _cmd, long long source, id options, id completion) {
+    if (gAevonIdleActive && source != AevonLockSourceLockButton) {
+        if (completion != nil) {
+            @try {
+                void (^block)(BOOL) = completion;
+                block(NO);
+            } @catch (NSException *exception) {
+            }
+        }
+        return;
+    }
+    if (gAevonOrigLockUICompletion != NULL) {
+        gAevonOrigLockUICompletion(self, _cmd, source, options, completion);
+    }
+}
+
+static void AevonIdleInstallLockBlock(void) {
+    if (gAevonLockBlockInstalled) { return; }
+    @try {
+        Class cls = objc_getClass("SBLockScreenManager");
+        if (cls == Nil) { return; }
+        gAevonLockBlockInstalled = YES;
+
+        SEL sel = NSSelectorFromString(@"lockUIFromSource:withOptions:");
+        Method method = class_getInstanceMethod(cls, sel);
+        if (method != NULL) {
+            gAevonOrigLockUI = (AevonLockUIFn)method_setImplementation(method, (IMP)AevonLockUIFiltered);
+            NSLog(@"[Aevon] 空闲锁屏：已接管 lockUIFromSource:withOptions:");
+        }
+        SEL sel2 = NSSelectorFromString(@"lockUIFromSource:withOptions:completion:");
+        Method method2 = class_getInstanceMethod(cls, sel2);
+        if (method2 != NULL) {
+            gAevonOrigLockUICompletion =
+                (AevonLockUIFnCompletion)method_setImplementation(method2, (IMP)AevonLockUIFilteredCompletion);
+            NSLog(@"[Aevon] 空闲锁屏：已接管 lockUIFromSource:withOptions:completion:");
+        }
+    } @catch (NSException *exception) {
+    }
+}
+
 void AevonIdleSetActive(BOOL on) {
     BOOL changed = (gAevonIdleActive != on);
     gAevonIdleActive = on;
 
-    if (on) { AevonIdleInstallHook(); }
+    if (on) {
+        AevonIdleInstallHook();
+        AevonIdleInstallLockBlock();
+        AevonIdleAcquireAssertion();
+    } else {
+        AevonIdleReleaseAssertion();
+    }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         UIApplication *app = [UIApplication sharedApplication];
@@ -169,6 +297,8 @@ void AevonIdleSetActive(BOOL on) {
 BOOL AevonIdleReassert(void) {
     if (!gAevonIdleActive) { return NO; }
     AevonIdleInstallHook();
+    AevonIdleInstallLockBlock();
+    BOOL assertion = AevonIdleAcquireAssertion();
     BOOL reset = AevonIdleResetCoordinator();
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -180,7 +310,8 @@ BOOL AevonIdleReassert(void) {
         AevonIdleSetter fn = (AevonIdleSetter)[app methodForSelector:setter];
         if (fn != NULL) { fn(app, setter, YES); }
     });
-    return reset;
+    // V0.0.55：断言拿到也算「通道已就绪」—— 它比 reset 更硬
+    return assertion || reset;
 }
 
 BOOL AevonIdleIsActive(void) {

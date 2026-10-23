@@ -40,6 +40,91 @@ final class AevonSceneHost {
     private var ticks = 0
     private var invalidated = false
 
+    /// 用户是否允许浮窗内容接收触摸（设置里的 TouchEnabled）
+    private let contentInteractiveByPref: Bool
+
+    /// 开关内容的触摸（V0.0.55，AevonDockNoTouchV55）。
+    ///
+    /// 用户 Aevon(48) 第 4 条：「快速点击停靠小窗切换到主悬浮窗时，依旧会触发 app 内点击操作」。
+    ///
+    /// 根因不是 Guard 没吞（SB 侧那条全局通道确实吞掉了自己那一份），
+    /// 而是浮窗里的内容本身就是一个**真的场景视图** —— 手指压在它上面时，
+    /// UIKit 会把触摸通过 presenter 的 UI 连接转发进 App 进程，App 收到
+    /// 「按下 + 抬起」就自己合成了一次点击（抖音于是暂停）。
+    ///
+    /// 停靠小窗根本不需要和内容交互（它的唯一操作是「轻点还原」），
+    /// 所以停靠态直接把内容的触摸关掉，从源头断掉转发。
+    func setContentInteraction(_ enabled: Bool) {
+        guard contentInteractiveByPref else { return }
+        container.isUserInteractionEnabled = enabled
+        presentationView.isUserInteractionEnabled = enabled
+    }
+
+    // MARK: - 自适应尺寸（V0.0.55，AevonAdaptiveContentV55）
+
+    /// 已经生效的场景尺寸（0 = 还没改成功，仍按整屏处理）
+    private(set) var adaptiveContentSize: CGSize = .zero
+    private var lastRequestedSize: CGSize = .zero
+    private var lastRequestAt: CFTimeInterval = 0
+
+    var isAdaptiveContent: Bool { adaptiveContentSize.width > 1 }
+
+    /// 内容来源尺寸：自适应成功 = 场景尺寸，否则 = 整屏尺寸。
+    var sourceSize: CGSize {
+        isAdaptiveContent ? adaptiveContentSize : UIScreen.main.bounds.size
+    }
+
+    /// 把 App 场景改成窗口内容区大小，让 App 自己重排（Stheno 同款机制）。
+    ///
+    /// 用户 Aevon(48) 第 2 条：小胖屏比例对了，但内容还是不显示底栏。
+    /// 前几版一直是「整屏画面缩放着显示」——按宽度铺满就必然裁掉底部（底栏没了），
+    /// 按高度装下就必然左右留黑边（Aevon(45) 已否掉）。两头堵死的根源是：
+    /// **画面尺寸压根没变过**。Stheno 的做法（逆向数据：`FBSMutableSceneSettings` +
+    /// `setFrame:` + `updateSettings:withTransitionContext:completion:`）是把场景改小，
+    /// App 于是真的按这个尺寸排版 —— 底栏、顶栏、右侧工具栏自然全在。
+    ///
+    /// 只在主窗（非停靠态）请求，且 0.3 秒限频 + 1.5pt 容差，避免拖动时疯狂重排。
+    /// - Returns: 当前是否处于自适应状态
+    @discardableResult
+    func updateAdaptiveSize(_ size: CGSize) -> Bool {
+        guard AevonPrefs.bool("AdaptiveContent", default: true) else { return false }
+        guard !invalidated, size.width > 40, size.height > 40 else { return false }
+        if abs(size.width - lastRequestedSize.width) < 1.5,
+           abs(size.height - lastRequestedSize.height) < 1.5 {
+            return isAdaptiveContent
+        }
+        let now = CACurrentMediaTime()
+        if now - lastRequestAt < 0.3 { return isAdaptiveContent }
+        lastRequestAt = now
+        lastRequestedSize = size
+
+        let rounded = CGSize(width: size.width.rounded(), height: size.height.rounded())
+        let ok = AevonSceneHelper.applyAdaptiveFrame(scene: scene, sceneID: sceneID, size: rounded)
+        if ok {
+            if !isAdaptiveContent || abs(adaptiveContentSize.width - rounded.width) > 0.5 {
+                AevonLog.info("[场景] 内容自适应已生效：场景改为 \(Int(rounded.width))x\(Int(rounded.height))"
+                    + "，App 按窗口尺寸重排（顶栏/底栏/右侧工具栏完整，无黑边不裁切）"
+                    + "（AevonAdaptiveContentV55）")
+            }
+            adaptiveContentSize = rounded
+        } else {
+            if !isAdaptiveContent {
+                AevonLog.info("[场景] 内容自适应未生效（本机场景设置不支持 frame），"
+                    + "继续用整屏缩放（AevonAdaptiveContentV55）")
+            }
+        }
+        return ok
+    }
+
+    /// 关窗时把场景尺寸还原成整屏，避免这个 App 下次前台打开只有一小块。
+    func resetAdaptiveSize() {
+        guard isAdaptiveContent else { return }
+        adaptiveContentSize = .zero
+        lastRequestedSize = .zero
+        AevonSceneHelper.restoreSceneFrame(scene: scene, sceneID: sceneID)
+        AevonLog.info("[场景] 已把 \(bundleID) 的场景尺寸还原为整屏（AevonAdaptiveContentV55）")
+    }
+
     init?(scene: AnyObject, sceneID: String, bundleID: String) {
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
         // 用同一个 id 会撞车。
@@ -69,6 +154,7 @@ final class AevonSceneHost {
         // 通过 presenter 的 UI 连接转发进 App 进程，不需要我们自己造触摸事件。
         // 开关默认开，若怀疑触摸引发异常可在 设置 → Aevon 关掉。
         let interactive = AevonPrefs.bool("TouchEnabled", default: true)
+        self.contentInteractiveByPref = interactive
         host.isUserInteractionEnabled = interactive
         host.clipsToBounds = true
         view.frame = host.bounds
