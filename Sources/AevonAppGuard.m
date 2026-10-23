@@ -81,6 +81,7 @@ __attribute__((used)) static const char AevonGuardGhostWideV70Marker[] = "AevonG
 __attribute__((used)) static const char AevonGuardLateRejudgeV71Marker[] = "AevonGuardLateRejudgeV71";
 /// CI 标记（V0.0.72）：幽灵格自动记录 + began 放行取证 + 版本日志
 __attribute__((used)) static const char AevonGuardGhostAutoV72Marker[] = "AevonGuardGhostAutoV72";
+__attribute__((used)) static const char AevonGuardScreenPtV73Marker[] = "AevonGuardScreenPtV73";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -365,16 +366,18 @@ static BOOL AevonGuardDockHitTest(CGPoint pt) {
         if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
         if (gAevonDockW < 1.0) { return NO; }
         CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-        const CGFloat slop = 3.0;
+        /* V0.0.73：命中外扩 —— 横向 4pt（贴边留白），纵向 24pt（槽位顶边留白 + 取整误差） */
+        const CGFloat slopX = 4.0;
+        const CGFloat slopY = 24.0;
         for (NSUInteger side = 0; side < 2; side++) {
             NSUInteger count = (side == 0) ? right : left;
             CGFloat originX = (side == 0) ? (sw - gAevonDockW) : 0;
             for (NSUInteger i = 0; i < count; i++) {
                 CGRect r = CGRectMake(originX, gAevonDockTop + (CGFloat)i * gAevonDockStep,
                                       gAevonDockW, gAevonDockH);
-                if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) {
+                if (CGRectContainsPoint(CGRectInset(r, -slopX, -slopY), pt)) {
                     /* V0.0.70：记录到幽灵表（去重续期，表满则覆盖最旧一条） */
-                    CGRect rec = CGRectInset(r, -slop, -slop);
+                    CGRect rec = CGRectInset(r, -slopX, -slopY);
                     NSInteger slot = -1;
                     for (NSInteger gi = 0; gi < gAevonDockGhostCount; gi++) {
                         if (CGRectEqualToRect(gAevonDockGhosts[gi], rec)) { slot = gi; break; }
@@ -771,12 +774,43 @@ static void AevonGuardCallOriginal(id self, SEL _cmd, UIEvent *event) {
  * （bit48 / 圆盘 / 主窗矩形 / 停靠格含幽灵格），立即接管吞掉。
  * App 只收到 began（外加零星 moved），没有 ended —— UIKit 不会合成点击，
  * 悬挂 touch 由系统自行取消。滚动 / 拖动手势位移必超阈值，完全不受影响。 */
-static BOOL AevonGuardLateRejudgeHit(CGPoint pt) {
+/* V0.0.73（AevonGuardScreenPtV73）：触点必须换算到**屏幕坐标**再比几何。
+ *
+ * Aevon(66) 日志实锤坐标错位：同一次轻点，SpringBoard 记「窗身按下 374,161」，
+ * App 进程 Guard 记「began 放行 x=386,y=72」—— 纵向差约 90pt。原因是
+ * `locationInView:nil` 给的是**窗口坐标**，而停靠槽位 / 主窗矩形 / 热区全部是
+ * **屏幕坐标**。停靠槽位顶边 = 屏高 10% = 93，Guard 读到的 y=72 差 21pt，
+ * 四条判据全部落空 → began 放行 → 完整 began+ended 进 App = 一次点击。
+ * 这也解释了为什么 V67 宽限、V70 幽灵格、V71 晚到重判（当时同样只比窗口坐标）
+ * 全都「改了但没用」—— 它们喂给几何判据的坐标一直是错的。
+ *
+ * 修法：两套坐标都试 —— 窗口坐标（老行为，窗口正好在原点时才对）与
+ * `[touch.window convertPoint:toWindow:nil]` 换算出的屏幕坐标，任一命中即命中。
+ * 双保险：停靠槽位的命中外扩从 3pt 提到「横向 4pt / 纵向 24pt」，
+ * 覆盖 dock 窗口顶部留白与像素取整误差。 */
+static BOOL AevonGuardPointInRect(CGRect rect, CGPoint a, CGPoint b) {
+    if (CGRectIsEmpty(rect)) { return NO; }
+    return CGRectContainsPoint(rect, a) || CGRectContainsPoint(rect, b);
+}
+
+static CGPoint AevonGuardScreenPoint(UITouch *touch, CGPoint windowPoint) {
+    @try {
+        UIWindow *w = touch.window;
+        if (w) {
+            CGPoint c = [w convertPoint:windowPoint toWindow:nil];
+            if (isfinite(c.x) && isfinite(c.y)) { return c; }
+        }
+    } @catch (NSException *e) { }
+    return windowPoint;
+}
+
+static BOOL AevonGuardLateRejudgeHit(CGPoint winPt, CGPoint scrPt) {
     if (AevonGuardFloatTouch()) { return YES; }
     if (AevonGuardRingOpen()) { return YES; }
     CGRect floatRect = AevonGuardFloatRectRect();
-    if (!CGRectIsEmpty(floatRect) && CGRectContainsPoint(floatRect, pt)) { return YES; }
-    if (AevonGuardDockHitTest(pt)) { return YES; }
+    if (AevonGuardPointInRect(floatRect, winPt, scrPt)) { return YES; }
+    if (AevonGuardDockHitTest(scrPt)) { return YES; }
+    if (AevonGuardDockHitTest(winPt)) { return YES; }
     return NO;
 }
 
@@ -858,9 +892,11 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
 
         if (phase == UITouchPhaseBegan) {
             CGPoint pt = [touch locationInView:nil];
+            /* V0.0.73：同一触点的两套坐标 —— 窗口坐标（老行为）+ 屏幕坐标（几何判据的真坐标系） */
+            CGPoint spt = AevonGuardScreenPoint(touch, pt);
             /* V0.0.71：无条件记录起点 —— 晚到重判要按「总位移」区分轻点与滚动，
              * 不能只在热区命中时才记（旧实现只有热区路径写 start）。 */
-            AevonGuardSetTouchStart(touch, pt);
+            AevonGuardSetTouchStart(touch, spt);
             BOOL hardZone = NO;
             /* V0.0.67（AevonGuardGhostRecordV67）：停靠格几何命中**先跑，且无论后面
              * 哪条判据吞掉这一触摸都照跑**。
@@ -871,7 +907,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
              * bit48 又在 350ms 后放行 —— 原槽位从此零保护，用户连点的第二击直达
              * App 画面合成一次点击。现在先跑几何命中（命中即记幽灵格，含 1 秒续期），
              * 再用结果进判定链，两条吞摸路径互不遮挡。 */
-            BOOL dockHit = AevonGuardDockHitTest(pt);
+            BOOL dockHit = (AevonGuardDockHitTest(spt) || AevonGuardDockHitTest(pt));
             if (floatTouch) {
                 /* V0.0.49：浮窗手势期 —— 整屏吞。手指压在浮窗上时，
                  * App 不该收到任何输入（这是「点小窗还原 → 抖音暂停」的正面修法）。 */
@@ -881,10 +917,10 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * 旧版留 18% 是给「万一圆盘需要顶部交互」，实际不存在这个场景，
                  * 反而多留一条缝。图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */
                 hardZone = YES;
-            } else if (hasFloatRect && CGRectContainsPoint(floatRect, pt)) {
+            } else if (hasFloatRect && AevonGuardPointInRect(floatRect, pt, spt)) {
                 /* V0.0.56：落在主悬浮窗（含外侧手势区）上 —— 这块屏幕本来就被浮窗盖着，
                  * App 不该收到任何输入。双击的第二下（间隔 0.36s > bit48 的 350ms 放行）
-                 * 就靠这条判据兜住。 */
+                 * 就靠这条判据兜住。V0.0.73 起两套坐标都试。 */
                 hardZone = YES;
             } else if (dockHit) {
                 /* V0.0.54：落在某一格停靠小窗上 —— 这本来就是浮窗自己的那块屏幕，
@@ -902,28 +938,34 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 owned = YES;
             } else {
                 /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
-                 * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。 */
+                 * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。
+                 * V0.0.73：同时打两套坐标 + 窗口 frame + Guard 自己算出的槽位几何，
+                 * 坐标错位 / 度量偏差一眼可辨。 */
                 CGFloat sw2 = [UIScreen mainScreen].bounds.size.width;
                 if (gAevonDockW < 1.0) { AevonGuardDockMetrics(); }
-                if (pt.x >= sw2 - gAevonDockW - 30.0) {
+                if (spt.x >= sw2 - gAevonDockW - 30.0 || pt.x >= sw2 - gAevonDockW - 30.0) {
                     static CFTimeInterval lastProbe = 0;
                     CFTimeInterval now2 = CACurrentMediaTime();
                     if (now2 - lastProbe > 1.0) {
                         lastProbe = now2;
                         NSUInteger r2 = 0, l2 = 0;
                         AevonGuardDockCounts(&r2, &l2);
-                        AevonGuardWriteLog(NO, @"began 放行（x=%.0f,y=%.0f float=%d ring=%d rect=%d dockR=%lu ghost=%lu）",
-                                           pt.x, pt.y,
+                        CGRect wf = CGRectZero;
+                        @try { if (touch.window) { wf = touch.window.frame; } } @catch (NSException *e) { }
+                        AevonGuardWriteLog(NO, @"began 放行（win=%.0f,%.0f scr=%.0f,%.0f float=%d ring=%d rect=%d dockR=%lu ghost=%lu winFrame=%.0f,%.0f,%.0f,%.0f slot=%.0f,%.0f %.0fx%.0f）",
+                                           pt.x, pt.y, spt.x, spt.y,
                                            floatTouch ? 1 : 0,
                                            ringOpen ? 1 : 0,
-                                           (hasFloatRect && CGRectContainsPoint(floatRect, pt)) ? 1 : 0,
+                                           AevonGuardPointInRect(floatRect, pt, spt) ? 1 : 0,
                                            (unsigned long)r2,
-                                           (unsigned long)gAevonDockGhostCount);
+                                           (unsigned long)gAevonDockGhostCount,
+                                           wf.origin.x, wf.origin.y, wf.size.width, wf.size.height,
+                                           sw2 - gAevonDockW, gAevonDockTop, gAevonDockW, gAevonDockH);
                     }
                 }
             }
             if (!owned && !CGRectIsEmpty(AevonGuardZone)
-                && CGRectContainsPoint(AevonGuardZone, pt)) {
+                && AevonGuardPointInRect(AevonGuardZone, pt, spt)) {
                 /* V0.0.56：**热区改为「移动才吞」**。
                  *
                  * 热区（屏幕右边缘 18pt 宽、底边往上 258pt）是呼出圆盘用的，
@@ -934,21 +976,22 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * 现在只记起点、先放行；真正出现横向拖动（> 8pt）才接管，
                  * 手势照样呼得出圆盘，纯点击则完整交给 App。
                  * （V0.0.71 起 began 已无条件记起点，这里重复设置同值，仅保留判读注释。） */
-                AevonGuardSetTouchStart(touch, pt);
+                AevonGuardSetTouchStart(touch, spt);
             }
         } else if (phase == UITouchPhaseMoved && !owned) {
             CGPoint start;
             if (AevonGuardGetTouchStart(touch, &start)) {
                 CGPoint now = [touch locationInView:nil];
-                CGFloat dx = now.x - start.x;
-                CGFloat dy = now.y - start.y;
+                CGPoint snow = AevonGuardScreenPoint(touch, now);
+                CGFloat dx = snow.x - start.x;
+                CGFloat dy = snow.y - start.y;
                 /* 只有「往左划」才接管 —— 那才是呼出圆盘的手势（SB 侧判据：左滑 ≥30pt）。
                  * 纯点击、竖向滚动（抖音右侧上下滑）、向右划一律放行，
                  * App 拿到的是完整触摸序列，不会出现「按钮点不动」或「滑到一半断掉」。 */
                 if (dx < -8.0 && fabs(dx) >= fabs(dy)) {
                     AevonGuardSetTouchOwned(touch, YES);
                     owned = YES;
-                } else if (hypot(dx, dy) < 25.0 && AevonGuardLateRejudgeHit(now)) {
+                } else if (hypot(dx, dy) < 25.0 && AevonGuardLateRejudgeHit(now, snow)) {
                     /* V0.0.71（AevonGuardLateRejudgeV71）：began 竞态泄漏的回收 ——
                      * 位移还很小（仍是轻点）且此刻任一浮窗判据已成立，立刻接管。 */
                     AevonGuardSetTouchOwned(touch, YES);
@@ -958,8 +1001,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                     CFTimeInterval now3 = CACurrentMediaTime();
                     if (now3 - lastRejudgeMoved > 1.0) {
                         lastRejudgeMoved = now3;
-                        AevonGuardWriteLog(NO, @"晚到重判接管（moved，位移 %.0fpt，x=%.0f,y=%.0f）",
-                                           hypot(dx, dy), now.x, now.y);
+                        AevonGuardWriteLog(NO, @"晚到重判接管（moved，位移 %.0fpt，win=%.0f,%.0f scr=%.0f,%.0f）",
+                                           hypot(dx, dy), now.x, now.y, snow.x, snow.y);
                     }
                 }
             }
@@ -971,12 +1014,13 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
          * UIKit 不会合成点击（这正是「点小窗还原 → App 被点一下」的终结）。 */
         if (!owned && (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled)) {
             CGPoint now = [touch locationInView:nil];
+            CGPoint snow = AevonGuardScreenPoint(touch, now);
             CGPoint start = CGPointZero;
             CGFloat dist = 0;
             if (AevonGuardGetTouchStart(touch, &start)) {
-                dist = hypot(now.x - start.x, now.y - start.y);
+                dist = hypot(snow.x - start.x, snow.y - start.y);
             }
-            if (dist < 25.0 && AevonGuardLateRejudgeHit(now)) {
+            if (dist < 25.0 && AevonGuardLateRejudgeHit(now, snow)) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
                 /* V0.0.72：取证（限频 1s）——ended 闸生效证据 */
@@ -984,8 +1028,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 CFTimeInterval now4 = CACurrentMediaTime();
                 if (now4 - lastRejudgeEnded > 1.0) {
                     lastRejudgeEnded = now4;
-                    AevonGuardWriteLog(NO, @"晚到重判接管（ended，位移 %.0fpt，x=%.0f,y=%.0f）",
-                                       dist, now.x, now.y);
+                    AevonGuardWriteLog(NO, @"晚到重判接管（ended，位移 %.0fpt，win=%.0f,%.0f scr=%.0f,%.0f）",
+                                       dist, now.x, now.y, snow.x, snow.y);
                 }
             }
         }
@@ -1116,6 +1160,9 @@ static void AevonGuardInstall(void) {
     /* V0.0.72（AevonGuardGhostAutoV72）：版本取证 —— 驻留 App 进程 respring 后不会重启，
      * 里面跑的可能还是旧版 Guard；下一轮日志靠版本号直接区分新旧进程。 */
     AevonGuardWriteLog(YES, @"Guard 版本 V72 激活（晚到重判 + 幽灵自动记录）（AevonGuardGhostAutoV72）");
+    /* V0.0.73（AevonGuardScreenPtV73）：坐标换算到屏幕坐标再比几何 —— Aevon(66) 实锤
+     * 窗口坐标与屏幕坐标纵向差约 90pt，停靠槽位判据整条落空。 */
+    AevonGuardWriteLog(YES, @"Guard 版本 V73 激活（窗口/屏幕双坐标系判据 + 停靠格纵向外扩 24pt）（AevonGuardScreenPtV73）");
 }
 
 /*

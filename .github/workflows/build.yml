@@ -967,6 +967,28 @@ jobs:
                   print(f"::error::V0.0.72 Guard 缺串(utf16): {s}"); sys.exit(1)
           print("V0.0.72 校验: Guard 幽灵自动记录/取证/版本日志 已编入")
           PY72G
+          # V0.0.73：Guard 坐标换算（窗口/屏幕双坐标系 + 停靠格纵向外扩 24pt）+ P1 provider 协议解析
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardScreenPtV73' \
+            || { echo "::error::V0.0.73 Guard 标记缺失: AevonGuardScreenPtV73（双坐标系判据）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSceneP1V73' \
+            || { echo "::error::V0.0.73 标记缺失: AevonSceneP1V73（P1 provider 协议解析）"; exit 1; }
+          python3 - "$GUARD_DYLIB" <<'PY73G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          # Guard 中文串在 __ustring 段 → UTF-16-LE（历史铁律，别再用 utf-8 查）
+          for s in ["Guard 版本 V73 激活","began 放行（win=","晚到重判接管（ended"]:
+              if s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.73 Guard 缺串(utf16): {s}"); sys.exit(1)
+          print("V0.0.73 校验: Guard 双坐标系判据 + 取证格式 已编入")
+          PY73G
+          python3 - "$DYLIB" <<'PY73M'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonSceneP1V73"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.73 缺串: {s}"); sys.exit(1)
+          print("V0.0.73 校验: P1 provider 协议解析（代理/扫描）已编入")
+          PY73M
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

@@ -297,6 +297,127 @@ final class AevonSceneDriver: NSObject {
         return nil
     }
 
+    // MARK: - V0.0.73：provider 协议方法解析（第 4 步唯一死因）
+
+    /// 四段 init 内部真正会调用的协议方法（Aevon(66) 实锤异常）：
+    /// `-[SBMainWorkspace sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:]:
+    ///   unrecognized selector` —— provider 断言过了，但方法没实现。
+    static let entityProviderSelector = "sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"
+    /// 代理转发目标（响应「下划线变体」的真实对象，通常是 SBMainWorkspace 本体）
+    static var proxyForwardTarget: NSObject?
+
+    /// 全类扫描：哪些类实现了某个选择子（只在候选全失败时跑，日志留证）
+    static func classesResponding(to selName: String, limit: Int = 6) -> [String] {
+        var out: [String] = []
+        let sel = NSSelectorFromString(selName)
+        var count: UInt32 = 0
+        guard let list = objc_copyClassList(&count) else { return out }
+        defer { free(UnsafeMutableRawPointer(list)) }
+        for i in 0..<Int(count) {
+            let cls: AnyClass = list[i]
+            if class_getInstanceMethod(cls, sel) != nil {
+                out.append(NSStringFromClass(cls))
+                if out.count >= limit { break }
+            }
+        }
+        return out
+    }
+
+    /// 造一个运行时子类，实现四段 init 需要的那个协议方法，转调目标对象的「下划线变体」。
+    static func ensureProviderProxy() -> NSObject? {
+        let clsName = "AevonSceneProviderProxy"
+        if let existing = NSClassFromString(clsName) as? NSObject.Type {
+            return existing.init()
+        }
+        guard let newCls = objc_allocateClassPair(NSObject.self, clsName, 0) else { return nil }
+        let sel = NSSelectorFromString(entityProviderSelector)
+        let block: @convention(block) (AnyObject, AnyObject, Bool, AnyObject) -> AnyObject? = { _, app, create, role in
+            guard let target = AevonSceneDriver.proxyForwardTarget else { return nil }
+            let alt = NSSelectorFromString("_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
+            guard let m = class_getInstanceMethod(type(of: target), alt) else { return nil }
+            typealias Fn = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject) -> Unmanaged<NSObject>?
+            let fn = unsafeBitCast(method_getImplementation(m), to: Fn.self)
+            let appObj = (app as? NSObject) ?? NSObject()
+            let roleObj = (role as? NSObject) ?? NSObject()
+            return fn(target, alt, appObj, create, roleObj)?.takeUnretainedValue()
+        }
+        let imp = imp_implementationWithBlock(block)
+        class_addMethod(newCls, sel, imp, "@@:@B@")
+        objc_registerClassPair(newCls)
+        return (newCls as? NSObject.Type)?.init()
+    }
+
+    /// 解析 provider：先找**直接实现协议方法**的实例，其次用代理转调下划线变体，
+    /// 最后全类扫描留证（下一轮即使仍失败，日志里也有「谁实现了」的答案）。
+    private static func findSceneEntityProvider(diag: StringBox) -> NSObject? {
+        let sel = NSSelectorFromString(entityProviderSelector)
+        var candidates: [NSObject] = []
+        var labels: [String] = []
+        func add(_ obj: NSObject?, _ label: String) {
+            guard let obj else { return }
+            candidates.append(obj)
+            labels.append(label)
+        }
+        let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance")
+        add(ws, "SBMainWorkspace")
+        var coord: NSObject? = nil
+        if let ws {
+            for s in ["sceneManagerCoordinator", "sceneManager"] {
+                let ss = NSSelectorFromString(s)
+                if ws.responds(to: ss), let r = ws.perform(ss)?.takeUnretainedValue() as? NSObject {
+                    coord = r
+                    add(r, "WS.\(s)")
+                    break
+                }
+            }
+        }
+        if coord == nil {
+            coord = tryShared(classNamed: "SBSceneManagerCoordinator", selector: "sharedInstance")
+            add(coord, "SBSceneManagerCoordinator")
+        }
+        if let coord {
+            for s in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
+                let ss = NSSelectorFromString(s)
+                if coord.responds(to: ss), let r = coord.perform(ss)?.takeUnretainedValue() as? NSObject {
+                    add(r, "Coord.\(s)")
+                }
+            }
+        }
+        // 1) 直接响应协议方法
+        for (i, obj) in candidates.enumerated() where obj.responds(to: sel) {
+            diag.items.append("provider=\(labels[i])（响应协议）")
+            return obj
+        }
+        // 2) 响应下划线变体 → 代理转调
+        let altSel = NSSelectorFromString("_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
+        for (i, obj) in candidates.enumerated() where obj.responds(to: altSel) {
+            proxyForwardTarget = obj
+            if let proxy = ensureProviderProxy() {
+                diag.items.append("provider=代理→\(labels[i])._sceneIdentity…")
+                return proxy
+            }
+        }
+        // 3) 全类扫描留证 + 能用 sharedInstance 取到的直接上
+        let exact = classesResponding(to: entityProviderSelector)
+        let alt = classesResponding(to: "_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
+        diag.items.append("实现类=\(exact.isEmpty ? "无" : exact.joined(separator: ","))")
+        diag.items.append("下划线实现类=\(alt.isEmpty ? "无" : alt.joined(separator: ","))")
+        for name in exact {
+            guard let cls = NSClassFromString(name) else { continue }
+            for selName in ["sharedInstance", "sharedManager", "defaultManager"] {
+                let s = NSSelectorFromString(selName)
+                if (cls as AnyObject).responds(to: s),
+                   let inst = (cls as AnyObject).perform(s)?.takeUnretainedValue() as? NSObject,
+                   inst.responds(to: sel) {
+                    diag.items.append("provider=扫描取到 \(name)")
+                    return inst
+                }
+            }
+        }
+        diag.items.append("provider=nil（候选=\(labels.joined(separator: ","))）")
+        return nil
+    }
+
     private static func findDisplayIdentity(mainDC: NSObject?) -> NSObject? {
         // 路线 1（V0.0.72）：主屏 dc 母本的 _identity ivar（P0 dump 实锤存在）
         if let mainDC, let id = readObjectIvar(mainDC, "_identity") {
@@ -361,8 +482,7 @@ final class AevonSceneDriver: NSObject {
                     break
                 }
             }
-            let provider = AevonSceneDriver.findSceneHandleProvider()
-            diag.items.append("provider=\(provider.map { String(describing: type(of: $0)) } ?? "nil")")
+            let provider = AevonSceneDriver.findSceneEntityProvider(diag: diag)
             let displayID = AevonSceneDriver.findDisplayIdentity(mainDC: mainDC)
             diag.items.append("displayID=\(displayID.map { String(describing: type(of: $0)) } ?? "nil")")
             // 依次尝试 P0 方法表里确认存在的全部 init 候选
@@ -376,44 +496,51 @@ final class AevonSceneDriver: NSObject {
             ]
             for (selName, argc) in candidates {
                 let sel = NSSelectorFromString(selName)
+                let short = selName.components(separatedBy: ":").count > 1
+                    ? selName.components(separatedBy: ":")[1] : selName
                 guard let method = class_getInstanceMethod(type(of: alloced), sel) else {
-                    diag.items.append("无方法 \(selName.components(separatedBy: ":")[1])")
+                    diag.items.append("无方法 \(short)")
                     continue
                 }
                 let imp = method_getImplementation(method)
-                var result: Unmanaged<NSObject>? = nil
-                switch argc {
-                case 4:
-                    let fn = unsafeBitCast(imp, to: Init4.self)
-                    result = fn(alloced, sel, app, true, provider, displayID)
-                case 3:
-                    let fn = unsafeBitCast(imp, to: Init3.self)
-                    result = fn(alloced, sel, app, provider, displayID)
-                case 5:
-                    guard let uid = (app.perform(NSSelectorFromString("uniqueIdentifier"))?
-                        .takeUnretainedValue() as? NSObject) else {
-                        diag.items.append("五段init缺uniqueID")
-                        continue
+                var attempt: NSObject? = nil
+                /* V0.0.73：每个候选**独立异常隔离 + 各自 fresh alloc**。
+                 * 旧实现整段共用一个 @try：第一个候选抛异常（Aevon(66)：provider 不响应
+                 * sceneIdentityForApplication…）就把后面所有候选一起跳过了。 */
+                self.tryRun("第4步-\(short)") {
+                    guard let fresh = AevonSceneDriver.allocObj(cls) else { return }
+                    var result: Unmanaged<NSObject>? = nil
+                    switch argc {
+                    case 4:
+                        let fn = unsafeBitCast(imp, to: Init4.self)
+                        result = fn(fresh, sel, app, true, provider, displayID)
+                    case 3:
+                        let fn = unsafeBitCast(imp, to: Init3.self)
+                        result = fn(fresh, sel, app, provider, displayID)
+                    case 5:
+                        guard let uid = (app.perform(NSSelectorFromString("uniqueIdentifier"))?
+                            .takeUnretainedValue() as? NSObject) else { return }
+                        let fn = unsafeBitCast(imp, to: Init5.self)
+                        result = fn(fresh, sel, app, uid, nil, provider, displayID)
+                    default:
+                        return
                     }
-                    let fn = unsafeBitCast(imp, to: Init5.self)
-                    result = fn(alloced, sel, app, uid, nil, provider, displayID)
-                default:
-                    continue
+                    if let r = result { attempt = r.takeRetainedValue() as NSObject? }
                 }
-                if let r = result, let obj = r.takeRetainedValue() as NSObject? {
-                    entity = obj
-                    diag.items.append("成功=\(selName.components(separatedBy: ":")[1])")
+                if let attempt {
+                    entity = attempt
+                    diag.items.append("成功=\(short)")
                     break
                 }
-                diag.items.append("返回nil=\(selName.components(separatedBy: ":")[1])")
+                diag.items.append("返回nil=\(short)")
             }
         }
         guard let entity else {
             let d = diag.items.isEmpty ? "" : "｜诊断：\(diag.items.joined(separator: "；"))"
-            AevonLog.warn("[场景] P1 第 4 步失败：SBDeviceApplicationSceneEntity 全部候选 init 都构造不出实体\(d)（AevonSceneDriverP1 AevonSceneP1V71）")
+            AevonLog.warn("[场景] P1 第 4 步失败：SBDeviceApplicationSceneEntity 全部候选 init 都构造不出实体\(d)（AevonSceneDriverP1 AevonSceneP1V73）")
             return
         }
-        AevonLog.info("[场景] P1 第 4 步通过：sceneEntity 已构造（AevonSceneDriverP1 AevonSceneP1V72）")
+        AevonLog.info("[场景] P1 第 4 步通过：sceneEntity 已构造（AevonSceneDriverP1 AevonSceneP1V73）")
         self.step5Create(manager: manager, entity: entity, mainDC: mainDC)
     }
 
