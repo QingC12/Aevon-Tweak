@@ -1002,6 +1002,15 @@ jobs:
                   print(f"::error::V0.0.74 Guard 缺串(utf16): {s}"); sys.exit(1)
           print("V0.0.74 校验: Guard 时间戳兜底 + 取证字段 已编入")
           PY74G
+          # V0.0.75（AevonCrashFuseV75）：P1 崩溃熔断（面包屑 + 启动自动关开关）
+          # Aevon(67)：P1 第 4 步 perform 一个返回 BOOL 的方法后 String(describing:)，
+          # 把 1 当对象指针读野 isa → SpringBoard 退出（自动注销），且重启后 20s 自检再崩。
+          strings "$DYLIB" | grep -q 'AevonCrashFuseV75' \
+            || { echo "::error::V0.0.75 标记缺失: AevonCrashFuseV75（崩溃熔断）"; exit 1; }
+          # 类型安全调用垫片：BOOL / 整数 / 结构体返回值绝不再被当成对象指针
+          strings "$DYLIB" | grep -q 'AevonSceneSafeCallV75' \
+            || { echo "::error::V0.0.75 标记缺失: AevonSceneSafeCallV75（安全方法调用垫片未编入）"; exit 1; }
+          echo "V0.0.75 校验: P1 崩溃熔断 + BOOL/对象返回值类型安全垫片 已编入"
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

@@ -1,3 +1,7 @@
+/* CI 标记（V0.0.75）：安全方法调用垫片必须编进主 dylib（
+ * Aevon(67) 自动注销的根治点：BOOL 返回值被 perform 当成对象指针）。 */
+__attribute__((used)) static const char AevonSceneSafeCallV75Marker[] = "AevonSceneSafeCallV75";
+
 #import "AevonSceneShim.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -586,5 +590,153 @@ BOOL AevonSettingsApplyDisplaySize(id settings, CGSize size) {
         return YES;
     } @catch (NSException *exception) {
         return NO;
+    }
+}
+
+#pragma mark - V0.0.75（AevonCrashFuseV75）：P1 崩溃防护三件套
+
+NSString *AevonSafeClassName(id obj) {
+    if (obj == nil) { return @"nil"; }
+    /* 只用 runtime 读类指针：object_getClass 对合法对象永远安全，
+     * 而 Swift 的 type(of:) 会走 swift_getObjectType —— 对象指针是 0x1（BOOL）
+     * 这类非法值时直接读野 isa 崩溃（Aevon(67) 自动注销的根因）。 */
+    Class c = object_getClass(obj);
+    if (c == Nil) { return @"?"; }
+    const char *n = class_getName(c);
+    if (n == NULL) { return @"?"; }
+    return [NSString stringWithUTF8String:n] ?: @"?";
+}
+
+BOOL AevonSafeBoolCall(id obj, NSString *selectorName, BOOL *ok) {
+    if (ok) { *ok = NO; }
+    if (obj == nil || selectorName.length == 0) { return NO; }
+    @try {
+        SEL sel = NSSelectorFromString(selectorName);
+        if (sel == NULL || ![obj respondsToSelector:sel]) { return NO; }
+        Method m = class_getInstanceMethod(object_getClass(obj), sel);
+        if (m == NULL) { return NO; }
+        char ret[16] = {0};
+        method_getReturnType(m, ret, sizeof(ret));
+        /* B = C++ bool / c = char / i = int：只有这几种才按 BOOL 调。
+         * 返回对象（@）的绝不能走这条路 —— 那才是安全的 perform 途径。 */
+        if (ret[0] != 'B' && ret[0] != 'c' && ret[0] != 'i') { return NO; }
+        BOOL (*fn)(id, SEL) = (BOOL (*)(id, SEL))method_getImplementation(m);
+        BOOL v = fn(obj, sel);
+        if (ok) { *ok = YES; }
+        return v;
+    } @catch (NSException *e) {
+        if (ok) { *ok = NO; }
+        return NO;
+    }
+}
+
+/* 面包屑文件：与 Aevon.log 同目录（/var/mobile），respring 不会清。
+ * 只在 P1 实验期间存在，正常走完立刻删除。 */
+static const char *kAevonCrumbPath = "/var/mobile/Aevon.p1crumb";
+static char s_crumbBuf[128];
+
+void AevonCrumbWrite(const char *stage) {
+    @try {
+        if (stage == NULL) { return; }
+        NSString *s = [NSString stringWithUTF8String:stage] ?: @"?";
+        /* 带时间戳，日志里能看出崩在各轮的第几秒 */
+        NSString *line = [NSString stringWithFormat:@"%.0f %@",
+                          [[NSDate date] timeIntervalSince1970], s];
+        [line writeToFile:[NSString stringWithUTF8String:kAevonCrumbPath]
+               atomically:YES
+                 encoding:NSUTF8StringEncoding
+                    error:NULL];
+    } @catch (NSException *e) { }
+}
+
+const char *AevonCrumbRead(void) {
+    s_crumbBuf[0] = '\0';
+    @try {
+        NSString *s = [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:kAevonCrumbPath]
+                                                encoding:NSUTF8StringEncoding
+                                                   error:NULL];
+        if (s.length > 0) {
+            const char *utf8 = [s UTF8String];
+            if (utf8 != NULL) {
+                strncpy(s_crumbBuf, utf8, sizeof(s_crumbBuf) - 1);
+                s_crumbBuf[sizeof(s_crumbBuf) - 1] = '\0';
+            }
+        }
+    } @catch (NSException *e) { }
+    return s_crumbBuf;
+}
+
+void AevonCrumbClear(void) {
+    @try {
+        [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:kAevonCrumbPath]
+                                                   error:NULL];
+    } @catch (NSException *e) { }
+    s_crumbBuf[0] = '\0';
+}
+
+#pragma mark - V0.0.75：返回值类型安全的方法调用
+
+id AevonSafeCallObject(id obj, NSString *selectorName) {
+    if (obj == nil || selectorName.length == 0) { return nil; }
+    @try {
+        SEL sel = NSSelectorFromString(selectorName);
+        if (sel == NULL || ![obj respondsToSelector:sel]) { return nil; }
+        Method m = class_getInstanceMethod(object_getClass(obj), sel);
+        if (m == NULL) { return nil; }
+        char ret[16] = {0};
+        method_getReturnType(m, ret, sizeof(ret));
+        /* 只认对象返回值；BOOL/整数/浮点/结构体一律拒绝（那些走 AevonSafeBoolCall） */
+        if (ret[0] != '@') { return nil; }
+        id (*fn)(id, SEL) = (id (*)(id, SEL))method_getImplementation(m);
+        return fn(obj, sel);
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
+id AevonSafeCallObject1(id obj, NSString *selectorName, id arg1) {
+    if (obj == nil || selectorName.length == 0) { return nil; }
+    @try {
+        SEL sel = NSSelectorFromString(selectorName);
+        if (sel == NULL || ![obj respondsToSelector:sel]) { return nil; }
+        Method m = class_getInstanceMethod(object_getClass(obj), sel);
+        if (m == NULL) { return nil; }
+        char ret[16] = {0};
+        method_getReturnType(m, ret, sizeof(ret));
+        if (ret[0] != '@') { return nil; }
+        id (*fn)(id, SEL, id) = (id (*)(id, SEL, id))method_getImplementation(m);
+        return fn(obj, sel, arg1);
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
+id AevonSafeCallObject2(id obj, NSString *selectorName, id arg1, id arg2) {
+    if (obj == nil || selectorName.length == 0) { return nil; }
+    @try {
+        SEL sel = NSSelectorFromString(selectorName);
+        if (sel == NULL || ![obj respondsToSelector:sel]) { return nil; }
+        Method m = class_getInstanceMethod(object_getClass(obj), sel);
+        if (m == NULL) { return nil; }
+        char ret[16] = {0};
+        method_getReturnType(m, ret, sizeof(ret));
+        if (ret[0] != '@') { return nil; }
+        id (*fn)(id, SEL, id, id) = (id (*)(id, SEL, id, id))method_getImplementation(m);
+        return fn(obj, sel, arg1, arg2);
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
+id AevonSafeReadObjectIvar(id obj, const char *ivarName) {
+    if (obj == nil || ivarName == NULL) { return nil; }
+    @try {
+        Ivar iv = class_getInstanceVariable(object_getClass(obj), ivarName);
+        if (iv == NULL) { return nil; }
+        const char *enc = ivar_getTypeEncoding(iv);
+        if (enc == NULL || enc[0] != '@') { return nil; }
+        return object_getIvar(obj, iv);
+    } @catch (NSException *e) {
+        return nil;
     }
 }

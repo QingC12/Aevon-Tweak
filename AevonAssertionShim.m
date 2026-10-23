@@ -300,6 +300,8 @@ __attribute__((used)) static const char AevonSceneP1V72Marker[] = "AevonSceneP1V
 __attribute__((used)) static const char AevonSceneP1V73Marker[] = "AevonSceneP1V73";
 /// CI 标记（V0.0.74）：浮窗按下时间戳通道（com.aevon.guardtap）——与坐标无关的穿透兜底
 __attribute__((used)) static const char AevonNotifyStampV74Marker[] = "AevonNotifyStampV74";
+/// CI 标记（V0.0.75）：P1 崩溃熔断（面包屑 + 启动自动关开关）
+__attribute__((used)) static const char AevonCrashFuseV75Marker[] = "AevonCrashFuseV75";
 
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；

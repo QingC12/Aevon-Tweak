@@ -24,6 +24,11 @@ enum AevonBootstrap {
                                object: nil,
                                queue: .main) { _ in
             AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势条 / 圆盘）")
+            // V0.0.75（AevonCrashFuseV75）：**第一件事**就是检查上一轮 P1 有没有把进程搞崩。
+            // Aevon(67)：P1 第 4 步野指针 → SpringBoard 退出 → 重启后 20s 自检又跑 P1 又崩，
+            // 5 次启动崩 4 次（用户完全没法测试）。这里读到残留面包屑就把开关写关，
+            // 彻底断掉「一开机就注销」的死循环。
+            AevonSceneDriver.consumeCrashFuse()
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                 installEntries(reason: "didFinishLaunching")
             }

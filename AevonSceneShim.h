@@ -65,3 +65,40 @@ BOOL AevonSettingsApplyDisplaySize(id settings, CGSize size);
 /// V0.0.64（AevonReflowAppGateV64）：scene 方法表诊断（host/Context/resize 选择子
 /// + context 类键取值），只在首次 AevonSceneApplyDisplaySize 时 dump 一次。
 const char *AevonSceneMethodDiag(void);
+
+#pragma mark - V0.0.75（AevonCrashFuseV75）：P1 自建场景的崩溃防护三件套
+
+/// 安全取类名（obj 为 nil → "nil"）。
+///
+/// Aevon(67) 自动注销的根因：Swift 里 `String(describing: type(of: obj))` 对一个
+/// **不是合法对象**的指针（典型来源：`perform:` 调用返回 BOOL 的方法，返回值 1
+/// 被当成对象指针）会读 isa → 野指针 → SIGSEGV/SIGTRAP，SpringBoard 直接退出。
+/// Swift 的 `type(of:)` / `String(describing:)` 都会走 swift_getObjectType，
+/// 这里改用纯 ObjC runtime 读类指针，**绝不触发 Swift 元类型机制**。
+NSString *AevonSafeClassName(id obj);
+
+/// 安全调用返回 BOOL 的方法/属性。
+/// `ok` 回填「确实调用成功且返回类型是 BOOL」，调用方据此决定是否采信。
+/// 内部先查方法签名返回值编码，绝不把 BOOL 当对象指针用。
+BOOL AevonSafeBoolCall(id obj, NSString *selectorName, BOOL *ok);
+
+/// 面包屑：P1 每进入一步前写一行（< 64 字节），走完清空。
+/// 启动时若读到残留 → 说明上一轮 P1 把进程搞崩了（respring 不会清文件）。
+void AevonCrumbWrite(const char *stage);
+/// 读残留面包屑（无则返回 ""，指针常驻，勿 free）。
+const char *AevonCrumbRead(void);
+/// 清空面包屑（正常结束 / 熔断处理后调用）。
+void AevonCrumbClear(void);
+
+/// 安全调用「返回对象」的无参方法：**先查返回值编码首字符是否为 '@'**，
+/// 不是（BOOL / 整数 / 结构体）直接返回 nil —— 这是 Aevon(67) 自动注销的另一半根因：
+/// `perform:` + `takeUnretainedValue()` 会把 BOOL 返回值 1 包装成对象指针，
+/// Swift 的 `as? NSObject` 随即 dynamicCast 读野 isa 崩溃。
+/// 走这条路之后，Swift 侧不再有任何「猜返回值类型」的机会。
+id AevonSafeCallObject(id obj, NSString *selectorName);
+/// 同上，带 1 个对象参数（等价 performSelector:withObject:）。
+id AevonSafeCallObject1(id obj, NSString *selectorName, id arg1);
+/// 同上，带 2 个对象参数（等价 performSelector:withObject:withObject:）。
+id AevonSafeCallObject2(id obj, NSString *selectorName, id arg1, id arg2);
+/// 安全读对象型 ivar（类型编码必须是 '@'，否则返回 nil）。
+id AevonSafeReadObjectIvar(id obj, const char *ivarName);

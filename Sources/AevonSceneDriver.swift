@@ -32,11 +32,38 @@ final class AevonSceneDriver: NSObject {
     private var ranForThisToggle = false
     private var running = false
 
+    // MARK: - V0.0.75（AevonCrashFuseV75）：崩溃熔断
+
+    /// 本次启动是否已被熔断（上一轮 P1 把 SpringBoard 搞崩过）。
+    static var crashFused = false
+
+    /// 启动时调用一次（Bootstrap 早期）：检查上一轮 P1 是否留下未完成的面包屑。
+    ///
+    /// Aevon(67)：P1 第 4 步的诊断代码 `perform` 一个返回 BOOL 的方法后
+    /// `String(describing:)`，把 1 当对象指针读野 isa → SpringBoard 退出（自动注销）。
+    /// respring 不会清文件，所以「残留面包屑」= 上一轮死在这一步的铁证。
+    /// 一旦读到残留，立刻把开关写成关，避免「每次开机都崩一次」的死循环。
+    static func consumeCrashFuse() {
+        let raw = AevonCrumbRead()
+        let crumb: String = (raw != nil) ? String(cString: raw!) : ""
+        AevonCrumbClear()
+        guard !crumb.isEmpty else { return }
+        crashFused = true
+        AevonPrefs.set("AevonTrueResizeP1", false)
+        AevonLog.warn("[场景] P1 崩溃熔断：上次实验崩在「\(crumb)」这一环，本次启动已自动关闭 P1 开关（要再试请在设置里把开关重开一次，会重新授权一轮）（AevonCrashFuseV75）")
+    }
+
     /// prefschanged 回调入口：开关从关到开才触发（5s 错峰，给设置页留写盘时间）
     func maybeRunExperiment() {
         guard AevonPrefs.bool("AevonTrueResizeP1", default: false) else {
             ranForThisToggle = false
             return
+        }
+        /* 熔断期间不自动跑；但如果是用户**手动重新打开**开关（熔断时我们写的是关，
+         * 现在又是开），视为「用户明确要求再试一次」，解除熔断放行一轮。 */
+        if AevonSceneDriver.crashFused {
+            AevonSceneDriver.crashFused = false
+            AevonLog.info("[场景] P1 熔断已解除：用户重新打开了开关，本轮允许再试一次（AevonCrashFuseV75）")
         }
         guard !ranForThisToggle, !running else { return }
         ranForThisToggle = true
@@ -62,13 +89,18 @@ final class AevonSceneDriver: NSObject {
         guard !running else { return }
         running = true
         AevonLog.info("[场景] P1 实验开始：目标画布 \(Int(AevonSceneDriver.canvasSize.width))x\(Int(AevonSceneDriver.canvasSize.height))（AevonSceneDriverP1）")
+        AevonCrumbWrite("开始")
         self.step1SceneManager()
+        /* V0.0.75：step1~step5 是一条同步链，能崩的都在这里。
+         * 走完（无论成败）就撤面包屑 —— 之后异步的取证段只做只读 KVC，不再有风险。 */
+        AevonCrumbClear()
         self.running = false
     }
 
     // MARK: 第 1 步：FBSceneManager 实例
 
     private func step1SceneManager() {
+        AevonCrumbWrite("第1步-场景管理器")
         var manager: NSObject? = nil
         tryRun("第1步") {
             manager = AevonSceneDriver.findSceneManager()
@@ -77,7 +109,7 @@ final class AevonSceneDriver: NSObject {
             AevonLog.warn("[场景] P1 第 1 步失败：拿不到 FBSceneManager 实例（AevonSceneDriverP1）")
             return
         }
-        AevonLog.info("[场景] P1 第 1 步通过：FBSceneManager = \(String(describing: type(of: manager)))（AevonSceneDriverP1）")
+        AevonLog.info("[场景] P1 第 1 步通过：FBSceneManager = \(AevonSafeClassName(manager))（AevonSceneDriverP1）")
         self.step2MainDisplayConfig(manager: manager)
     }
 
@@ -93,8 +125,8 @@ final class AevonSceneDriver: NSObject {
         }
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["sceneManager", "workspaceSceneCoordinator", "sceneCoordinator"] {
-                if let m = (ws as NSObject).perform(NSSelectorFromString(sel))?.takeUnretainedValue() as? NSObject {
-                    if String(describing: type(of: m)).contains("SceneManager") { return m }
+                if let m = AevonSafeCallObject(ws, sel) as? NSObject {
+                    if AevonSafeClassName(m).contains("SceneManager") { return m }
                 }
             }
         }
@@ -105,18 +137,19 @@ final class AevonSceneDriver: NSObject {
         guard let cls = NSClassFromString(classNamed) as? NSObject.Type else { return nil }
         let sel = NSSelectorFromString(selector)
         guard cls.responds(to: sel) else { return nil }
-        return cls.perform(sel)?.takeUnretainedValue() as? NSObject
+        return AevonSafeCallObject(cls, sel) as? NSObject
     }
 
     // MARK: 第 2 步：主屏显示配置母本
 
     private func step2MainDisplayConfig(manager: NSObject) {
+        AevonCrumbWrite("第2步-主屏dc")
         var dc: NSObject? = nil
         tryRun("第2步") {
             dc = AevonSceneDriver.findMainDisplayConfiguration(manager: manager)
         }
         if let dc {
-            AevonLog.info("[场景] P1 第 2 步通过：主屏 dc 母本 = \(String(describing: type(of: dc)))（AevonSceneDriverP1）")
+            AevonLog.info("[场景] P1 第 2 步通过：主屏 dc 母本 = \(AevonSafeClassName(dc))（AevonSceneDriverP1）")
         } else {
             AevonLog.warn("[场景] P1 第 2 步降级：没拿到主屏 dc 母本，改走「从零构造小窗 dc」（ivar 直写，日志如实记录）（AevonSceneDriverP1）")
         }
@@ -129,7 +162,7 @@ final class AevonSceneDriver: NSObject {
     static func findMainDisplayConfiguration(manager: NSObject) -> NSObject? {
         for sel in ["mainDisplayConfiguration", "displayConfiguration", "primaryDisplayConfiguration"] {
             if manager.responds(to: NSSelectorFromString(sel)),
-               let r = manager.perform(NSSelectorFromString(sel))?.takeUnretainedValue() as? NSObject {
+               let r = AevonSafeCallObject(manager, sel) as? NSObject {
                 return r
             }
         }
@@ -151,13 +184,13 @@ final class AevonSceneDriver: NSObject {
             if let dm = tryShared(classNamed: clsName, selector: selName) {
                 for sel in ["mainDisplayConfiguration", "displayConfiguration", "mainScreenDisplayConfiguration", "mainSBFDisplay"] {
                     if dm.responds(to: NSSelectorFromString(sel)),
-                       let r = dm.perform(NSSelectorFromString(sel))?.takeUnretainedValue() as? NSObject {
-                        if String(describing: type(of: r)).contains("DisplayConfiguration") { return r }
+                       let r = AevonSafeCallObject(dm, sel) as? NSObject {
+                        if AevonSafeClassName(r).contains("DisplayConfiguration") { return r }
                         // SBFDisplay 之类再向下钻一层
                         for sel2 in ["displayConfiguration", "mainDisplayConfiguration"] {
                             if r.responds(to: NSSelectorFromString(sel2)),
-                               let r2 = r.perform(NSSelectorFromString(sel2))?.takeUnretainedValue() as? NSObject,
-                               String(describing: type(of: r2)).contains("DisplayConfiguration") {
+                               let r2 = AevonSafeCallObject(r, sel2) as? NSObject,
+                               AevonSafeClassName(r2).contains("DisplayConfiguration") {
                                 return r2
                             }
                         }
@@ -168,7 +201,7 @@ final class AevonSceneDriver: NSObject {
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["mainScene", "mainWorkspaceScene", "scene"] {
                 if ws.responds(to: NSSelectorFromString(sel)),
-                   let scene = ws.perform(NSSelectorFromString(sel))?.takeUnretainedValue() as? NSObject,
+                   let scene = AevonSafeCallObject(ws, sel) as? NSObject,
                    let dc = displayConfigFromScene(scene) {
                     return dc
                 }
@@ -180,11 +213,11 @@ final class AevonSceneDriver: NSObject {
     /// 从 FBScene 的 settings 里找 FBSDisplayConfiguration
     static func displayConfigFromScene(_ scene: NSObject) -> NSObject? {
         if scene.responds(to: NSSelectorFromString("settings")),
-           let settings = scene.perform(NSSelectorFromString("settings"))?.takeUnretainedValue() as? NSObject {
+           let settings = AevonSafeCallObject(scene, "settings") as? NSObject {
             for sel in ["displayConfiguration", "displayConfigurationLayout"] {
                 if settings.responds(to: NSSelectorFromString(sel)),
-                   let r = settings.perform(NSSelectorFromString(sel))?.takeUnretainedValue() as? NSObject,
-                   String(describing: type(of: r)).contains("DisplayConfiguration") {
+                   let r = AevonSafeCallObject(settings, sel) as? NSObject,
+                   AevonSafeClassName(r).contains("DisplayConfiguration") {
                     return r
                 }
             }
@@ -195,6 +228,7 @@ final class AevonSceneDriver: NSObject {
     // MARK: 第 3 步：目标 App 的 SBApplication
 
     private func step3Application(manager: NSObject, mainDC: NSObject?) {
+        AevonCrumbWrite("第3步-SBApplication")
         var app: NSObject? = nil
         let diag = StringBox()
         tryRun("第3步") {
@@ -206,8 +240,7 @@ final class AevonSceneDriver: NSObject {
                 for selName in ["applicationWithBundleIdentifier:", "applicationWithDisplayIdentifier:", "runningApplicationWithBundleIdentifier:"] {
                     let sel = NSSelectorFromString(selName)
                     if ctrl.responds(to: sel),
-                       let a = ctrl.perform(sel, with: AevonSceneDriver.experimentBundleID)?
-                           .takeUnretainedValue() as? NSObject {
+                       let a = AevonSafeCallObject1(ctrl, selName, AevonSceneDriver.experimentBundleID) as? NSObject {
                         app = a
                         break
                     }
@@ -215,7 +248,7 @@ final class AevonSceneDriver: NSObject {
             }
         }
         if let app {
-            AevonLog.info("[场景] P1 第 3 步通过：SBApplication = \(String(describing: type(of: app)))（AevonSceneDriverP1）")
+            AevonLog.info("[场景] P1 第 3 步通过：SBApplication = \(AevonSafeClassName(app))（AevonSceneDriverP1）")
         } else {
             let d = diag.items.isEmpty ? "" : "｜诊断：\(diag.items.joined(separator: "；"))"
             AevonLog.warn("[场景] P1 第 3 步失败：拿不到 \(AevonSceneDriver.experimentBundleID) 的 SBApplication\(d)（AevonSceneDriverP1）")
@@ -240,7 +273,7 @@ final class AevonSceneDriver: NSObject {
         for selName in ["sharedInstance", "sharedApplicationController", "defaultController", "sharedController"] {
             let sel = NSSelectorFromString(selName)
             if (cls as AnyObject).responds(to: sel),
-               let c = (cls as AnyObject).perform(sel)?.takeUnretainedValue() as? NSObject {
+               let c = AevonSafeCallObject(cls as AnyObject, selName) as? NSObject {
                 return c
             }
         }
@@ -280,7 +313,7 @@ final class AevonSceneDriver: NSObject {
             for sel in ["sceneHandleProvider", "handleProvider"] {
                 let s = NSSelectorFromString(sel)
                 if ws.responds(to: s),
-                   let r = ws.perform(s)?.takeUnretainedValue() as? NSObject {
+                   let r = AevonSafeCallObject(ws, s) as? NSObject {
                     return r
                 }
             }
@@ -331,15 +364,16 @@ final class AevonSceneDriver: NSObject {
         }
         guard let newCls = objc_allocateClassPair(NSObject.self, clsName, 0) else { return nil }
         let sel = NSSelectorFromString(entityProviderSelector)
-        let block: @convention(block) (AnyObject, AnyObject, Bool, AnyObject) -> AnyObject? = { _, app, create, role in
+        /* V0.0.75：参数一律 optional —— objc 侧传 nil 时，`AnyObject` 形参会因
+         * 隐式解包 nil 而崩（编译器在 ABI 层仍是裸指针，AnyObject? 与之等价）。
+         * 同时 `type(of:)` 换 object_getClass：不经过 Swift 元类型机制。 */
+        let block: @convention(block) (AnyObject?, AnyObject?, Bool, AnyObject?) -> AnyObject? = { _, app, create, role in
             guard let target = AevonSceneDriver.proxyForwardTarget else { return nil }
             let alt = NSSelectorFromString("_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
-            guard let m = class_getInstanceMethod(type(of: target), alt) else { return nil }
-            typealias Fn = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject) -> Unmanaged<NSObject>?
+            guard let m = class_getInstanceMethod(object_getClass(target), alt) else { return nil }
+            typealias Fn = @convention(c) (NSObject, Selector, NSObject?, Bool, NSObject?) -> Unmanaged<NSObject>?
             let fn = unsafeBitCast(method_getImplementation(m), to: Fn.self)
-            let appObj = (app as? NSObject) ?? NSObject()
-            let roleObj = (role as? NSObject) ?? NSObject()
-            return fn(target, alt, appObj, create, roleObj)?.takeUnretainedValue()
+            return fn(target, alt, app as? NSObject, create, role as? NSObject)?.takeUnretainedValue()
         }
         let imp = imp_implementationWithBlock(block)
         class_addMethod(newCls, sel, imp, "@@:@B@")
@@ -364,7 +398,7 @@ final class AevonSceneDriver: NSObject {
         if let ws {
             for s in ["sceneManagerCoordinator", "sceneManager"] {
                 let ss = NSSelectorFromString(s)
-                if ws.responds(to: ss), let r = ws.perform(ss)?.takeUnretainedValue() as? NSObject {
+                if ws.responds(to: ss), let r = AevonSafeCallObject(ws, ss) as? NSObject {
                     coord = r
                     add(r, "WS.\(s)")
                     break
@@ -378,7 +412,7 @@ final class AevonSceneDriver: NSObject {
         if let coord {
             for s in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
                 let ss = NSSelectorFromString(s)
-                if coord.responds(to: ss), let r = coord.perform(ss)?.takeUnretainedValue() as? NSObject {
+                if coord.responds(to: ss), let r = AevonSafeCallObject(coord, ss) as? NSObject {
                     add(r, "Coord.\(s)")
                 }
             }
@@ -407,7 +441,7 @@ final class AevonSceneDriver: NSObject {
             for selName in ["sharedInstance", "sharedManager", "defaultManager"] {
                 let s = NSSelectorFromString(selName)
                 if (cls as AnyObject).responds(to: s),
-                   let inst = (cls as AnyObject).perform(s)?.takeUnretainedValue() as? NSObject,
+                   let inst = AevonSafeCallObject(cls as AnyObject, selName) as? NSObject,
                    inst.responds(to: sel) {
                     diag.items.append("provider=扫描取到 \(name)")
                     return inst
@@ -428,10 +462,10 @@ final class AevonSceneDriver: NSObject {
             for sel in ["mainDisplay", "mainSBFDisplay"] {
                 let s = NSSelectorFromString(sel)
                 if dm.responds(to: s),
-                   let d = dm.perform(s)?.takeUnretainedValue() as? NSObject {
+                   let d = AevonSafeCallObject(dm, s) as? NSObject {
                     let s2 = NSSelectorFromString("displayIdentity")
                     if d.responds(to: s2),
-                       let id = d.perform(s2)?.takeUnretainedValue() as? NSObject {
+                       let id = AevonSafeCallObject(d, s2) as? NSObject {
                         return id
                     }
                 }
@@ -442,10 +476,10 @@ final class AevonSceneDriver: NSObject {
             for sel in ["mainScene", "mainWorkspaceScene"] {
                 let s = NSSelectorFromString(sel)
                 if ws.responds(to: s),
-                   let scene = ws.perform(s)?.takeUnretainedValue() as? NSObject,
+                   let scene = AevonSafeCallObject(ws, s) as? NSObject,
                    let settings = displaySettings(scene),
                    settings.responds(to: NSSelectorFromString("displayIdentity")),
-                   let id = settings.perform(NSSelectorFromString("displayIdentity"))?.takeUnretainedValue() as? NSObject {
+                   let id = AevonSafeCallObject(settings, "displayIdentity") as? NSObject {
                     return id
                 }
             }
@@ -455,13 +489,16 @@ final class AevonSceneDriver: NSObject {
 
     private static func displaySettings(_ scene: NSObject) -> NSObject? {
         if scene.responds(to: NSSelectorFromString("settings")),
-           let s = scene.perform(NSSelectorFromString("settings"))?.takeUnretainedValue() as? NSObject {
+           let s = AevonSafeCallObject(scene, "settings") as? NSObject {
             return s
         }
         return nil
     }
 
     private func step4SceneEntity(manager: NSObject, app: NSObject, mainDC: NSObject?) {
+        /* V0.0.75：进第 4 步先落面包屑 —— Aevon(67) 就崩在这里（BOOL 被当成对象指针），
+         * 下次若还崩，启动日志会直接指名道姓。 */
+        AevonCrumbWrite("第4步-场景实体")
         var entity: NSObject? = nil
         let diag = StringBox()
         tryRun("第4步") {
@@ -473,18 +510,24 @@ final class AevonSceneDriver: NSObject {
                 diag.items.append("alloc 失败")
                 return
             }
-            // 诊断 1：目标 App 是否在运行（四段 init 对未运行 App 可能返回 nil）
-            for s in ["isRunning", "running"] {
-                let sel = NSSelectorFromString(s)
-                if app.responds(to: sel) {
-                    let r = app.perform(sel)?.takeUnretainedValue()
-                    diag.items.append("app.\(s)=\(String(describing: r))")
-                    break
+            /* V0.0.75（AevonCrashFuseV75）：这里原来写的是
+             *   let r = app.perform(sel)?.takeUnretainedValue()
+             *   diag.items.append("app.\(s)=\(String(describing: r))")
+             * 而 isRunning 返回 BOOL —— `perform:` 把 1 包装成「对象指针」，
+             * `String(describing:)` 随即读野 isa（崩溃栈里的
+             * swift_dynamicCast / swift_getObjectType / _CF_forwarding_prep_0，
+             * 垃圾地址 0xffff8001b301dd2c），SpringBoard 当场退出 = 用户看到的自动注销。
+             * 现在只要「App 是否在跑」这个布尔，绝不碰对象指针。 */
+            for s in ["isRunning", "running", "isLaunchable"] {
+                var ok: ObjCBool = false
+                if app.responds(to: NSSelectorFromString(s)) {
+                    let v = AevonSafeBoolCall(app, s, &ok)
+                    if ok.boolValue { diag.items.append("app.\(s)=\(v ? 1 : 0)") }
                 }
             }
             let provider = AevonSceneDriver.findSceneEntityProvider(diag: diag)
             let displayID = AevonSceneDriver.findDisplayIdentity(mainDC: mainDC)
-            diag.items.append("displayID=\(displayID.map { String(describing: type(of: $0)) } ?? "nil")")
+            diag.items.append("displayID=\(AevonSafeClassName(displayID))")
             // 依次尝试 P0 方法表里确认存在的全部 init 候选
             typealias Init4 = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init3 = @convention(c) (NSObject, Selector, NSObject, NSObject?, NSObject?) -> Unmanaged<NSObject>?
@@ -518,8 +561,7 @@ final class AevonSceneDriver: NSObject {
                         let fn = unsafeBitCast(imp, to: Init3.self)
                         result = fn(fresh, sel, app, provider, displayID)
                     case 5:
-                        guard let uid = (app.perform(NSSelectorFromString("uniqueIdentifier"))?
-                            .takeUnretainedValue() as? NSObject) else { return }
+                        guard let uid = AevonSafeCallObject(app, "uniqueIdentifier") as? NSObject else { return }
                         let fn = unsafeBitCast(imp, to: Init5.self)
                         result = fn(fresh, sel, app, uid, nil, provider, displayID)
                     default:
@@ -547,10 +589,10 @@ final class AevonSceneDriver: NSObject {
     // MARK: 第 5 步：场景设置（烙 dc + 小窗 frame）+ createScene
 
     private func step5Create(manager: NSObject, entity: NSObject, mainDC: NSObject?) {
+        AevonCrumbWrite("第5步-创建场景")
         var created: NSObject? = nil
         tryRun("第5步") {
-            let definition = entity.perform(NSSelectorFromString("sceneDefinition"))?
-                .takeUnretainedValue() as? NSObject
+            let definition = AevonSafeCallObject(entity, "sceneDefinition") as? NSObject
             guard let definition else {
                 AevonLog.warn("[场景] P1 第 5 步：entity 上拿不到 sceneDefinition（AevonSceneDriverP1）")
                 return
@@ -597,8 +639,8 @@ final class AevonSceneDriver: NSObject {
                     }
                     if params == nil { params = alloced }
                 }
-                created = manager.perform(sel, with: definition, with: params)?
-                    .takeUnretainedValue() as? NSObject
+                created = AevonSafeCallObject2(manager, "createSceneWithDefinition:initialParameters:",
+                                               definition, params) as? NSObject
             }
             // 私有全家桶兜底（P0 dump 到的 7 参版）
             if created == nil {
@@ -612,7 +654,7 @@ final class AevonSceneDriver: NSObject {
             }
         }
         if let created {
-            AevonLog.info("[场景] P1 第 5 步通过：createScene 已调用，返回 \(String(describing: type(of: created)))——若创建链成立，屏幕应出现按 266x458 排版的设置场景（AevonSceneDriverP1）")
+            AevonLog.info("[场景] P1 第 5 步通过：createScene 已调用，返回 \(AevonSafeClassName(created))——若创建链成立，屏幕应出现按 266x458 排版的设置场景（AevonSceneDriverP1）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 self?.step6Verify(created: created)
             }
@@ -627,17 +669,14 @@ final class AevonSceneDriver: NSObject {
         tryRun("取证") {
             var lines: [String] = []
             if created.responds(to: NSSelectorFromString("settings")),
-               let settings = created.perform(NSSelectorFromString("settings"))?
-                   .takeUnretainedValue() as? NSObject {
+               let settings = AevonSafeCallObject(created, "settings") as? NSObject {
                 if let frame = settings.value(forKey: "frame") {
                     lines.append("frame=\(frame)")
                 }
-                if settings.responds(to: NSSelectorFromString("displayConfiguration")),
-                   let dc = settings.perform(NSSelectorFromString("displayConfiguration"))?
-                       .takeUnretainedValue() as? NSObject,
-                   dc.responds(to: NSSelectorFromString("pixelSize")),
-                   let px = dc.perform(NSSelectorFromString("pixelSize"))?
-                       .takeUnretainedValue() {
+                /* V0.0.75：pixelSize 返回 CGSize **结构体**，`perform` + takeUnretainedValue
+                 * 会把结构体当对象指针（同类野指针风险，见 Aevon(67) 崩溃栈），
+                 * 这里改走 KVC（NSValue 包装，类型安全）。 */
+                if let px = settings.value(forKeyPath: "displayConfiguration.pixelSize") {
                     lines.append("dc.pixelSize=\(px)")
                 }
             }
@@ -662,7 +701,7 @@ final class AevonSceneDriver: NSObject {
     static func allocObj(_ cls: AnyClass) -> NSObject? {
         let sel = NSSelectorFromString("alloc")
         guard (cls as AnyObject).responds(to: sel) else { return nil }
-        guard let obj = (cls as AnyObject).perform(sel)?.takeUnretainedValue() as? NSObject else { return nil }
+        guard let obj = AevonSafeCallObject(cls as AnyObject, "alloc") as? NSObject else { return nil }
         return obj
     }
 
@@ -694,7 +733,7 @@ final class AevonSceneDriver: NSObject {
         // 2) 烙进 settings
         let dcSel = NSSelectorFromString("setDisplayConfiguration:")
         if settings.responds(to: dcSel), let smallDC {
-            settings.perform(dcSel, with: smallDC)
+            _ = AevonSafeCallObject1(settings, "setDisplayConfiguration:", smallDC) as? NSObject
             AevonLog.info("[场景] P1 已把小窗 dc（266x458）烙进 settings.displayConfiguration（AevonSceneDriverP1）")
         } else {
             AevonLog.warn("[场景] P1 settings 无 setDisplayConfiguration: 入口或小窗 dc 构造失败（AevonSceneDriverP1）")
@@ -719,7 +758,7 @@ final class AevonSceneDriver: NSObject {
         var copyObj: NSObject? = nil
         for selName in ["mutableCopy", "copy"] {
             let sel = NSSelectorFromString(selName)
-            if mainDC.responds(to: sel), let c = mainDC.perform(sel)?.takeUnretainedValue() as? NSObject {
+            if mainDC.responds(to: sel), let c = AevonSafeCallObject(mainDC, sel) as? NSObject {
                 copyObj = c
                 break
             }
