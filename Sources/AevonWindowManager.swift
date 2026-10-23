@@ -232,14 +232,26 @@ enum AevonWindowManager {
             // 根因就在无条件 `sleep()`：它把场景 settings.foreground 写成 false ——
             // 当浮窗的 App 恰好就是全屏前台的那个 App（用户在 A 里把 A 浮窗化），
             // 这等于把正在显示的 App 设成了后台：画面停在最后一帧、触摸不再投递，
-            // 屏幕自然滑不动。现在按「全屏前台场景标识」精确跳过休眠，
-            // 场景保持前台（几何已由 teardown 还原整屏），App 立刻恢复交互。
-            if AevonEntryHost.mountedInAppScene,
-               let identity = AevonEntryHost.appSceneIdentity,
-               identity.contains(bundleID) {
-                AevonLog.info("[窗口] 浮窗 App 即当前全屏前台 App：跳过场景休眠、保持前台"
-                    + "（\(bundleID)，几何已还原整屏，修复关窗后屏幕无法滑动）"
-                    + "（AevonFrontmostCloseV59）")
+            // 屏幕自然滑不动。
+            //
+            // V0.0.61（AevonFrontmostRepreV61）：Aevon(54) 复盘 —— 跳过休眠后仍然
+            // 无法滑动。第二个根因：全屏 App 的画面呈现本来就被浮窗的 presenter
+            // 接管着（presentationView 在我们窗里），teardown 销毁 presenter 后
+            // 场景保持前台、状态没翻转，系统就**永远不会重新呈现全屏** ——
+            // 触摸路由跟着断掉。修法：跳过休眠 + 主动做一次「前台回弹」
+            // （false → 0.35s → true），逼系统把 App 重新呈现回整屏。
+            let mountedNow = AevonEntryHost.mountedInAppScene
+            let frontIdentity = AevonEntryHost.appSceneIdentity
+            let closingFrontmost = mountedNow && frontIdentity != nil
+                && frontIdentity!.contains(bundleID)
+            // 决策输入全量落日志：上一版只在「跳过」时才打，输入是什么永远看不到，
+            // 用户报「依旧无法滑动」时无法判断哪一环没对上。
+            AevonLog.info("[窗口] 关窗收尾决策：容器在App画面=\(mountedNow)"
+                + "，前台场景=\(frontIdentity ?? "无")，浮窗App=\(bundleID)"
+                + "，判定关的是前台自己=\(closingFrontmost)（AevonFrontmostCloseV59）")
+            if closingFrontmost {
+                AevonLog.info("[窗口] 浮窗 App 即当前全屏前台 App：跳过场景休眠"
+                    + "（\(bundleID)）（AevonFrontmostCloseV59）")
             } else {
                 AevonSceneHelper.sleep(bundleID)
             }
@@ -250,6 +262,20 @@ enum AevonWindowManager {
             AevonEntryHost.syncFloatRectToGuard()
             // 真正拆完视图后再判定（退场动画期间窗还在，计数不能提前减）
             AevonIdleGuard.shared.refresh()
+            // V0.0.61（AevonFrontmostRepreV61）：前台回弹 —— 关的是前台 App 自己时，
+            // presenter 已销毁而场景状态没翻转，系统不会自己重新呈现全屏。
+            // 先置后台再置回前台，逼系统走一遍完整的「重新呈现」：触摸路由随之恢复。
+            // 代价是约 0.3 秒的画面回弹（黑一下再回全屏），换来彻底摆脱「无法滑动」。
+            if closingFrontmost {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    AevonSceneHelper.sleep(bundleID)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        AevonSceneHelper.wakeUp(bundleID)
+                        AevonLog.info("[窗口] 已触发前台回弹：App 重新呈现全屏"
+                            + "（\(bundleID)，修复关浮窗后无法滑动）（AevonFrontmostRepreV61）")
+                    }
+                }
+            }
         }
         AevonLog.info("[窗口] \(bundleID) 已关闭（缩放缓出退场）（AevonFloatAnimV48）")
     }

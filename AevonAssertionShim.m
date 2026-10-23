@@ -274,6 +274,15 @@ __attribute__((used)) static const char AevonNoPanSliderV59Marker[] = "AevonNoPa
  *                       （V59 探测假阳性 + 只推 frame 的组合症状）。 */
 __attribute__((used)) static const char AevonReflowGateV60Marker[] = "AevonReflowGateV60";
 
+/* V0.0.61（小胖屏主修 + 关窗呈现恢复 + 扩展排除）：
+ *   AevonReflowIvarV61     displayConfiguration ivar 内存直写（FBSDisplayConfiguration
+ *                          无任何 setter 选择子，ivar 是最后一层写入口）+ 全量诊断
+ *                          （ivar 清单 / size 相关方法清单落日志）；
+ *   AevonFrontmostRepreV61 关「前台 App 自己」的浮窗后强制前台回弹，逼系统重新
+ *                          呈现全屏（presenter 销毁后状态不翻转 = 触摸路由断）。 */
+__attribute__((used)) static const char AevonReflowIvarV61Marker[] = "AevonReflowIvarV61";
+__attribute__((used)) static const char AevonFrontmostRepreV61Marker[] = "AevonFrontmostRepreV61";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

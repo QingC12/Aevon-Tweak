@@ -3,6 +3,8 @@
 #import <objc/message.h>
 #import <math.h>
 #import <stdio.h>
+#import <string.h>
+#import <strings.h>
 
 /// 场景尺寸改写（V0.0.55）。全部私有 API，全部走运行时探测 + 异常保护。
 
@@ -152,9 +154,9 @@ static id AevonSceneDisplayConfiguration(id settings) {
  *      裁视口症状），Swift 侧据此自动回退整屏等比缩放（V58 形态）。
  */
 
-static char s_dcDiag[224];
+static char s_dcDiag[512];
 
-/// 最近一次 displayConfiguration 诊断（类名 + 能力表），供 Swift 日志使用。
+/// 最近一次 displayConfiguration 诊断（类名 + 能力表 + ivar 清单 + 方法清单），供 Swift 日志使用。
 const char *AevonDisplayConfigDiag(void) { return s_dcDiag; }
 
 static void AevonDcDiag(id obj) {
@@ -168,10 +170,101 @@ static void AevonDcDiag(id obj) {
     BOOL hasSetPts = [obj respondsToSelector:NSSelectorFromString(@"setSizeInPoints:")];
     BOOL hasCopy = [obj respondsToSelector:NSSelectorFromString(@"mutableCopy")];
     BOOL hasDCInit = [realClass instancesRespondToSelector:NSSelectorFromString(@"initWithDisplayConfiguration:")];
+
+    /* V0.0.61（AevonReflowIvarV61）：V60 真机日志证明 FBSDisplayConfiguration
+     * 没有 setSize:/sizeInPoints: 选择子 —— 剩下的唯一写入口是 ivar。
+     * 这里把 ivar 名单和 size 相关方法名单全部落日志，写不进也能一眼看清
+     * 真实布局，下一版不用再猜。 */
+    char ivars[224] = "";
+    unsigned int ivarCount = 0;
+    Ivar *ivarList = class_copyIvarList(realClass, &ivarCount);
+    size_t used = 0;
+    for (unsigned int i = 0; i < ivarCount && ivarList != NULL; i++) {
+        const char *name = ivar_getName(ivarList[i]);
+        const char *enc = ivar_getTypeEncoding(ivarList[i]);
+        if (name == NULL) { continue; }
+        int n = snprintf(ivars + used, sizeof(ivars) - used, "%s%s(%s)",
+                         used == 0 ? "" : " ", name, enc ? enc : "?");
+        if (n < 0 || (size_t)n >= sizeof(ivars) - used) { break; }
+        used += (size_t)n;
+    }
+    free(ivarList);
+
+    char methods[128] = "";
+    unsigned int methodCount = 0;
+    Method *methodList = class_copyMethodList(realClass, &methodCount);
+    used = 0;
+    for (unsigned int i = 0; i < methodCount && methodList != NULL; i++) {
+        SEL sel = method_getName(methodList[i]);
+        const char *name = sel_getName(sel);
+        if (name == NULL) { continue; }
+        /* 只收名字里带 size / point 的方法（全部 dump 会爆缓冲） */
+        size_t len = strlen(name);
+        BOOL hit = NO;
+        for (size_t j = 0; j + 4 <= len; j++) {
+            if (strncasecmp(name + j, "size", 4) == 0) { hit = YES; break; }
+        }
+        for (size_t j = 0; !hit && j + 5 <= len; j++) {
+            if (strncasecmp(name + j, "point", 5) == 0) { hit = YES; }
+        }
+        if (!hit) { continue; }
+        int n = snprintf(methods + used, sizeof(methods) - used, "%s%s",
+                         used == 0 ? "" : " ", name);
+        if (n < 0 || (size_t)n >= sizeof(methods) - used) { break; }
+        used += (size_t)n;
+    }
+    free(methodList);
+
     snprintf(s_dcDiag, sizeof(s_dcDiag),
-             "class=%s setSize:%s sizeInPoints:%s mutableCopy:%s initWithDC:%s",
+             "class=%s setSize:%s sizeInPoints:%s mutableCopy:%s initWithDC:%s"
+             " 方法[%s] ivar[%s]",
              cls, hasSetSize ? "Y" : "N", hasSetPts ? "Y" : "N",
-             hasCopy ? "Y" : "N", hasDCInit ? "Y" : "N");
+             hasCopy ? "Y" : "N", hasDCInit ? "Y" : "N",
+             methods[0] ? methods : "无", ivars[0] ? ivars : "无");
+}
+
+/* ── V0.0.61（AevonReflowIvarV61）：ivar 内存直写 ──
+ * V60 真机日志（Aevon(54)）：class=FBSDisplayConfiguration，setSize:N sizeInPoints:N
+ * mutableCopy:Y —— 选择子/KVC 层面没有任何写入口。剩下唯一没试过的写入口是 ivar：
+ * class_copyIvarList 找出名字带 size 的 CGSize 型 ivar（_size / _sizeInPoints 这类），
+ * 用 ivar_getOffset 拿偏移、对象内存基址 + 偏移直接 memcpy 目标尺寸。
+ * 写完由硬闸门统一裁决：写不进 → 整单放弃回退（与 V60 相同）。 */
+static BOOL AevonIvarNameContainsSize(const char *name) {
+    if (name == NULL) { return NO; }
+    size_t len = strlen(name);
+    for (size_t j = 0; j + 4 <= len; j++) {
+        if (strncasecmp(name + j, "size", 4) == 0) { return YES; }
+    }
+    return NO;
+}
+
+static BOOL AevonWriteDcIvar(id obj, CGSize target, int *outBits) {
+    if (obj == nil) { return NO; }
+    @try {
+        Class cls = object_getClass(obj);
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList(cls, &count);
+        if (ivars == NULL) { return NO; }
+        char *base = (char *)(__bridge void *)obj;
+        BOOL wrote = NO;
+        for (unsigned int i = 0; i < count; i++) {
+            const char *name = ivar_getName(ivars[i]);
+            const char *enc = ivar_getTypeEncoding(ivars[i]);
+            if (name == NULL || enc == NULL) { continue; }
+            /* 只动「名字带 size」的 CGSize ivar（_size / _sizeInPoints / size...），
+             * 绝不盲写其它 CGSize 字段（比如 minimum/native 之类会破坏现场）。 */
+            if (!AevonIvarNameContainsSize(name)) { continue; }
+            if (strncmp(enc, "{CGSize", 7) != 0) { continue; }
+            ptrdiff_t off = ivar_getOffset(ivars[i]);
+            memcpy(base + off, &target, sizeof(CGSize));
+            wrote = YES;
+            *outBits |= (strstr(name, "oint") != NULL) ? 0x8 : 0x4;
+        }
+        free(ivars);
+        return wrote;
+    } @catch (NSException *exception) {
+        return NO;
+    }
 }
 
 /// 尽力把 candidate 的逻辑尺寸改成 target。
@@ -214,6 +307,11 @@ static BOOL AevonWriteDcSize(id candidate, CGSize target, int *outBits) {
             *outBits |= 0x8;
             return YES;
         } @catch (NSException *unused) {}
+        /* V0.0.61：最后一层 —— ivar 内存直写（AevonReflowIvarV61） */
+        if (AevonWriteDcIvar(candidate, target, outBits)) {
+            *outBits |= 0x800;
+            return YES;
+        }
         return NO;
     } @catch (NSException *exception) {
         return NO;

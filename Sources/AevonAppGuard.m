@@ -70,6 +70,8 @@ __attribute__((used)) static const char AevonNoWinResizeV57Marker[] = "AevonNoWi
 /// CI 标记（V0.0.59）：浮窗手势期状态位白名单补 0x36 —— V56 重构时漏了新版本号，
 /// bit48 自 V54 起整条失效（SB 写 0x36，Guard 只认 0x34/0x35）
 __attribute__((used)) static const char AevonGuardFloatBit36V59Marker[] = "AevonGuardFloatBit36V59";
+/// CI 标记（V0.0.61）：扩展进程（.appex）绝不装 Guard —— 修「桌面部分小组件空白」
+__attribute__((used)) static const char AevonGuardNoExtV61Marker[] = "AevonGuardNoExtV61";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -897,6 +899,20 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
          */
         NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
         if ([bundleID isEqualToString:@"com.apple.Preferences"]) { return; }
+
+        /*
+         * V0.0.61（AevonGuardNoExtV61）：**扩展进程（.appex）绝不装 Guard**。
+         * 用户反馈「最近几个版本桌面部分小程序不显示（位置空白）」：
+         * 小组件/键盘等扩展进程也链接 UIKit，会命中 com.apple.UIKit 注入过滤器；
+         * Guard 在扩展的头less 环境里装 sendEvent 拦截 + 生命周期监听，
+         * 扩展一崩它的桌面小组件就是一块空白 —— 正好是「部分小程序不显示」
+         * （只有崩了的那些扩展对应的小组件空白）。主 App 没有 NSExtension 键，
+         * 此判断不会误伤。
+         */
+        NSDictionary *guardInfo = [[NSBundle mainBundle] infoDictionary];
+        if (guardInfo[@"NSExtension"] != nil) { return; }
+        NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+        if ([bundlePath hasSuffix:@".appex"]) { return; }
 
         @try {
             AevonGuardInstall();

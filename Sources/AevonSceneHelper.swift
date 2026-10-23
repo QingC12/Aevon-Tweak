@@ -214,6 +214,7 @@ enum AevonSceneHelper {
         if bits & 0x100 != 0 { parts.append("策略=拷贝旧配置") }
         if bits & 0x200 != 0 { parts.append("策略=原对象直写") }
         if bits & 0x400 != 0 { parts.append("策略=新建配置") }
+        if bits & 0x800 != 0 { parts.append("策略=ivar内存直写") }
         return "目标 \(Int(target.width))x\(Int(target.height))：\(parts.joined(separator: "·"))"
     }
 
