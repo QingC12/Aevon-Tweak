@@ -179,7 +179,8 @@ enum AevonSceneHelper {
     static func applyDisplaySize(scene: AnyObject, sceneID: String, size: CGSize,
                                  floatMode: Bool) -> Int {
         guard !sceneID.isEmpty, size.width > 1, size.height > 1 else { return 0 }
-        let bits = AevonSceneApplyDisplaySize(scene, size, floatMode)
+        let bits32 = AevonSceneApplyDisplaySize(scene, size, floatMode)
+        let bits = Int(bits32)
         // 记录条件：diff 通道推出去了就记（0x40）—— 回读（0x80）可能因系统时序差一点，
         // 但 FBScene 钩子要从**下一次**系统推送起就把 frame 顶回去，不能等回读确认。
         if bits & 0x40 != 0 {
