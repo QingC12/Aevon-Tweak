@@ -161,6 +161,14 @@ __attribute__((used)) static const char AevonDockColumnV48Marker[] = "AevonDockC
 __attribute__((used)) static const char AevonGrowFromCenterV48Marker[] = "AevonGrowFromCenterV48";
 __attribute__((used)) static const char AevonDockTapOnlyV48Marker[] = "AevonDockTapOnlyV48";
 
+/* V0.0.49 CI 标记：
+ * AevonFloatTouchBitV49 = 浮窗手势期写 notify state bit48（SpringBoard → Guard 跨进程握手）；
+ * AevonDockColumnFillV49 = 还原小窗后停靠列回填（下方小窗上移补位）；
+ * AevonFineMotionV49     = 统一弹簧动效参数（停靠 / 还原 / 开关窗 / 列重排）。 */
+__attribute__((used)) static const char AevonFloatTouchBitV49Marker[] = "AevonFloatTouchBitV49";
+__attribute__((used)) static const char AevonDockColumnFillV49Marker[] = "AevonDockColumnFillV49";
+__attribute__((used)) static const char AevonFineMotionV49Marker[] = "AevonFineMotionV49";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
@@ -196,18 +204,31 @@ static int AevonNotifyZoneToken(void) {
     return token;
 }
 
-#define AEVON_NOTIFY_VER (0x34ULL << 40)
+#define AEVON_NOTIFY_VER (0x35ULL << 40)
 #define AEVON_NOTIFY_RING_BIT (1ULL << 39)
+/* V0.0.49（AevonFloatTouchBitV49）：浮窗手势期状态位。
+ * 位 0~47 已被 zone(0~37) / enabled(38) / ring(39) / 版本(40~47) 占满，
+ * 所以浮窗位放到 48 —— 版本号同时升到 0x35，老 Guard 读到 0x35 也能解析 zone。 */
+#define AEVON_NOTIFY_FLOAT_BIT (1ULL << 48)
+
+/// 版本兼容：0x34（V46 及更早）与 0x35（本版）都算有效状态；
+/// 只认 0x34 会让「用旧版 Guard + 新版 SB」的机器上 zone 通道整条失效。
+static inline BOOL AevonNotifyPackValid(uint64_t pack) {
+    uint64_t ver = (pack >> 40) & 0xFFULL;
+    return (ver == 0x34ULL || ver == 0x35ULL);
+}
 
 void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
     @try {
         int token = AevonNotifyZoneToken();
         if (token < 0) { return; }
-        /* 读-改-写：保留 bit39 圆盘状态位（圆盘开着时设置页改几何，不能把 ring 位冲掉） */
+        /* 读-改-写：保留 bit39 圆盘状态位（圆盘开着时设置页改几何，不能把 ring 位冲掉），
+         * 以及 bit48 浮窗触摸位（设置页刷新配置时浮窗可能正被操作）。 */
         uint64_t old = 0;
         notify_get_state(token, &old);
-        uint64_t ringBit = (((old >> 40) & 0xFF) == 0x34) ? (old & AEVON_NOTIFY_RING_BIT) : 0;
-        uint64_t pack = ringBit;
+        uint64_t keep = AevonNotifyPackValid(old)
+            ? (old & (AEVON_NOTIFY_RING_BIT | AEVON_NOTIFY_FLOAT_BIT)) : 0;
+        uint64_t pack = keep;
         pack |= ((uint64_t)llround(x)) & 0x3FFULL;
         pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
         pack |= (((uint64_t)llround(w)) & 0xFFULL) << 20;
@@ -228,8 +249,26 @@ void AevonNotifySetRing(int on) {
         if (token < 0) { return; }
         uint64_t pack = 0;
         notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) != 0x34) { pack = 0; }
+        if (!AevonNotifyPackValid(pack)) { pack = 0; }
         if (on) { pack |= AEVON_NOTIFY_RING_BIT; } else { pack &= ~AEVON_NOTIFY_RING_BIT; }
+        pack |= AEVON_NOTIFY_VER;
+        notify_set_state(token, pack);
+        notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* V0.0.49（AevonFloatTouchBitV49）：浮窗手势期状态位。
+ * 浮窗一按下置位、抬手 / 取消 / 超时清理时清零 —— Guard 据此在 App 进程内
+ * 吞掉同一段时间的事件，堵住「backboardd 直投 App 那一份」的漏洞。 */
+void AevonNotifySetFloatTouch(int on) {
+    @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return; }
+        uint64_t pack = 0;
+        notify_get_state(token, &pack);
+        if (!AevonNotifyPackValid(pack)) { pack = 0; }
+        if (on) { pack |= AEVON_NOTIFY_FLOAT_BIT; } else { pack &= ~AEVON_NOTIFY_FLOAT_BIT; }
         pack |= AEVON_NOTIFY_VER;
         notify_set_state(token, pack);
         notify_post("com.aevon.guardzone");
@@ -243,7 +282,7 @@ int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled)
         if (token < 0) { return 0; }
         uint64_t pack = 0;
         notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
+        if (!AevonNotifyPackValid(pack)) { return 0; }
         if (x) { *x = (double)(pack & 0x3FFULL); }
         if (y) { *y = (double)((pack >> 10) & 0x3FFULL); }
         if (w) { *w = (double)((pack >> 20) & 0xFFULL); }

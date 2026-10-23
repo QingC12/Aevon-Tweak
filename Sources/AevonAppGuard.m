@@ -56,6 +56,8 @@ __attribute__((used)) static const char AevonGuardAckMarker[] = "AevonGuardAckV3
 /// 60s 时间窗兜底只在状态通道不可用时启用（Aevon(30)：圆盘收起后 60 秒内整屏被吞，
 /// QQ 分享到 Sileo 点不动的根因就是兜底时间窗在 bit39=0 时仍然为真）
 __attribute__((used)) static const char AevonGuardRingExactV37Marker[] = "AevonGuardRingExactV37";
+/// CI 标记（V0.0.49）：浮窗手势期 App 侧拦截 —— backboardd 双投递漏洞的最后一块补丁
+__attribute__((used)) static const char AevonGuardFloatTouchV49Marker[] = "AevonGuardFloatTouchV49";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -82,6 +84,8 @@ static BOOL AevonGuardPluginAlive = NO;
 
 /* 前向声明（定义在下方 notify 通道区） */
 static int AevonGuardNotifyToken(void);
+/* 日志函数定义在下方，这里前置声明（原型与下面的定义完全一致） */
+static void AevonGuardWriteLog(BOOL force, NSString *fmt, ...) NS_FORMAT_FUNCTION(2, 3);
 
 static BOOL AevonGuardRingOpen(void) {
     /* 主判定：notify(3) 共享内存 bit39（每条事件实时读，微秒级开销）
@@ -94,7 +98,9 @@ static BOOL AevonGuardRingOpen(void) {
     if (token >= 0) {
         uint64_t pack = 0;
         notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) == 0x34) {
+        /* V0.0.49：版本 0x34（旧 SB）与 0x35（本版，多一个浮窗位）都算有效状态 */
+        uint64_t ver = (pack >> 40) & 0xFFULL;
+        if (ver == 0x34ULL || ver == 0x35ULL) {
             if ((pack >> 39) & 1ULL) {
                 AevonGuardRingOpenAt = CACurrentMediaTime();  /* 诊断用，不再参与判定 */
                 return YES;
@@ -106,6 +112,47 @@ static BOOL AevonGuardRingOpen(void) {
     /* 兜底：只在状态通道不可用（旧版 SB / token 注册失败）时才用 Darwin 时间窗 */
     if (AevonGuardRingOpenAt <= 0) { return NO; }
     return (CACurrentMediaTime() - AevonGuardRingOpenAt) < AevonGuardRingOpenMaxAge;
+}
+
+/* V0.0.49（AevonGuardFloatTouchV49）：浮窗手势期状态。
+ *
+ * Aevon(42) 第 1 条的根因写在本文件开头：前台 App 的触摸由 backboardd **直投 App 进程**，
+ * SpringBoard 只是同时收到一份。我们在 SpringBoard 里吞掉自己那份之后，
+ * 拖动看不出问题（App 只收到 moved、没有 began，UIKit 会丢弃无主移动），
+ * 但一次**轻点**是 began + ended 完整的一对 —— App 那边照样合成一次点击，
+ * 于是抖音「点小窗还原主窗」时视频被点停。
+ *
+ * 修法：SpringBoard 在浮窗手势按下时把 notify state bit48 置 1、抬手清 0；
+ * 这里每条 sendEvent 直接读，置位期间把 App 进程收到的触摸整屏吞掉
+ * （手指正压在浮窗上，App 本就不该收到任何输入）。
+ *
+ * 防呆：bit48 连续置位超过 8 秒就当成 SB 侧没清干净的残留（崩溃 / 强杀），
+ * 立刻放行 —— 宁可少吞，也绝不能让 App 永久点不动。
+ * 取 8 秒而不是 3 秒：真实拖动可能持续几秒，而轻点触发 App 内点击只发生在
+ * 按下后的 0.5 秒内，8 秒窗足够覆盖，同时仍留了一条硬边界。 */
+static BOOL AevonGuardFloatTouch(void) {
+    static CFTimeInterval onSince = 0;
+    static CFTimeInterval lastLoggedAt = 0;
+    int token = AevonGuardNotifyToken();
+    if (token < 0) { onSince = 0; return NO; }
+    uint64_t pack = 0;
+    notify_get_state(token, &pack);
+    uint64_t ver = (pack >> 40) & 0xFFULL;
+    if ((ver != 0x34ULL && ver != 0x35ULL) || ((pack >> 48) & 1ULL) == 0) {
+        onSince = 0;
+        return NO;
+    }
+    CFTimeInterval now = CACurrentMediaTime();
+    if (onSince <= 0) {
+        onSince = now;
+        /* 首次进入浮窗触摸期的日志（限频 1s）：下一版日志能确证 Guard 读到了这一位 */
+        if (now - lastLoggedAt > 1.0) {
+            lastLoggedAt = now;
+            AevonGuardWriteLog(NO, @"浮窗触摸期 → Guard 在 App 进程内接管输入（AevonGuardFloatTouchV49）");
+        }
+    }
+    if (now - onSince > 8.0) { return NO; }
+    return YES;
 }
 
 /* V0.0.35（AevonGuardAckV35）：ack 回执。
@@ -254,8 +301,10 @@ static BOOL AevonGuardReadNotifyZone(CGRect *outZone, BOOL *outEnabled) {
     if (token < 0) { return NO; }
     uint64_t pack = 0;
     notify_get_state(token, &pack);
-    /* 读失败时 pack 保持 0，版本标记对不上就当没有配置 */
-    if (((pack >> 40) & 0xFF) != 0x34) { return NO; }
+    /* 读失败时 pack 保持 0，版本标记对不上就当没有配置。
+     * V0.0.49：0x34（旧 SB）与 0x35（本版，bit48 = 浮窗触摸期）都按同一套 zone 布局解析。 */
+    uint64_t ver = (pack >> 40) & 0xFFULL;
+    if (ver != 0x34ULL && ver != 0x35ULL) { return NO; }
     double x = (double)(pack & 0x3FFULL);
     double y = (double)((pack >> 10) & 0x3FFULL);
     double w = (double)((pack >> 20) & 0xFFULL);
@@ -352,6 +401,9 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     /* V0.0.34：圆盘状态翻转时打一条日志（force，不受限频）——
      * 下一版日志能直接确认「Guard 看到了圆盘开 / 关」，不再靠猜。 */
     BOOL ringOpen = AevonGuardRingOpen();
+    /* V0.0.49：浮窗手势期（SpringBoard 写 bit48）—— 手指正压在浮窗上，
+     * App 进程这一份事件也必须吞掉，否则轻点会合成一次 App 内点击。 */
+    BOOL floatTouch = AevonGuardFloatTouch();
     {
         static BOOL lastLogged = NO;
         static BOOL hasLogged = NO;
@@ -364,7 +416,11 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                AevonGuardEnabled ? @"热区拦截启用" : @"仅圆盘期拦截");
         }
     }
-    if (!AevonGuardEnabled && !ringOpen) {
+    if (!AevonGuardEnabled && !ringOpen && !floatTouch) {
+        /* 浮窗触摸期结束：把上一轮留在集合里的 touch 清掉，避免指针复用后误判 */
+        if (AevonGuardSwallowed != NULL && CFSetGetCount(AevonGuardSwallowed) > 0) {
+            CFSetRemoveAllValues(AevonGuardSwallowed);
+        }
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
@@ -372,7 +428,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
-    if (!ringOpen && CGRectIsEmpty(AevonGuardZone)) {
+    if (!ringOpen && !floatTouch && CGRectIsEmpty(AevonGuardZone)) {
         AevonGuardCallOriginal(self, _cmd, event);
         return;
     }
@@ -396,7 +452,11 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         if (phase == UITouchPhaseBegan) {
             CGPoint pt = [touch locationInView:nil];
             BOOL inZone = NO;
-            if (ringOpen) {
+            if (floatTouch) {
+                /* V0.0.49：浮窗手势期 —— 整屏吞。手指压在浮窗上时，
+                 * App 不该收到任何输入（这是「点小窗还原 → 抖音暂停」的正面修法）。 */
+                inZone = YES;
+            } else if (ringOpen) {
                 /* V0.0.35：圆盘开着 —— **整屏**吞掉（连顶部 18% 也吞，状态栏区无交互需求）。
                  * 旧版留 18% 是给「万一圆盘需要顶部交互」，实际不存在这个场景，
                  * 反而多留一条缝。图标选择 / 旋转走 SpringBoard 全局通道副本，不依赖这里投递。 */

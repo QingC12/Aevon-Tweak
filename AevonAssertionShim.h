@@ -30,6 +30,15 @@ int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled)
 /// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
 void AevonNotifySetRing(int on);
 
+/// V0.0.49（AevonFloatTouchBitV49）：浮窗触摸期状态位（notify state bit48）。
+///
+/// Aevon(42) 第 1 条：「点停靠小窗还原时，App 里也吃到了一次点击（抖音暂停）」。
+/// 根因是 **双投递** —— 前台 App 的触摸由 backboardd 直投 App 进程，
+/// SpringBoard 只是同时收到一份；SB 里吞掉只是我们这份，App 那份照旧触发 tap。
+/// 所以 SpringBoard 在浮窗手势按下 / 结束时写这个位，注入 App 的 AevonGuard
+/// 读到就整屏吞掉那几帧事件（手指正压在浮窗上，App 本就不该收到输入）。
+void AevonNotifySetFloatTouch(int on);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，

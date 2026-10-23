@@ -614,8 +614,13 @@ enum AevonEdgeEntry {
     private static let floatDoubleTapGap: CFTimeInterval = 0.36
 
     /// 浮窗手势是否正压着某根手指（供吞事件判断）
+    ///
+    /// V0.0.49（AevonFloatTouchBitV49）：判定从「`floatTouchID != 0` 且 `floatWindow != nil`」
+    /// 收窄成只看 touchID。窗口若是 `weak` 提前释放（关窗 / 场景回收）而 ended 还没到，
+    /// 旧写法会立刻停止吞事件 —— App 就会收到这段手势的残余事件（含抬手合成点击）。
+    /// 手指的归属只跟 touchID 有关，窗口没了也不该把这段事件还给 App。
     private static var floatGestureActive: Bool {
-        return floatTouchID != 0 && floatWindow != nil
+        return floatTouchID != 0
     }
 
     /// 圆盘接管期（V0.0.24）：只有「全局通道唤起的圆盘」需要把这根手指从 App 手里拿走。
@@ -824,6 +829,10 @@ enum AevonEdgeEntry {
         floatDeadline = now + floatDragLimit
         floatEngaged = false
         hit.window.grabBegin(hit.grab, at: hit.layerPoint)
+        // V0.0.49（AevonFloatTouchBitV49）：告诉 App 侧的 AevonGuard「手指正压在浮窗上」。
+        // 前台 App 的触摸是 backboardd **直投 App 进程**的，SB 里吞只吞掉自己那一份；
+        // 不通知 Guard 的话，轻点小窗仍会在 App 里合成一次点击（Aevon(42) 第 1 条）。
+        setFloatTouchFlag(true)
         switch hit.grab {
         case .side:
             // 先不移动：到底是「轻点停靠 / 还原」还是「长按移动」，要等抬手/阈值才知道
@@ -951,7 +960,34 @@ enum AevonEdgeEntry {
         floatGrab = nil
         floatDeadline = 0
         floatEngaged = false
+        // V0.0.49：手指离开浮窗 —— 立刻放行 App 进程的输入通道
+        setFloatTouchFlag(false)
     }
+
+    /// V0.0.49（AevonFloatTouchBitV49）：浮窗手势期状态位（notify state bit48）。
+    ///
+    /// 只在真正翻转时写（notify_set_state + notify_post 是跨进程调用，不能每条触摸都刷）。
+    /// 写成幂等：`clearFloatGesture()` 在没接管过的情况下也会被调用，若不加标志位
+    /// 会每段触摸都白写一次共享内存。
+    private static var floatTouchFlagOn = false
+
+    private static func setFloatTouchFlag(_ on: Bool) {
+        if floatTouchFlagOn == on { return }
+        floatTouchFlagOn = on
+        AevonNotifySetFloatTouch(on ? 1 : 0)
+        // 日志证据：下一版能确证「SB 确实写了这一位」。限频 3 秒，
+        // 免得用户连续点小窗时把日志刷满（一次手势只该有一条）。
+        if on {
+            let now = CACurrentMediaTime()
+            if now - floatFlagLastLogAt > 3.0 {
+                floatFlagLastLogAt = now
+                AevonLog.info("[边缘] 浮窗手势期开始：已通知 App 侧 Guard 接管输入"
+                    + "（notify bit48）（AevonFloatTouchBitV49）")
+            }
+        }
+    }
+
+    private static var floatFlagLastLogAt: CFTimeInterval = 0
 
     /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
     static func presentRing(source: String) {

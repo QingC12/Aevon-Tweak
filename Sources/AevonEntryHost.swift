@@ -154,7 +154,10 @@ enum AevonEntryHost {
             guard win.isDocked, win.currentSlot == side else { continue }
             column.append(win)
         }
-        guard column.count > 1 else { return }
+        // V0.0.49（AevonDockColumnFillV49）：原来这里要求 `count > 1`，
+        // 于是「三个小窗还原中间那个」之后若只剩一个就不重排，它孤零零留在原位。
+        // 现在剩一个也要重排 —— `dockColumnYs(count:1)` 会把它送回屏幕垂直中心。
+        guard !column.isEmpty else { return }
         column.sort { $0.frame.minY < $1.frame.minY }
         let height = column[0].frame.height
         let ys = AevonSnap.dockColumnYs(count: column.count, height: height)

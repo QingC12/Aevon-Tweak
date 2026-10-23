@@ -373,9 +373,10 @@ final class AevonWindowView: UIView {
     /// 内容已经缩成一小块」，四周露出窗口背景 —— 即 Aevon(41) 说的
     /// 「停靠成小窗时先黑屏，然后才出现画面」。
     func animateGeometry(to target: CGRect,
-                         duration: TimeInterval = 0.34,
+                         duration: TimeInterval = AevonMotion.dockDuration,
                          alpha targetAlpha: CGFloat? = nil,
                          spring: Bool = true,
+                         damping: CGFloat = AevonMotion.dockDamping,
                          completion: (() -> Void)? = nil) {
         guard target.width > 1, target.height > 1 else { completion?(); return }
         isAnimatingGeometry = true
@@ -412,7 +413,7 @@ final class AevonWindowView: UIView {
         }
         if spring {
             UIView.animate(withDuration: duration, delay: 0,
-                           usingSpringWithDamping: 0.88,
+                           usingSpringWithDamping: damping,
                            initialSpringVelocity: 0.2,
                            options: [.beginFromCurrentState, .allowUserInteraction],
                            animations: steps, completion: done)
@@ -433,16 +434,25 @@ final class AevonWindowView: UIView {
         // 入场**不**设 `isAnimatingGeometry`：尺寸没变，必须让 layoutSubviews 正常跑一次，
         // 否则 `applyContentScale` 永远不会执行，第一帧内容会以 1:1 尺寸塞进小窗里。
         alpha = 0
-        frame = CGRect(x: target.minX, y: target.minY + 22,
+        frame = CGRect(x: target.minX, y: target.minY + 28,
                        width: target.width, height: target.height)
         layoutIfNeeded()
-        UIView.animate(withDuration: 0.34, delay: 0,
-                       usingSpringWithDamping: 0.86,
+        // V0.0.49（AevonFineMotionV49）：透明度与位移**分两条曲线**。
+        // 原来两者共用一条 0.34s 弹簧 —— 前 40% 画面还是半透明的，像"从黑里浮出来"，
+        // 这就是 Aevon(42) 说的"生硬"。现在内容 0.20s 先"睁眼"（easeOut），
+        // 位置再用 0.42s 弹簧慢慢落位，两层叠起来才像系统卡片。
+        UIView.animate(withDuration: AevonMotion.entryFadeDuration,
+                       delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
+            self.alpha = 1
+        }
+        UIView.animate(withDuration: AevonMotion.entryDuration, delay: 0,
+                       usingSpringWithDamping: AevonMotion.entryDamping,
                        initialSpringVelocity: 0.25,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.frame = target
-            self.alpha = 1
         } completion: { _ in
+            self.alpha = 1
             self.lastAppliedScale = -1
             self.setNeedsLayout()
         }
@@ -458,8 +468,14 @@ final class AevonWindowView: UIView {
         // 几何必须在动画前落盘：动画会把 frame 改成缩小后的值
         persistFrame()
         geometryPersistedBeforeDismiss = true
-        let target = AevonWindowView.scaledFrame(frame, ratio: 0.94)
-        animateGeometry(to: target, duration: 0.18, alpha: 0, spring: false) { [weak self] in
+        // V0.0.49（AevonFineMotionV49）：退场从「0.18s 线性 + 缩到 94%」改成
+        // 「0.24s 弹簧（damping 0.98，几乎不过冲）+ 缩到 90%」。
+        // 原来收得太快太浅，观感像"卡了一下就没了"；现在是明确的"收住再消失"。
+        let target = AevonWindowView.scaledFrame(frame, ratio: AevonMotion.dismissScaleRatio)
+        animateGeometry(to: target,
+                        duration: AevonMotion.dismissDuration,
+                        alpha: 0,
+                        damping: AevonMotion.dismissDamping) { [weak self] in
             self?.isDismissing = false
             completion()
         }
@@ -951,7 +967,10 @@ final class AevonWindowView: UIView {
 
         currentSlot = slot
         // V0.0.48：停靠走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
-        animateGeometry(to: target, duration: 0.34) { [weak self] in
+        // V0.0.49（AevonFineMotionV49）：时长 / 阻尼统一走 AevonMotion（0.42s / 0.80）
+        animateGeometry(to: target,
+                        duration: AevonMotion.dockDuration,
+                        damping: AevonMotion.dockDamping) { [weak self] in
             guard let self = self else { return }
             self.persistFrame()
             // 整列重排：把这一列的小窗按「中心锚点 + 向下生长」重新对齐
@@ -960,8 +979,8 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
             + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 9:16 · 屏宽 "
-            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 中心锚点向下成列 · 弹簧动画）"
-            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockColumnV48 AevonGrowFromCenterV48）")
+            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 中心锚点向下成列 · 统一弹簧动效）"
+            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockColumnV48 AevonGrowFromCenterV48 AevonFineMotionV49）")
     }
 
     /// 把自己挪到停靠列的指定纵向位置（V0.0.48，AevonGrowFromCenterV48）。
@@ -973,9 +992,9 @@ final class AevonWindowView: UIView {
         var t = frame
         t.origin.y = y
         t = AevonSnap.clamped(t)
-        UIView.animate(withDuration: 0.30,
+        UIView.animate(withDuration: AevonMotion.columnDuration,
                        delay: 0,
-                       usingSpringWithDamping: 0.90,
+                       usingSpringWithDamping: AevonMotion.columnDamping,
                        initialSpringVelocity: 0.2,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.frame = t
@@ -1014,15 +1033,23 @@ final class AevonWindowView: UIView {
         }
 
         preDockFrame = nil
+        // V0.0.49（AevonDockColumnFillV49）：Aevon(42) 第 2 条 ——
+        // 「右侧放了 3 个小窗，把中间那个还原之后，下面的小窗不会主动上移」。
+        // 还原前先记住自己在哪一侧，置成自由态（这样它不会被算进停靠列），
+        // 然后立刻让整列重新按「中心锚点 + 向下生长」对齐 —— 空位当场被补上。
+        let restoreSide = currentSlot
         currentSlot = .free
+        AevonEntryHost.relayoutDockedColumn(side: restoreSide)
         // V0.0.48：还原也走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
-        animateGeometry(to: target, duration: 0.36) { [weak self] in
+        animateGeometry(to: target,
+                        duration: AevonMotion.restoreDuration,
+                        damping: AevonMotion.restoreDamping) { [weak self] in
             self?.persistFrame()
         }
         AevonLog.info("[窗口] 轻点已停靠小窗 → 还原主悬浮窗 \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（回到停靠前的位置与尺寸 · 不再贴边改写 · 弹簧动画）"
-            + "（AevonDockRestoreV44 AevonRestorePosV47 AevonGeomAnimV48）")
+            + "（回到停靠前的位置与尺寸 · 不再贴边改写 · 停靠列已回填 · 弹簧动画）"
+            + "（AevonDockRestoreV44 AevonRestorePosV47 AevonGeomAnimV48 AevonDockColumnFillV49）")
     }
 
     /// 关闭自己（底边条双击时由全局通道调用）。

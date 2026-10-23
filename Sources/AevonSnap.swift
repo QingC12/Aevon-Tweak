@@ -373,3 +373,43 @@ enum AevonSnap {
         }
     }
 }
+
+/// 统一的动效参数（V0.0.49，AevonFineMotionV49）。
+///
+/// Aevon(42) 第 3 条：「悬浮窗的过渡动画再细腻一点，不然太生硬」。
+/// 生硬的两个来源其实不是时长，而是**曲线形状**：
+///   1. 原来停靠 / 还原都用 `damping 0.88 + 时长 0.34`，弹簧偏硬、收尾太干脆，
+///      看上去像线性缓动；iOS 系统级卡片动效基本都是 `damping 0.80~0.84`
+///      —— 落位时有一点点"压住"的感觉，才是细腻。
+///   2. 入场时位移和透明度用同一条曲线，前 40% 又慢又淡，像"从黑里浮出来"。
+///      透明度应该更快（内容先"睁眼"，位置再落下）。
+///
+/// Stheno 用的是 `spring(response:dampingFraction:)` 与自研 `CustomSpringAnimation`
+/// （字符串里有 `_dampingFraction` / `_fastMoveSpeed`），路线一致：弹簧，不用线性。
+///
+/// 这里集中管理，避免每处各自写一个魔法数字导致观感不统一。
+enum AevonMotion {
+    /// 停靠成小窗：位移 + 2.2 倍缩小，需要稍长一点时长，否则显得"砸"下去
+    static let dockDuration: TimeInterval = 0.42
+    /// 0.80 = 落位后有极轻的一次回弹，接近系统卡片
+    static let dockDamping: CGFloat = 0.80
+
+    /// 还原主窗：放大比缩小更"重"，时长再长一点，阻尼略高（避免大窗回弹太明显）
+    static let restoreDuration: TimeInterval = 0.46
+    static let restoreDamping: CGFloat = 0.84
+
+    /// 开窗入场：位移用弹簧，透明度单独用更短的 easeOut
+    static let entryDuration: TimeInterval = 0.42
+    static let entryDamping: CGFloat = 0.82
+    static let entryFadeDuration: TimeInterval = 0.20
+
+    /// 关窗退场：快速收住，不做过冲（消失时过冲会显得"抖动"）
+    static let dismissDuration: TimeInterval = 0.24
+    static let dismissDamping: CGFloat = 0.98
+    /// 退场缩到 90%（原来是 94%，收得不够明显，像"卡了一下"）
+    static let dismissScaleRatio: CGFloat = 0.90
+
+    /// 停靠列重排（只动 y）：轻、快，不抢停靠动画的视线
+    static let columnDuration: TimeInterval = 0.36
+    static let columnDamping: CGFloat = 0.86
+}

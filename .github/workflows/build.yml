@@ -525,6 +525,26 @@ jobs:
               sys.exit(1)
           print("V0.0.48 校验: 几何动画 + 开关落场 + 贴边归零 + 停靠成列 + 侧条不再还原 已编入")
           PY
+
+          # ── V0.0.49：浮窗触摸期跨进程握手（修 App 被误点）/ 停靠列回填 / 统一弹簧动效 ──
+          for m in AevonFloatTouchBitV49 AevonDockColumnFillV49 AevonFineMotionV49; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.49 标记缺失: $m"; exit 1; }
+          done
+          # Guard 侧必须也认这一位，否则「点小窗还原 → App 内被点一下」修不掉
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardFloatTouchV49' \
+            || { echo "::error::V0.0.49 Guard 缺浮窗期拦截（AevonGuardFloatTouchV49）—— App 仍会吃到一次点击"; exit 1; }
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          # 注意：Swift 会把 ≤15 字节的字面量内联进寄存器，日志串必须够长才落进二进制
+          need = ["停靠列已回填", "已通知 App 侧 Guard 接管输入", "统一弹簧动效"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.49 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.49 校验: 浮窗期跨进程吞摸 + 停靠列回填 + 统一弹簧动效 已编入")
+          PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
