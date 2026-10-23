@@ -27,6 +27,13 @@ enum AevonBootstrap {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                 installEntries(reason: "didFinishLaunching")
             }
+            // V0.0.70（AevonSceneProbeP0 同源通道）：P1 实验启动自检 ——
+            // prefschanged 只在设置变化时触发；若用户上一版就把 P1 开关打开并
+            // 一直保留（Aevon(63)：全程开着但实验从未排程），这里启动后补查一次。
+            // maybeRunExperiment 自带防重入（跑过即跳过），不会重复实验。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) {
+                AevonSceneDriver.shared.maybeRunExperiment()
+            }
         }
 
         // 兜底：每次回到活跃态时检查一遍（首次没有场景 / 被系统回收 / 屏幕尺寸变化时补建与校正）

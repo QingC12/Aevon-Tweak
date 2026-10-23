@@ -291,6 +291,7 @@ __attribute__((used)) static const char AevonSceneProbeP0Marker[] = "AevonSceneP
 __attribute__((used)) static const char AevonSceneDriverP1Marker[] = "AevonSceneDriverP1";
 __attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
 __attribute__((used)) static const char AevonRestoreGraceV67Marker[] = "AevonRestoreGraceV67";
+__attribute__((used)) static const char AevonRestoreGraceAllV70Marker[] = "AevonRestoreGraceAllV70";
 
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；

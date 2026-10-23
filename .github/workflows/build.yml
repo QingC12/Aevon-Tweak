@@ -921,6 +921,17 @@ jobs:
                   print(f"::error::V0.0.69 缺串: {s}"); sys.exit(1)
           print("V0.0.69 校验: Guard 延迟安装 + P1 dc 母本拷贝/小窗烙定 已编入")
           PY69
+          # V0.0.70：宽限全分支统一 0.7s + 幽灵格多格 2s + P1 启动自检
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostWideV70' \
+            || { echo "::error::V0.0.70 Guard 标记缺失: AevonGuardGhostWideV70（幽灵格多格 2s）"; exit 1; }
+          python3 - "$DYLIB" <<'PY70'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonRestoreGraceAllV70","P1 实验开始","P1 实验已排程","场景探测："]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.70 缺串: {s}"); sys.exit(1)
+          print("V0.0.70 校验: 宽限统一 0.7s + 幽灵格多格 2s + P1 启动自检 已编入")
+          PY70
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

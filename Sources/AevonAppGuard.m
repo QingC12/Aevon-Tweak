@@ -76,6 +76,7 @@ __attribute__((used)) static const char AevonGuardGhostRecordV67Marker[] = "Aevo
 /// CI 标记（V0.0.68）：「设置」App 解除整体排除（装 Guard、热区禁用）+ 注入自检日志
 __attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
 __attribute__((used)) static const char AevonGuardLateStartV69Marker[] = "AevonGuardLateStartV69";
+__attribute__((used)) static const char AevonGuardGhostWideV70Marker[] = "AevonGuardGhostWideV70";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -261,9 +262,15 @@ static NSUInteger AevonGuardDockCounts(NSUInteger *outRight, NSUInteger *outLeft
 ///
 /// 轻点还原后小窗立刻离开该槽位、下方整列上移补位，而用户第二根手指往往
 /// 几十毫秒后就落回**原槽位**——那里已经是 App 画面了。所以命中过的那一格
-/// 在 1 秒内继续吞摸（同一只手连点 5 个也不会漏）。
-static CGRect gAevonDockGhost = {{0, 0}, {0, 0}};
-static CFTimeInterval gAevonDockGhostUntil = 0;
+/// 在窗口期内继续吞摸（同一只手连点 5 个也不会漏）。
+///
+/// V0.0.70（AevonGuardGhostWideV70）：单格 → 最多 8 格数组 + 1s → 2s。
+/// 单格实现的洞：点走 A 格后立刻点 B 格，B 的幽灵覆盖 A —— A 位置漏保护；
+/// 1s 时长在「还原 → 自动停靠旧主窗 → 再还原」的快速循环里也不够
+/// （Aevon(63) 日志连点间隔 ~0.5s，第 3 击起幽灵已过期，全靠 bit48 竞态兜底）。
+static CGRect gAevonDockGhosts[8];
+static CFTimeInterval gAevonDockGhostUntil[8];
+static NSInteger gAevonDockGhostCount = 0;
 
 /// 点是否落在某一格停靠小窗上（外扩 3pt 容错，卡片的描边也能算进去）。
 ///
@@ -272,9 +279,13 @@ static CFTimeInterval gAevonDockGhostUntil = 0;
 static BOOL AevonGuardDockHitTest(CGPoint pt) {
     @try {
         CFTimeInterval now = CACurrentMediaTime();
-        if (now < gAevonDockGhostUntil && !CGRectIsEmpty(gAevonDockGhost)
-            && CGRectContainsPoint(gAevonDockGhost, pt)) {
-            return YES;
+        /* V0.0.70：逐格查幽灵表（2s 窗口），命中即吞 */
+        for (NSInteger gi = 0; gi < gAevonDockGhostCount; gi++) {
+            if (now < gAevonDockGhostUntil[gi]
+                && !CGRectIsEmpty(gAevonDockGhosts[gi])
+                && CGRectContainsPoint(gAevonDockGhosts[gi], pt)) {
+                return YES;
+            }
         }
         NSUInteger right = 0, left = 0;
         if (AevonGuardDockCounts(&right, &left) == 0) { return NO; }
@@ -289,8 +300,24 @@ static BOOL AevonGuardDockHitTest(CGPoint pt) {
                 CGRect r = CGRectMake(originX, gAevonDockTop + (CGFloat)i * gAevonDockStep,
                                       gAevonDockW, gAevonDockH);
                 if (CGRectContainsPoint(CGRectInset(r, -slop, -slop), pt)) {
-                    gAevonDockGhost = CGRectInset(r, -slop, -slop);
-                    gAevonDockGhostUntil = now + 1.0;
+                    /* V0.0.70：记录到幽灵表（去重续期，表满则覆盖最旧一条） */
+                    CGRect rec = CGRectInset(r, -slop, -slop);
+                    NSInteger slot = -1;
+                    for (NSInteger gi = 0; gi < gAevonDockGhostCount; gi++) {
+                        if (CGRectEqualToRect(gAevonDockGhosts[gi], rec)) { slot = gi; break; }
+                    }
+                    if (slot < 0) {
+                        if (gAevonDockGhostCount < 8) {
+                            slot = gAevonDockGhostCount++;
+                        } else {
+                            slot = 0;
+                            for (NSInteger gi = 1; gi < 8; gi++) {
+                                if (gAevonDockGhostUntil[gi] < gAevonDockGhostUntil[slot]) { slot = gi; }
+                            }
+                        }
+                        gAevonDockGhosts[slot] = rec;
+                    }
+                    gAevonDockGhostUntil[slot] = now + 2.0;
                     return YES;
                 }
             }

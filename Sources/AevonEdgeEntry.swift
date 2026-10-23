@@ -1081,9 +1081,13 @@ enum AevonEdgeEntry {
     private static var floatTouchFlagOn = false
     /// 延迟清位的代次（V0.0.54）：每次新的按下都会让挂起中的清位作废。
     private static var floatFlagGeneration = 0
-    /// V0.0.67（AevonRestoreGraceV67）：下一次清 bit48 的延迟。默认 0.35s；
-    /// 轻点还原主窗分支把它拉到 0.7s（覆盖还原动画），用完即复位。
-    private static var floatFlagNextClearDelay: Double = 0.35
+    /// V0.0.67（AevonRestoreGraceV67）：下一次清 bit48 的延迟。
+    /// V0.0.70（AevonRestoreGraceAllV70）：**所有分支统一 0.7s**（原默认 0.35s 只给非还原手势）。
+    /// Aevon(63) 实测：弹簧动画落定 ~0.48s（02.394 还原 → 02.871 落定），0.35s 的
+    /// 非还原分支（判定为拖动、侧条等）在快速连点中偶发放行早于动画余量 → 偶发穿透。
+    /// 统一 0.7s 无副作用：bit48 只吞「App 画面」的触摸副本，浮窗自身交互走 SB
+    /// 进程 hit-test 不受影响；下一次按下会作废挂起并重新置位。
+    private static var floatFlagNextClearDelay: Double = 0.70
 
     private static func setFloatTouchFlag(_ on: Bool) {
         if on {
@@ -1111,9 +1115,10 @@ enum AevonEdgeEntry {
         // 配合 Guard 侧新增的「按停靠槽位几何吞摸」，两条路互为兜底。
         floatFlagGeneration += 1
         let gen = floatFlagGeneration
-        // V0.0.67（AevonRestoreGraceV67）：读走本次延迟并复位默认（还原分支提前写成 0.7）
+        // V0.0.67（AevonRestoreGraceV67）：读走本次延迟并复位默认
+        // （V0.0.70 起默认即 0.7s，所有分支统一宽限）
         let clearDelay = floatFlagNextClearDelay
-        floatFlagNextClearDelay = 0.35
+        floatFlagNextClearDelay = 0.70
         DispatchQueue.main.asyncAfter(deadline: .now() + clearDelay) {
             guard gen == floatFlagGeneration else { return }   // 期间又按下了
             guard floatTouchFlagOn else { return }
