@@ -338,6 +338,11 @@ static NSArray *AevonBuildFallback(id target) {
     if (s2 != nil) [result addObject:s2];
     id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作", target, @"TouchEnabled", @YES);
     if (s2a != nil) [result addObject:s2a];
+    /* V0.0.57（AevonContentFitV57）：完整显示内容 —— 默认开。
+     * 开：窗口按屏幕比例、整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切；
+     * 关：回到 0.60 小胖屏（按宽度铺满、底部溢出裁掉，抖音底栏会掉）。 */
+    id s2f = AevonNewSwitch(@"完整显示内容（不裁切，窗口按屏幕比例）", target, @"FullContent", @YES);
+    if (s2f != nil) [result addObject:s2f];
     id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
     if (s2c != nil) [result addObject:s2c];
     id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);

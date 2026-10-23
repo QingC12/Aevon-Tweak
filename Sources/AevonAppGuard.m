@@ -65,8 +65,8 @@ __attribute__((used)) static const char AevonGuardDockZoneV54Marker[] = "AevonGu
 __attribute__((used)) static const char AevonGuardTouchMarkV56Marker[] = "AevonGuardTouchMarkV56";
 /// CI 标记（V0.0.56）：主悬浮窗矩形通道（双击底边 / 快速连点仍点到 App 的根治）
 __attribute__((used)) static const char AevonGuardFloatRectV56Marker[] = "AevonGuardFloatRectV56";
-/// CI 标记（V0.0.56）：App 窗口尺寸通道（内容被放大 / 剪裁、右侧工具栏不显示的根治）
-__attribute__((used)) static const char AevonAdaptiveWindowV56Marker[] = "AevonAdaptiveWindowV56";
+/// CI 标记（V0.0.57）：停用 App 窗口改写 —— 只保留「还原整屏」的单向兜底
+__attribute__((used)) static const char AevonNoWinResizeV57Marker[] = "AevonNoWinResizeV57";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -308,28 +308,24 @@ static CGRect AevonGuardFloatRectRect(void) {
 
 /// 停靠小窗「刚被点走」留下的幽灵格 —— 变量定义已上移到 AevonGuardDockHitTest 之前。
 
-/* V0.0.56（AevonAdaptiveWindowV56）：App 窗口尺寸 —— 让 App 真正按浮窗尺寸重排。
+/* V0.0.57（AevonNoWinResizeV57）：App 窗口尺寸 —— **只允许单向还原**。
  *
- * Aevon(50) 第 4 条：「内容比例被放大（字体变大）、画面被剪裁，抖音依旧不显示右侧工具栏」。
- * SB 侧 `FBSMutableSceneSettings.setFrame:` 只改了**渲染视口**，App 的 UIWindow 还是整屏：
- * 内容按 430 宽排版、视口只露出左边 62% → 右边框被切、字看起来变大。
- * Guard 就在 App 进程里，直接改 keyWindow.frame，UIKit 会带着整棵视图树重排。
- * 恢复（w/h = 0）由 SB 在关窗时下发。 */
-static NSUInteger gAevonWindowApplyCount = 0;
-/// 兜底：App 真的进了后台（用户回桌面 / 切走）→ 立刻把窗口还原成整屏。
-/// `gAevonWindowSuppressPack` 记下「已经被作废的那份尺寸」，避免下一次 sendEvent
-/// 又把旧状态重新套用回去（那样 App 会被永久困在小窗口里）。
-static BOOL gAevonWindowSuppressed = NO;
-static uint64_t gAevonWindowSuppressPack = 0;
+ * Aevon(50) 第 4 条当时以为是「App 窗口没跟着浮窗缩小」，于是在 App 进程里改
+ * keyWindow.frame。Aevon(51) 证明这条路更糟：
+ *   · 第 1 条：内容依旧放大 / 剪裁 / 排列错乱 —— 抖音这类 App 按 `UIScreen` 排版，
+ *     窗口变小只是把内容裁掉一块，布局不会真的重排；
+ *   · 第 4 条：关窗后小窗口残留 → 回到桌面再全屏打开应用，大面积黑屏。
+ * 所以这里不再缩小任何窗口，只保留「还原整屏」的兜底（修上一版可能留下的残局，
+ * 以及任何被别的东西改小的窗口）。真正的显示适配在 SpringBoard 侧做：
+ * 整屏画面等比完整缩放（AevonContentFitV57）。 */
+static BOOL gAevonWindowKeptFullLogged = NO;
 
-static uint64_t AevonGuardWindowSizePack(void);   /* 定义在下方 ApplyWindowSize 之前 */
-
-static void AevonGuardForceFullWindow(void) {
+static void AevonGuardKeepWindowFull(void) {
     @try {
-        /* 先把「当前这份尺寸」记成作废，再还原窗口 ——
-         * 否则下一次 sendEvent 读到同一个值又会把窗口缩小回去。 */
-        gAevonWindowSuppressPack = AevonGuardWindowSizePack();
-        gAevonWindowSuppressed = YES;
+        static CFTimeInterval lastAt = 0;
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - lastAt < 1.0) { return; }
+        lastAt = now;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         UIApplication *app = [UIApplication sharedApplication];
@@ -341,84 +337,17 @@ static void AevonGuardForceFullWindow(void) {
         if (win == nil) { win = wins.firstObject; }
         if (win == nil) { return; }
         CGRect screen = [UIScreen mainScreen].bounds;
-        if (!CGRectEqualToRect(win.frame, screen)) {
-            win.frame = screen;
-            [win.rootViewController.view setNeedsLayout];
-            [win.rootViewController.view layoutIfNeeded];
-            AevonGuardWriteLog(YES, @"App 进入后台 → 已把窗口还原成整屏"
-                               @"（防止关窗后 App 一直停在小窗口）（AevonAdaptiveWindowV56）");
+        if (CGRectEqualToRect(win.frame, screen)) { return; }
+        win.frame = screen;
+        [win.rootViewController.view setNeedsLayout];
+        [win.rootViewController.view layoutIfNeeded];
+        if (!gAevonWindowKeptFullLogged) {
+            gAevonWindowKeptFullLogged = YES;
+            AevonGuardWriteLog(YES, @"App 窗口曾被改小，已还原成整屏"
+                               @"（本版不再改窗口尺寸：内容适配改由浮窗侧等比整屏缩放负责）"
+                               @"（AevonNoWinResizeV57）");
         }
 #pragma clang diagnostic pop
-    } @catch (NSException *exception) {
-    }
-}
-
-/// 读 `com.aevon.guardwinsize` 的原始 64 位状态（0 = 没有有效状态）
-static uint64_t AevonGuardWindowSizePack(void) {
-    static int token = -1;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        notify_register_check("com.aevon.guardwinsize", &token);
-    });
-    if (token < 0) { return 0; }
-    uint64_t pack = 0;
-    notify_get_state(token, &pack);
-    return pack;
-}
-
-static void AevonGuardApplyWindowSize(void) {
-    @try {
-        /* 每条 sendEvent 都会调到这里 —— 0.5 秒节流，避免 notify_get_state 打满主线程 */
-        static CFTimeInterval lastAt = 0;
-        CFTimeInterval now = CACurrentMediaTime();
-        if (now - lastAt < 0.5) { return; }
-        lastAt = now;
-        uint64_t pack = AevonGuardWindowSizePack();
-        if (((pack >> 48) & 0xFFULL) != 0x36ULL) { return; }
-        // 已被「进后台还原」作废的那份尺寸，不要再套用
-        if (gAevonWindowSuppressed) {
-            if (pack == gAevonWindowSuppressPack) { return; }
-            gAevonWindowSuppressed = NO;
-        }
-        BOOL valid = ((pack >> 20) & 1ULL) ? YES : NO;
-        CGSize size = CGSizeMake((CGFloat)(pack & 0x3FFULL),
-                                 (CGFloat)((pack >> 10) & 0x3FFULL));
-        if (valid && (size.width < 40 || size.height < 40)) { return; }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            /* 防重入：改窗口尺寸会让 App 立即重排，重排过程中可能再产生触摸事件 */
-            static BOOL applying = NO;
-            if (applying) { return; }
-            applying = YES;
-            @try {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                UIApplication *app = [UIApplication sharedApplication];
-                NSArray<UIWindow *> *wins = (app != nil) ? app.windows : nil;
-                UIWindow *win = nil;
-                for (UIWindow *candidate in wins) {
-                    if (candidate.isKeyWindow) { win = candidate; break; }
-                }
-                if (win == nil) { win = wins.firstObject; }
-                if (win != nil) {
-                    CGRect screen = [UIScreen mainScreen].bounds;
-                    CGRect want = valid ? CGRectMake(0, 0, size.width, size.height) : screen;
-                    if (!CGRectEqualToRect(win.frame, want)) {
-                        /* 抖动保护：系统若反复把窗口尺寸改回去，最多重设 40 次就放弃，
-                         * 避免「重设 → 被改回 → 再重设」的死循环把 App 卡住。 */
-                        gAevonWindowApplyCount += 1;
-                        if (gAevonWindowApplyCount <= 40) {
-                            win.frame = want;
-                            [win.rootViewController.view setNeedsLayout];
-                            [win.rootViewController.view layoutIfNeeded];
-                        }
-                    }
-                }
-#pragma clang diagnostic pop
-            } @catch (NSException *exception) {
-            }
-            applying = NO;
-        });
     } @catch (NSException *exception) {
     }
 }
@@ -722,8 +651,15 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
      * App 一律收不到输入（双击底边 / 快速连点都不会漏）。 */
     CGRect floatRect = AevonGuardFloatRectRect();
     BOOL hasFloatRect = !CGRectIsEmpty(floatRect);
-    /* V0.0.56（AevonAdaptiveWindowV56）：App 窗口尺寸跟随浮窗内容区（内部 0.5s 节流）。 */
-    AevonGuardApplyWindowSize();
+    /* V0.0.57（AevonNoWinResizeV57）：**不再改 App 的窗口尺寸**。
+     *
+     * Aevon(51) 第 1 条（内容被放大 / 剪裁 / 排列错乱）与第 4 条（关窗后全屏打开
+     * 大面积黑屏）都是这条通道造成的：改 keyWindow.frame 让 App 真的变成 267x458，
+     * 抖音这类按 UIScreen 排版的 App 内部布局仍然错乱；关窗时窗口尺寸没被可靠还原，
+     * 回到桌面再全屏打开就是一块小窗 + 大片黑。
+     * 内容显示改由 SpringBoard 侧「整屏等比完整缩放」负责，这里只在 App 进后台 /
+     * 回前台时把窗口**单向**还原成整屏（修上一版可能残留的小窗口）。 */
+    AevonGuardKeepWindowFull();
     {
         static BOOL lastLogged = NO;
         static BOOL hasLogged = NO;
@@ -914,18 +850,22 @@ static void AevonGuardInstall(void) {
      * 上面的 prefschanged 观察者已把 ConfigAt 清零 → 下一次 sendEvent 重读 notify 状态。
      * 不额外 register notify 回调，避免 blocks / dispatch 依赖。 */
 
-    /* V0.0.56（AevonAdaptiveWindowV56）：安全兜底 —— App 真的进后台就还原窗口。
+    /* V0.0.57（AevonNoWinResizeV57）：单向兜底 —— 进后台 / 回前台都把窗口还原成整屏。
      *
-     * 窗口尺寸是 SB 通过 notify 下发的，正常路径由「关窗」下发 0 恢复。
-     * 但万一 SB 崩溃 / 注销 / 下发丢失，App 会带着一个 267x458 的窗口回到桌面，
-     * 用户从图标打开时就是一小块 —— 那是最坏的情况。
-     * 进后台是最可靠的「这段浮窗会话结束」信号，这里无条件还原整屏。 */
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
-                                                      object:nil
-                                                       queue:nil
-                                                  usingBlock:^(NSNotification *note) {
-        AevonGuardForceFullWindow();
-    }];
+     * Aevon(51) 第 4 条：「双击关闭浮窗后，回桌面再全屏打开应用会出现大面积黑屏」。
+     * 根因是上一版在 App 进程里把 keyWindow 改小了、关窗时又没可靠还原。
+     * 本版不再缩小窗口；两个通知都做一次「只放大不缩小」的校正，
+     * 顺带修掉上一版可能残留在现场的 267x458 小窗口。 */
+    for (NSString *name in @[UIApplicationDidEnterBackgroundNotification,
+                             UIApplicationWillEnterForegroundNotification,
+                             UIApplicationDidBecomeActiveNotification]) {
+        [[NSNotificationCenter defaultCenter] addObserverForName:name
+                                                          object:nil
+                                                           queue:nil
+                                                      usingBlock:^(NSNotification *note) {
+            AevonGuardKeepWindowFull();
+        }];
+    }
 
     NSLog(@"[Aevon] App 侧热区拦截已安装（%s %s）", AevonAppGuardMarker, AevonGuardNotifyMarker);
     /* V0.0.34（AevonGuardLogV34）：注入确认日志 —— 用户日志里出现这行就说明 Guard 真的进了这个 App */

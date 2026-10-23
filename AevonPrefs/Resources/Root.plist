@@ -56,6 +56,18 @@
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
+			<string>FullContent</string>
+			<key>label</key>
+			<string>完整显示内容（不裁切，窗口按屏幕比例）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
 			<string>TouchEnabled</string>
 			<key>label</key>
 			<string>浮窗内可直接触摸操作</string>

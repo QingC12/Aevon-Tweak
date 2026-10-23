@@ -203,43 +203,92 @@ enum AevonSnap {
         return height > 800 ? 59 : 20
     }
 
-    /// 主窗内容可视区的宽高比（宽 ÷ 高）= 0.60 小胖屏（V0.0.54，AevonFatMainV54）。
+    /// 主窗内容可视区的宽高比（宽 ÷ 高）。
     ///
-    /// Aevon(47) 第 4 条：「主悬浮窗的尺寸又变回了之前的等比例尺寸，并没有改为小胖屏
-    /// （停靠时是小胖屏）」—— V0.0.53 为了「底栏完整」把比例压到 0.50，视觉上又回到细长条。
-    /// 现在回到 0.60：266 宽 → 内容高 443、窗口高 457（V0.0.53 是 547）。
+    /// 版本史：0.60 小胖屏（V0.0.54）→ **屏幕比例**（V0.0.57，AevonContentFitV57）。
+    ///
+    /// 用户 Aevon(51) 第 1 条：「小胖屏内的内容比例被放大、画面被剪裁，内容排列依旧
+    /// 存在问题，显示不全」。到这一版必须把话说清楚 —— 这是几何硬约束，不是实现细节：
+    ///
+    ///   屏内容 430×932（宽÷高 = 0.4614）。窗口一旦比它**胖**（0.60），
+    ///   按宽度铺满就必然纵向溢出：0.60 要裁掉 ≈20% 屏高（≈186pt，正好是抖音底栏
+    ///   与右侧工具栏所在的那一段）；按高度装下则必然左右各留 ≈27pt 黑边
+    ///   （Aevon(45)/(46) 已两次否掉）。
+    ///   **「0.60 小胖屏」与「内容完整」在「整屏画面缩放」这条路上数学互斥。**
+    ///
+    /// V0.0.55/V0.0.56 想绕开它：改 App 场景 frame + 在 App 进程里改 keyWindow，
+    /// 让 App 自己按小窗重排。Aevon(51) 日志与截图证明两条都不成立 ——
+    /// 改场景 frame 只裁了**渲染视口**（App 的 UIWindow 仍是 430×932，内容照旧按整屏
+    /// 排版、视口只露左 62% = 字变大+右侧被切+右侧工具栏消失），而改 keyWindow
+    /// 会让 App 真的变成 267×458 的小窗、关窗后残留 → 全屏打开大面积黑屏（第 4 条）。
+    ///
+    /// 所以 V0.0.57 回到 Stheno 真正在做的事（逆向键：`containerScale` / `finalScale`）：
+    /// **整屏画面等比缩放，并且默认让窗口比例 = 屏幕比例** → 不裁切、无黑边、一次到位。
+    /// 想回到 0.60 小胖屏的，设置里关掉「完整显示内容」即可（接受裁底）。
     static var aspect: CGFloat {
         let screen = UIScreen.main.bounds
         guard screen.width > 1, screen.height > 1 else { return 9.0 / 19.5 }
+        if AevonSnap.fullContentEnabled {
+            // 完整显示：比例 = 屏宽 ÷（屏高 − 状态栏那条空白）。
+            // 这样按默认宽度算出来的高度刚好等于内容缩放后的高度 → 既铺满又不裁切，
+            // 也不留黑边（屏幕比例算完是 0.4881，不是 0.60 —— 见上面的推导）。
+            let usable = max(1, screen.height - AevonSnap.cropTop)
+            return screen.width / usable
+        }
         return AevonSnapWindowShape.mainAspect
     }
 
-    /// 内容铺满窗口所需的缩放比（V0.0.53，AevonCoverCropV53）。
+    /// 是否「完整显示内容」（V0.0.57，AevonContentFitV57）。
+    /// 开：窗口按屏幕比例、整屏等比缩放，永不裁切（默认）；
+    /// 关：回到 0.60 小胖屏，按宽度铺满、从底部裁掉溢出（抖音底栏会掉）。
+    static var fullContentEnabled: Bool {
+        return AevonPrefs.bool("FullContent", default: true)
+    }
+
+    /// 内容布局（V0.0.57）。
     ///
-    /// 与 V0.0.52 的 `min`（完整适配）相反，这里取 **max** —— 即「cover」：
-    ///   · 按宽度铺满 → 窗口胖时纵向溢出，从**底部**裁掉溢出的部分
-    ///     （顶部锚在状态栏下沿，所以顶栏永远不被裁，底栏只有在窗口明显过胖时才会掉）；
-    ///   · 按高度铺满 → 窗口瘦时横向溢出，左右对称裁掉。
-    /// 两种情况都**不会出现黑边**，这是用户 Aevon(46) 第 1 条的核心要求。
+    /// - `fill == false`（默认）：**等比完整适配**，永不裁切，多出来的方向居中留边。
+    /// - `fill == true`：铺满（cover），从底部吃溢出 —— 只给停靠小窗当缩略图用，
+    ///   以及用户手动关掉「完整显示内容」时。
     ///
-    /// - Parameters:
-    ///   - windowWidth: 窗口宽度
-    ///   - clipHeight: 内容区（contentClip）高度
-    ///   - topPad: 内容顶部留白（主窗 14pt / 停靠窗 0）
+    /// 唯一的「裁」是**状态栏那一条空白**（`cropTop`）：App 的画面不画系统状态栏，
+    /// 那 50 多 pt 在浮窗里就是一条纯空白色带，切掉它才算真正「从第一行内容开始」。
+    ///
+    /// - Returns: scale = 缩放比；offset = 内容左上角在窗口内容区里的位置。
+    static func contentLayout(windowSize: CGSize, topPad: CGFloat,
+                              source: CGSize? = nil,
+                              cropTop: CGFloat? = nil,
+                              fill: Bool = false) -> (scale: CGFloat, offset: CGPoint) {
+        let screen = source ?? UIScreen.main.bounds.size
+        guard screen.width > 1, screen.height > 1,
+              windowSize.width > 1, windowSize.height > topPad + 1 else {
+            return (1, .zero)
+        }
+        let crop = max(0, min(cropTop ?? AevonSnap.cropTop, screen.height * 0.2))
+        let usableHeight = max(screen.height * 0.5, screen.height - crop)
+        let availH = max(1, windowSize.height - topPad)
+        let byWidth = windowSize.width / screen.width
+        let byHeight = availH / usableHeight
+        if fill {
+            let scale = max(0.02, max(byWidth, byHeight))
+            return (scale, CGPoint(x: (windowSize.width - screen.width * scale) / 2.0,
+                                   y: topPad - crop * scale))
+        }
+        let scale = max(0.02, min(byWidth, byHeight))
+        return (scale, CGPoint(x: (windowSize.width - screen.width * scale) / 2.0,
+                               y: topPad - crop * scale + (availH - usableHeight * scale) / 2.0))
+    }
+
+    /// 内容缩放比（V0.0.57）。旧签名保留，内部统一走 `contentLayout` 的 **fit** 逻辑。
+    ///
+    /// V0.0.53 这里取过 `max`（cover，铺满裁切）—— 用户 Aevon(51) 第 1 条把它的代价
+    /// 说得很清楚：字被放大、画面被剪、右侧工具栏消失。V0.0.57 起一律 `min`（完整适配），
+    /// 宁可留一点点边也不会裁掉任何内容。
     static func contentScale(windowWidth: CGFloat, clipHeight: CGFloat, topPad: CGFloat,
                              source: CGSize? = nil,
                              sourceCropTop: CGFloat? = nil) -> CGFloat {
-        let screen = source ?? UIScreen.main.bounds.size
-        guard screen.width > 1, screen.height > 1, windowWidth > 1, clipHeight > 1 else { return 1 }
-        let crop = sourceCropTop ?? cropTop
-        let usableHeight = max(screen.height * 0.6, screen.height - crop)
-        let byWidth = windowWidth / screen.width
-        let avail = max(1, clipHeight - topPad)
-        let byHeight = avail / usableHeight
-        // V0.0.55（AevonAdaptiveContentV55）：场景被真的改成窗口尺寸后，
-        // source 就是窗口内容区本身 → byWidth ≈ byHeight ≈ 1，
-        // 既不会裁切也不会留黑边，App 的顶栏 / 底栏 / 右侧工具栏全部在原位。
-        return max(0.02, max(byWidth, byHeight))
+        return contentLayout(windowSize: CGSize(width: windowWidth, height: clipHeight),
+                             topPad: topPad, source: source).scale
     }
 
     /// 窗口高度 = 内容高度 + 上下留白（V0.0.46）

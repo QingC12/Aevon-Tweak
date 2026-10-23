@@ -239,11 +239,10 @@ final class AevonWindowView: UIView {
     /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
-    /// V0.0.46：从「顶部 inset」改成「实际裁剪量 + 窗内上留白」两个缓存键
-    private var lastTopCrop: CGFloat = -1
-    private var lastTopPad: CGFloat = -1
+    /// V0.0.57（AevonContentFitV57）：上一次应用过的内容偏移（等比完整适配后居中）
+    private var lastContentOffset: CGPoint = CGPoint(x: -1, y: -1)
     /// V0.0.55（AevonAdaptiveContentV55）：上一次用的「内容来源尺寸」
-    /// —— 自适应开启后它是场景尺寸（= 窗口内容区），否则是整屏尺寸。
+    /// —— V0.0.57 起固定是整屏尺寸（不再改场景 / 窗口）。
     private var lastSourceSize: CGSize = .zero
 
     /// 合帧用的待处理拖拽目标（V0.0.45，AevonFloatSmoothV45）。
@@ -365,9 +364,10 @@ final class AevonWindowView: UIView {
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
-            + "主窗比例 3:5（0.600 小胖屏，铺满裁切 · 无黑边 · 顶栏始终完整），"
-            + "内容比例 \(String(format: "%.3f", aspect))，内容按宽度铺满、底部溢出自动裁掉"
-            + "（AevonCoverCropV53 AevonFatMainV54），"
+            + (AevonSnap.fullContentEnabled
+               ? "内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
+               : "内容模式=小胖屏铺满（0.600，按宽度铺满、底部溢出裁掉），")
+            + "内容比例 \(String(format: "%.3f", aspect))（AevonContentFitV57），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
     }
@@ -450,22 +450,16 @@ final class AevonWindowView: UIView {
                          completion: (() -> Void)? = nil) {
         guard target.width > 1, target.height > 1 else { completion?(); return }
         isAnimatingGeometry = true
-        // V0.0.55（AevonAdaptiveContentV55）：内容来源尺寸由场景决定 ——
-        // 自适应成功时是场景尺寸（≈ 窗口内容区），失败时退回整屏。
-        let adaptive = sceneHost.isAdaptiveContent
+        // V0.0.57（AevonContentFitV57）：动画中间态与 `applyContentScale` 必须用**同一条**
+        // 公式（等比完整适配 + 居中），否则动画期按一套、落位按另一套，结束瞬间会跳一下。
         let source = sceneHost.sourceSize
         // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
-        let topPad = self.isDocked ? AevonSnap.dockTopPadding
-            : (adaptive ? 0 : AevonSnap.contentTopPadding)
-        let cropTop = adaptive ? 0 : AevonSnap.cropTop
-        // V0.0.52（AevonFitContentV52）：动画中间态的缩放也必须和 `applyContentScale`
-        // 用同一条公式，否则动画期按宽度、落位后按完整适配，画面会在结束的一瞬间跳一下。
-        let scale = AevonSnap.contentScale(windowWidth: target.width,
-                                          clipHeight: target.height,
-                                          topPad: topPad,
-                                          source: source,
-                                          sourceCropTop: cropTop)
-        let xOffset = (target.width - source.width * scale) / 2.0
+        let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
+        let fill = self.isDocked || !AevonSnap.fullContentEnabled
+        let layout = AevonSnap.contentLayout(windowSize: target.size, topPad: topPad,
+                                             source: source, fill: fill)
+        let scale = layout.scale
+        let offset = layout.offset
         let container = sceneHost.container
         let radius = AevonWindowView.cornerRadius(forWidth: target.width)
         let clipTarget = CGRect(origin: .zero, size: target.size)
@@ -491,7 +485,7 @@ final class AevonWindowView: UIView {
             self.contentClip.layer.cornerRadius = radius
             self.layer.shadowOpacity = 0
             container.transform = CGAffineTransform(scaleX: scale, y: scale)
-            container.layer.position = CGPoint(x: xOffset, y: topPad - cropTop * scale)
+            container.layer.position = offset
             if let a = targetAlpha { self.alpha = a }
             self.layoutGestureHandles()
         }
@@ -652,51 +646,38 @@ final class AevonWindowView: UIView {
         let clipSize = contentClip.bounds.size
         guard clipSize.width > 0, clipSize.height > 0 else { return }
 
-        // V0.0.55（AevonAdaptiveContentV55）：把「App 场景」的尺寸真的改成窗口内容区大小，
-        // 让 App 自己按新尺寸重排 —— 这是 Stheno 的做法（它逆向里就是
-        // FBSMutableSceneSettings + setFrame: + updateSettings:…）。
-        // 成功时 source 就是窗口内容区本身，顶栏 / 底栏 / 右侧工具栏全部在原位，
-        // 既没有黑边也不用裁底（Aevon(48) 第 2 条）。
-        // 拖动 / 缩放期间不请求：每一帧改场景尺寸会让 App 疯狂重排。
-        // 停靠小窗也不请求：它是**缩略预览**，跟着主窗那套场景尺寸缩放就行；
-        // 不然每次停靠 / 还原都改一次场景，App 会连续重排三次卡顿。
-        // V0.0.56（AevonMoveSmoothV56）：**任何手势进行中都不请求场景尺寸**。
-        // 旧条件只挡了 isLiveResizing（缩放），移动 / 侧条拖动这一路仍然会在每个布局周期
-        // 走到 `updateAdaptiveSize` —— 一旦尺寸差超过 1.5pt 就会发一次
-        // `FBScene updateSettings:`，App 立刻整屏重排，正是「拖着拖着突然卡一下」的来源。
-        // 抬手后 `grabEnd` → setNeedsLayout 会补做一次，尺寸最终仍是对齐的。
-        if !isLiveResizing && !isLiveMoving && !isDocked && activeGrab == nil && !isAnimatingGeometry {
-            _ = sceneHost.updateAdaptiveSize(clipSize)
-        }
-        let adaptive = sceneHost.isAdaptiveContent
+        // V0.0.57（AevonContentFitV57）：这里**不再**请求改 App 场景尺寸 / 改 App 窗口。
+        //
+        // Aevon(51) 的日志与截图把 V0.0.55/V0.0.56 两条路都判死了：
+        //   · 改场景 frame：只裁渲染视口（App 的 UIWindow 还是 430×932），内容按整屏
+        //     排版、视口只露左 62% → 「字变大 + 右边被切 + 抖音右侧工具栏不显示」；
+        //   · 在 App 进程改 keyWindow.frame：抖音这类按 UIScreen 排版的 App 依旧错位，
+        //     而且关窗后会残留小窗口 → 全屏打开大面积黑屏（第 4 条）。
+        // 现在回到 Stheno 的做法（`containerScale` / `finalScale`）：整屏画面等比缩放，
+        // 只做「完整适配」，任何情况下都不裁切。
         let source = sceneHost.sourceSize
-        let cropTop = adaptive ? 0 : AevonSnap.cropTop
-        // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）；
-        // 自适应生效时也不需要顶部留白（App 自己知道窗口有多高）。
-        let topPad = isDocked ? AevonSnap.dockTopPadding
-            : (adaptive ? 0 : AevonSnap.contentTopPadding)
+        // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）。
+        let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
+        // 停靠小窗是缩略图 → 铺满（cover）；主窗在「完整显示」开启时 → 等比完整适配。
+        let fill = isDocked || !AevonSnap.fullContentEnabled
 
-        let scale = AevonSnap.contentScale(windowWidth: clipSize.width,
-                                           clipHeight: clipSize.height,
-                                           topPad: topPad,
-                                           source: source,
-                                           sourceCropTop: cropTop)
-        // 内容比窗口窄时左右均分留边（贴左会在右边留一大块，看着像错位）
-        let xOffset = (clipSize.width - source.width * scale) / 2.0
+        let layout = AevonSnap.contentLayout(windowSize: clipSize, topPad: topPad,
+                                             source: source, fill: fill)
+        let scale = layout.scale
+        let offset = layout.offset
 
         if abs(clipSize.width - lastClipSize.width) < 0.01,
            abs(clipSize.height - lastClipSize.height) < 0.01,
            abs(scale - lastAppliedScale) < 0.0001,
-           abs(cropTop - lastTopCrop) < 0.5,
-           abs(topPad - lastTopPad) < 0.5,
+           abs(offset.x - lastContentOffset.x) < 0.5,
+           abs(offset.y - lastContentOffset.y) < 0.5,
            abs(source.width - lastSourceSize.width) < 0.5,
            abs(source.height - lastSourceSize.height) < 0.5 {
             return
         }
         lastClipSize = clipSize
         lastAppliedScale = scale
-        lastTopCrop = cropTop
-        lastTopPad = topPad
+        lastContentOffset = offset
         lastSourceSize = source
 
         let container = sceneHost.container
@@ -709,7 +690,7 @@ final class AevonWindowView: UIView {
             container.bounds = targetBounds
         }
         container.transform = CGAffineTransform(scaleX: scale, y: scale)
-        container.layer.position = CGPoint(x: xOffset, y: topPad - cropTop * scale)
+        container.layer.position = offset
     }
 
     // MARK: - 手势区（V0.0.43，AevonSthenoGestureV43）
@@ -1216,10 +1197,29 @@ final class AevonWindowView: UIView {
             pendingDockY = y
             return
         }
+        /* V0.0.57（AevonDockAtomicV57）：尺寸还没缩到停靠档时，不能只改 y。
+         *
+         * 旧实现直接 `t.origin.y = y` 再走 `AevonSnap.clamped(t)`，而 clamped 会按
+         * **当前高度**把 y 夹回屏内：一个还停在 509pt 高的窗（缩放动画被打断后的中间态）
+         * 被夹到 y=423，然后才慢慢变成 158 高 —— 画面上就是「某一格飘在屏幕中间」，
+         * 也就是用户说的断层。这里直接按停靠档尺寸 + 目标 y 重做一次几何动画。 */
+        if abs(frame.height - AevonSnap.dockSize.height) > 1.5 {
+            var t = frame
+            t.size = AevonSnap.dockSize
+            if currentSlot == .left { t.origin.x = AevonSnap.edgeInset }
+            if currentSlot == .right {
+                t.origin.x = UIScreen.main.bounds.width - AevonSnap.edgeInset - t.width
+            }
+            t.origin.y = y
+            animateGeometry(to: t, duration: AevonMotion.columnDuration,
+                            damping: AevonMotion.columnDamping)
+            return
+        }
         guard abs(frame.minY - y) > 0.5 else { return }
         var t = frame
         t.origin.y = y
-        t = AevonSnap.clamped(t)
+        let screen = UIScreen.main.bounds
+        t.origin.y = min(max(t.origin.y, 0), max(0, screen.height - t.height))
         UIView.animate(withDuration: AevonMotion.columnDuration,
                        delay: 0,
                        usingSpringWithDamping: AevonMotion.columnDamping,
@@ -1260,9 +1260,24 @@ final class AevonWindowView: UIView {
         // V0.0.50：停靠动画还没结束就再点一下（手指快）时直接忽略，
         // 否则两段几何动画叠在一起，落点会算错。
         guard !isAnimatingGeometry, !isDismissing else { return }
-        // V0.0.51（AevonSingleMainV51）：先让其它主悬浮窗自动吸附成停靠小窗，
+
+        /* V0.0.57（AevonDockAtomicV57）：先把「自己」从停靠列里摘出去，**再**降级其它主窗。
+         *
+         * Aevon(51) 第 3 条：「多个停靠小窗切换时依旧会出现断层，尤其是第一个变成第五个时」。
+         * 旧顺序是 demote → relayout → 自己置 free → relayout：
+         *   ① demote 的时候自己还占着第 1 格，列里算出来是 5 个 → 被降级的那个主窗
+         *      按「第 5 格」落到 y=757（屏幕最下），
+         *   ② 紧接着自己离开这一列 → 列里变 4 个 → 那个刚落到第 5 格的窗又要往上升到 591。
+         * 两段动画方向相反、时间错开，用户看到的就是「先掉到底、再滑上去」的断层。
+         * 现在先摘自己 → 列里从一开始就是 4 个 → 被降级的窗一次落到正确的 591。
+         */
+        currentSlot = .free
+        AevonEntryHost.relayoutAllDockedColumns()
+
+        // V0.0.51（AevonSingleMainV51）：再让其它主悬浮窗自动吸附成停靠小窗，
         // 街上只留自己这一个主窗 —— 否则几个窗都会回到同一份几何记忆（同一点）上叠起来。
         AevonEntryHost.demoteMainWindows(except: self)
+
         var target: CGRect
         if let previous = preDockFrame,
            previous.width > AevonSnap.minContentWidth,

@@ -74,6 +74,24 @@ final class AevonSwitcherGuard {
             return
         }
 
+        /* V0.0.57（AevonOverlayAppV57）：容器正挂在**铺满整屏的前台 App 画面**里
+         * = 用户就在这个 App 里，浮窗必须一直显示。
+         *
+         * Aevon(51) 第 2 条的根因就在这里：容器搬进 App 画面容器后，
+         * `AevonOverlaySwitcherVisible()` / `hostedInSwitcherCard()` 会误判成「切换器」，
+         * 于是每次进全屏 App 都立刻 `isHidden = true` —— 圆盘看不见（但全局触摸通道
+         * 照样在收手势，所以「有操作、会开窗」）、浮窗也看不见，
+         * 回到桌面容器搬回入口窗口才恢复。日志里 12:43:20.576 搬家 → .579 隐藏，
+         * 就是这个误判（间隔 3ms，一次轮询都没等）。
+         *
+         * 判据只认「容器自己挂在哪个宿主」+「那个宿主是不是铺满整屏」，
+         * 与切换器状态机完全解耦：App 前台 → 无条件显示。 */
+        if AevonEntryHost.mountedInAppScene && AevonEntryHost.appSceneCoversScreen() {
+            AevonEntryHost.reattachAppSceneIfPossible()
+            apply(hidden: false, reason: "全屏 App（浮窗一直显示）")
+            return
+        }
+
         // ---- ② 切换器：通知抢跑 + 协调器确认 ----
         if switcherForced {
             if CACurrentMediaTime() - switcherForcedAt > switcherForceTimeout {

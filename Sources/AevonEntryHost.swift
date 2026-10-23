@@ -368,6 +368,56 @@ enum AevonEntryHost {
             + "AevonDockSlotFitV53 AevonDockOrderV54）")
         // 列变化 = 哪几格被停靠小窗占着变了 → 立刻告诉 Guard，它按固定槽位几何吞摸
         syncDockStateToGuard(reason: "停靠列重排后")
+        scheduleDockSettle()
+    }
+
+    /* MARK: - 停靠列「落地校验」（V0.0.57，AevonDockSettleV57） */
+
+    /// 停靠列的自愈校验：一次切换里会连着触发好几次重排（自己离开列 / 别的窗被降级 /
+    /// 动画结束补做），任何一次被 `isAnimatingGeometry` 挡下、或者系统在动画中间
+    /// 又改了一次 frame，都可能留下「某一格偏了十几 pt」的缺口。
+    /// 用户在 Aevon(51) 第 3 条里看到的断层就是它。
+    ///
+    /// 做法：最后一次重排后 0.62 秒（覆盖 0.42s 缩放 + 0.36s 补位两段动画），
+    /// 对着最终槽位再核一遍，偏了就补一次很短的动画对齐。**幂等**，正常情况什么都不做。
+    private static var dockSettleToken = 0
+
+    private static func scheduleDockSettle() {
+        dockSettleToken += 1
+        let token = dockSettleToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
+            guard token == dockSettleToken else { return }
+            settleDockedColumns()
+        }
+    }
+
+    private static func settleDockedColumns() {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
+        var fixed = 0
+        let height = AevonSnap.dockSize.height
+        for side in [AevonSnapSlot.left, AevonSnapSlot.right] {
+            var column: [AevonWindowView] = []
+            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+                guard let win = view as? AevonWindowView else { continue }
+                guard win.isDocked, win.currentSlot == side else { continue }
+                column.append(win)
+            }
+            guard !column.isEmpty else { continue }
+            column.sort { lhs, rhs in
+                if abs(lhs.dockSeq - rhs.dockSeq) > 0.000_1 { return lhs.dockSeq < rhs.dockSeq }
+                return lhs.frame.minY < rhs.frame.minY
+            }
+            let ys = AevonSnap.dockColumnYs(count: column.count, height: height)
+            guard ys.count == column.count else { continue }
+            for (index, win) in column.enumerated() where abs(win.frame.minY - ys[index]) > 1.0 {
+                win.setDockedY(ys[index])
+                fixed += 1
+            }
+        }
+        if fixed > 0 {
+            AevonLog.info("[窗口] 停靠列落地校验：\(fixed) 个小窗的槽位有偏差，已对齐到固定格"
+                + "（第一个变第五个 / 快速连点时不再留缺口）（AevonDockSettleV57）")
+        }
     }
 
     /// 已停靠小窗的**原始**矩形（不外扩）。
