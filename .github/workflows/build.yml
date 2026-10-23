@@ -437,7 +437,9 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["底边条拖动", "还原主悬浮窗", "自动避让停靠小窗", "全程实时渲染"]
+          # V0.0.47：跨窗自动避让已停用，日志串「自动避让停靠小窗」不再存在，
+          # 这里换成同版本仍然存在的还原日志串（V0.0.44 的其它特性未变）。
+          need = ["底边条拖动", "还原主悬浮窗", "轻点已停靠小窗", "全程实时渲染"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.44 日志串: " + ", ".join(miss))
