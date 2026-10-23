@@ -184,7 +184,7 @@ final class AevonSceneHost {
         }
         if !evidenceLogged {
             evidenceLogged = true
-            AevonLog.info("[场景] 画布证据收集：首子=\(AevonRuntime.className(presentationView.subviews.first) ?? "?")"
+            AevonLog.info("[场景] 画布证据收集：首子=\(presentationView.subviews.first.map { AevonRuntime.className($0) } ?? "?")"
                 + " \(Int(inner.width))x\(Int(inner.height))，超尺寸视图=\(oversizedDesc)"
                 + "（SB 侧信号不作为确认依据，AevonReflowAppGateV64）")
         }
