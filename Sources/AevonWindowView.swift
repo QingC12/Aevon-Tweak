@@ -366,7 +366,7 @@ final class AevonWindowView: UIView {
             + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
             + (AevonSnap.fullContentEnabled
                ? "内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
-               : "内容模式=小胖屏铺满（0.600，按宽度铺满、底部溢出裁掉），")
+               : "内容模式=小胖屏铺满（0.600 小胖屏，铺满裁切、内容按宽度铺满、底部溢出裁掉），")
             + "内容比例 \(String(format: "%.3f", aspect))（AevonContentFitV57），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
