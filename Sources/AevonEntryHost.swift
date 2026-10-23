@@ -123,6 +123,23 @@ enum AevonEntryHost {
         return rects
     }
 
+    /// 已停靠小窗的**原始**矩形（不外扩）。
+    ///
+    /// V0.0.46（AevonDockStackV46）：竖向堆叠要用它，不能用外扩版 ——
+    /// 外扩 30pt 之后两个 293pt 高的小窗在 932pt 屏上就摆不下了
+    /// （候选位全被判超界，回退成重叠），而停靠态的侧条本来就在窗内，不需要留这份余量。
+    static func dockedFrames(excluding window: AevonWindowView?) -> [CGRect] {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return [] }
+        var rects: [CGRect] = []
+        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+            guard let win = view as? AevonWindowView else { continue }
+            if win === window { continue }
+            guard win.isDocked else { continue }
+            rects.append(win.frame)
+        }
+        return rects
+    }
+
     /// 某个窗刚改变停靠状态：通知其它窗重新避让一次（V0.0.44，AevonDockAvoidV44）。
     static func avoidDockedWindow(_ window: AevonWindowView) {
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return }

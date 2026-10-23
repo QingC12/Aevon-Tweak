@@ -59,6 +59,24 @@ enum AevonSnap {
     /// 自动避让时和别的浮窗之间留的缝
     static let obstacleGap: CGFloat = 8
 
+    /// 窗内上下留白（V0.0.46，AevonFloatPaddingV46）。
+    ///
+    /// Aevon(39)：「主悬浮窗看着不协调，顶部太小了，打开设置二级菜单时顶部的返回按钮
+    /// 缺少部分（可以适当加宽一下顶部和底部）」。
+    /// 根因是内容直接顶到窗口上边缘，而窗口的圆角半径有 20~24pt —— 左上角的圆弧正好
+    /// 啃掉了导航栏返回按钮的角。上下各留 14pt 的深色边（看起来就是一圈屏幕边框），
+    /// 内容整体下移，圆弧再也咬不到按钮，同时上下视觉也对称了。
+    static let contentTopPadding: CGFloat = 14
+    static let contentBottomPadding: CGFloat = 14
+
+    /// 顶部实际裁掉多少（场景坐标，单位 = 整屏 pt）。
+    ///
+    /// = 状态栏空白 − 8pt：留一点点余量，保证导航栏那一行**一行都不缺**，
+    /// 而不是正好切在它的上边缘上（差几 pt 就会啃掉返回按钮的顶）。
+    static var cropTop: CGFloat {
+        return max(0, visualTopInset - 8)
+    }
+
     /// 顶部安全区（状态栏那条空白）在设备上的高度。
     /// 优先读真实 safeAreaInsets；SpringBoard 里的入口容器是整屏视图，能拿到 59。
     static var visualTopInset: CGFloat {
@@ -74,17 +92,19 @@ enum AevonSnap {
         return height > 800 ? 59 : 20
     }
 
-    /// 内容可视区的宽高比 = 屏宽 ÷（屏高 − 顶部状态栏空白）。
-    /// iPhone 15 Pro Max：430 ÷ (932 − 59) ≈ 0.4925（原来 0.461，细长条的来源）。
+    /// 内容可视区的宽高比 = 屏宽 ÷（屏高 − 顶部裁剪量）。
+    /// iPhone 15 Pro Max：430 ÷ (932 − 51) ≈ 0.4875。
     static var aspect: CGFloat {
         let screen = UIScreen.main.bounds
         guard screen.width > 1, screen.height > 1 else { return 9.0 / 19.5 }
-        let usableHeight = max(screen.height * 0.6, screen.height - visualTopInset)
+        let usableHeight = max(screen.height * 0.6, screen.height - cropTop)
         return screen.width / usableHeight
     }
 
+    /// 窗口高度 = 内容高度 + 上下留白（V0.0.46）
     static func height(forWidth width: CGFloat) -> CGFloat {
         return width / max(0.2, aspect) + titleBarHeight
+            + contentTopPadding + contentBottomPadding
     }
 
     /// 安全区最大宽度（左右各留 edgeInset）
@@ -154,8 +174,13 @@ enum AevonSnap {
     }
 
     /// 停靠到某一侧的 frame（Stheno 式：贴边 + 换成停靠档的小尺寸）。
-    /// `base` 是停靠前的 frame，用来保留另一轴的中心位置。
-    static func frame(for slot: AevonSnapSlot, from base: CGRect) -> CGRect {
+    /// `base` 是停靠前的 frame，用来保留「想停在哪个高度」；
+    /// `obstacles` 是其它已停靠小窗（已按手势厚度外扩），用来竖向堆叠。
+    ///
+    /// V0.0.46（AevonDockStackV46）：纵向落点改走 `dockY`，第二个小窗往**下**叠，
+    /// 不再被 `avoidVertical` 顶到第一个的上方（Aevon(39) 的第 2 个问题）。
+    static func frame(for slot: AevonSnapSlot, from base: CGRect,
+                      obstacles: [CGRect] = []) -> CGRect {
         let screen = UIScreen.main.bounds
         guard slot != .free else { return clamped(base) }
         var width = dockWidth
@@ -170,12 +195,45 @@ enum AevonSnap {
             return clamped(base)
         case .left:
             f.origin.x = edgeInset
-            f.origin.y = base.midY - height / 2.0
         case .right:
             f.origin.x = screen.width - edgeInset - width
-            f.origin.y = base.midY - height / 2.0
         }
+        f.origin.y = dockY(height: height, near: base.midY, obstacles: obstacles)
         return clamped(f)
+    }
+
+    /// 停靠小窗的纵向落点（V0.0.46，AevonDockStackV46）。
+    ///
+    /// Aevon(39)：「第一个小窗停靠屏幕边缘中间，第二个会到上面」。
+    /// 原实现撞车时先试「往上推」，于是第二个永远叠在第一个上面，和阅读顺序相反。
+    /// 现在：理想位仍是「屏幕垂直中心」，撞了就**优先往下叠**，
+    /// 下方放不下才往上方找，同距离时一律选下方。
+    static func dockY(height: CGFloat, near centerY: CGFloat, obstacles: [CGRect]) -> CGFloat {
+        let screen = UIScreen.main.bounds
+        let minY = edgeInset
+        let maxY = max(edgeInset, screen.height - edgeInset - height)
+        let ideal = min(max(centerY - height / 2.0, minY), maxY)
+        guard !obstacles.isEmpty else { return ideal }
+
+        var candidates: [CGFloat] = [ideal]
+        for rect in obstacles {
+            candidates.append(rect.maxY + obstacleGap)            // 叠在它下面
+            candidates.append(rect.minY - obstacleGap - height)   // 叠在它上面
+        }
+        var best = ideal
+        var bestScore = CGFloat.greatestFiniteMagnitude
+        for y in candidates {
+            guard y >= minY - 0.5, y <= maxY + 0.5 else { continue }
+            // 同侧竖排，横向必然重叠，所以只用纵向区间判重
+            let clash = obstacles.contains { rect in
+                !(y + height <= rect.minY + 0.5 || y >= rect.maxY - 0.5)
+            }
+            if clash { continue }
+            // 同距离时下方优先（减去一点分数）
+            let score = abs(y - ideal) - (y > ideal ? 0.05 : 0)
+            if score < bestScore { bestScore = score; best = y }
+        }
+        return best
     }
 
     /// 松手时按窗口位置判断想吸附到哪一格；不需要吸附时返回 nil。

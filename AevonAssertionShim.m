@@ -122,6 +122,21 @@ __attribute__((used)) static const char AevonDockKeepSideV45Marker[] = "AevonDoc
 __attribute__((used)) static const char AevonEdgeThinV45Marker[] = "AevonEdgeThinV45";
 __attribute__((used)) static const char AevonCornerHotV45Marker[] = "AevonCornerHotV45";
 
+/* V0.0.46 CI 标记（AevonResizeSmoothV46）：
+ * AevonResizeSmoothV46    = 缩放宽度改为「横/纵两向投影取平均」，治抖动变大变小
+ *                           （旧实现 abs(dx)>=abs(dy) 二选一，两式结果差近一倍）；
+ * AevonDockStackV46       = 停靠小窗竖向排版：中心优先、撞了下叠（第二个不再跑到上面）；
+ * AevonFloatPaddingV46    = 内容上下各留 14pt 深色边，窗口圆角不再啃到导航栏返回按钮；
+ * AevonTopCropV46         = 顶部裁剪量 = 状态栏空白 − 8pt，保证导航栏一行不缺；
+ * AevonDockTapRestoreV46  = 停靠小窗整块窗身轻点即还原主悬浮窗；
+ * AevonFrameMemoryCleanV46= 停靠态不写几何记忆 + 读到停靠档尺寸直接作废。 */
+__attribute__((used)) static const char AevonResizeSmoothV46Marker[] = "AevonResizeSmoothV46";
+__attribute__((used)) static const char AevonDockStackV46Marker[] = "AevonDockStackV46";
+__attribute__((used)) static const char AevonFloatPaddingV46Marker[] = "AevonFloatPaddingV46";
+__attribute__((used)) static const char AevonTopCropV46Marker[] = "AevonTopCropV46";
+__attribute__((used)) static const char AevonDockTapRestoreV46Marker[] = "AevonDockTapRestoreV46";
+__attribute__((used)) static const char AevonFrameMemoryCleanV46Marker[] = "AevonFrameMemoryCleanV46";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

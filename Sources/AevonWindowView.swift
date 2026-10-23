@@ -24,6 +24,11 @@ enum AevonFloatGrab {
     case corner(UIRectEdge)
     /// 底边条：拖动 = 移动窗口；双击 = 关闭浮窗
     case bottom
+    /// V0.0.46（AevonDockTapRestoreV46）：**停靠小窗的整块窗身**。
+    /// 用户 Aevon(39)：「吸附停靠后的小窗能不能改为点击小窗后还原到主悬浮窗」——
+    /// 小窗只有 30% 屏宽，侧条又只有 20pt，实际很难点准，所以整块窗身都算轻点还原。
+    /// 拖动窗身仍然 = 移动（与侧条同一套位移逻辑）。
+    case body
 }
 
 /// 单个 App 的浮窗外壳：纯内容（无标题栏）+ 右上悬浮 ✕ + 贴窗外边缘的手势区。
@@ -88,6 +93,15 @@ enum AevonFloatGrab {
 ///   · 顶部停靠彻底删除（`AevonSnapSlot.top` 已不存在）；
 ///   · 白描边 0.9pt/34% → 0.5pt/26%；
 ///   · 下角块 36 → 48pt，另加 10pt 命中外扩（右下角缩放不好按）。
+/// V0.0.46（AevonResizeSmoothV46 / AevonDockStackV46 / AevonFloatPaddingV46 /
+///          AevonDockTapRestoreV46 / AevonFrameMemoryCleanV46），用户 Aevon(39)：
+///   · **缩放抖动**：`clampedCornerWidth` 原来用 `abs(dx)>=abs(dy)` 在横/纵两条公式间
+///     二选一，两值相差近一倍 → 手指没变方向窗口却突然变大变小。改为两向投影取平均。
+///   · **停靠小窗竖向排版**：`AevonSnap.dockY` 先算屏幕中心，撞了优先往下叠。
+///   · **顶部太窄 + 返回按钮被啃**：内容上下各留 14pt 深色边，窗口圆角不再咬到导航栏；
+///     顶部裁剪量减少 8pt，保证导航栏那一行完整。
+///   · **轻点停靠小窗 = 还原主窗**：整块窗身成为抓取区（`.body`），轻点还原、拖动移动。
+///   · **几何记忆被小窗污染**：停靠态不再写 `MedusaFrameLast`，读到时也会作废。
 final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
@@ -188,7 +202,9 @@ final class AevonWindowView: UIView {
     /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
-    private var lastTopInset: CGFloat = 0
+    /// V0.0.46：从「顶部 inset」改成「实际裁剪量 + 窗内上留白」两个缓存键
+    private var lastTopCrop: CGFloat = -1
+    private var lastTopPad: CGFloat = -1
 
     /// 合帧用的待处理拖拽目标（V0.0.45，AevonFloatSmoothV45）。
     ///
@@ -374,18 +390,25 @@ final class AevonWindowView: UIView {
               contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
 
         let scale = contentClip.bounds.width / screen.width
-        let topInset = AevonSnap.visualTopInset
+        // V0.0.46（AevonTopCropV46 AevonFloatPaddingV46）：
+        // 裁的是 `cropTop`（状态栏空白 − 8pt，保证导航栏一行不缺），
+        // 内容整体再往下让 `contentTopPadding`，上下各留出一条深色边，
+        // 窗口圆角就再也啃不到左上角的返回按钮。
+        let cropTop = AevonSnap.cropTop
+        let topPad = AevonSnap.contentTopPadding
 
         let clipSize = contentClip.bounds.size
         if abs(clipSize.width - lastClipSize.width) < 0.01,
            abs(clipSize.height - lastClipSize.height) < 0.01,
            abs(scale - lastAppliedScale) < 0.0001,
-           abs(topInset - lastTopInset) < 0.5 {
+           abs(cropTop - lastTopCrop) < 0.5,
+           abs(topPad - lastTopPad) < 0.5 {
             return
         }
         lastClipSize = clipSize
         lastAppliedScale = scale
-        lastTopInset = topInset
+        lastTopCrop = cropTop
+        lastTopPad = topPad
 
         let container = sceneHost.container
         // anchorPoint 只在第一次设一次：每帧写它会让 CA 重算 position，纯浪费
@@ -397,7 +420,7 @@ final class AevonWindowView: UIView {
             container.bounds = targetBounds
         }
         container.transform = CGAffineTransform(scaleX: scale, y: scale)
-        container.layer.position = CGPoint(x: 0, y: -topInset * scale)
+        container.layer.position = CGPoint(x: 0, y: topPad - cropTop * scale)
     }
 
     // MARK: - 手势区（V0.0.43，AevonSthenoGestureV43）
@@ -492,6 +515,9 @@ final class AevonWindowView: UIView {
             if handle === bottomBar { return .bottom }
             return .side(handle.edges)
         }
+        // V0.0.46（AevonDockTapRestoreV46）：停靠小窗的**整块窗身**也算抓取区 ——
+        // 轻点还原主窗、拖动移动。只有停靠态才这样，自由态窗身必须留给 App。
+        if isDocked, bounds.contains(local) { return .body }
         return nil
     }
 
@@ -500,9 +526,9 @@ final class AevonWindowView: UIView {
         guard let parent = superview else { return }
         activeGrab = grab
         switch grab {
-        case .side, .bottom:
+        case .side, .bottom, .body:
             // 只记基准，不动几何：要「越过阈值」才真正开始移动，
-            // 轻点（侧条=停靠 / 底边=双击关闭）由全局通道判定后回调。
+            // 轻点（侧条=停靠 / 底边=双击关闭 / 窗身=还原）由全局通道判定后回调。
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner(let edges):
@@ -524,7 +550,7 @@ final class AevonWindowView: UIView {
     func rebaseGrab(at layerPoint: CGPoint) {
         guard let grab = activeGrab else { return }
         switch grab {
-        case .side, .bottom:
+        case .side, .bottom, .body:
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner:
@@ -564,7 +590,7 @@ final class AevonWindowView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         switch grab {
-        case .side, .bottom:
+        case .side, .bottom, .body:
             applyBarMove(to: point)
         case .corner(let edges):
             applyCornerResize(to: point, edges: edges)
@@ -580,7 +606,7 @@ final class AevonWindowView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         switch grab {
-        case .side, .bottom:
+        case .side, .bottom, .body:
             applyBarMove(to: layerPoint)
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
@@ -601,6 +627,16 @@ final class AevonWindowView: UIView {
                     obstacles: AevonEntryHost.dockedObstacles(excluding: self)))
             }
             persistFrame()
+        case .body:
+            // V0.0.46：拖窗身 = 移动；松手若还在停靠态，就贴回最近的那一侧（保持小窗）
+            if commit, isDocked {
+                let slot = AevonSnap.slot(for: frame) ?? currentSlot
+                if slot != .free {
+                    snap(to: slot)
+                    return
+                }
+            }
+            persistFrame()
         case .corner:
             finishEdgeResize()
         case .bottom:
@@ -619,7 +655,7 @@ final class AevonWindowView: UIView {
         guard let grab = activeGrab else { return }
         activeGrab = nil
         switch grab {
-        case .side, .bottom:
+        case .side, .bottom, .body:
             frame = moveOriginFrame
         case .corner:
             if isLiveResizing {
@@ -690,26 +726,32 @@ final class AevonWindowView: UIView {
     }
 
     /// 只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例。
-    /// 横向按 dx（拖左角反向），纵向按 dy（拖顶角反向）；
-    /// 角块横竖都在动，取变化更明显的那个方向，斜拖也跟手，拖不出细长条。
+    /// 角块横竖都在动，所以把横、纵两个方向的位移**都投影成宽度再取平均**。
+    ///
+    /// V0.0.46（AevonResizeSmoothV46）：这里是「缩放时突然抖动变大变小」的根因。
+    /// 旧实现用 `abs(dx) >= abs(dy)` 在「按 X 算」和「按 Y 算」之间二选一 ——
+    /// dx / dy 每帧都在微小抖动，一旦跨越这个判据就换公式，而两条公式给出的宽度
+    /// 相差近一倍（aspect ≈ 0.49：横向 10pt 就是 10pt 宽，纵向 10pt 只有 4.9pt 宽），
+    /// 于是手指几乎没动，窗口却突然跳大或跳小。取平均是连续的，永远不会跳。
     private func clampedCornerWidth(dx: CGFloat, dy: CGFloat, base: CGRect,
                                     edges: UIRectEdge) -> CGFloat {
         let aspect = AevonWindowView.contentAspect
         let screen = UIScreen.main.bounds
+        // 纵向位移换算宽度时只能用「内容区高度」，上下留白不能算进去
+        let contentHeight = max(1, base.height
+            - AevonSnap.contentTopPadding - AevonSnap.contentBottomPadding)
 
-        var width: CGFloat? = nil
+        var estimates: [CGFloat] = []
         if edges.contains(.left) || edges.contains(.right) {
             let signed = edges.contains(.left) ? -dx : dx
-            width = base.width + signed
+            estimates.append(base.width + signed)
         }
         if edges.contains(.top) || edges.contains(.bottom) {
             let signed = edges.contains(.top) ? -dy : dy
-            let widthFromY = (base.height + signed) * aspect
-            width = width.map { current in
-                abs(dx) >= abs(dy) ? current : widthFromY
-            } ?? widthFromY
+            estimates.append((contentHeight + signed) * aspect)
         }
-        var result = width ?? base.width
+        var result = estimates.isEmpty ? base.width
+            : estimates.reduce(0, +) / CGFloat(estimates.count)
         // 上限：不超屏高 92%，宽度不超屏宽 95%
         let maxWidth = max(AevonWindowView.minContentWidth,
                            min(screen.width * 0.95, screen.height * 0.92 * aspect))
@@ -760,12 +802,14 @@ final class AevonWindowView: UIView {
     /// 不再需要「先拖动再缩放」才能变大（Aevon(37) 的第二个问题）。
     func snap(to slot: AevonSnapSlot) {
         guard slot != .free, !isLiveResizing else { return }
-        var target = AevonSnap.frame(for: slot, from: frame)
-        // V0.0.45（AevonDockKeepSideV45）：停靠后只允许**上下**让位。
-        // Aevon(38) 日志里「靠右停靠 19,92」就是被 `avoid()` 横向推走的，
-        // 明明吸在右边却跑到左边，语义直接崩掉。
-        target = AevonSnap.avoidVertical(target,
-            obstacles: AevonEntryHost.dockedObstacles(excluding: self))
+        // V0.0.46（AevonDockTapRestoreV46）：从自由态进停靠时先记住主窗几何，
+        // 之后无论轻点侧条还是轻点窗身还原，都能回到原来那个大小。
+        if !isDocked { preDockFrame = frame }
+        // V0.0.46（AevonDockStackV46）：把其它已停靠小窗当障碍，纵向按顺序往下叠 ——
+        // 「第一个小窗在边缘中间、第二个跑到上面」的修法在这里。
+        // 用**原始**矩形（不外扩）：外扩 30pt 后两个小窗在屏上根本摆不下，会退化成重叠。
+        let obstacles = AevonEntryHost.dockedFrames(excluding: self)
+        let target = AevonSnap.frame(for: slot, from: frame, obstacles: obstacles)
         guard target.width > 1, target.height > 0 else { return }
 
         // 目标与当前几乎一致就不折腾了（拖动松手时已经贴在位置上的情况）
@@ -792,7 +836,7 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
             + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 · 屏宽 "
-            + "\(Int(AevonSnap.dockWidthRatio * 100))%）（AevonSthenoDockV44 AevonDockSizeV45）")
+            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 小窗竖向下叠）（AevonSthenoDockV44 AevonDockSizeV45 AevonDockStackV46）")
     }
 
     /// 当前是不是停靠小窗（宽度等于停靠档）
@@ -809,9 +853,7 @@ final class AevonWindowView: UIView {
             restoreMainWindow()
             return
         }
-        // 只在「从自由状态进来」时记下原几何；已停靠时切换另一侧不能覆盖它，
-        // 否则还原时会把小窗尺寸当成主窗尺寸。
-        if !isDocked { preDockFrame = frame }
+        // preDockFrame 由 `snap(to:)` 在「从自由态进来」时记录（V0.0.46 挪过去了）
         snap(to: slot)
     }
 
@@ -858,10 +900,13 @@ final class AevonWindowView: UIView {
     /// 所以停靠动作完成后由 `AevonEntryHost` 挨个通知其它窗重排一次。
     func avoidDockedWindows() {
         guard !isLiveResizing else { return }
+        // V0.0.46（AevonDockStackV46）：**已停靠的窗不再被别人的动作推着跑**。
+        // 它的纵向位置由 `AevonSnap.dockY` 在停靠那一刻按堆叠顺序定好；
+        // 再让 `avoidVertical` 推一次，就会把它顶出屏幕边界或顶到别人上方
+        // —— 正是 Aevon(39) 说的「第二个小窗跑到上面」。
+        guard !isDocked else { return }
         let obstacles = AevonEntryHost.dockedObstacles(excluding: self)
-        // 自己已停靠时只能纵向让位，否则会被推离所在的那一侧（V0.0.45）
-        let avoided = isDocked ? AevonSnap.avoidVertical(frame, obstacles: obstacles)
-                               : AevonSnap.avoid(frame, obstacles: obstacles)
+        let avoided = AevonSnap.avoid(frame, obstacles: obstacles)
         guard abs(avoided.minX - frame.minX) > 0.5 || abs(avoided.minY - frame.minY) > 0.5 else { return }
         UIView.animate(withDuration: 0.24,
                        delay: 0,
@@ -892,10 +937,16 @@ final class AevonWindowView: UIView {
               raw.count >= 3 else { return fallback }
 
         let screen = UIScreen.main.bounds
+        // V0.0.46（AevonFrameMemoryCleanV46）：旧版本会把停靠小窗的 30% 宽写成全局记忆，
+        // 读出来会让「新开的主窗」变成一根窄条。落在停靠档 ±2% 内的一律作废，用默认尺寸。
+        let storedPercent = CGFloat(raw[2])
+        if abs(storedPercent - AevonSnap.dockWidthRatio * 100.0) < 2.0 {
+            return fallback
+        }
         // V0.0.43：旧版本可能存着 66%~94% 的巨窗，读出来按 maxRestoredRatio 收回
         let cap = screen.width * AevonSnap.maxRestoredRatio
         let width = max(minContentWidth,
-                        min(screen.width * CGFloat(raw[2]) / 100.0, cap, AevonSnap.maxWidth))
+                        min(screen.width * storedPercent / 100.0, cap, AevonSnap.maxWidth))
         let height = AevonSnap.height(forWidth: width)
         let x = screen.width * CGFloat(raw[0]) / 100.0
         let y = screen.height * CGFloat(raw[1]) / 100.0
@@ -903,6 +954,10 @@ final class AevonWindowView: UIView {
     }
 
     private func persistFrame() {
+        // V0.0.46（AevonFrameMemoryCleanV46）：**停靠态一律不写几何记忆**。
+        // Aevon(39)：「吸附停靠变成小窗后，再用圆盘打开新应用，主悬浮窗会按小窗尺寸打开」——
+        // 根因就是停靠落盘时把 30% 宽的小窗当成全局记忆（MedusaFrameLast）写进去了。
+        guard currentSlot == .free else { return }
         guard !isLiveResizing, transform.isIdentity else { return }
         guard let store = UserDefaults(suiteName: AevonWindowView.prefsSuite) else { return }
         let screen = UIScreen.main.bounds

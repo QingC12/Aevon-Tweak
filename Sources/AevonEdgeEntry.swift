@@ -833,6 +833,9 @@ enum AevonEdgeEntry {
             AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
         case .bottom:
             AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
+        case .body:
+            // V0.0.46：停靠小窗整块窗身 —— 轻点还原主窗，拖动移动
+            AevonLog.info("[窗口] 停靠小窗窗身按下 \(Int(point.x)),\(Int(point.y))（轻点还原主窗 · 拖动移动）（AevonDockTapRestoreV46）")
         }
         return true
     }
@@ -919,6 +922,18 @@ enum AevonEdgeEntry {
                         floatBottomLastTapAt = now
                         floatBottomLastTapWindow = win
                     }
+                } else {
+                    win.grabCancel()
+                }
+            case .body:
+                // V0.0.46（AevonDockTapRestoreV46）：轻点停靠小窗 = 还原主悬浮窗
+                if floatEngaged {
+                    win.grabEnd(at: layerPoint, commit: true)
+                } else if isTap {
+                    win.grabCancel()
+                    win.restoreMainWindow()
+                    AevonLog.info("[窗口] 轻点停靠小窗窗身 → 还原主悬浮窗"
+                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）（AevonDockTapRestoreV46）")
                 } else {
                     win.grabCancel()
                 }
