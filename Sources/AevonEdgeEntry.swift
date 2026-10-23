@@ -892,12 +892,14 @@ enum AevonEdgeEntry {
                     // 拖过 = 正常结束（贴边松手会自动吸附）
                     win.grabEnd(at: layerPoint, commit: true)
                 } else if isTap {
-                    // 轻点侧条：未停靠 → 停靠到该侧变小窗；已停靠在同一侧 → 还原主窗
+                    // 轻点侧条：停靠到该侧变小窗（V0.0.48：停靠态不再靠这个手势还原，
+                    // 还原统一走「轻点小窗窗身」，见 AevonDockTapOnlyV48）
                     win.grabCancel()   // 丢掉这段「只按下没移动」的抓取
                     let slot: AevonSnapSlot = edges.contains(.left) ? .left : .right
                     win.dock(to: slot)
                     AevonLog.info("[窗口] 侧条轻点 → \(AevonSnap.describe(slot))"
-                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）（AevonSthenoGestureV44）")
+                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）"
+                        + "（AevonSthenoGestureV44 AevonDockTapOnlyV48）")
                 } else {
                     // 按住太久又没动：既不算轻点也没拖动，原样恢复
                     win.grabCancel()

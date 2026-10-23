@@ -102,6 +102,9 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title, slot: slot)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
+            // V0.0.48（AevonFloatAnimV48）：入场动画 —— 从下方 22pt 处浮上来 + 淡入。
+            // 只动位置和透明度、不动尺寸，所以不会触发内容缩放，第一帧不会闪黑。
+            windowView.playEntryAnimation()
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)
@@ -204,14 +207,18 @@ enum AevonWindowManager {
     static func close(bundleID: String) {
         guard let windowView = windows.removeValue(forKey: bundleID) else { return }
         if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
-        windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
-        AevonSceneHelper.sleep(bundleID)
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         if let pid = AevonAppInfo.pid(bundleID: bundleID) {
             AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
         }
-        AevonLog.info("[窗口] \(bundleID) 已关闭")
+        // V0.0.48（AevonFloatAnimV48）：先播退场动画，动画结束再休眠场景 + 拆视图。
+        // 顺序不能反 —— 先把场景睡掉，动画中途画面就变黑了。
+        windowView.playDismissAnimation {
+            AevonSceneHelper.sleep(bundleID)
+            windowView.teardown()
+        }
+        AevonLog.info("[窗口] \(bundleID) 已关闭（缩放缓出退场）（AevonFloatAnimV48）")
     }
 
     static func closeAll() {

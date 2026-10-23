@@ -147,6 +147,20 @@ __attribute__((used)) static const char AevonRestorePosV47Marker[] = "AevonResto
 __attribute__((used)) static const char AevonDock916V47Marker[] = "AevonDock916V47";
 __attribute__((used)) static const char AevonNoPushV47Marker[] = "AevonNoPushV47";
 
+/* V0.0.48 CI 标记（Aevon(41) 的 5 条反馈）：
+ * AevonGeomAnimV48     = 停靠/还原的几何动画（窗口与内容缩放同曲线，修「先黑屏再出画面」）；
+ * AevonFloatAnimV48    = 开窗入场（上浮淡入）与关窗退场（缩放缓出）；
+ * AevonFlushEdgeV48    = 贴边距离归零，停靠小窗真正贴住屏幕边缘；
+ * AevonDockColumnV48   = 同侧小窗成列（第一个居中、后续向下）；
+ * AevonGrowFromCenterV48 = 一列放不下时整列上移（第一个从中心往上走）；
+ * AevonDockTapOnlyV48  = 已停靠时移除「轻点侧条还原」，只保留轻点窗身还原。 */
+__attribute__((used)) static const char AevonGeomAnimV48Marker[] = "AevonGeomAnimV48";
+__attribute__((used)) static const char AevonFloatAnimV48Marker[] = "AevonFloatAnimV48";
+__attribute__((used)) static const char AevonFlushEdgeV48Marker[] = "AevonFlushEdgeV48";
+__attribute__((used)) static const char AevonDockColumnV48Marker[] = "AevonDockColumnV48";
+__attribute__((used)) static const char AevonGrowFromCenterV48Marker[] = "AevonGrowFromCenterV48";
+__attribute__((used)) static const char AevonDockTapOnlyV48Marker[] = "AevonDockTapOnlyV48";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；

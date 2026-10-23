@@ -477,7 +477,8 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["小窗竖向下叠", "轻点停靠小窗窗身", "停靠小窗窗身按下"]
+          # V0.0.48：停靠改成「中心锚点向下成列」，旧串「小窗竖向下叠」随之退场
+          need = ["轻点停靠小窗窗身", "停靠小窗窗身按下"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.46 日志串: " + ", ".join(miss))
@@ -493,9 +494,10 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
+          # V0.0.48：跨窗自动避让早已停用，V47 的「不再挪动其它窗」串也随之改为成列语义
           need = ["回到停靠前的位置与尺寸",
                   "停靠小窗 9:16",
-                  "不再挪动其它窗"]
+                  "中心锚点向下成列"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.47 日志串: " + ", ".join(miss))
@@ -505,6 +507,23 @@ jobs:
               print("::error::仍存在跨窗自动避让（自动避让停靠小窗）—— V0.0.47 应已停用")
               sys.exit(1)
           print("V0.0.47 校验: 去底部黑边 + 还原回原位 + 停靠 9:16 + 停用跨窗避让 已编入")
+          PY
+
+          # ── V0.0.48：几何动画（修停靠黑屏）/ 开关落场 / 贴边归零 / 停靠成列 / 侧条不再还原 ──
+          for m in AevonGeomAnimV48 AevonFloatAnimV48 AevonFlushEdgeV48 \
+                   AevonDockColumnV48 AevonGrowFromCenterV48 AevonDockTapOnlyV48; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.48 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["中心锚点向下排列", "缩放缓出退场", "停靠列已重排"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.48 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.48 校验: 几何动画 + 开关落场 + 贴边归零 + 停靠成列 + 侧条不再还原 已编入")
           PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }

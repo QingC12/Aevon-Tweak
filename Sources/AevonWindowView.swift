@@ -199,6 +199,19 @@ final class AevonWindowView: UIView {
 
     /// 手势进行中（此时只允许改 transform，不允许改 frame）
     private var isLiveResizing = false
+
+    /// 几何动画进行中（V0.0.48，AevonGeomAnimV48）。
+    ///
+    /// 停靠 / 还原 / 开关窗的动画由 `animateGeometry` 统一驱动，动画期间
+    /// `layoutSubviews` 必须闭嘴 —— 否则它会把 `contentClip.frame` 与
+    /// `sceneHost.container.transform` 立刻写成**最终值**，而窗口 frame 还在动画途中，
+    /// 于是内容先缩成一小块、四周露出窗口黑底，再在动画结束的瞬间对齐。
+    /// 这正是 Aevon(41) 第 1 条「停靠成小窗时先黑屏再出现画面」的根因。
+    private var isAnimatingGeometry = false
+    /// 正在播退场动画（关窗），期间不接受任何手势
+    private(set) var isDismissing = false
+    /// 退场动画开始前已经落盘过几何（teardown 里不要再用缩小后的 frame 覆盖它）
+    private var geometryPersistedBeforeDismiss = false
     /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
@@ -321,6 +334,9 @@ final class AevonWindowView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // V0.0.48（AevonGeomAnimV48）：动画期间几何全部由动画块驱动，这里一律不动，
+        // 否则就会「内容先缩成小块 → 黑屏 → 动画结束才出现画面」。
+        if isAnimatingGeometry { return }
         // V0.0.44：缩放改成「实时改 frame」，所以这里必须照常布局 ——
         // 以前缩放期间直接 return，正是「缩放中四角变直角、抬手才跳回圆角」的来源。
         if contentClip.frame != bounds {
@@ -344,6 +360,116 @@ final class AevonWindowView: UIView {
             updateShadowPath()
         }
         applyContentScale()
+    }
+
+    // MARK: - 几何动画（V0.0.48，AevonGeomAnimV48 / AevonFloatAnimV48）
+
+    /// 统一的几何动画：窗口 frame、内容裁剪框、场景缩放**同一条曲线、同一个块**里走。
+    ///
+    /// 关键在于 `sceneHost.container.transform` 必须跟窗口一起插值 ——
+    /// 内容可视大小 = 窗口宽 ×（窗口宽 ÷ 屏宽），两者必须同比例变化。
+    /// 旧版（V0.0.47 及以前）只动画了窗口 frame，而 `applyContentScale` 在
+    /// `layoutSubviews` 里立刻把 scale 写成最终值，于是中间态是「窗口还是大的、
+    /// 内容已经缩成一小块」，四周露出窗口背景 —— 即 Aevon(41) 说的
+    /// 「停靠成小窗时先黑屏，然后才出现画面」。
+    func animateGeometry(to target: CGRect,
+                         duration: TimeInterval = 0.34,
+                         alpha targetAlpha: CGFloat? = nil,
+                         spring: Bool = true,
+                         completion: (() -> Void)? = nil) {
+        guard target.width > 1, target.height > 1 else { completion?(); return }
+        isAnimatingGeometry = true
+        let screenW = max(1, UIScreen.main.bounds.width)
+        let scale = target.width / screenW
+        let topPad = AevonSnap.contentTopPadding
+        let cropTop = AevonSnap.cropTop
+        let container = sceneHost.container
+        let radius = AevonWindowView.cornerRadius(forWidth: target.width)
+        let clipTarget = CGRect(origin: .zero, size: target.size)
+        // 锚点必须是左上角，否则动画块里设的 position 会算偏
+        if container.layer.anchorPoint != .zero {
+            container.layer.anchorPoint = .zero
+        }
+
+        let steps: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.frame = target
+            self.contentClip.frame = clipTarget
+            self.contentClip.layer.cornerRadius = radius
+            container.transform = CGAffineTransform(scaleX: scale, y: scale)
+            container.layer.position = CGPoint(x: 0, y: topPad - cropTop * scale)
+            if let a = targetAlpha { self.alpha = a }
+            self.layoutGestureHandles()
+        }
+        let done: (Bool) -> Void = { [weak self] _ in
+            guard let self = self else { completion?(); return }
+            self.isAnimatingGeometry = false
+            // 缓存失效，让下一次布局把最终值再对一遍（值与动画终点相同，不会跳）
+            self.lastAppliedScale = -1
+            self.setNeedsLayout()
+            self.layoutIfNeeded()
+            completion?()
+        }
+        if spring {
+            UIView.animate(withDuration: duration, delay: 0,
+                           usingSpringWithDamping: 0.88,
+                           initialSpringVelocity: 0.2,
+                           options: [.beginFromCurrentState, .allowUserInteraction],
+                           animations: steps, completion: done)
+        } else {
+            UIView.animate(withDuration: duration, delay: 0,
+                           options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut],
+                           animations: steps, completion: done)
+        }
+    }
+
+    /// 开窗入场（V0.0.48）：从下方 22pt 浮上来 + 淡入。
+    ///
+    /// 入场**只动位置和透明度、不动尺寸** —— 尺寸一变就要跑一遍内容缩放，
+    /// 反而容易在第一帧闪一下。停靠 / 还原才需要真正的尺寸动画。
+    func playEntryAnimation() {
+        let target = frame
+        guard target.width > 1, target.height > 1 else { return }
+        // 入场**不**设 `isAnimatingGeometry`：尺寸没变，必须让 layoutSubviews 正常跑一次，
+        // 否则 `applyContentScale` 永远不会执行，第一帧内容会以 1:1 尺寸塞进小窗里。
+        alpha = 0
+        frame = CGRect(x: target.minX, y: target.minY + 22,
+                       width: target.width, height: target.height)
+        layoutIfNeeded()
+        UIView.animate(withDuration: 0.34, delay: 0,
+                       usingSpringWithDamping: 0.86,
+                       initialSpringVelocity: 0.25,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.frame = target
+            self.alpha = 1
+        } completion: { _ in
+            self.lastAppliedScale = -1
+            self.setNeedsLayout()
+        }
+    }
+
+    /// 关窗退场（V0.0.48）：缩到 94% + 淡出，动画结束再真正拆视图。
+    func playDismissAnimation(completion: @escaping () -> Void) {
+        guard !isDismissing else { return }
+        isDismissing = true
+        isUserInteractionEnabled = false
+        stopDragLink()
+        activeGrab = nil
+        // 几何必须在动画前落盘：动画会把 frame 改成缩小后的值
+        persistFrame()
+        geometryPersistedBeforeDismiss = true
+        let target = AevonWindowView.scaledFrame(frame, ratio: 0.94)
+        animateGeometry(to: target, duration: 0.18, alpha: 0, spring: false) { [weak self] in
+            self?.isDismissing = false
+            completion()
+        }
+    }
+
+    /// 以原中心为基准按比例缩放一个 frame
+    static func scaledFrame(_ frame: CGRect, ratio: CGFloat) -> CGRect {
+        let w = max(1, frame.width * ratio)
+        let h = max(1, frame.height * ratio)
+        return CGRect(x: frame.midX - w / 2, y: frame.midY - h / 2, width: w, height: h)
     }
 
     /// 投影路径与圆角矩形严格一致，避免系统按 alpha 逐帧重算（滚动 App 画面时开销很大）
@@ -794,24 +920,23 @@ final class AevonWindowView: UIView {
 
     // MARK: - 停靠 / 吸附
 
-    /// 停靠到某一侧（V0.0.43：贴边 5pt + 换成停靠档小尺寸）。
+    /// 停靠到某一侧（V0.0.43：贴边 + 换成停靠档小尺寸）。
     ///
     /// 两个入口共用：
     ///   · 拖侧条贴边松手 → 自动吸附（`grabEnd` 里按 `AevonSnap.slot(for:)` 判定）；
     ///   · 轻点左右侧条 → 直接停靠到那一侧（用户在 Aevon(36) 指定的新交互）。
     ///
-    /// V0.0.44（AevonDockRestoreV44）：轻点已停靠在同一侧的小窗 = 还原成主悬浮窗，
-    /// 不再需要「先拖动再缩放」才能变大（Aevon(37) 的第二个问题）。
+    /// V0.0.48（AevonDockColumnV48）：落点改走「同侧一列」模型 ——
+    /// 第一个在屏幕垂直中心、后续向下排、放不下整列上移（Aevon(41) 第 4 条）。
     func snap(to slot: AevonSnapSlot) {
-        guard slot != .free, !isLiveResizing else { return }
+        guard slot != .free, !isLiveResizing, !isAnimatingGeometry else { return }
         // V0.0.46（AevonDockTapRestoreV46）：从自由态进停靠时先记住主窗几何，
-        // 之后无论轻点侧条还是轻点窗身还原，都能回到原来那个大小。
+        // 之后轻点窗身还原能回到原来那个位置和大小。
         if !isDocked { preDockFrame = frame }
-        // V0.0.46（AevonDockStackV46）：把其它已停靠小窗当障碍，纵向按顺序往下叠 ——
-        // 「第一个小窗在边缘中间、第二个跑到上面」的修法在这里。
-        // 用**原始**矩形（不外扩）：外扩 30pt 后两个小窗在屏上根本摆不下，会退化成重叠。
-        let obstacles = AevonEntryHost.dockedFrames(excluding: self)
-        let target = AevonSnap.frame(for: slot, from: frame, obstacles: obstacles)
+        // 同侧已有的小窗（按纵向顺序），它们决定本窗落在这一列的第几格
+        let peers = AevonEntryHost.dockedPeers(side: slot, excluding: self)
+        let target = AevonSnap.frame(for: slot, from: frame,
+                                     obstacles: peers.map { $0.frame })
         guard target.width > 1, target.height > 0 else { return }
 
         // 目标与当前几乎一致就不折腾了（拖动松手时已经贴在位置上的情况）
@@ -820,40 +945,53 @@ final class AevonWindowView: UIView {
            abs(target.width - frame.width) < 0.5 {
             currentSlot = slot
             persistFrame()
+            AevonEntryHost.relayoutDockedColumn(side: slot)
             return
         }
 
         currentSlot = slot
-        UIView.animate(withDuration: 0.24,
-                       delay: 0,
-                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
-            self.frame = target
-        } completion: { _ in
-            self.setNeedsLayout()
+        // V0.0.48：停靠走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
+        animateGeometry(to: target, duration: 0.34) { [weak self] in
+            guard let self = self else { return }
             self.persistFrame()
+            // 整列重排：把这一列的小窗按「中心锚点 + 向下生长」重新对齐
+            AevonEntryHost.relayoutDockedColumn(side: slot)
         }
         AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
             + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 9:16 · 屏宽 "
-            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 小窗竖向下叠 · 不再挪动其它窗）"
-            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockStackV46 AevonDock916V47 AevonNoPushV47）")
+            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 中心锚点向下成列 · 弹簧动画）"
+            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockColumnV48 AevonGrowFromCenterV48）")
     }
 
-    /// 当前是不是停靠小窗（宽度等于停靠档）
-    private var isDockedSize: Bool {
-        return abs(bounds.width - AevonSnap.dockWidth) < 3
+    /// 把自己挪到停靠列的指定纵向位置（V0.0.48，AevonGrowFromCenterV48）。
+    ///
+    /// 只改 y、不动尺寸 —— 内容缩放不变，所以不会出现停靠黑屏那种问题。
+    func setDockedY(_ y: CGFloat) {
+        guard isDocked, !isAnimatingGeometry, !isDismissing else { return }
+        guard abs(frame.minY - y) > 0.5 else { return }
+        var t = frame
+        t.origin.y = y
+        t = AevonSnap.clamped(t)
+        UIView.animate(withDuration: 0.30,
+                       delay: 0,
+                       usingSpringWithDamping: 0.90,
+                       initialSpringVelocity: 0.2,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.frame = t
+        } completion: { _ in
+            self.setNeedsLayout()
+        }
     }
 
-    /// 轻点侧条（V0.0.44）：
-    ///   · 未停靠 / 停靠在另一侧 → 贴到该侧并变小窗；
-    ///   · **已停靠在同一侧 → 还原成主悬浮窗**（轻点即放大，不用再拖再缩）。
+    /// 轻点侧条（V0.0.44）。
+    ///
+    /// V0.0.48（AevonDockTapOnlyV48）：**已停靠时的「轻点侧条还原」已移除**。
+    /// Aevon(41) 第 2 条：「既然现在停靠小窗可以直接点击变成主悬浮窗，
+    /// 那么可以移除之前的小窗还原手势」—— 整块窗身轻点就是唯一的还原入口，
+    /// 侧条轻点在小窗态只负责「挪到另一侧」或原地不动，避免两套还原手势打架。
     func dock(to slot: AevonSnapSlot) {
         guard slot == .left || slot == .right else { return }
-        if currentSlot == slot, isDockedSize {
-            restoreMainWindow()
-            return
-        }
-        // preDockFrame 由 `snap(to:)` 在「从自由态进来」时记录（V0.0.46 挪过去了）
         snap(to: slot)
     }
 
@@ -877,17 +1015,14 @@ final class AevonWindowView: UIView {
 
         preDockFrame = nil
         currentSlot = .free
-        UIView.animate(withDuration: 0.26,
-                       delay: 0,
-                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
-            self.frame = target
-        } completion: { _ in
-            self.setNeedsLayout()
-            self.persistFrame()
+        // V0.0.48：还原也走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
+        animateGeometry(to: target, duration: 0.36) { [weak self] in
+            self?.persistFrame()
         }
         AevonLog.info("[窗口] 轻点已停靠小窗 → 还原主悬浮窗 \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（回到停靠前的位置与尺寸 · 不再贴边改写）（AevonDockRestoreV44 AevonRestorePosV47）")
+            + "（回到停靠前的位置与尺寸 · 不再贴边改写 · 弹簧动画）"
+            + "（AevonDockRestoreV44 AevonRestorePosV47 AevonGeomAnimV48）")
     }
 
     /// 关闭自己（底边条双击时由全局通道调用）。
@@ -958,8 +1093,11 @@ final class AevonWindowView: UIView {
     func teardown() {
         // 合帧定时器会强引用 self，必须显式停掉，否则关窗后视图泄漏
         stopDragLink()
-        // 关窗前把最终位置记下来
-        persistFrame()
+        // 关窗前把最终位置记下来（退场动画已经落过盘就不用再来一次，
+        // 否则会用缩小 94% 后的 frame 覆盖掉正确几何 —— V0.0.48）
+        if !geometryPersistedBeforeDismiss {
+            persistFrame()
+        }
         // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
         // NSInternalInconsistencyException: Must be invalidated before deallocating
         sceneHost.onFirstContent = nil

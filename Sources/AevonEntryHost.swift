@@ -123,6 +123,49 @@ enum AevonEntryHost {
         return rects
     }
 
+    /// 同侧已停靠的小窗（V0.0.48，AevonDockColumnV48），按当前纵向位置从上到下。
+    ///
+    /// 停靠列是「同侧一列」的模型：左侧一列、右侧一列，互不干扰。
+    /// 新窗落点 = 这一列的第 `count` 格（见 `AevonSnap.dockColumnY`）。
+    static func dockedPeers(side: AevonSnapSlot,
+                            excluding window: AevonWindowView?) -> [AevonWindowView] {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return [] }
+        var list: [AevonWindowView] = []
+        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+            guard let win = view as? AevonWindowView else { continue }
+            if win === window { continue }
+            guard win.isDocked, win.currentSlot == side else { continue }
+            list.append(win)
+        }
+        return list.sorted { $0.frame.minY < $1.frame.minY }
+    }
+
+    /// 重排某一侧的整列停靠小窗（V0.0.48，AevonGrowFromCenterV48）。
+    ///
+    /// Aevon(41) 第 4 条：「第一个在中间，后续的在中下段，如果放不下了，
+    /// 中间的会自动向上移动」。所以停靠完成后不是只摆新窗，
+    /// 而是把**整列**按 `AevonSnap.dockColumnYs` 重新对齐 ——
+    /// 底部放不下时整列上移，第一个窗从屏幕中心往上走。
+    static func relayoutDockedColumn(side: AevonSnapSlot) {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
+        var column: [AevonWindowView] = []
+        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+            guard let win = view as? AevonWindowView else { continue }
+            guard win.isDocked, win.currentSlot == side else { continue }
+            column.append(win)
+        }
+        guard column.count > 1 else { return }
+        column.sort { $0.frame.minY < $1.frame.minY }
+        let height = column[0].frame.height
+        let ys = AevonSnap.dockColumnYs(count: column.count, height: height)
+        guard ys.count == column.count else { return }
+        for (index, win) in column.enumerated() {
+            win.setDockedY(ys[index])
+        }
+        AevonLog.info("[窗口] 停靠列已重排：\(column.count) 个小窗，中心锚点向下排列"
+            + "（\(ys.map { Int($0) })，AevonGrowFromCenterV48）")
+    }
+
     /// 已停靠小窗的**原始**矩形（不外扩）。
     ///
     /// V0.0.46（AevonDockStackV46）：竖向堆叠要用它，不能用外扩版 ——

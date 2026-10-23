@@ -35,8 +35,13 @@ enum AevonSnapSlot: String {
 ///     宽度下限 `dockMinWidth`，不再被主窗的 `minContentWidth` 抬回去；
 ///   · 新增 `avoidVertical`：停靠小窗只上下让位，绝不被横向推离所在的那一侧。
 enum AevonSnap {
-    /// 贴边距离（Stheno `edgeWidth` 对应物）。用户要求 5pt。
-    static let edgeInset: CGFloat = 5
+    /// 贴边距离（Stheno `edgeWidth` 对应物）。
+    ///
+    /// V0.0.48（AevonFlushEdgeV48）：5 → **0**。
+    /// Aevon(41)：「现在屏幕边缘不再保留空白区，停靠小窗可以直接贴边」。
+    /// Stheno 的 `edgeWidth` 本来就是「贴边态露出的那一条厚度」，不是安全区留白；
+    /// 归零后停靠小窗真正贴在屏幕边缘，主窗拖到边上也能贴齐。
+    static let edgeInset: CGFloat = 0
     /// 距离屏幕边缘多少点以内算「想吸附」
     static let edgeThreshold: CGFloat = 22
     /// V0.0.37：浮窗无标题栏，高度就是纯内容高
@@ -228,42 +233,47 @@ enum AevonSnap {
         case .right:
             f.origin.x = screen.width - edgeInset - width
         }
-        f.origin.y = dockY(height: height, near: base.midY, obstacles: obstacles)
+        f.origin.y = dockColumnY(index: obstacles.count, height: height)
         return clamped(f)
     }
 
-    /// 停靠小窗的纵向落点（V0.0.46，AevonDockStackV46）。
+    /// 停靠小窗的纵向落点（V0.0.48，AevonDockColumnV48）。
     ///
-    /// Aevon(39)：「第一个小窗停靠屏幕边缘中间，第二个会到上面」。
-    /// 原实现撞车时先试「往上推」，于是第二个永远叠在第一个上面，和阅读顺序相反。
-    /// 现在：理想位仍是「屏幕垂直中心」，撞了就**优先往下叠**，
-    /// 下方放不下才往上方找，同距离时一律选下方。
-    static func dockY(height: CGFloat, near centerY: CGFloat, obstacles: [CGRect]) -> CGFloat {
-        let screen = UIScreen.main.bounds
-        let minY = edgeInset
-        let maxY = max(edgeInset, screen.height - edgeInset - height)
-        let ideal = min(max(centerY - height / 2.0, minY), maxY)
-        guard !obstacles.isEmpty else { return ideal }
+    /// Aevon(41) 第 4 条：「停靠小窗应该是第一个在中间，后续的在中下段，
+    /// 如果放不下了，中间的会自动向上移动」——
+    /// 所以这是一列**从屏幕垂直中心向下生长**的栈，锚点永远在中心：
+    ///   · index 0 = 屏幕正中；
+    ///   · 后续依次往下排（间隔 `obstacleGap`）；
+    ///   · 底部放不下时**整列上移**（第一个窗就是从中心往上走），而不是把新窗塞到别处。
+    static func dockColumnY(index: Int, height: CGFloat) -> CGFloat {
+        let ys = dockColumnYs(count: max(1, index + 1), height: height)
+        guard !ys.isEmpty else { return edgeInset }
+        return ys[min(index, ys.count - 1)]
+    }
 
-        var candidates: [CGFloat] = [ideal]
-        for rect in obstacles {
-            candidates.append(rect.maxY + obstacleGap)            // 叠在它下面
-            candidates.append(rect.minY - obstacleGap - height)   // 叠在它上面
-        }
-        var best = ideal
-        var bestScore = CGFloat.greatestFiniteMagnitude
-        for y in candidates {
-            guard y >= minY - 0.5, y <= maxY + 0.5 else { continue }
-            // 同侧竖排，横向必然重叠，所以只用纵向区间判重
-            let clash = obstacles.contains { rect in
-                !(y + height <= rect.minY + 0.5 || y >= rect.maxY - 0.5)
+    /// 一列停靠小窗的全部纵向落点（V0.0.48）。
+    static func dockColumnYs(count: Int, height: CGFloat) -> [CGFloat] {
+        let screen = UIScreen.main.bounds
+        guard count > 0, height > 0, screen.height > height else { return [] }
+        let minY = edgeInset
+        let limit = screen.height - edgeInset
+        let step = height + obstacleGap
+
+        // 理想：第一个窗垂直居中，之后依次向下
+        var ys: [CGFloat] = (0..<count).map { (screen.height - height) / 2.0 + CGFloat($0) * step }
+        // 底部溢出 → 整列上移（第一个跟着往上，正是用户要的「中间的自动向上移动」）
+        let overflow = (ys[count - 1] + height) - limit
+        if overflow > 0 {
+            let shifted = ys.map { $0 - overflow }
+            if let first = shifted.first, first >= minY {
+                ys = shifted
+            } else {
+                // 整列比屏幕还高：从顶部开始排，宁可底部溢出也不越过状态栏
+                ys = (0..<count).map { minY + CGFloat($0) * step }
             }
-            if clash { continue }
-            // 同距离时下方优先（减去一点分数）
-            let score = abs(y - ideal) - (y > ideal ? 0.05 : 0)
-            if score < bestScore { bestScore = score; best = y }
         }
-        return best
+        let maxY = max(minY, limit - height)
+        return ys.map { min(max($0, minY), maxY) }
     }
 
     /// 松手时按窗口位置判断想吸附到哪一格；不需要吸附时返回 nil。
