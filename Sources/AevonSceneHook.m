@@ -50,11 +50,33 @@ static BOOL AevonLooksLikeBundleID(NSString *s) {
     return [s containsString:@"."];
 }
 
+/* V0.0.63（AevonIvarSafeV63）：V62 在真机上把 SpringBoard 搞崩（自动注销）。
+ * 根因：ivar 遍历里不检查类型编码就调 object_getIvar —— 非对象类型 ivar
+ * （BOOL / 整型 / CGRect / char[]）的原始字节被当成对象指针，
+ * 后续 isKindOfClass 解引用垃圾地址 → SIGSEGV。ObjC 的 @try 捕不了信号。
+ * 修复：**只有类型编码以 '@' 开头的 ivar 才允许 object_getIvar**；
+ * getter 调用前也检查方法返回类型编码必须是对象。 */
+
+static BOOL AevonIvarIsObjectType(Ivar ivar) {
+    const char *enc = ivar_getTypeEncoding(ivar);
+    return enc != NULL && enc[0] == '@';
+}
+
+static BOOL AevonGetterReturnsObject(id obj, SEL sel) {
+    Method m = class_getInstanceMethod(object_getClass(obj), sel);
+    if (m == NULL) { return NO; }
+    const char *enc = method_getTypeEncoding(m);
+    /* 类型编码开头是返回类型（可能带数字长度前缀），对象返回是 '@' */
+    while (enc != NULL && *enc >= '0' && *enc <= '9') { enc++; }
+    return enc != NULL && enc[0] == '@';
+}
+
 static NSString *AevonStringFromObject(id obj, NSString *key) {
     if (obj == nil || key.length == 0) { return nil; }
     @try {
         SEL sel = NSSelectorFromString(key);
         if (![obj respondsToSelector:sel]) { return nil; }
+        if (!AevonGetterReturnsObject(obj, sel)) { return nil; }
         id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
         id result = fn(obj, sel);
         if ([result isKindOfClass:[NSString class]]) { return result; }
@@ -66,11 +88,13 @@ static NSString *AevonBundleIDFromIdentity(id identity) {
     if (identity == nil) { return nil; }
     NSString *direct = AevonStringFromObject(identity, @"bundleIdentifier");
     if (AevonLooksLikeBundleID(direct)) { return direct; }
-    /* FBSceneIdentity 的 ivar 遍历：找形如 bundleID 的 NSString（不猜名字） */
+    /* FBSceneIdentity 的 ivar 遍历：找形如 bundleID 的 NSString（不猜名字）。
+     * 只读对象类型 ivar（AevonIvarSafeV63）。 */
     @try {
         unsigned int count = 0;
         Ivar *ivars = class_copyIvarList(object_getClass(identity), &count);
         for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+            if (!AevonIvarIsObjectType(ivars[i])) { continue; }
             id value = object_getIvar(identity, ivars[i]);
             if ([value isKindOfClass:[NSString class]] && AevonLooksLikeBundleID(value)) {
                 free(ivars);
@@ -92,7 +116,7 @@ static NSString *AevonBundleIDFromScene(id scene) {
     /* identity 键 → FBSceneIdentity → bundleIdentifier */
     @try {
         SEL identitySel = NSSelectorFromString(@"identity");
-        if ([scene respondsToSelector:identitySel]) {
+        if ([scene respondsToSelector:identitySel] && AevonGetterReturnsObject(scene, identitySel)) {
             id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
             NSString *s = AevonBundleIDFromIdentity(fn(scene, identitySel));
             if (s != nil) { return s; }
@@ -105,8 +129,9 @@ static NSString *AevonBundleIDFromScene(id scene) {
             unsigned int count = 0;
             Ivar *ivars = class_copyIvarList(object_getClass(scene), &count);
             for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+                if (!AevonIvarIsObjectType(ivars[i])) { continue; }
                 id value = object_getIvar(scene, ivars[i]);
-                if ([value isKindOfClass:identityCls]) {
+                if (value != nil && [value isKindOfClass:identityCls]) {
                     NSString *s = AevonBundleIDFromIdentity(value);
                     if (s != nil) { free(ivars); return s; }
                 }
@@ -124,6 +149,7 @@ static NSString *AevonSceneBundleIDFromVC(UIViewController *vc) {
             @try {
                 SEL sel = NSSelectorFromString(key);
                 if (![vc respondsToSelector:sel]) { continue; }
+                if (!AevonGetterReturnsObject(vc, sel)) { continue; }
                 id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
                 id scene = fn(vc, sel);
                 if (scene == nil || [scene isKindOfClass:[NSString class]]) { continue; }
@@ -131,12 +157,14 @@ static NSString *AevonSceneBundleIDFromVC(UIViewController *vc) {
                 if (s != nil) { return s; }
             } @catch (NSException *unused) {}
         }
-        /* ② VC 的 ivar 遍历找 FBScene（iOS 17.3.1 属性名未知时靠类型匹配） */
+        /* ② VC 的 ivar 遍历找 FBScene（iOS 17.3.1 属性名未知时靠类型匹配）。
+         * 只读对象类型 ivar（AevonIvarSafeV63：非对象 ivar 当指针读 = SIGSEGV）。 */
         Class sceneCls = NSClassFromString(@"FBScene");
         if (sceneCls != Nil) {
             unsigned int count = 0;
             Ivar *ivars = class_copyIvarList([vc class], &count);
             for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+                if (!AevonIvarIsObjectType(ivars[i])) { continue; }
                 id value = object_getIvar(vc, ivars[i]);
                 if (value != nil && [value isKindOfClass:sceneCls]) {
                     NSString *s = AevonBundleIDFromScene(value);
@@ -145,10 +173,11 @@ static NSString *AevonSceneBundleIDFromVC(UIViewController *vc) {
             }
             if (ivars != NULL) { free(ivars); }
         }
-        /* ⑤ 兜底：VC 自身 ivar 里找形如 bundleID 的 NSString */
+        /* ⑤ 兜底：VC 自身 ivar 里找形如 bundleID 的 NSString（同样只读对象类型） */
         unsigned int count = 0;
         Ivar *ivars = class_copyIvarList([vc class], &count);
         for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+            if (!AevonIvarIsObjectType(ivars[i])) { continue; }
             id value = object_getIvar(vc, ivars[i]);
             if ([value isKindOfClass:[NSString class]] && AevonLooksLikeBundleID(value)) {
                 free(ivars);

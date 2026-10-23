@@ -841,6 +841,11 @@ jobs:
           print("V0.0.62 校验: 场景bundleID深挖 + 策略独立try 已编入")
           PY62
 
+          # ── V0.0.63（AevonIvarSafeV63）：修 V62 场景探测 SIGSEGV 自动注销 ──
+          strings "$DYLIB" | grep -q 'AevonIvarSafeV63' \
+            || { echo "::error::V0.0.63 标记缺失: AevonIvarSafeV63"; exit 1; }
+          echo "V0.0.63 校验: ivar 类型安全已编入"
+
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"

@@ -283,6 +283,7 @@ __attribute__((used)) static const char AevonReflowGateV60Marker[] = "AevonReflo
 __attribute__((used)) static const char AevonReflowIvarV61Marker[] = "AevonReflowIvarV61";
 __attribute__((used)) static const char AevonFrontmostIDV62Marker[] = "AevonFrontmostIDV62";
 __attribute__((used)) static const char AevonPolicyTryV62Marker[] = "AevonPolicyTryV62";
+__attribute__((used)) static const char AevonIvarSafeV63Marker[] = "AevonIvarSafeV63";
 __attribute__((used)) static const char AevonFrontmostRepreV61Marker[] = "AevonFrontmostRepreV61";
 
 /* V0.0.39 CI 标记：
