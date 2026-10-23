@@ -740,3 +740,19 @@ id AevonSafeReadObjectIvar(id obj, const char *ivarName) {
         return nil;
     }
 }
+
+id AevonSafeCallObjectSel(id obj, SEL sel) {
+    if (obj == nil || sel == NULL) { return nil; }
+    @try {
+        if (![obj respondsToSelector:sel]) { return nil; }
+        Method m = class_getInstanceMethod(object_getClass(obj), sel);
+        if (m == NULL) { return nil; }
+        char ret[16] = {0};
+        method_getReturnType(m, ret, sizeof(ret));
+        if (ret[0] != '@') { return nil; }
+        id (*fn)(id, SEL) = (id (*)(id, SEL))method_getImplementation(m);
+        return fn(obj, sel);
+    } @catch (NSException *e) {
+        return nil;
+    }
+}

@@ -102,3 +102,5 @@ id AevonSafeCallObject1(id obj, NSString *selectorName, id arg1);
 id AevonSafeCallObject2(id obj, NSString *selectorName, id arg1, id arg2);
 /// 安全读对象型 ivar（类型编码必须是 '@'，否则返回 nil）。
 id AevonSafeReadObjectIvar(id obj, const char *ivarName);
+/// 同上，但直接吃 SEL（Swift 里的 `Selector` 无法隐式转字符串）。
+id AevonSafeCallObjectSel(id obj, SEL sel);

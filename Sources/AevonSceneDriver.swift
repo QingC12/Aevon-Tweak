@@ -137,7 +137,7 @@ final class AevonSceneDriver: NSObject {
         guard let cls = NSClassFromString(classNamed) as? NSObject.Type else { return nil }
         let sel = NSSelectorFromString(selector)
         guard cls.responds(to: sel) else { return nil }
-        return AevonSafeCallObject(cls, sel) as? NSObject
+        return AevonSafeCallObjectSel(cls, sel) as? NSObject
     }
 
     // MARK: 第 2 步：主屏显示配置母本
@@ -313,7 +313,7 @@ final class AevonSceneDriver: NSObject {
             for sel in ["sceneHandleProvider", "handleProvider"] {
                 let s = NSSelectorFromString(sel)
                 if ws.responds(to: s),
-                   let r = AevonSafeCallObject(ws, s) as? NSObject {
+                   let r = AevonSafeCallObjectSel(ws, s) as? NSObject {
                     return r
                 }
             }
@@ -398,7 +398,7 @@ final class AevonSceneDriver: NSObject {
         if let ws {
             for s in ["sceneManagerCoordinator", "sceneManager"] {
                 let ss = NSSelectorFromString(s)
-                if ws.responds(to: ss), let r = AevonSafeCallObject(ws, ss) as? NSObject {
+                if ws.responds(to: ss), let r = AevonSafeCallObjectSel(ws, ss) as? NSObject {
                     coord = r
                     add(r, "WS.\(s)")
                     break
@@ -412,7 +412,7 @@ final class AevonSceneDriver: NSObject {
         if let coord {
             for s in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
                 let ss = NSSelectorFromString(s)
-                if coord.responds(to: ss), let r = AevonSafeCallObject(coord, ss) as? NSObject {
+                if coord.responds(to: ss), let r = AevonSafeCallObjectSel(coord, ss) as? NSObject {
                     add(r, "Coord.\(s)")
                 }
             }
@@ -462,10 +462,10 @@ final class AevonSceneDriver: NSObject {
             for sel in ["mainDisplay", "mainSBFDisplay"] {
                 let s = NSSelectorFromString(sel)
                 if dm.responds(to: s),
-                   let d = AevonSafeCallObject(dm, s) as? NSObject {
+                   let d = AevonSafeCallObjectSel(dm, s) as? NSObject {
                     let s2 = NSSelectorFromString("displayIdentity")
                     if d.responds(to: s2),
-                       let id = AevonSafeCallObject(d, s2) as? NSObject {
+                       let id = AevonSafeCallObjectSel(d, s2) as? NSObject {
                         return id
                     }
                 }
@@ -476,7 +476,7 @@ final class AevonSceneDriver: NSObject {
             for sel in ["mainScene", "mainWorkspaceScene"] {
                 let s = NSSelectorFromString(sel)
                 if ws.responds(to: s),
-                   let scene = AevonSafeCallObject(ws, s) as? NSObject,
+                   let scene = AevonSafeCallObjectSel(ws, s) as? NSObject,
                    let settings = displaySettings(scene),
                    settings.responds(to: NSSelectorFromString("displayIdentity")),
                    let id = AevonSafeCallObject(settings, "displayIdentity") as? NSObject {
@@ -758,7 +758,7 @@ final class AevonSceneDriver: NSObject {
         var copyObj: NSObject? = nil
         for selName in ["mutableCopy", "copy"] {
             let sel = NSSelectorFromString(selName)
-            if mainDC.responds(to: sel), let c = AevonSafeCallObject(mainDC, sel) as? NSObject {
+            if mainDC.responds(to: sel), let c = AevonSafeCallObjectSel(mainDC, sel) as? NSObject {
                 copyObj = c
                 break
             }
