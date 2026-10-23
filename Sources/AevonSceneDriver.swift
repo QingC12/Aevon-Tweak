@@ -247,7 +247,8 @@ final class AevonSceneDriver: NSObject {
         // 全部失败：取样类方法名（下一轮按真实名补）
         var names: [String] = []
         var count: UInt32 = 0
-        if let list = class_copyMethodList(objc_getMetaClass("SBApplicationController"), &count) {
+        if let metaCls = objc_getMetaClass("SBApplicationController") as? AnyClass,
+           let list = class_copyMethodList(metaCls, &count) {
             for i in 0..<Int(count) {
                 let n = NSStringFromSelector(method_getName(list[i]))
                 if n.lowercased().contains("shared") || n.lowercased().contains("default") { names.append("+" + n) }
