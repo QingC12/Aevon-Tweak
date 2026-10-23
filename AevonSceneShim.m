@@ -756,3 +756,242 @@ id AevonSafeCallObjectSel(id obj, SEL sel) {
         return nil;
     }
 }
+
+#pragma mark - V0.0.76（AevonSceneSafeObjV76）：静态类型化的安全调用
+
+/* CI 标记（V0.0.76）：本段必须编进主 dylib —— Aevon(68) 自动注销的根治点。 */
+__attribute__((used)) static const char AevonSceneSafeObjV76Marker[] = "AevonSceneSafeObjV76";
+__attribute__((used)) static const char AevonSceneProxyObjCV76Marker[] = "AevonP1ProxyObjCV76";
+
+/* 指针体检：不是干净对象就返回 nil，绝不把脏指针带进 Swift。
+ * 历史两次自动注销的元凶：BOOL 返回值 1（奇地址）被当成对象指针、
+ * 结构体返回值被当成对象指针。 */
+static id AevonVerifiedObject(id p) {
+    if (p == nil) { return nil; }
+    uintptr_t v = (uintptr_t)p;
+    if ((v & 1ULL) != 0) { return nil; }          /* tagged / BOOL 1 / 小整数 */
+    if (v < 0x100000000ULL) { return nil; }        /* arm64 上不可能是合法对象 */
+    if ((v & 7ULL) != 0) { return nil; }           /* 对象至少 8 字节对齐 */
+    @try {
+        Class c = object_getClass(p);
+        if (c == Nil) { return nil; }
+        if (class_isMetaClass(c)) { return nil; }
+        if (class_getName(c) == NULL) { return nil; }
+    } @catch (NSException *e) {
+        return nil;
+    }
+    return p;
+}
+
+/// 统一取实现 + 校验返回值编码是 '@'（只认对象）
+static IMP AevonObjectIMP(id obj, SEL sel) {
+    if (obj == nil || sel == NULL) { return NULL; }
+    if (![obj respondsToSelector:sel]) { return NULL; }
+    Method m = class_getInstanceMethod(object_getClass(obj), sel);
+    if (m == NULL) { return NULL; }
+    char ret[16] = {0};
+    method_getReturnType(m, ret, sizeof(ret));
+    if (ret[0] != '@') { return NULL; }
+    return method_getImplementation(m);
+}
+
+NSObject *AevonSafeObjCallSel(id obj, SEL sel) {
+    @try {
+        IMP imp = AevonObjectIMP(obj, sel);
+        if (imp == NULL) { return nil; }
+        return AevonVerifiedObject(((id (*)(id, SEL))imp)(obj, sel));
+    } @catch (NSException *e) { return nil; }
+}
+
+NSObject *AevonSafeObjCall(id obj, NSString *selectorName) {
+    if (selectorName.length == 0) { return nil; }
+    return AevonSafeObjCallSel(obj, NSSelectorFromString(selectorName));
+}
+
+NSObject *AevonSafeObjCall1(id obj, NSString *selectorName, id arg1) {
+    if (selectorName.length == 0) { return nil; }
+    @try {
+        SEL sel = NSSelectorFromString(selectorName);
+        IMP imp = AevonObjectIMP(obj, sel);
+        if (imp == NULL) { return nil; }
+        return AevonVerifiedObject(((id (*)(id, SEL, id))imp)(obj, sel, arg1));
+    } @catch (NSException *e) { return nil; }
+}
+
+NSObject *AevonSafeObjCall2(id obj, NSString *selectorName, id arg1, id arg2) {
+    if (selectorName.length == 0) { return nil; }
+    @try {
+        SEL sel = NSSelectorFromString(selectorName);
+        IMP imp = AevonObjectIMP(obj, sel);
+        if (imp == NULL) { return nil; }
+        return AevonVerifiedObject(((id (*)(id, SEL, id, id))imp)(obj, sel, arg1, arg2));
+    } @catch (NSException *e) { return nil; }
+}
+
+NSObject *AevonSafeObjIvar(id obj, const char *ivarName) {
+    if (obj == nil || ivarName == NULL) { return nil; }
+    @try {
+        Ivar iv = class_getInstanceVariable(object_getClass(obj), ivarName);
+        if (iv == NULL) { return nil; }
+        const char *enc = ivar_getTypeEncoding(iv);
+        if (enc == NULL || enc[0] != '@') { return nil; }
+        return AevonVerifiedObject(object_getIvar(obj, iv));
+    } @catch (NSException *e) { return nil; }
+}
+
+NSObject *AevonAllocInstance(Class cls) {
+    if (cls == Nil || class_isMetaClass((Class)cls) == NO) { return nil; }
+    @try {
+        return AevonVerifiedObject(((id (*)(id, SEL))objc_msgSend)((id)cls, @selector(alloc)));
+    } @catch (NSException *e) { return nil; }
+}
+
+Class AevonClassOfObject(id obj) {
+    if (obj == nil) { return Nil; }
+    @try { return object_getClass(obj); } @catch (NSException *e) { return Nil; }
+}
+
+Class AevonClassNamed(NSString *name) {
+    if (name.length == 0) { return Nil; }
+    return NSClassFromString(name);
+}
+
+BOOL AevonClassRespondsTo(Class cls, NSString *selectorName) {
+    if (cls == Nil || selectorName.length == 0) { return NO; }
+    @try { return [(id)cls respondsToSelector:NSSelectorFromString(selectorName)]; }
+    @catch (NSException *e) { return NO; }
+}
+
+BOOL AevonClassHasInstanceMethod(Class cls, NSString *selectorName) {
+    if (cls == Nil || selectorName.length == 0) { return NO; }
+    return class_getInstanceMethod((Class)cls, NSSelectorFromString(selectorName)) != NULL;
+}
+
+BOOL AevonObjRespondsTo(id obj, NSString *selectorName) {
+    if (obj == nil || selectorName.length == 0) { return NO; }
+    @try { return [obj respondsToSelector:NSSelectorFromString(selectorName)]; }
+    @catch (NSException *e) { return NO; }
+}
+
+#pragma mark - provider 代理（纯 ObjC）
+
+static int s_aevonProxyHits = 0;
+
+@interface AevonSceneHandleProviderProxy : NSObject
+@property (nonatomic, strong) id target;
+@end
+
+@implementation AevonSceneHandleProviderProxy
+
+/* 四段 init 内部会向 provider 要「这个 App 的主场景身份」。
+ * iOS 17.3.1 的 SBMainWorkspace 没实现这个协议方法，只实现了下划线变体，
+ * 所以这里原样转调；两套命名都试，全失败返回 nil（系统会自己报错，不崩进程）。 */
+- (id)sceneIdentityForApplication:(id)app
+          createPrimaryIfRequired:(BOOL)createPrimary
+                 sceneSessionRole:(id)role {
+    s_aevonProxyHits++;
+    id target = self.target;
+    if (target == nil) { return nil; }
+    NSArray<NSString *> *names = @[
+        @"_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:",
+        @"_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:error:",
+        @"sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:error:"
+    ];
+    for (NSString *n in names) {
+        SEL alt = NSSelectorFromString(n);
+        if (alt == NULL || ![target respondsToSelector:alt]) { continue; }
+        Method m = class_getInstanceMethod(object_getClass(target), alt);
+        if (m == NULL) { continue; }
+        char ret[16] = {0};
+        method_getReturnType(m, ret, sizeof(ret));
+        if (ret[0] != '@') { continue; }
+        IMP imp = method_getImplementation(m);
+        @try {
+            if ([n hasSuffix:@"error:"]) {
+                id out = nil;
+                id r = ((id (*)(id, SEL, id, BOOL, id, id *))imp)(target, alt, app, createPrimary, role, &out);
+                if (r != nil) { return r; }
+            } else {
+                id r = ((id (*)(id, SEL, id, BOOL, id))imp)(target, alt, app, createPrimary, role);
+                if (r != nil) { return r; }
+            }
+        } @catch (NSException *e) { }
+    }
+    /* 最后一招：只要实参是 SBApplication，直接问它自己的主场景身份（等价语义）。 */
+    @try {
+        for (NSString *n in @[@"_mainSceneIdentity", @"mainSceneIdentity", @"primarySceneIdentity"]) {
+            SEL s = NSSelectorFromString(n);
+            if ([target respondsToSelector:s]) {
+                id r = ((id (*)(id, SEL))method_getImplementation(class_getInstanceMethod(object_getClass(target), s)))(target, s);
+                if (r != nil) { return r; }
+            }
+        }
+    } @catch (NSException *e) { }
+    return nil;
+}
+
+@end
+
+NSObject *AevonProviderProxyCreate(id target) {
+    @try {
+        AevonSceneHandleProviderProxy *p = [[AevonSceneHandleProviderProxy alloc] init];
+        p.target = target;
+        return p;
+    } @catch (NSException *e) { return nil; }
+}
+
+int AevonProviderProxyHitCount(void) { return s_aevonProxyHits; }
+
+#pragma mark - P1 崩溃计数
+
+static const char *kAevonP1FusePath = "/var/mobile/Aevon.p1fuse";
+
+int AevonP1FuseCount(void) {
+    @try {
+        NSString *s = [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:kAevonP1FusePath]
+                                                encoding:NSUTF8StringEncoding error:NULL];
+        return s.length ? s.intValue : 0;
+    } @catch (NSException *e) { return 0; }
+}
+
+void AevonP1FuseBump(void) {
+    @try {
+        int n = AevonP1FuseCount() + 1;
+        NSString *s = [NSString stringWithFormat:@"%d", n];
+        [s writeToFile:[NSString stringWithUTF8String:kAevonP1FusePath]
+            atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    } @catch (NSException *e) { }
+}
+
+void AevonP1FuseReset(void) {
+    @try {
+        [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:kAevonP1FusePath]
+                                                   error:NULL];
+    } @catch (NSException *e) { }
+}
+
+#pragma mark - KVC 安全版（Swift 无法捕获 ObjC 异常）
+
+BOOL AevonSafeSetValueForKey(id obj, id value, NSString *key) {
+    if (obj == nil || key.length == 0) { return NO; }
+    @try { [obj setValue:value forKey:key]; return YES; }
+    @catch (NSException *e) { return NO; }
+}
+
+BOOL AevonSafeSetValueForKeyPath(id obj, id value, NSString *keyPath) {
+    if (obj == nil || keyPath.length == 0) { return NO; }
+    @try { [obj setValue:value forKeyPath:keyPath]; return YES; }
+    @catch (NSException *e) { return NO; }
+}
+
+NSObject *AevonSafeValueForKey(id obj, NSString *key) {
+    if (obj == nil || key.length == 0) { return nil; }
+    @try { return AevonVerifiedObject([obj valueForKey:key]); }
+    @catch (NSException *e) { return nil; }
+}
+
+NSObject *AevonSafeValueForKeyPath(id obj, NSString *keyPath) {
+    if (obj == nil || keyPath.length == 0) { return nil; }
+    @try { return AevonVerifiedObject([obj valueForKeyPath:keyPath]); }
+    @catch (NSException *e) { return nil; }
+}

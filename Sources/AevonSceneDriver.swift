@@ -8,15 +8,24 @@ import UIKit
  *   · ScreenCore 2.1.0 逆向报告：小胖屏 = SB 侧为 App 新建正经主场景，
  *     创建时把小窗尺寸烙进 FBSSceneParameters（dc + sceneFrame + orientation），
  *     App 按小窗真重排（底栏天然在场、元素 1:1、无裁切）。
- *   · 本机 P0 探测 5/5 全过（Aevon(60) 日志）：SBDeviceApplicationSceneEntity 四段 init、
- *     FBSSceneParameters、FBSceneManager createSceneWithDefinition:initialParameters:、
- *     FBApplicationProcessLaunchTransaction、FBSDisplayConfiguration 全部存在。
+ *   · 本机 P0 探测 5/5 全过（Aevon(60) 日志）。
  *
- * P1 目标：**只验证「创建链 + App 按小尺寸重排」**，不做显示挂层（P2 的事）、
- * 不碰现有浮窗。全程独立异常隔离，任何一步失败只写日志，绝不影响现有功能。
+ * V0.0.76（AevonSceneSafeObjV76）—— 两次自动注销的终审：
+ *   Aevon(67)、Aevon(68) 两份崩溃栈一模一样，最内层都是
+ *     swift_dynamicCast → swift_getObjectType → _CF_forwarding_prep_0 → SpringBoard 退出
+ *   而栈里**一个 FrontBoard 帧都没有**：不是系统方法内部崩的，是我们自己 Swift 代码里的
+ *   `as? NSObject` 动态转换崩的。`id` 在 Swift 里被桥成 `Any!`，每次赋值都要过一趟运行时
+ *   转换；那个指针只要不是干净对象（BOOL 的 1、结构体、tagged pointer），立刻读野 isa。
  *
- * 触发：设置页「真小胖屏 P1：自建场景实验」开关从关 → 开，
- * 延迟 5 秒对白名单 App（设置）执行一次；执行过后置位防重入，重开开关可再次触发。
+ *   本版两条硬规矩，从二进制层面掐掉这条崩溃路径：
+ *     ① 调垫片一律走 `AevonSafeObj *`（返回类型写死 `NSObject *`）—— Swift 侧拿到的就是
+ *        `NSObject?`，**编译期不再生成任何转换指令**；
+ *     ② 本文件内**禁止**出现 `as?` / `as!` / `type(of:)` / `String(describing:)`，
+ *        取类名走 `AevonSafeClassName`，取类走 `AevonClassOfObject`。
+ *
+ * 另外新增「前置体检」：provider / displayIdentity / 方法表任一不达标就**直接收工**，
+ * 绝不带着半成品参数去调四段 init —— 让 266x458 能不能出来这件事，永远只由
+ * 「创建链是否成立」决定，而不是由一次野指针决定。
  */
 
 @objc(AevonSceneDriver)
@@ -29,32 +38,62 @@ final class AevonSceneDriver: NSObject {
     /// P1 参考画布：与浮窗 0.600 胖窗同比例
     static let canvasSize = CGSize(width: 266, height: 458)
 
+    /// 四段 init 内部真正会调用的协议方法
+    static let entityProviderSelector = "sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"
+    /// iOS 17.3.1 上 SBMainWorkspace 实际实现的「下划线变体」
+    static let entityProviderAltSelector = "_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"
+
+    /// 连崩这么多次就锁定实验（连崩 = 用户开了开关就注销，体验不可接受）
+    static let maxCrashesBeforeLock = 2
+
     private var ranForThisToggle = false
     private var running = false
 
-    // MARK: - V0.0.75（AevonCrashFuseV75）：崩溃熔断
+    // MARK: - 崩溃熔断（V0.0.75 / V0.0.76 加固）
 
-    /// 本次启动是否已被熔断（上一轮 P1 把 SpringBoard 搞崩过）。
     static var crashFused = false
+    static var locked = false
 
     /// 启动时调用一次（Bootstrap 早期）：检查上一轮 P1 是否留下未完成的面包屑。
     ///
-    /// Aevon(67)：P1 第 4 步的诊断代码 `perform` 一个返回 BOOL 的方法后
-    /// `String(describing:)`，把 1 当对象指针读野 isa → SpringBoard 退出（自动注销）。
     /// respring 不会清文件，所以「残留面包屑」= 上一轮死在这一步的铁证。
-    /// 一旦读到残留，立刻把开关写成关，避免「每次开机都崩一次」的死循环。
+    /// 读到残留就：开关写关（断掉死循环）+ 崩溃计数 +1；计数达上限直接锁定实验。
     static func consumeCrashFuse() {
         let raw = AevonCrumbRead()
         let crumb: String = (raw != nil) ? String(cString: raw!) : ""
         AevonCrumbClear()
-        guard !crumb.isEmpty else { return }
+        guard !crumb.isEmpty else {
+            let n = Int(AevonP1FuseCount())
+            if n > 0 {
+                AevonLog.info("[场景] P1 崩溃计数 = \(n)（上一轮没有留下面包屑，说明是正常收工）（AevonCrashFuseV75）")
+            }
+            return
+        }
+        // 面包屑格式是「<时间戳> <步骤名>」，日志里只留步骤名
+        let stage: String = {
+            if let sp = crumb.firstIndex(of: " ") {
+                return String(crumb[crumb.index(after: sp)...])
+            }
+            return crumb
+        }()
+        AevonP1FuseBump()
+        let count = Int(AevonP1FuseCount())
         crashFused = true
         AevonPrefs.set("AevonTrueResizeP1", false)
-        AevonLog.warn("[场景] P1 崩溃熔断：上次实验崩在「\(crumb)」这一环，本次启动已自动关闭 P1 开关（要再试请在设置里把开关重开一次，会重新授权一轮）（AevonCrashFuseV75）")
+        if count >= maxCrashesBeforeLock {
+            locked = true
+            AevonLog.warn("[场景] P1 崩溃熔断：上次崩在「\(stage)」，累计已崩 \(count) 次 —— 实验**已锁定**，本版不再自动运行（请把日志发给开发者，修好后再放开）（AevonCrashFuseV75 AevonSceneSafeObjV76）")
+        } else {
+            AevonLog.warn("[场景] P1 崩溃熔断：上次崩在「\(stage)」，本次启动已自动关闭 P1 开关（累计第 \(count) 次；崩满 \(maxCrashesBeforeLock) 次将锁定实验）（AevonCrashFuseV75）")
+        }
     }
 
-    /// prefschanged 回调入口：开关从关到开才触发（5s 错峰，给设置页留写盘时间）
+    /// prefschanged / 启动自检回调入口：开关从关到开才触发（5s 错峰，给设置页留写盘时间）
     func maybeRunExperiment() {
+        guard !AevonSceneDriver.locked else {
+            AevonLog.warn("[场景] P1 实验已锁定（累计崩溃 \(Int(AevonP1FuseCount())) 次），本轮不运行；需要重试请先换用新版本（AevonSceneSafeObjV76）")
+            return
+        }
         guard AevonPrefs.bool("AevonTrueResizeP1", default: false) else {
             ranForThisToggle = false
             return
@@ -88,10 +127,10 @@ final class AevonSceneDriver: NSObject {
     private func runExperiment() {
         guard !running else { return }
         running = true
-        AevonLog.info("[场景] P1 实验开始：目标画布 \(Int(AevonSceneDriver.canvasSize.width))x\(Int(AevonSceneDriver.canvasSize.height))（AevonSceneDriverP1）")
+        AevonLog.info("[场景] P1 实验开始：目标画布 \(Int(AevonSceneDriver.canvasSize.width))x\(Int(AevonSceneDriver.canvasSize.height))（AevonSceneDriverP1 AevonSceneSafeObjV76）")
         AevonCrumbWrite("开始")
         self.step1SceneManager()
-        /* V0.0.75：step1~step5 是一条同步链，能崩的都在这里。
+        /* step1~step5 是一条同步链，能崩的都在这里。
          * 走完（无论成败）就撤面包屑 —— 之后异步的取证段只做只读 KVC，不再有风险。 */
         AevonCrumbClear()
         self.running = false
@@ -125,7 +164,7 @@ final class AevonSceneDriver: NSObject {
         }
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["sceneManager", "workspaceSceneCoordinator", "sceneCoordinator"] {
-                if let m = AevonSafeCallObject(ws, sel) as? NSObject {
+                if let m = AevonSafeObjCall(ws, sel) {
                     if AevonSafeClassName(m).contains("SceneManager") { return m }
                 }
             }
@@ -133,11 +172,11 @@ final class AevonSceneDriver: NSObject {
         return nil
     }
 
+    /// `[SomeClass sharedInstance]` 的安全版（V0.0.76：全程无动态转换）
     private static func tryShared(classNamed: String, selector: String) -> NSObject? {
-        guard let cls = NSClassFromString(classNamed) as? NSObject.Type else { return nil }
-        let sel = NSSelectorFromString(selector)
-        guard cls.responds(to: sel) else { return nil }
-        return AevonSafeCallObjectSel(cls, sel) as? NSObject
+        guard let cls = AevonClassNamed(classNamed) else { return nil }
+        guard AevonClassRespondsTo(cls, selector) else { return nil }
+        return AevonSafeObjCallSel(cls as AnyObject, NSSelectorFromString(selector))
     }
 
     // MARK: 第 2 步：主屏显示配置母本
@@ -157,19 +196,14 @@ final class AevonSceneDriver: NSObject {
     }
 
     /// 主屏 dc 多路探测（ScreenCore 的 sc_mainDisplayConfiguration 对应物）
-    /// V0.0.69 新增：FBSceneManager enumerateScenes 路线（P0 dump 实锤管理器上有
-    /// enumerateScenesWithBlock:/scenesPassingTest:）+ 失败时诊断输出，帮助下一轮定位。
     static func findMainDisplayConfiguration(manager: NSObject) -> NSObject? {
         for sel in ["mainDisplayConfiguration", "displayConfiguration", "primaryDisplayConfiguration"] {
-            if manager.responds(to: NSSelectorFromString(sel)),
-               let r = AevonSafeCallObject(manager, sel) as? NSObject {
-                return r
-            }
+            if let r = AevonSafeObjCall(manager, sel) { return r }
         }
-        // 路线 B（新）：遍历管理器持有的全部场景，取任一 settings.displayConfiguration
-        let enumSel = NSSelectorFromString("enumerateScenesWithBlock:")
-        if manager.responds(to: enumSel),
-           let enumMethod = class_getInstanceMethod(type(of: manager), enumSel) {
+        // 路线 B：遍历管理器持有的全部场景，取任一 settings.displayConfiguration
+        let selName = "enumerateScenesWithBlock:"
+        if let cls = AevonClassOfObject(manager), AevonClassHasInstanceMethod(cls, selName),
+           let enumMethod = class_getInstanceMethod(cls, NSSelectorFromString(selName)) {
             var found: NSObject? = nil
             let block: @convention(block) (NSObject) -> Void = { scene in
                 if found == nil, let dc = AevonSceneDriver.displayConfigFromScene(scene) {
@@ -177,19 +211,17 @@ final class AevonSceneDriver: NSObject {
                 }
             }
             typealias EnumFn = @convention(c) (NSObject, Selector, @convention(block) (NSObject) -> Void) -> Void
-            unsafeBitCast(method_getImplementation(enumMethod), to: EnumFn.self)(manager, enumSel, block)
+            unsafeBitCast(method_getImplementation(enumMethod), to: EnumFn.self)(manager, NSSelectorFromString(selName), block)
             if let found { return found }
         }
         for (clsName, selName) in [("SBFDisplayManager", "sharedInstance"), ("SBFDisplayManager", "mainDisplayManager")] {
             if let dm = tryShared(classNamed: clsName, selector: selName) {
                 for sel in ["mainDisplayConfiguration", "displayConfiguration", "mainScreenDisplayConfiguration", "mainSBFDisplay"] {
-                    if dm.responds(to: NSSelectorFromString(sel)),
-                       let r = AevonSafeCallObject(dm, sel) as? NSObject {
+                    if let r = AevonSafeObjCall(dm, sel) {
                         if AevonSafeClassName(r).contains("DisplayConfiguration") { return r }
                         // SBFDisplay 之类再向下钻一层
                         for sel2 in ["displayConfiguration", "mainDisplayConfiguration"] {
-                            if r.responds(to: NSSelectorFromString(sel2)),
-                               let r2 = AevonSafeCallObject(r, sel2) as? NSObject,
+                            if let r2 = AevonSafeObjCall(r, sel2),
                                AevonSafeClassName(r2).contains("DisplayConfiguration") {
                                 return r2
                             }
@@ -200,9 +232,7 @@ final class AevonSceneDriver: NSObject {
         }
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["mainScene", "mainWorkspaceScene", "scene"] {
-                if ws.responds(to: NSSelectorFromString(sel)),
-                   let scene = AevonSafeCallObject(ws, sel) as? NSObject,
-                   let dc = displayConfigFromScene(scene) {
+                if let scene = AevonSafeObjCall(ws, sel), let dc = displayConfigFromScene(scene) {
                     return dc
                 }
             }
@@ -212,11 +242,9 @@ final class AevonSceneDriver: NSObject {
 
     /// 从 FBScene 的 settings 里找 FBSDisplayConfiguration
     static func displayConfigFromScene(_ scene: NSObject) -> NSObject? {
-        if scene.responds(to: NSSelectorFromString("settings")),
-           let settings = AevonSafeCallObject(scene, "settings") as? NSObject {
+        if let settings = AevonSafeObjCall(scene, "settings") {
             for sel in ["displayConfiguration", "displayConfigurationLayout"] {
-                if settings.responds(to: NSSelectorFromString(sel)),
-                   let r = AevonSafeCallObject(settings, sel) as? NSObject,
+                if let r = AevonSafeObjCall(settings, sel),
                    AevonSafeClassName(r).contains("DisplayConfiguration") {
                     return r
                 }
@@ -232,15 +260,10 @@ final class AevonSceneDriver: NSObject {
         var app: NSObject? = nil
         let diag = StringBox()
         tryRun("第3步") {
-            // V0.0.69 修复：V68 用的类方法是 "sharedApplicationController" —— 这个选择子
-            // 在 SBApplicationController 上不存在（经典路径是 sharedInstance），
-            // responds(to:) 恒 false → app 恒 nil → 第 3 步必然失败。
             let ctrl = AevonSceneDriver.findApplicationController(diag: diag)
             if let ctrl {
                 for selName in ["applicationWithBundleIdentifier:", "applicationWithDisplayIdentifier:", "runningApplicationWithBundleIdentifier:"] {
-                    let sel = NSSelectorFromString(selName)
-                    if ctrl.responds(to: sel),
-                       let a = AevonSafeCallObject1(ctrl, selName, AevonSceneDriver.experimentBundleID) as? NSObject {
+                    if let a = AevonSafeObjCall1(ctrl, selName, AevonSceneDriver.experimentBundleID) {
                         app = a
                         break
                     }
@@ -265,126 +288,68 @@ final class AevonSceneDriver: NSObject {
 
     /// SBApplicationController 多路获取 + 失败诊断（方法表取样）
     static func findApplicationController(diag: StringBox) -> NSObject? {
-        let cls = NSClassFromString("SBApplicationController")
-        guard let cls else {
+        guard let cls = AevonClassNamed("SBApplicationController") else {
             diag.items.append("SBApplicationController 类不存在")
             return nil
         }
         for selName in ["sharedInstance", "sharedApplicationController", "defaultController", "sharedController"] {
-            let sel = NSSelectorFromString(selName)
-            if (cls as AnyObject).responds(to: sel),
-               let c = AevonSafeCallObject(cls as AnyObject, selName) as? NSObject {
+            if AevonClassRespondsTo(cls, selName),
+               let c = AevonSafeObjCallSel(cls as AnyObject, NSSelectorFromString(selName)) {
                 return c
             }
         }
         // 全部失败：取样类方法名（下一轮按真实名补）
         var names: [String] = []
         var count: UInt32 = 0
-        if let metaCls = objc_getMetaClass("SBApplicationController") as? AnyClass,
+        if let metaCls = objc_getMetaClass("SBApplicationController"),
            let list = class_copyMethodList(metaCls, &count) {
             for i in 0..<Int(count) {
                 let n = NSStringFromSelector(method_getName(list[i]))
                 if n.lowercased().contains("shared") || n.lowercased().contains("default") { names.append("+" + n) }
             }
+            free(list)
         }
         diag.items.append(names.isEmpty ? "类方法里无 sharedInstance/default 系" : "类方法候选=\(names.prefix(5).joined(separator: ","))")
         return nil
     }
 
-    // MARK: 第 4 步：SBDeviceApplicationSceneEntity 构造（V0.0.71 诊断增强版）
+    // MARK: 第 4 步：SBDeviceApplicationSceneEntity 构造
 
-    /// V0.0.72：读对象型 ivar（V62 教训：先查类型编码 '@' 才可用 object_getIvar）
+    /// 读对象型 ivar（V62 教训：先查类型编码 '@' 才可用 object_getIvar）
     static func readObjectIvar(_ obj: NSObject, _ name: String) -> NSObject? {
-        guard let ivar = class_getInstanceVariable(type(of: obj) as AnyClass, name),
-              let enc = ivar_getTypeEncoding(ivar), String(cString: enc).hasPrefix("@") else { return nil }
-        return object_getIvar(obj, ivar) as? NSObject
+        return AevonSafeObjIvar(obj, name)
     }
 
-    /// 多路找 sceneHandleProvider —— 四段 init 有断言 `sceneHandleProvider != nil`
-    /// （Aevon(65) 实锤异常：Invalid parameter not satisfying: sceneHandleProvider）。
-    ///
-    /// ScreenCore 逆向实锤（SCSystemSceneDriver.sc_mainDisplaySceneHandleProvider）：
-    /// provider 就是 **SBMainWorkspace 本体**（iOS 17 上 SBMainWorkspace 实现了
-    /// FBSSceneHandleProvider 协议），其次是 FBSceneManager 本体。
-    private static func findSceneHandleProvider() -> NSObject? {
-        // 路线 1：SBMainWorkspace 实例（本体即 provider，ScreenCore 同款）
+    /// provider 四路探测（ScreenCore 的 sc_mainDisplaySceneHandleProvider 对应物）
+    private static func findSceneHandleProvider(diag: StringBox) -> NSObject? {
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
-            // 若 workspace 上有 sceneHandleProvider 属性则优先用属性值
             for sel in ["sceneHandleProvider", "handleProvider"] {
-                let s = NSSelectorFromString(sel)
-                if ws.responds(to: s),
-                   let r = AevonSafeCallObjectSel(ws, s) as? NSObject {
+                if let r = AevonSafeObjCall(ws, sel) {
+                    diag.items.append("provider=WS.\(sel)")
                     return r
                 }
             }
+            diag.items.append("provider=CANDIDATE:SBMainWorkspace")
             return ws
         }
-        // 路线 2：FBSceneManager 本体
         if let m = tryShared(classNamed: "FBSceneManager", selector: "sharedInstance") {
+            diag.items.append("provider=CANDIDATE:FBSceneManager")
             return m
         }
-        // 路线 3：FBSSceneHandleProvider 自身的 sharedInstance 系
         for selName in ["sharedInstance", "defaultProvider", "sharedProvider"] {
-            if let p = tryShared(classNamed: "FBSSceneHandleProvider", selector: selName) { return p }
+            if let p = tryShared(classNamed: "FBSSceneHandleProvider", selector: selName) {
+                diag.items.append("provider=CANDIDATE:FBSSceneHandleProvider")
+                return p
+            }
         }
         return nil
     }
 
-    // MARK: - V0.0.73：provider 协议方法解析（第 4 步唯一死因）
-
-    /// 四段 init 内部真正会调用的协议方法（Aevon(66) 实锤异常）：
-    /// `-[SBMainWorkspace sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:]:
-    ///   unrecognized selector` —— provider 断言过了，但方法没实现。
-    static let entityProviderSelector = "sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"
-    /// 代理转发目标（响应「下划线变体」的真实对象，通常是 SBMainWorkspace 本体）
-    static var proxyForwardTarget: NSObject?
-
-    /// 全类扫描：哪些类实现了某个选择子（只在候选全失败时跑，日志留证）
-    static func classesResponding(to selName: String, limit: Int = 6) -> [String] {
-        var out: [String] = []
-        let sel = NSSelectorFromString(selName)
-        var count: UInt32 = 0
-        guard let list = objc_copyClassList(&count) else { return out }
-        defer { free(UnsafeMutableRawPointer(list)) }
-        for i in 0..<Int(count) {
-            let cls: AnyClass = list[i]
-            if class_getInstanceMethod(cls, sel) != nil {
-                out.append(NSStringFromClass(cls))
-                if out.count >= limit { break }
-            }
-        }
-        return out
-    }
-
-    /// 造一个运行时子类，实现四段 init 需要的那个协议方法，转调目标对象的「下划线变体」。
-    static func ensureProviderProxy() -> NSObject? {
-        let clsName = "AevonSceneProviderProxy"
-        if let existing = NSClassFromString(clsName) as? NSObject.Type {
-            return existing.init()
-        }
-        guard let newCls = objc_allocateClassPair(NSObject.self, clsName, 0) else { return nil }
-        let sel = NSSelectorFromString(entityProviderSelector)
-        /* V0.0.75：参数一律 optional —— objc 侧传 nil 时，`AnyObject` 形参会因
-         * 隐式解包 nil 而崩（编译器在 ABI 层仍是裸指针，AnyObject? 与之等价）。
-         * 同时 `type(of:)` 换 object_getClass：不经过 Swift 元类型机制。 */
-        let block: @convention(block) (AnyObject?, AnyObject?, Bool, AnyObject?) -> AnyObject? = { _, app, create, role in
-            guard let target = AevonSceneDriver.proxyForwardTarget else { return nil }
-            let alt = NSSelectorFromString("_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
-            guard let m = class_getInstanceMethod(object_getClass(target), alt) else { return nil }
-            typealias Fn = @convention(c) (NSObject, Selector, NSObject?, Bool, NSObject?) -> Unmanaged<NSObject>?
-            let fn = unsafeBitCast(method_getImplementation(m), to: Fn.self)
-            return fn(target, alt, app as? NSObject, create, role as? NSObject)?.takeUnretainedValue()
-        }
-        let imp = imp_implementationWithBlock(block)
-        class_addMethod(newCls, sel, imp, "@@:@B@")
-        objc_registerClassPair(newCls)
-        return (newCls as? NSObject.Type)?.init()
-    }
-
-    /// 解析 provider：先找**直接实现协议方法**的实例，其次用代理转调下划线变体，
-    /// 最后全类扫描留证（下一轮即使仍失败，日志里也有「谁实现了」的答案）。
-    private static func findSceneEntityProvider(diag: StringBox) -> NSObject? {
-        let sel = NSSelectorFromString(entityProviderSelector)
+    /// 解析 provider：在**整条 workspace / sceneManager 候选链**上找真正实现了协议方法的那个：
+    ///   · 直接实现 `sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:` → 直接用
+    ///   · 只实现下划线变体 → 用纯 ObjC 代理转调
+    ///   · 全链都不响应 → 返回 nil（**不硬调**，这是 V0.0.73~75 反复崩在 init 里的教训）
+    private static func resolveSceneEntityProvider(diag: StringBox) -> NSObject? {
         var candidates: [NSObject] = []
         var labels: [String] = []
         func add(_ obj: NSObject?, _ label: String) {
@@ -394,180 +359,189 @@ final class AevonSceneDriver: NSObject {
         }
         let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance")
         add(ws, "SBMainWorkspace")
-        var coord: NSObject? = nil
+        // 属性式 provider（ScreenCore 的 sc_mainDisplaySceneHandleProvider 对应物）
         if let ws {
-            for s in ["sceneManagerCoordinator", "sceneManager"] {
-                let ss = NSSelectorFromString(s)
-                if ws.responds(to: ss), let r = AevonSafeCallObjectSel(ws, ss) as? NSObject {
-                    coord = r
-                    add(r, "WS.\(s)")
-                    break
-                }
+            for sel in ["sceneHandleProvider", "handleProvider"] {
+                add(AevonSafeObjCall(ws, sel), "WS.\(sel)")
             }
-        }
-        if coord == nil {
-            coord = tryShared(classNamed: "SBSceneManagerCoordinator", selector: "sharedInstance")
-            add(coord, "SBSceneManagerCoordinator")
-        }
-        if let coord {
-            for s in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
-                let ss = NSSelectorFromString(s)
-                if coord.responds(to: ss), let r = AevonSafeCallObjectSel(coord, ss) as? NSObject {
-                    add(r, "Coord.\(s)")
-                }
-            }
-        }
-        // 1) 直接响应协议方法
-        for (i, obj) in candidates.enumerated() where obj.responds(to: sel) {
-            diag.items.append("provider=\(labels[i])（响应协议）")
-            return obj
-        }
-        // 2) 响应下划线变体 → 代理转调
-        let altSel = NSSelectorFromString("_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
-        for (i, obj) in candidates.enumerated() where obj.responds(to: altSel) {
-            proxyForwardTarget = obj
-            if let proxy = ensureProviderProxy() {
-                diag.items.append("provider=代理→\(labels[i])._sceneIdentity…")
-                return proxy
-            }
-        }
-        // 3) 全类扫描留证 + 能用 sharedInstance 取到的直接上
-        let exact = classesResponding(to: entityProviderSelector)
-        let alt = classesResponding(to: "_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")
-        diag.items.append("实现类=\(exact.isEmpty ? "无" : exact.joined(separator: ","))")
-        diag.items.append("下划线实现类=\(alt.isEmpty ? "无" : alt.joined(separator: ","))")
-        for name in exact {
-            guard let cls = NSClassFromString(name) else { continue }
-            for selName in ["sharedInstance", "sharedManager", "defaultManager"] {
-                let s = NSSelectorFromString(selName)
-                if (cls as AnyObject).responds(to: s),
-                   let inst = AevonSafeCallObject(cls as AnyObject, selName) as? NSObject,
-                   inst.responds(to: sel) {
-                    diag.items.append("provider=扫描取到 \(name)")
-                    return inst
-                }
-            }
-        }
-        diag.items.append("provider=nil（候选=\(labels.joined(separator: ","))）")
-        return nil
-    }
-
-    private static func findDisplayIdentity(mainDC: NSObject?) -> NSObject? {
-        // 路线 1（V0.0.72）：主屏 dc 母本的 _identity ivar（P0 dump 实锤存在）
-        if let mainDC, let id = readObjectIvar(mainDC, "_identity") {
-            return id
-        }
-        // 路线 2：主屏 SBFDisplay 的 displayIdentity
-        if let dm = tryShared(classNamed: "SBFDisplayManager", selector: "sharedInstance") {
-            for sel in ["mainDisplay", "mainSBFDisplay"] {
-                let s = NSSelectorFromString(sel)
-                if dm.responds(to: s),
-                   let d = AevonSafeCallObjectSel(dm, s) as? NSObject {
-                    let s2 = NSSelectorFromString("displayIdentity")
-                    if d.responds(to: s2),
-                       let id = AevonSafeCallObjectSel(d, s2) as? NSObject {
-                        return id
+            for sel in ["sceneManager", "sceneManagerCoordinator"] {
+                if let r = AevonSafeObjCall(ws, sel) {
+                    add(r, "WS.\(sel)")
+                    for sel2 in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
+                        add(AevonSafeObjCall(r, sel2), "WS.\(sel).\(sel2)")
                     }
                 }
             }
         }
-        // 路线 3：主场景 settings 上的 displayIdentity
+        if let coord = tryShared(classNamed: "SBSceneManagerCoordinator", selector: "sharedInstance") {
+            add(coord, "SBSceneManagerCoordinator")
+            for sel in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
+                add(AevonSafeObjCall(coord, sel), "Coord.\(sel)")
+            }
+        }
+        add(tryShared(classNamed: "FBSceneManager", selector: "sharedInstance"), "FBSceneManager")
+        for selName in ["sharedInstance", "defaultProvider", "sharedProvider"] {
+            add(tryShared(classNamed: "FBSSceneHandleProvider", selector: selName), "FBSSceneHandleProvider.\(selName)")
+        }
+
+        // 1) 优先：直接响应协议方法
+        for (i, obj) in candidates.enumerated() where AevonObjRespondsTo(obj, entityProviderSelector) {
+            diag.items.append("provider=直接响应协议（\(labels[i])）")
+            return obj
+        }
+        // 2) 次选：只响应下划线变体 → 纯 ObjC 代理
+        for (i, obj) in candidates.enumerated() where AevonObjRespondsTo(obj, entityProviderAltSelector) {
+            if let proxy = AevonProviderProxyCreate(obj) {
+                diag.items.append("provider=ObjC代理→\(labels[i])._sceneIdentity…")
+                return proxy
+            }
+        }
+        // 3) 全类扫描留证（下一轮按真实实现类补链路）
+        let exact = classesResponding(to: entityProviderSelector, limit: 10)
+        let alt = classesResponding(to: entityProviderAltSelector, limit: 10)
+        diag.items.append("实现类=\(exact.isEmpty ? "无" : exact.joined(separator: ","))")
+        diag.items.append("下划线实现类=\(alt.isEmpty ? "无" : alt.joined(separator: ","))")
+        diag.items.append("候选链=\(labels.isEmpty ? "空" : labels.joined(separator: ","))")
+        return nil
+    }
+
+    /// 全类扫描：哪些类实现了某个选择子（只在候选全失败时跑，日志留证）
+    static func classesResponding(to selName: String, limit: Int = 6) -> [String] {
+        var out: [String] = []
+        let sel = NSSelectorFromString(selName)
+        var count: UInt32 = 0
+        guard let list = objc_copyClassList(&count) else { return out }
+        defer { free(UnsafeMutableRawPointer(list)) }
+        for i in 0..<Int(count) {
+            if class_getInstanceMethod(list[i], sel) != nil {
+                out.append(NSStringFromClass(list[i]))
+                if out.count >= limit { break }
+            }
+        }
+        return out
+    }
+
+    /// 主屏 dc 的 displayIdentity（四段 init 的第 5 个参数）
+    private static func findDisplayIdentity(mainDC: NSObject?, app: NSObject?) -> NSObject? {
+        // 路线 1：主屏 dc 母本的 _identity ivar（P0 dump 实锤存在）
+        if let mainDC {
+            if let id = AevonSafeObjIvar(mainDC, "_identity"),
+               AevonSafeClassName(id).contains("DisplayIdentity") {
+                return id
+            }
+            // FBSDisplayConfiguration 的 _identity 可能另叫 _displayIdentity
+            if let id = AevonSafeObjIvar(mainDC, "_displayIdentity"),
+               AevonSafeClassName(id).contains("DisplayIdentity") {
+                return id
+            }
+        }
+        // 路线 2：主场景 settings 上的 displayIdentity
         if let ws = tryShared(classNamed: "SBMainWorkspace", selector: "sharedInstance") {
             for sel in ["mainScene", "mainWorkspaceScene"] {
-                let s = NSSelectorFromString(sel)
-                if ws.responds(to: s),
-                   let scene = AevonSafeCallObjectSel(ws, s) as? NSObject,
-                   let settings = displaySettings(scene),
-                   settings.responds(to: NSSelectorFromString("displayIdentity")),
-                   let id = AevonSafeCallObject(settings, "displayIdentity") as? NSObject {
+                if let scene = AevonSafeObjCall(ws, sel),
+                   let settings = AevonSafeObjCall(scene, "settings"),
+                   let id = AevonSafeObjCall(settings, "displayIdentity"),
+                   AevonSafeClassName(id).contains("DisplayIdentity") {
                     return id
                 }
             }
         }
-        return nil
-    }
-
-    private static func displaySettings(_ scene: NSObject) -> NSObject? {
-        if scene.responds(to: NSSelectorFromString("settings")),
-           let s = AevonSafeCallObject(scene, "settings") as? NSObject {
-            return s
+        // 路线 3：App 自己身上的 displayIdentity
+        if let app, let id = AevonSafeObjCall(app, "displayIdentity"),
+           AevonSafeClassName(id).contains("DisplayIdentity") {
+            return id
         }
         return nil
     }
 
     private func step4SceneEntity(manager: NSObject, app: NSObject, mainDC: NSObject?) {
-        /* V0.0.75：进第 4 步先落面包屑 —— Aevon(67) 就崩在这里（BOOL 被当成对象指针），
-         * 下次若还崩，启动日志会直接指名道姓。 */
         AevonCrumbWrite("第4步-场景实体")
         var entity: NSObject? = nil
         let diag = StringBox()
+
+        // ── 前置体检（V0.0.76 新增）：不达标就收工，绝不带半成品参数进 init ──
+        guard let cls = AevonClassNamed("SBDeviceApplicationSceneEntity") else {
+            AevonLog.warn("[场景] P1 第 4 步失败：类 SBDeviceApplicationSceneEntity 不存在（AevonSceneDriverP1 AevonSceneP1V73）")
+            return
+        }
+        let candidates: [(String, Int)] = [
+            ("initWithApplication:generatingNewPrimarySceneIfRequired:sceneHandleProvider:displayIdentity:", 4),
+            ("initWithApplication:sceneHandleProvider:displayIdentity:", 3),
+            ("initWithApplication:uniqueIdentifier:targetContentIdentifier:sceneHandleProvider:displayIdentity:", 5),
+        ]
+        var usable: [(String, Int)] = []
+        for (selName, argc) in candidates where AevonClassHasInstanceMethod(cls, selName) {
+            usable.append((selName, argc))
+        }
+        guard !usable.isEmpty else {
+            AevonLog.warn("[场景] P1 第 4 步失败：实体类上三个 init 候选一个都没有（AevonSceneDriverP1 AevonSceneP1V73）")
+            return
+        }
+
+        AevonCrumbWrite("第4步-provider")
+        var provider: NSObject? = nil
+        tryRun("第4步-provider") {
+            provider = AevonSceneDriver.resolveSceneEntityProvider(diag: diag)
+        }
+        AevonCrumbWrite("第4步-identity")
+        var displayID: NSObject? = nil
+        tryRun("第4步-identity") {
+            displayID = AevonSceneDriver.findDisplayIdentity(mainDC: mainDC, app: app)
+        }
+
+        // App 状态只取布尔（历史崩点一：BOOL 被当对象指针）
+        for s in ["isRunning", "running", "isLaunchable"] {
+            var ok: ObjCBool = false
+            if AevonObjRespondsTo(app, s) {
+                let v = AevonSafeBoolCall(app, s, &ok)
+                if ok.boolValue { diag.items.append("app.\(s)=\(v ? 1 : 0)") }
+            }
+        }
+        diag.items.append("entity=\(AevonSafeClassName(cls as AnyObject))")
+        diag.items.append("app=\(AevonSafeClassName(app))")
+        let displayName: String = (displayID != nil) ? AevonSafeClassName(displayID!) : "nil"
+        let providerName: String = (provider != nil) ? AevonSafeClassName(provider!) : "nil"
+        diag.items.append("displayID=\(displayName)")
+        diag.items.append("provider=\(providerName)")
+        AevonLog.info("[场景] P1 第 4 步预习：将尝试 \(usable.count) 个 init（\(usable.map { $0.0.components(separatedBy: ":")[0] }.joined(separator: "/"))）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
+
+        // provider 是关键参数：没有就停（带 nil 硬调 = Aevon(65) 的断言异常）
+        guard let provider else {
+            AevonLog.warn("[场景] P1 第 4 步失败：解析不到 sceneHandleProvider，本轮不调 init（避免断言异常 / 野指针）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
+            return
+        }
+
+        AevonCrumbWrite("第4步-init")
         tryRun("第4步") {
-            guard let cls = NSClassFromString("SBDeviceApplicationSceneEntity") else {
-                diag.items.append("类不存在")
-                return
-            }
-            guard let alloced = AevonSceneDriver.allocObj(cls) else {
-                diag.items.append("alloc 失败")
-                return
-            }
-            /* V0.0.75（AevonCrashFuseV75）：这里原来写的是
-             *   let r = app.perform(sel)?.takeUnretainedValue()
-             *   diag.items.append("app.\(s)=\(String(describing: r))")
-             * 而 isRunning 返回 BOOL —— `perform:` 把 1 包装成「对象指针」，
-             * `String(describing:)` 随即读野 isa（崩溃栈里的
-             * swift_dynamicCast / swift_getObjectType / _CF_forwarding_prep_0，
-             * 垃圾地址 0xffff8001b301dd2c），SpringBoard 当场退出 = 用户看到的自动注销。
-             * 现在只要「App 是否在跑」这个布尔，绝不碰对象指针。 */
-            for s in ["isRunning", "running", "isLaunchable"] {
-                var ok: ObjCBool = false
-                if app.responds(to: NSSelectorFromString(s)) {
-                    let v = AevonSafeBoolCall(app, s, &ok)
-                    if ok.boolValue { diag.items.append("app.\(s)=\(v ? 1 : 0)") }
-                }
-            }
-            let provider = AevonSceneDriver.findSceneEntityProvider(diag: diag)
-            let displayID = AevonSceneDriver.findDisplayIdentity(mainDC: mainDC)
-            diag.items.append("displayID=\(AevonSafeClassName(displayID))")
-            // 依次尝试 P0 方法表里确认存在的全部 init 候选
             typealias Init4 = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init3 = @convention(c) (NSObject, Selector, NSObject, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init5 = @convention(c) (NSObject, Selector, NSObject, NSObject, NSObject?, NSObject?, NSObject?) -> Unmanaged<NSObject>?
-            let candidates: [(String, Int)] = [
-                ("initWithApplication:generatingNewPrimarySceneIfRequired:sceneHandleProvider:displayIdentity:", 4),
-                ("initWithApplication:sceneHandleProvider:displayIdentity:", 3),
-                ("initWithApplication:uniqueIdentifier:targetContentIdentifier:sceneHandleProvider:displayIdentity:", 5),
-            ]
-            for (selName, argc) in candidates {
+            for (selName, argc) in usable {
                 let sel = NSSelectorFromString(selName)
-                let short = selName.components(separatedBy: ":").count > 1
-                    ? selName.components(separatedBy: ":")[1] : selName
-                guard let method = class_getInstanceMethod(type(of: alloced), sel) else {
-                    diag.items.append("无方法 \(short)")
-                    continue
-                }
+                let short = selName.components(separatedBy: ":")[0]
+                guard let method = class_getInstanceMethod(cls, sel) else { continue }
                 let imp = method_getImplementation(method)
                 var attempt: NSObject? = nil
-                /* V0.0.73：每个候选**独立异常隔离 + 各自 fresh alloc**。
-                 * 旧实现整段共用一个 @try：第一个候选抛异常（Aevon(66)：provider 不响应
-                 * sceneIdentityForApplication…）就把后面所有候选一起跳过了。 */
+                /* 每个候选**独立异常隔离 + 各自 fresh alloc**（Aevon(66) 教训：整段共用一个
+                 * @try 时，第一个候选抛异常会把后面所有候选一起跳过）。 */
                 self.tryRun("第4步-\(short)") {
-                    guard let fresh = AevonSceneDriver.allocObj(cls) else { return }
+                    guard let fresh = AevonAllocInstance(cls) else { return }
                     var result: Unmanaged<NSObject>? = nil
                     switch argc {
                     case 4:
-                        let fn = unsafeBitCast(imp, to: Init4.self)
-                        result = fn(fresh, sel, app, true, provider, displayID)
+                        result = unsafeBitCast(imp, to: Init4.self)(fresh, sel, app, true, provider, displayID)
                     case 3:
-                        let fn = unsafeBitCast(imp, to: Init3.self)
-                        result = fn(fresh, sel, app, provider, displayID)
+                        result = unsafeBitCast(imp, to: Init3.self)(fresh, sel, app, provider, displayID)
                     case 5:
-                        guard let uid = AevonSafeCallObject(app, "uniqueIdentifier") as? NSObject else { return }
-                        let fn = unsafeBitCast(imp, to: Init5.self)
-                        result = fn(fresh, sel, app, uid, nil, provider, displayID)
+                        guard let uid = AevonSafeObjCall(app, "uniqueIdentifier") else { return }
+                        result = unsafeBitCast(imp, to: Init5.self)(fresh, sel, app, uid, nil, provider, displayID)
                     default:
                         return
                     }
-                    if let r = result { attempt = r.takeRetainedValue() as NSObject? }
+                    if let r = result {
+                        let obj = r.takeRetainedValue()
+                        if AevonClassOfObject(obj) != nil { attempt = obj }
+                    }
                 }
                 if let attempt {
                     entity = attempt
@@ -579,10 +553,11 @@ final class AevonSceneDriver: NSObject {
         }
         guard let entity else {
             let d = diag.items.isEmpty ? "" : "｜诊断：\(diag.items.joined(separator: "；"))"
+            AevonCrumbClear()
             AevonLog.warn("[场景] P1 第 4 步失败：SBDeviceApplicationSceneEntity 全部候选 init 都构造不出实体\(d)（AevonSceneDriverP1 AevonSceneP1V73）")
             return
         }
-        AevonLog.info("[场景] P1 第 4 步通过：sceneEntity 已构造（AevonSceneDriverP1 AevonSceneP1V73）")
+        AevonLog.info("[场景] P1 第 4 步通过：sceneEntity 已构造（代理命中 \(Int(AevonProviderProxyHitCount())) 次）（AevonSceneDriverP1 AevonSceneP1V73）")
         self.step5Create(manager: manager, entity: entity, mainDC: mainDC)
     }
 
@@ -592,67 +567,48 @@ final class AevonSceneDriver: NSObject {
         AevonCrumbWrite("第5步-创建场景")
         var created: NSObject? = nil
         tryRun("第5步") {
-            let definition = AevonSafeCallObject(entity, "sceneDefinition") as? NSObject
-            guard let definition else {
+            guard let definition = AevonSafeObjCall(entity, "sceneDefinition") else {
                 AevonLog.warn("[场景] P1 第 5 步：entity 上拿不到 sceneDefinition（AevonSceneDriverP1）")
                 return
             }
-            let settings = self.makeMutableSettings()
-            self.bakeGeometry(settings: settings, mainDC: mainDC)
-            // 小窗 dc 单独备好：definition 路线（ScreenCore 正路）和 settings 路线共用
+            // 小窗 dc 只造一次：definition 路线和 settings 路线共用
             var smallDC: NSObject? = nil
             if let mainDC {
                 smallDC = AevonSceneDriver.smallDisplayConfig(from: mainDC, canvas: AevonSceneDriver.canvasSize)
             }
-            // V0.0.71：ScreenCore 正路 —— 在 FBSMutableSceneDefinition 上直接烙
-            // initialParameters + displayConfiguration + sceneFrame + orientation。
-            // 逆向报告实锤 ScreenCore 调 sc_configureInitialParameters:displayConfiguration:sceneFrame:interfaceOrientation:
-            let cfgSel = NSSelectorFromString("sc_configureInitialParameters:displayConfiguration:sceneFrame:interfaceOrientation:")
-            if definition.responds(to: cfgSel) {
-                var params: NSObject? = nil
-                if let pcls = NSClassFromString("FBSSceneParameters"),
-                   let alloced = AevonSceneDriver.allocObj(pcls) {
-                    params = alloced
-                }
-                let frame = NSValue(cgRect: CGRect(origin: .zero, size: AevonSceneDriver.canvasSize))
-                let orient = NSNumber(value: 1)   // UIInterfaceOrientationPortrait = 1
-                if let method = class_getInstanceMethod(type(of: definition), cfgSel), let params {
-                    typealias Cfg = @convention(c) (NSObject, Selector, NSObject?, NSObject?, NSValue?, NSNumber?) -> Unmanaged<NSObject>?
-                    let fn = unsafeBitCast(method_getImplementation(method), to: Cfg.self)
-                    _ = fn(definition, cfgSel, params, smallDC, frame, orient)
-                    AevonLog.info("[场景] P1 已走 ScreenCore 正路：definition.sc_configureInitialParameters（dc=\(smallDC != nil)）（AevonSceneDriverP1）")
-                }
-            } else {
-                AevonLog.info("[场景] P1 definition 上无 sc_configureInitialParameters（走 settings 烙法，AevonSceneDriverP1）")
+            guard let settings = self.makeMutableSettings() else {
+                AevonLog.warn("[场景] P1 第 5 步失败：没有可用的可变场景设置类（UIMutableApplicationSceneSettings / FBMutableSceneSettings）（AevonSceneDriverP1）")
+                return
             }
-            // 公开创建 API（P0 确认存在）
-            let sel = NSSelectorFromString("createSceneWithDefinition:initialParameters:")
-            if manager.responds(to: sel) {
-                // initialParameters：FBSSceneParameters 构造（多路），失败给裸 alloc
-                var params: NSObject? = nil
-                if let pcls = NSClassFromString("FBSSceneParameters"),
-                   let alloced = AevonSceneDriver.allocObj(pcls) {
-                    let single = NSSelectorFromString("initWithSettings:")
-                    if let method = class_getInstanceMethod(type(of: alloced), single) {
-                        typealias Fn1 = @convention(c) (NSObject, Selector, NSObject?) -> Unmanaged<NSObject>?
-                        params = unsafeBitCast(method_getImplementation(method), to: Fn1.self)(alloced, single, settings)?.takeRetainedValue()
-                    }
-                    if params == nil { params = alloced }
-                }
-                created = AevonSafeCallObject2(manager, "createSceneWithDefinition:initialParameters:",
-                                               definition, params) as? NSObject
-            }
+            self.bakeGeometry(settings: settings, smallDC: smallDC)
+            /* ScreenCore 那个 sc_configureInitialParameters:displayConfiguration:sceneFrame:
+             * interfaceOrientation: 是 **ScreenCore 自家 SCSystemSceneDriver 上的方法**，
+             * 系统类上根本没有 —— V0.0.71~75 那句 definition.responds(to:) 恒为 false，
+             * 属于死代码。本版改为在 FBSSceneParameters 上直接烙（KVC / setter）。 */
+            AevonLog.info("[场景] P1 第 5 步：跳过 sc_configureInitialParameters（那是 ScreenCore 私有方法，系统类无实现），改在 FBSSceneParameters 上烙 dc+frame（AevonSceneDriverP1）")
+            let params = AevonSceneDriver.makeSceneParameters(definition: definition,
+                                                             settings: settings,
+                                                             smallDC: smallDC)
+            /* ScreenCore 的 sc_configureInitialParameters:displayConfiguration:sceneFrame:
+             * interfaceOrientation: 是 **ScreenCore 自己的方法**（SCSystemSceneDriver 上），
+             * 系统类上根本没有 —— V0.0.71~75 那句 definition.responds(to:) 恒为 false，
+             * 属于死代码，本版删掉，改为在 FBSSceneParameters 上直接烙（KVC）。 */
+            created = AevonSafeObjCall2(manager, "createSceneWithDefinition:initialParameters:", definition, params)
             // 私有全家桶兜底（P0 dump 到的 7 参版）
             if created == nil {
-                let sel2 = NSSelectorFromString("_createSceneWithDefinition:settings:initialClientSettings:transitionContext:fromRemnant:usingClientProvider:completion:")
-                if let method = class_getInstanceMethod(type(of: manager), sel2) {
+                let selName = "_createSceneWithDefinition:settings:initialClientSettings:transitionContext:fromRemnant:usingClientProvider:completion:"
+                if let mcls = AevonClassOfObject(manager), AevonClassHasInstanceMethod(mcls, selName),
+                   let method = class_getInstanceMethod(mcls, NSSelectorFromString(selName)) {
                     typealias C7 = @convention(c) (NSObject, Selector, NSObject, NSObject?, NSObject?, NSObject?, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
                     let fn = unsafeBitCast(method_getImplementation(method), to: C7.self)
-                    created = fn(manager, sel2, definition, settings, nil, nil, false, nil, nil)?
-                        .takeRetainedValue()
+                    if let r = fn(manager, NSSelectorFromString(selName), definition, settings, nil, nil, false, nil, nil) {
+                        let obj = r.takeRetainedValue()
+                        if AevonClassOfObject(obj) != nil { created = obj }
+                    }
                 }
             }
         }
+        AevonCrumbClear()
         if let created {
             AevonLog.info("[场景] P1 第 5 步通过：createScene 已调用，返回 \(AevonSafeClassName(created))——若创建链成立，屏幕应出现按 266x458 排版的设置场景（AevonSceneDriverP1）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
@@ -663,20 +619,70 @@ final class AevonSceneDriver: NSObject {
         }
     }
 
+    /// FBSSceneParameters 构造 + 把 dc / sceneFrame / orientation / settings 全部烙进去
+    static func makeSceneParameters(definition: NSObject, settings: NSObject, smallDC: NSObject?) -> NSObject? {
+        guard let pcls = AevonClassNamed("FBSSceneParameters"), let params = AevonAllocInstance(pcls) else {
+            AevonLog.warn("[场景] P1 第 5 步：FBSSceneParameters 类不存在（createScene 会收到 nil 参数）（AevonSceneDriverP1）")
+            return nil
+        }
+        // settings（FBSSceneParameters 的 ivar 实锤 _settings / _clientSettings / _specification）
+        if AevonObjRespondsTo(params, "setSettings:") {
+            _ = AevonSafeObjCall1(params, "setSettings:", settings)
+        }
+        if AevonObjRespondsTo(params, "setClientSettings:") {
+            if let client = AevonSafeObjCall(settings, "mutableCopy") {
+                _ = AevonSafeObjCall1(params, "setClientSettings:", client)
+            }
+        }
+        if AevonObjRespondsTo(params, "setSpecification:"),
+           let spec = AevonSafeObjCall(definition, "specification") {
+            _ = AevonSafeObjCall1(params, "setSpecification:", spec)
+        }
+        // dc 直接烙在 parameters 上（ScreenCore 的 sc_configureInitialParameters 就在做这件事）
+        if let smallDC, AevonObjRespondsTo(params, "setDisplayConfiguration:") {
+            _ = AevonSafeObjCall1(params, "setDisplayConfiguration:", smallDC)
+            AevonLog.info("[场景] P1 已把 266x458 的 dc 烙进 FBSSceneParameters（AevonSceneDriverP1）")
+        }
+        // sceneFrame / interfaceOrientation 走 KVC（结构体用 NSValue，@try 内）
+        let frame = CGRect(origin: .zero, size: AevonSceneDriver.canvasSize)
+        let frameValue = NSValue(cgRect: frame)
+        var frameDone = false
+        for key in ["sceneFrame", "frame"] {
+            let setter = "set" + key.prefix(1).uppercased() + key.dropFirst() + ":"
+            if AevonObjRespondsTo(params, setter) {
+                _ = AevonSafeObjCall1(params, setter, frameValue)
+                frameDone = true
+                break
+            }
+        }
+        if !frameDone {
+            frameDone = AevonSafeSetValueForKey(params, frameValue, "sceneFrame")
+                || AevonSafeSetValueForKey(params, frameValue, "frame")
+        }
+        var orientationDone = false
+        if AevonObjRespondsTo(params, "setInterfaceOrientation:") {
+            /* setter 返回 void，垫片按「对象返回」调会拿不到值 —— 调用本身成功即可信，
+             * 再用 KVC 补一遍（同一个键，幂等）。 */
+            _ = AevonSafeObjCall1(params, "setInterfaceOrientation:", NSNumber(value: 1))
+            orientationDone = AevonSafeSetValueForKey(params, NSNumber(value: 1), "interfaceOrientation")
+        } else {
+            orientationDone = AevonSafeSetValueForKey(params, NSNumber(value: 1), "interfaceOrientation")
+        }
+        AevonLog.info("[场景] P1 parameters 烙参数：settings/dc/frame=\(frameDone) orientation=\(orientationDone)（AevonSceneDriverP1）")
+        return params
+    }
+
     // MARK: 第 6 步：创建后取证
 
     private func step6Verify(created: NSObject) {
         tryRun("取证") {
             var lines: [String] = []
-            if created.responds(to: NSSelectorFromString("settings")),
-               let settings = AevonSafeCallObject(created, "settings") as? NSObject {
-                if let frame = settings.value(forKey: "frame") {
+            if let settings = AevonSafeObjCall(created, "settings") {
+                if let frame = AevonSafeValueForKey(settings, "frame") {
                     lines.append("frame=\(frame)")
                 }
-                /* V0.0.75：pixelSize 返回 CGSize **结构体**，`perform` + takeUnretainedValue
-                 * 会把结构体当对象指针（同类野指针风险，见 Aevon(67) 崩溃栈），
-                 * 这里改走 KVC（NSValue 包装，类型安全）。 */
-                if let px = settings.value(forKeyPath: "displayConfiguration.pixelSize") {
+                /* pixelSize 返回 CGSize **结构体**，走 KVC 取（NSValue 包装，类型安全）。 */
+                if let px = AevonSafeValueForKeyPath(settings, "displayConfiguration.pixelSize") {
                     lines.append("dc.pixelSize=\(px)")
                 }
             }
@@ -688,37 +694,26 @@ final class AevonSceneDriver: NSObject {
     // MARK: - 辅助
 
     /// 可变场景设置构造（UIMutableApplicationSceneSettings 系）
-    private func makeMutableSettings() -> NSObject {
+    private func makeMutableSettings() -> NSObject? {
         for clsName in ["UIMutableApplicationSceneSettings", "FBMutableSceneSettings"] {
-            if let cls = NSClassFromString(clsName), let obj = AevonSceneDriver.allocObj(cls) {
+            if let cls = AevonClassNamed(clsName), let obj = AevonAllocInstance(cls) {
                 return obj
             }
         }
-        return NSObject()
-    }
-
-    /// Swift 里 NSObject.alloc() 不可用 —— 走 ObjC 运行时 alloc（全工程统一走这里）
-    static func allocObj(_ cls: AnyClass) -> NSObject? {
-        let sel = NSSelectorFromString("alloc")
-        guard (cls as AnyObject).responds(to: sel) else { return nil }
-        guard let obj = AevonSafeCallObject(cls as AnyObject, "alloc") as? NSObject else { return nil }
-        return obj
+        return nil
     }
 
     /// 把「小窗尺寸的 dc」烙进 settings（创建时烙定 = ScreenCore/Mango 路线）
-    private func bakeGeometry(settings: NSObject, mainDC: NSObject?) {
+    private func bakeGeometry(settings: NSObject, smallDC: NSObject?) {
         let size = AevonSceneDriver.canvasSize
         let frame = CGRect(origin: .zero, size: size)
 
-        // 1) 造小窗 dc：优先拷贝主屏母本后按小窗尺寸改写几何 ivar；无母本则从零构造
-        var smallDC: NSObject? = nil
-        if let mainDC {
-            smallDC = AevonSceneDriver.smallDisplayConfig(from: mainDC, canvas: size)
-        }
-        if smallDC == nil, let dcls = NSClassFromString("FBSDisplayConfiguration"),
-           let fresh = AevonSceneDriver.allocObj(dcls) {
+        // 1) 小窗 dc：优先用母本拷贝；无母本则从零构造（ivar 直写）
+        var dc = smallDC
+        if dc == nil, let dcls = AevonClassNamed("FBSDisplayConfiguration"),
+           let fresh = AevonAllocInstance(dcls) {
             let initSel = NSSelectorFromString("init")
-            if let m = class_getInstanceMethod(type(of: fresh), initSel) {
+            if let cls = AevonClassOfObject(fresh), let m = class_getInstanceMethod(cls, initSel) {
                 typealias Fn0 = @convention(c) (NSObject, Selector) -> Unmanaged<NSObject>?
                 _ = unsafeBitCast(method_getImplementation(m), to: Fn0.self)(fresh, initSel)
             }
@@ -726,23 +721,24 @@ final class AevonSceneDriver: NSObject {
             AevonSceneDriver.writeCGRectIvar(fresh, "_bounds", frame)
             AevonSceneDriver.writeCGSizeIvar(fresh, "_pixelSize",
                                              CGSize(width: size.width * 3, height: size.height * 3))
-            smallDC = fresh
+            dc = fresh
             AevonLog.info("[场景] P1 小窗 dc 从零构造（无母本，ivar 直写 266x458 / 3x 像素）（AevonSceneDriverP1）")
         }
 
         // 2) 烙进 settings
-        let dcSel = NSSelectorFromString("setDisplayConfiguration:")
-        if settings.responds(to: dcSel), let smallDC {
-            _ = AevonSafeCallObject1(settings, "setDisplayConfiguration:", smallDC) as? NSObject
+        if let dc, AevonObjRespondsTo(settings, "setDisplayConfiguration:") {
+            _ = AevonSafeObjCall1(settings, "setDisplayConfiguration:", dc)
             AevonLog.info("[场景] P1 已把小窗 dc（266x458）烙进 settings.displayConfiguration（AevonSceneDriverP1）")
         } else {
             AevonLog.warn("[场景] P1 settings 无 setDisplayConfiguration: 入口或小窗 dc 构造失败（AevonSceneDriverP1）")
         }
         var baked = false
         for (selName, key) in [("setFrame:", "frame"), ("setSceneFrame:", "sceneFrame"), ("setSize:", "size")] {
-            if settings.responds(to: NSSelectorFromString(selName)) {
+            if AevonObjRespondsTo(settings, selName) {
                 let value: NSValue = (key == "size") ? NSValue(cgSize: size) : NSValue(cgRect: frame)
-                settings.setValue(value, forKey: key)
+                _ = AevonSafeObjCall1(settings, selName, value)
+                // setter 返回 void（垫片拿不到返回值），KVC 再补一遍同键，幂等
+                _ = AevonSafeSetValueForKey(settings, value, key)
                 AevonLog.info("[场景] P1 已烙 settings.\(key) = \(value)（AevonSceneDriverP1）")
                 baked = true
                 break
@@ -757,8 +753,7 @@ final class AevonSceneDriver: NSObject {
     static func smallDisplayConfig(from mainDC: NSObject, canvas: CGSize) -> NSObject? {
         var copyObj: NSObject? = nil
         for selName in ["mutableCopy", "copy"] {
-            let sel = NSSelectorFromString(selName)
-            if mainDC.responds(to: sel), let c = AevonSafeCallObjectSel(mainDC, sel) as? NSObject {
+            if let c = AevonSafeObjCall(mainDC, selName) {
                 copyObj = c
                 break
             }
@@ -782,7 +777,8 @@ final class AevonSceneDriver: NSObject {
     // MARK: ivar 直写/直读（V63 技术链：先查类型编码再动字节）
 
     private static func ivarPtr(_ obj: NSObject, _ name: String, expectPrefix: String) -> (UnsafeMutableRawPointer, Int)? {
-        guard let ivar = class_getInstanceVariable(type(of: obj) as AnyClass, name),
+        guard let cls = AevonClassOfObject(obj),
+              let ivar = class_getInstanceVariable(cls, name),
               let enc = ivar_getTypeEncoding(ivar), String(cString: enc).hasPrefix(expectPrefix) else { return nil }
         let off = ivar_getOffset(ivar)
         guard off >= 0 else { return nil }

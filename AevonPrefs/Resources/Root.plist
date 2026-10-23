@@ -163,6 +163,8 @@
 			<string>AevonTrueResizeP1</string>
 			<key>label</key>
 			<string>真小胖屏 P1：自建场景实验（给「设置」按小窗尺寸开新场景，只写日志不改浮窗）</string>
+			<key>footerText</key>
+			<string>实验性质：创建链不成立时会直接收工写日志，不会乱改现有浮窗。若连续崩满 2 次，本版会自动锁定该实验（不再随开关自动运行），请把日志发给开发者。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

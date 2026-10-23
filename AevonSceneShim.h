@@ -104,3 +104,52 @@ id AevonSafeCallObject2(id obj, NSString *selectorName, id arg1, id arg2);
 id AevonSafeReadObjectIvar(id obj, const char *ivarName);
 /// 同上，但直接吃 SEL（Swift 里的 `Selector` 无法隐式转字符串）。
 id AevonSafeCallObjectSel(id obj, SEL sel);
+
+#pragma mark - V0.0.76（AevonSceneSafeObjV76）：返回值静态类型化 + 非对象指针过滤
+
+/* 为什么换签名（Aevon(68) 崩溃栈铁证）：
+ *   swift_dynamicCast → swift_getObjectType → _CF_forwarding_prep_0 → SpringBoard 退出
+ * 栈里一个 FrontBoard 帧都没有，说明**不是**在系统方法内部崩的，而是崩在我们自己
+ * Swift 代码的 `as? NSObject`（动态转换）上。根因是 `id` 在 Swift 里被桥成 `Any!`，
+ * 每次赋值都必须过一趟运行时动态转换；一旦那个指针不是干净对象（BOOL 的 1、
+ * 结构体、tagged pointer），swift_getObjectType 就抓瞎。
+ *
+ * V0.0.76 两手一起上：
+ *   ① 返回类型写死 `NSObject *` —— Swift 侧直接拿 `NSObject?`，**编译期就没有转换指令**；
+ *   ② 每个返回值都过 AevonVerifiedObject：奇数地址、低位地址、元类一律判 nil。 */
+
+NSObject *AevonSafeObjCall(id obj, NSString *selectorName);
+NSObject *AevonSafeObjCallSel(id obj, SEL sel);
+NSObject *AevonSafeObjCall1(id obj, NSString *selectorName, id arg1);
+NSObject *AevonSafeObjCall2(id obj, NSString *selectorName, id arg1, id arg2);
+/// 读对象型 ivar（编码必须是 '@'）。
+NSObject *AevonSafeObjIvar(id obj, const char *ivarName);
+/// `[cls alloc]`（@try 保护 + 返回值过滤）。
+NSObject *AevonAllocInstance(Class cls);
+/// 对象的类（替代 Swift 的 `type(of:)`，不走 swift_getObjectType）。
+Class AevonClassOfObject(id obj);
+/// NSClassFromString 的安全版（空名/不存在 → Nil）。
+Class AevonClassNamed(NSString *name);
+BOOL AevonClassRespondsTo(Class cls, NSString *selectorName);
+BOOL AevonClassHasInstanceMethod(Class cls, NSString *selectorName);
+BOOL AevonObjRespondsTo(id obj, NSString *selectorName);
+
+/* 自建场景 provider 代理（纯 ObjC 实现）。
+ * V0.0.73/75 用 Swift 闭包 + imp_implementationWithBlock 造代理：参数类型、BOOL 位宽、
+ * 返回值归属全靠推断，属于「自己给自己埋雷」。现在换成真正的 ObjC 类，
+ * 方法签名与协议字面一致（@@:@B@），内部转调下划线变体。 */
+NSObject *AevonProviderProxyCreate(id target);
+/// 代理被系统调用过几次（日志用：能区分「provider 没被用到」和「用了但返回 nil」）。
+int AevonProviderProxyHitCount(void);
+
+/* P1 崩溃计数（持久化在 /var/mobile/Aevon.p1fuse，respring 不清）。
+ * 连崩 2 次 → 调用方锁定实验，避免「一开开关就注销」的体验。 */
+int AevonP1FuseCount(void);
+void AevonP1FuseBump(void);
+void AevonP1FuseReset(void);
+
+/// KVC 安全版（Swift 里没法写 @try，KVC 遇到未定义键会抛 NSUndefinedKeyException）。
+BOOL AevonSafeSetValueForKey(id obj, id value, NSString *key);
+BOOL AevonSafeSetValueForKeyPath(id obj, id value, NSString *keyPath);
+NSObject *AevonSafeValueForKey(id obj, NSString *key);
+NSObject *AevonSafeValueForKeyPath(id obj, NSString *keyPath);

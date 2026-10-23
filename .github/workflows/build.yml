@@ -1011,6 +1011,31 @@ jobs:
           strings "$DYLIB" | grep -q 'AevonSceneSafeCallV75' \
             || { echo "::error::V0.0.75 标记缺失: AevonSceneSafeCallV75（安全方法调用垫片未编入）"; exit 1; }
           echo "V0.0.75 校验: P1 崩溃熔断 + BOOL/对象返回值类型安全垫片 已编入"
+          # V0.0.76（AevonSceneSafeObjV76）：终审两次自动注销
+          # Aevon(67)/Aevon(68) 崩溃栈同形：swift_dynamicCast → swift_getObjectType →
+          # _CF_forwarding_prep_0 → 进程退出，且栈里一个 FrontBoard 帧都没有 ——
+          # 不是系统方法内部崩的，是我们自己 Swift 代码的 `as? NSObject` 动态转换崩的。
+          # 本版：垫片返回类型写死 NSObject*（编译期不再生成转换指令）+ 返回值指针体检
+          #      + provider 代理改成纯 ObjC 类 + 前置体检不达标直接收工。
+          for s in AevonSceneSafeObjV76 AevonP1ProxyObjCV76; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.0.76 标记缺失: $s"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY76'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["P1 第 4 步预习", "AevonSceneP1V73", "P1 实验已锁定"]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.76 缺串: {s}"); sys.exit(1)
+          print("V0.0.76 校验: 静态类型化垫片 + 前置体检 + 实验锁定 已编入")
+          PY76
+          # 源码级硬规矩（防回退）：P1 这条链里绝不允许再出现 Swift 动态转换 ——
+          # 历史两次自动注销全部是它引起的。
+          if grep -nE 'as\? |as! |type\(of:|String\(describing:' Sources/AevonSceneDriver.swift; then
+            echo "::error::V0.0.76 回退: AevonSceneDriver.swift 出现动态转换（as?/as!/type(of:)，会重新触发 swift_dynamicCast 野指针崩溃）"
+            exit 1
+          fi
+          echo "V0.0.76 校验: SceneDriver 无动态转换（as?/as!/type(of:)）已确认"
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
