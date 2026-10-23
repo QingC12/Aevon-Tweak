@@ -248,10 +248,10 @@ final class AevonWindowView: UIView {
             if remembered != fallback { sizeSource = "已恢复上次几何（全局记忆）" }
         }
 
-        // V0.0.44：新开的窗别压住已停靠的小窗（会盖住对方的手势条）
-        let placed = AevonSnap.avoid(restored, obstacles: AevonEntryHost.dockedObstacles(excluding: nil))
-        frame = CGRect(x: placed.minX, y: placed.minY,
-                       width: placed.width, height: placed.height)
+        // V0.0.47（AevonNoPushV47）：新开窗也**不再**被已停靠小窗推开。
+        // Aevon(40) 第 4 条明确「自动避让让主悬浮窗随意挪动位置，很不合理」——
+        // 位置只由记忆几何 + 用户操作决定，重叠了用户自己拖一下即可。
+        frame = AevonSnap.clamped(restored)
 
         backgroundColor = .clear
         // V0.0.37：窗口本体不裁剪 —— 外侧手势区要伸到 frame 外面；
@@ -392,8 +392,9 @@ final class AevonWindowView: UIView {
         let scale = contentClip.bounds.width / screen.width
         // V0.0.46（AevonTopCropV46 AevonFloatPaddingV46）：
         // 裁的是 `cropTop`（状态栏空白 − 8pt，保证导航栏一行不缺），
-        // 内容整体再往下让 `contentTopPadding`，上下各留出一条深色边，
-        // 窗口圆角就再也啃不到左上角的返回按钮。
+        // 内容整体再往下让 `contentTopPadding`，窗口圆角就啃不到左上角的返回按钮。
+        // V0.0.47（AevonNoBottomPadV47）：底部那条深色边已删除（任何 App 里都是死黑），
+        // 所以内容一直铺到窗口底边 —— 裁剪交给 contentClip 的 clipsToBounds。
         let cropTop = AevonSnap.cropTop
         let topPad = AevonSnap.contentTopPadding
 
@@ -621,10 +622,11 @@ final class AevonWindowView: UIView {
                 snap(to: slot)
                 return
             }
-            // 拖动期间不再每帧算避让，松手补一次完整避让（左右上下都可以）
+            // V0.0.47（AevonNoPushV47）：松手只夹屏幕边界，不再因为「别处有停靠小窗」而跳位置。
+            // Aevon(40)：「自动避让停靠小窗会让主悬浮窗随意挪动位置，很不合理」——
+            // 手指放下的地方就是最终位置，重叠由用户自己摆。
             if commit {
-                frame = AevonSnap.clamped(AevonSnap.avoid(frame,
-                    obstacles: AevonEntryHost.dockedObstacles(excluding: self)))
+                frame = AevonSnap.clamped(frame)
             }
             persistFrame()
         case .body:
@@ -642,8 +644,8 @@ final class AevonWindowView: UIView {
         case .bottom:
             // 底边拖动 = 移动（用户 Aevon(37) 的新交互），贴底不再自动吸附
             if commit {
-                frame = AevonSnap.clamped(AevonSnap.avoid(frame,
-                    obstacles: AevonEntryHost.dockedObstacles(excluding: self)))
+                // V0.0.47：同上，只夹边界，不做跨窗避让
+                frame = AevonSnap.clamped(frame)
             }
             persistFrame()
         }
@@ -779,8 +781,8 @@ final class AevonWindowView: UIView {
         guard isLiveResizing else { return }
         isLiveResizing = false
         layer.shadowOpacity = AevonWindowView.shadowOpacity
-        frame = AevonSnap.clamped(AevonSnap.avoid(frame,
-                                                  obstacles: AevonEntryHost.dockedObstacles(excluding: self)))
+        // V0.0.47（AevonNoPushV47）：缩放收尾只夹边界，不再被别的小窗推着跳
+        frame = AevonSnap.clamped(frame)
         // 圆角一次对到最终尺寸；此时阴影路径与描边一并刷新
         AevonWindowView.applyRadius(to: contentClip, width: frame.width)
         setNeedsLayout()
@@ -818,7 +820,6 @@ final class AevonWindowView: UIView {
            abs(target.width - frame.width) < 0.5 {
             currentSlot = slot
             persistFrame()
-            AevonEntryHost.avoidDockedWindow(self)
             return
         }
 
@@ -830,13 +831,12 @@ final class AevonWindowView: UIView {
         } completion: { _ in
             self.setNeedsLayout()
             self.persistFrame()
-            // 小窗落下后通知其它窗让开，别压住别人的手势条
-            AevonEntryHost.avoidDockedWindow(self)
         }
         AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 · 屏宽 "
-            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 小窗竖向下叠）（AevonSthenoDockV44 AevonDockSizeV45 AevonDockStackV46）")
+            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 9:16 · 屏宽 "
+            + "\(Int(AevonSnap.dockWidthRatio * 100))% · 小窗竖向下叠 · 不再挪动其它窗）"
+            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockStackV46 AevonDock916V47 AevonNoPushV47）")
     }
 
     /// 当前是不是停靠小窗（宽度等于停靠档）
@@ -857,23 +857,23 @@ final class AevonWindowView: UIView {
         snap(to: slot)
     }
 
-    /// 还原成主悬浮窗尺寸，位置优先回到停靠前那一块。
+    /// 还原成主悬浮窗：**位置和尺寸都回到停靠前那一块**。
+    ///
+    /// V0.0.47（AevonRestorePosV47）：Aevon(40)「主悬浮窗吸附停靠后，点击还原时
+    /// 不会回到停靠前的主悬浮窗位置」。旧实现有两处把落点改写掉：
+    ///   ① 按当前停靠侧把 `origin.x` 强设成贴边 —— 于是无论停靠前在哪儿，还原后总是贴边；
+    ///   ② 再走一次 `AevonSnap.avoid(...)` 让别人把它推开。
+    /// 现在两处都删掉：`preDockFrame` 原样用，位置/尺寸与停靠前逐点一致。
     func restoreMainWindow() {
-        let screen = UIScreen.main.bounds
         var target: CGRect
-        if let previous = preDockFrame, previous.width > AevonSnap.minContentWidth {
-            target = previous
+        if let previous = preDockFrame,
+           previous.width > AevonSnap.minContentWidth,
+           previous.height > AevonSnap.minContentWidth {
+            // 原样恢复（只做屏幕边界夹取，不做任何避让 / 贴边改写）
+            target = AevonSnap.clamped(previous)
         } else {
             target = AevonWindowView.defaultFrame()
         }
-        // 停靠在左侧就保持贴左、右侧就保持贴右（用户的心智位置不变），但换成主窗尺寸
-        if currentSlot == .left {
-            target.origin.x = AevonSnap.edgeInset
-        } else if currentSlot == .right {
-            target.origin.x = screen.width - AevonSnap.edgeInset - target.width
-        }
-        target = AevonSnap.clamped(target)
-        target = AevonSnap.avoid(target, obstacles: AevonEntryHost.dockedObstacles(excluding: self))
 
         preDockFrame = nil
         currentSlot = .free
@@ -885,8 +885,9 @@ final class AevonWindowView: UIView {
             self.setNeedsLayout()
             self.persistFrame()
         }
-        AevonLog.info("[窗口] 轻点已停靠小窗 → 还原主悬浮窗 \(Int(target.width))x\(Int(target.height))"
-            + "（AevonDockRestoreV44）")
+        AevonLog.info("[窗口] 轻点已停靠小窗 → 还原主悬浮窗 \(Int(target.minX)),\(Int(target.minY)) "
+            + "\(Int(target.width))x\(Int(target.height))"
+            + "（回到停靠前的位置与尺寸 · 不再贴边改写）（AevonDockRestoreV44 AevonRestorePosV47）")
     }
 
     /// 关闭自己（底边条双击时由全局通道调用）。
@@ -894,30 +895,14 @@ final class AevonWindowView: UIView {
         AevonWindowManager.close(bundleID: bundleID)
     }
 
-    /// 别的窗刚停靠 → 本窗主动让开（V0.0.44，AevonDockAvoidV44）。
+    /// V0.0.47（AevonNoPushV47）：跨窗自动避让**整体停用**。
     ///
-    /// 只靠「移动时避让」不够：小窗是**后**停靠的，落下来就可能压住本窗的手势条。
-    /// 所以停靠动作完成后由 `AevonEntryHost` 挨个通知其它窗重排一次。
+    /// Aevon(40) 第 4 条：「自动避让停靠小窗会让主悬浮窗随意挪动位置，很不合理」。
+    /// 旧链路是「某个窗停靠完成 → `AevonEntryHost.avoidDockedWindow` 挨个通知其它窗
+    /// 重新 `avoid()`」，于是用户什么都没做，别的主窗就自己飘走了 —— 而且飘到的位置
+    /// 还会写进几何记忆，下次开窗继续错位。
+    /// 现在保留空实现只为兼容调用点；真正的位置只由「用户拖动 / 缩放 / 停靠」决定。
     func avoidDockedWindows() {
-        guard !isLiveResizing else { return }
-        // V0.0.46（AevonDockStackV46）：**已停靠的窗不再被别人的动作推着跑**。
-        // 它的纵向位置由 `AevonSnap.dockY` 在停靠那一刻按堆叠顺序定好；
-        // 再让 `avoidVertical` 推一次，就会把它顶出屏幕边界或顶到别人上方
-        // —— 正是 Aevon(39) 说的「第二个小窗跑到上面」。
-        guard !isDocked else { return }
-        let obstacles = AevonEntryHost.dockedObstacles(excluding: self)
-        let avoided = AevonSnap.avoid(frame, obstacles: obstacles)
-        guard abs(avoided.minX - frame.minX) > 0.5 || abs(avoided.minY - frame.minY) > 0.5 else { return }
-        UIView.animate(withDuration: 0.24,
-                       delay: 0,
-                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
-            self.frame = avoided
-        } completion: { _ in
-            self.setNeedsLayout()
-            self.persistFrame()
-        }
-        AevonLog.info("[窗口] \(bundleID) 自动避让停靠小窗 → "
-            + "\(Int(avoided.minX)),\(Int(avoided.minY))（AevonDockAvoidV44）")
     }
 
     /// 把窗口提到最前（面板里的「已开窗口」点名称时用）。

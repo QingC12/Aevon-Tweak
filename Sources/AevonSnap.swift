@@ -49,8 +49,15 @@ enum AevonSnap {
     ///
     /// V0.0.45（AevonDockSizeV45）：0.42 → 0.30。用户 Aevon(38)：「吸附后的小窗还是大」。
     /// Stheno 的停靠尺寸由 `leftHeightPecent` / `rightHeightPecent` 独立按百分比记忆
-    /// （高度和宽度不是一个自由度），所以贴边状态就是一个窄条 —— 0.30 × 430 ≈ 129pt 宽。
-    static let dockWidthRatio: CGFloat = 0.30
+    /// （高度和宽度不是一个自由度），所以贴边状态就是一个窄条。
+    ///
+    /// V0.0.47（AevonDock916V47）：0.30 → 0.28，并且高度不再跟随主窗比例。
+    /// Aevon(40)：「停靠小窗的尺寸依旧看起来很大，可以像 stheno 一样，
+    /// 停靠吸附小窗的比例改为 9:16，然后停靠时缩小」。
+    /// 旧版 0.30 宽度下按主窗比例（0.4875）算出的高度是 292pt —— 129x292 就是 1:2.26 的瘦高条，
+    /// 面积比用户预期大得多。现在停靠走独立的 `dockAspect`（9:16）：
+    /// 0.28 × 430 ≈ 120pt 宽、内容高 ≈ 213pt，窗高约 227pt（占屏 24%，旧版 31%）。
+    static let dockWidthRatio: CGFloat = 0.28
     /// 停靠档的宽度下限：**不能**沿用 `minContentWidth`，
     /// 否则 430 × 0.30 = 129 会被 150 抬回去，看起来「收不小」（V0.0.44 的隐形坑）。
     static let dockMinWidth: CGFloat = 96
@@ -67,7 +74,20 @@ enum AevonSnap {
     /// 啃掉了导航栏返回按钮的角。上下各留 14pt 的深色边（看起来就是一圈屏幕边框），
     /// 内容整体下移，圆弧再也咬不到按钮，同时上下视觉也对称了。
     static let contentTopPadding: CGFloat = 14
-    static let contentBottomPadding: CGFloat = 14
+
+    /// 底部深色边：V0.0.47（AevonNoBottomPadV47）已**移除**。
+    ///
+    /// Aevon(40)：「主悬浮窗底部新增的深色边在任何页面都是黑屏，所以直接移除，顶部的保留」。
+    /// 底部那 14pt 露出来的是窗口自身的背景（纯黑），任何 App 里都是死黑一条，
+    /// 看起来像把内容截断了；顶部那条之所以要留，是因为窗口圆角会啃掉导航栏返回按钮的角。
+    /// 底部没有需要保护的控件（内容底边距窗口底边本来就有 home indicator 区），所以归零。
+    static let contentBottomPadding: CGFloat = 0
+
+    /// 停靠小窗的内容宽高比（V0.0.47，AevonDock916V47）= 9:16。
+    ///
+    /// Stheno 的 `leftHeightPecent` / `rightHeightPecent` 是**独立**于宽度的高度百分比，
+    /// 所以停靠态的高度本来就不跟着主窗的整屏比例走。这里固定成用户要求的 9:16。
+    static let dockAspect: CGFloat = 9.0 / 16.0
 
     /// 顶部实际裁掉多少（场景坐标，单位 = 整屏 pt）。
     ///
@@ -105,6 +125,15 @@ enum AevonSnap {
     static func height(forWidth width: CGFloat) -> CGFloat {
         return width / max(0.2, aspect) + titleBarHeight
             + contentTopPadding + contentBottomPadding
+    }
+
+    /// 停靠小窗的高度（V0.0.47，AevonDock916V47）：内容按 9:16 计量。
+    ///
+    /// 注意：主窗用 `aspect`（屏宽 ÷（屏高 − 顶部裁剪）≈ 0.4875），停靠窗用 `dockAspect`（0.5625）。
+    /// 两者混用就是旧版「小窗又瘦又高」的来源 —— 停靠窗比屏幕内容区更宽，
+    /// 所以宽度贴合后底部会裁掉一截（被 `clipsToBounds` 吃掉），换来整体尺寸明显变小。
+    static func dockHeight(forWidth width: CGFloat) -> CGFloat {
+        return width / max(0.2, dockAspect) + titleBarHeight + contentTopPadding
     }
 
     /// 安全区最大宽度（左右各留 edgeInset）
@@ -184,10 +213,11 @@ enum AevonSnap {
         let screen = UIScreen.main.bounds
         guard slot != .free else { return clamped(base) }
         var width = dockWidth
-        var height = height(forWidth: width)
+        // V0.0.47（AevonDock916V47）：停靠走独立的 9:16，不再套主窗的整屏比例
+        var height = dockHeight(forWidth: width)
         if height > maxHeight {
             height = maxHeight
-            width = max(dockMinWidth, height * aspect)
+            width = max(dockMinWidth, (height - titleBarHeight - contentTopPadding) * dockAspect)
         }
         var f = CGRect(x: 0, y: 0, width: width, height: height)
         switch slot {

@@ -137,6 +137,16 @@ __attribute__((used)) static const char AevonTopCropV46Marker[] = "AevonTopCropV
 __attribute__((used)) static const char AevonDockTapRestoreV46Marker[] = "AevonDockTapRestoreV46";
 __attribute__((used)) static const char AevonFrameMemoryCleanV46Marker[] = "AevonFrameMemoryCleanV46";
 
+/* V0.0.47 CI 标记（Aevon(40) 的 4 条反馈）：
+ * AevonNoBottomPadV47  = 移除底部深色边（任何页面都是死黑一条），顶部保留；
+ * AevonRestorePosV47   = 还原主窗时位置与尺寸都回到停靠前，不再被贴边改写；
+ * AevonDock916V47      = 停靠小窗改 9:16 并整体缩小（宽度 28%）；
+ * AevonNoPushV47       = 跨窗自动避让整体停用，位置只由用户操作决定。 */
+__attribute__((used)) static const char AevonNoBottomPadV47Marker[] = "AevonNoBottomPadV47";
+__attribute__((used)) static const char AevonRestorePosV47Marker[] = "AevonRestorePosV47";
+__attribute__((used)) static const char AevonDock916V47Marker[] = "AevonDock916V47";
+__attribute__((used)) static const char AevonNoPushV47Marker[] = "AevonNoPushV47";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
