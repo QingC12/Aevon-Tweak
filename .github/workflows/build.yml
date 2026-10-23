@@ -905,7 +905,7 @@ jobs:
           python3 - "$DYLIB" <<'PY68'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["P1 实验开始","自建场景实验","场景探测："]:
+          for s in ["P1 实验开始","P1 实验已排程","场景探测："]:
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.68 缺串: {s}"); sys.exit(1)
           print("V0.0.68 校验: Guard 设置 App 解除排除 + P1 自建场景实验 已编入")
