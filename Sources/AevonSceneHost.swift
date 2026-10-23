@@ -84,8 +84,27 @@ final class AevonSceneHost {
     }
 
     /// 请求场景按指定逻辑尺寸重排。bits=0 表示垫片层完全失败。
+    ///
+    /// V0.0.65（AevonTrueResizeWritesOffV65）：**几何写入整体停用**（运行时开关，
+    /// 默认关）。V64 真机实锤：只关 1:1 显示分支不够——frame+dc 仍被写入时
+    /// 场景 frame 变成小窗尺寸，而等比缩放分支的基准是整屏 430x932，两者矛盾
+    /// = 大部分黑屏 + 左上角残留画面 + 状态栏放大；且 5 秒回退只清内容管线、
+    /// 不还原场景 frame，错乱持续到关窗。V58 形态的正确前提 = **场景 frame
+    /// 恒整屏**。真重排的 SB 侧通道已被三家逆向 + 三版真机彻底排除（FBScene
+    /// 方法表 dump 亦无 resizesHosted 类选择子），剩下的 App 进程路线是独立
+    /// 工程 —— 在它落地前，这里绝不碰场景几何。写入代码全部保留在本开关
+    /// 之后（历史日志串随之保留，证据通道建立后开关一开即接上）。
+    private static let trueResizeWritesEnabled =
+        AevonPrefs.bool("TrueResizeWrites", default: false)
+
     func updateAdaptiveSize(_ size: CGSize, reason: String) {
         guard size.width > 1, size.height > 1 else { return }
+        guard Self.trueResizeWritesEnabled else {
+            AevonLog.info("[场景] 真重排写入已停用（\(reason)，场景保持整屏，"
+                + "显示走整屏等比缩放；App 进程证据通道未建立前不碰场景几何，"
+                + "AevonTrueResizeWritesOffV65）")
+            return
+        }
         let bits = AevonSceneHelper.applyDisplaySize(scene: scene, sceneID: sceneID,
                                                      size: size, floatMode: true)
         if bits == 0 {
@@ -184,7 +203,7 @@ final class AevonSceneHost {
         }
         if !evidenceLogged {
             evidenceLogged = true
-            AevonLog.info("[场景] 画布证据收集：首子=\(presentationView.subviews.first.map { AevonRuntime.className($0) } ?? "?")"
+            AevonLog.info("[场景] 画布证据收集：首子=\(presentationView.subviews.first.flatMap { AevonRuntime.className($0) } ?? "?")"
                 + " \(Int(inner.width))x\(Int(inner.height))，超尺寸视图=\(oversizedDesc)"
                 + "（SB 侧信号不作为确认依据，AevonReflowAppGateV64）")
         }
