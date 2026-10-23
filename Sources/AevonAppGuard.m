@@ -923,6 +923,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 }
             }
             if (!owned && !CGRectIsEmpty(AevonGuardZone)
+                && CGRectContainsPoint(AevonGuardZone, pt)) {
                 /* V0.0.56：**热区改为「移动才吞」**。
                  *
                  * 热区（屏幕右边缘 18pt 宽、底边往上 258pt）是呼出圆盘用的，
@@ -931,7 +932,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * （抖音右侧工具栏最后几个正好压在 x≈412~430）永远点不动，
                  * 用户 Aevon(50) 第 3 条「屏幕部分位置无法点击」的另一半就是它。
                  * 现在只记起点、先放行；真正出现横向拖动（> 8pt）才接管，
-                 * 手势照样呼得出圆盘，纯点击则完整交给 App。 */
+                 * 手势照样呼得出圆盘，纯点击则完整交给 App。
+                 * （V0.0.71 起 began 已无条件记起点，这里重复设置同值，仅保留判读注释。） */
                 AevonGuardSetTouchStart(touch, pt);
             }
         } else if (phase == UITouchPhaseMoved && !owned) {
