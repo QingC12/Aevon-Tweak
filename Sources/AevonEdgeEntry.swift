@@ -618,6 +618,14 @@ enum AevonEdgeEntry {
     private static weak var floatBottomLastTapWindow: AevonWindowView?
     private static let floatDoubleTapGap: CFTimeInterval = 0.36
 
+    /// 这次按下是否落在「停靠小窗 ∩ 圆盘热区」的重叠区（V0.0.53，AevonDockZoneTakeV53）。
+    ///
+    /// Aevon(46) 第 3 条：「吸附停靠小窗点击还原成主悬浮窗时依旧会触发一次内容点击」。
+    /// 根因：V0.0.50 为了不挡圆盘手势，在这个重叠区直接 `return false` 让位给热区 ——
+    /// 于是浮窗没接管、`bit48` 也没置，前台 App 收到完整的 began+ended 就合成了一次点击。
+    /// 现在改为**一律接管并吞掉**，只在「真的左滑（想呼圆盘）」时才把手指交还热区。
+    private static var floatBodyInZone = false
+
     /// 浮窗手势是否正压着某根手指（供吞事件判断）
     ///
     /// V0.0.49（AevonFloatTouchBitV49）：判定从「`floatTouchID != 0` 且 `floatWindow != nil`」
@@ -825,18 +833,22 @@ enum AevonEdgeEntry {
         guard let hit = AevonEntryHost.grabFloatingWindow(atScreenPoint: point) else {
             return false
         }
-        // V0.0.50（AevonDockPassThroughV50）：停靠小窗压在「呼出圆盘」的热区上时，让位给热区。
+        // V0.0.53（AevonDockZoneTakeV53）：停靠小窗压在「呼出圆盘」热区上时**不再让位**。
         //
-        // 停靠列贴着右边缘，热区又是右缘那条 18pt 宽的手势条 —— 两者必然重叠。
-        // 用户 Aevon(43)：「停靠的小窗无法被手动移动（避免与呼出圆盘手势冲突）」。
-        // 只把拖动禁掉还不够：手指仍然被浮窗接管，圆盘照样呼不出来。
-        // 所以这里直接放弃接管，让下面的热区流程拿走这根手指（圆盘 = 左滑）。
+        // Aevon(46) 第 3 条：「点击还原成主悬浮窗时依旧会触发一次内容点击」。
+        // V0.0.50 在这里 `return false` 本意是让圆盘能划出来，代价却是——浮窗不接管、
+        // `bit48` 不置位，前台 App 自己收到完整 began+ended，合成了一次真实点击。
+        // 现在：小窗一律接管（`bit48` 照置，App 侧整段被 Guard 吞掉），
+        // 只有用户真的**往左滑 ≥30pt**（想呼圆盘）时，`handleFloatGestureMoved` 里
+        // 才取消这段浮窗手势并调 `presentRing` 把手指交给圆盘。
+        floatBodyInZone = false
         if case .body = hit.grab,
            AevonPrefs.bool("EdgeGestureEnabled", default: true),
            AevonTriggerZone.rect(in: UIScreen.main.bounds).contains(point) {
-            AevonLog.info("[边缘] 停靠小窗落在圆盘热区内 \(Int(point.x)),\(Int(point.y))，让位给热区"
-                + "（不拖动小窗，AevonDockPassThroughV50）")
-            return false
+            floatBodyInZone = true
+            AevonLog.info("[窗口] 停靠小窗与圆盘热区重叠 \(Int(point.x)),\(Int(point.y))"
+                + "（仍由浮窗接管并吞摸，左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt 才交还圆盘）"
+                + "（AevonDockZoneTakeV53）")
         }
 
         let now = CACurrentMediaTime()
@@ -896,6 +908,22 @@ enum AevonEdgeEntry {
         floatDeadline = now + floatDragLimit      // 手指还在动就续期
 
         if !floatEngaged {
+            // V0.0.53（AevonDockZoneTakeV53）：起点在「停靠小窗 ∩ 圆盘热区」的重叠区时，
+            // 先看这是不是一次想呼圆盘的左滑。是的话立刻放弃浮窗手势、把手指交给圆盘 ——
+            // 这样既不牺牲圆盘，又不会再让前台 App 收到「按下 + 抬起」合成点击。
+            if floatBodyInZone, case .some(.body) = floatGrab {
+                let dx = point.x - floatStart.x
+                let dy = point.y - floatStart.y
+                if dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
+                    win.grabCancel()
+                    clearFloatGesture()
+                    lastTouchPoint = point
+                    presentRing(source: "floatdock")
+                    AevonLog.info("[边缘] 停靠小窗重叠区左滑 \(Int(dx))pt → 交还给圆盘"
+                        + "（AevonDockZoneTakeV53）")
+                    return true
+                }
+            }
             // 侧条 / 底边条：越过阈值才算拖动，之前都只是「可能的轻点」
             let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
             // V0.0.50：停靠小窗不可拖动，阈值放宽（纯为了更好点中卡片）
@@ -1006,6 +1034,7 @@ enum AevonEdgeEntry {
         floatGrab = nil
         floatDeadline = 0
         floatEngaged = false
+        floatBodyInZone = false
         // V0.0.49：手指离开浮窗 —— 立刻放行 App 进程的输入通道
         setFloatTouchFlag(false)
     }

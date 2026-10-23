@@ -13,19 +13,24 @@ enum AevonSnapSlot: String {
     case right
 }
 
-/// 主悬浮窗**唯一**形态：小胖屏（V0.0.52，AevonFatWindowV52）。
+/// 主窗与停靠小窗的比例（V0.0.53，AevonCoverCropV53 / AevonDockFatV53）。
 ///
 /// 版本史：
-///   · V0.0.50 及以前 = 整屏等比（内容比例 ≈ 0.4875，266 宽必须 560 高 → 细长条）；
-///   · V0.0.51 = 双形态（整屏 ↔ 卡片 0.72），右下角轻点切换。
-///     但 Aevon(45) 反馈：卡片形态「内容展示不完整，丢失下半部分（应用底栏）」。
-///     根因不在比例，而在内容缩放公式 —— 固定按**宽度**缩放（`scale = 窗宽 ÷ 屏宽`），
-///     窗口一矮，内容高度就超出窗口，底部被 `clipsToBounds` 直接吃掉。
-///   · V0.0.52 = 只保留小胖屏一档（0.60），并把内容缩放改成**完整适配**
-///     （宽、高各自能容纳的缩放比取小值，横向居中、纵向贴顶），任何窗口形状都不裁内容。
-///     多形态与右下角轻点切换一并移除（用户要求），右下角只负责拖动缩放。
+///   · V0.0.50 及以前 = 整屏等比（内容比例 ≈ 0.4875）；
+///   · V0.0.51 = 双形态（整屏 ↔ 卡片 0.72），右下角轻点切换；
+///   · V0.0.52 = 只留小胖屏 0.60，内容改成「宽高取小」的完整适配 → 画面两侧出现黑边，
+///     用户 Aevon(46) 第 1 条明确否定：「两侧会有黑边，正确的应该是自动剪裁画面内容，
+///     并且完整展示顶栏和底栏（包括抖音的右侧工具栏）」。
+///
+/// **几何硬约束**（这是定比例的唯一依据）：屏内容是 430×881（去掉状态栏）≈ 0.4875 的窄条。
+///   · 窗口比它**胖**（0.60）→ 左右必然留黑边（按高度缩放）或裁掉顶/底栏（按宽度缩放）；
+///   · 窗口 **≈ 0.4875** → 刚好铺满，顶栏底栏右侧工具栏全在，一个像素都不裁。
+/// 所以 `mainAspect` 回到 0.50（只比屏幕胖 2.5%，裁切量落在底部 home 区，不碰 App UI）。
+/// 想要更胖就必然裁掉 UI —— 这是数学，不是实现取舍。
 enum AevonSnapWindowShape {
-    /// 小胖屏的内容区宽高比 = 0.60（3:5）。266 宽 → 内容高 443，窗口 457。
+    /// 主悬浮窗：0.50（≈ 屏内容比例，铺满无黑边，顶栏/底栏/右侧工具栏完整）
+    static let mainAspect: CGFloat = 0.50
+    /// 停靠小窗：0.60 小胖屏（用户 Aevon(46) 第 2 条：「吸附小窗的比例也按照小胖屏设计」）
     static let fatAspect: CGFloat = 0.60
 }
 
@@ -165,11 +170,12 @@ enum AevonSnap {
     /// 于是在小窗顶部就是一条死黑。停靠态改为 0，内容直接铺到顶边。
     static let dockTopPadding: CGFloat = 0
 
-    /// 停靠小窗的内容宽高比（V0.0.47，AevonDock916V47）= 9:16。
+    /// 停靠小窗的内容宽高比 = 0.60「小胖屏」（V0.0.53，AevonDockFatV53）。
     ///
     /// Stheno 的 `leftHeightPecent` / `rightHeightPecent` 是**独立**于宽度的高度百分比，
-    /// 所以停靠态的高度本来就不跟着主窗的整屏比例走。这里固定成用户要求的 9:16。
-    static let dockAspect: CGFloat = 9.0 / 16.0
+    /// 所以停靠态的高度本来就不跟着主窗走 —— 用户 Aevon(46) 第 2 条要求
+    /// 「吸附小窗的比例也按照小胖屏设计」，于是固定成 0.60（原 9:16 = 0.5625）。
+    static var dockAspect: CGFloat { return AevonSnapWindowShape.fatAspect }
 
     /// 顶部实际裁掉多少（场景坐标，单位 = 整屏 pt）。
     ///
@@ -194,24 +200,23 @@ enum AevonSnap {
         return height > 800 ? 59 : 20
     }
 
-    /// 内容可视区的宽高比（宽 ÷ 高）= 小胖屏 0.60（V0.0.52，AevonFatWindowV52）。
+    /// 主窗内容可视区的宽高比（宽 ÷ 高）= 0.50（V0.0.53，AevonCoverCropV53）。
     ///
-    /// 旧版这里是「屏宽 ÷（屏高 − 顶部裁剪）≈ 0.4875」，266 宽就必须 560 高，
-    /// 所以窗口永远细长（Aevon(44) 抱怨的就是这个）。多形态（整屏 / 卡片）在
-    /// Aevon(45) 之后已移除 —— 只留一档小胖屏，其余比例不再存在。
+    /// 为什么不是 0.60：那样内容要么左右留黑边、要么裁掉底栏（用户 Aevon(46) 第 1 条已否掉）。
+    /// 0.50 时窗口高度刚好够把 881 高的内容按宽度缩放后放下，只裁掉底部几十 pt 的 home 区。
     static var aspect: CGFloat {
         let screen = UIScreen.main.bounds
         guard screen.width > 1, screen.height > 1 else { return 9.0 / 19.5 }
-        return AevonSnapWindowShape.fatAspect
+        return AevonSnapWindowShape.mainAspect
     }
 
-    /// 内容完整显示所需的缩放比（V0.0.52，AevonFitContentV52）。
+    /// 内容铺满窗口所需的缩放比（V0.0.53，AevonCoverCropV53）。
     ///
-    /// 这是「内容丢失下半部分」的根因修复：
-    ///   · 旧公式 `scale = 窗宽 ÷ 屏宽` 只管宽度 —— 窗口一变矮（卡片形态）内容就纵向溢出，
-    ///     底部（应用底栏、抖音操作栏）被 contentClip 的 `clipsToBounds` 直接裁掉；
-    ///   · 现在宽、高各自算出「刚好塞得下」的比例，取**小**的那个 ——
-    ///     内容永远完整，多余的一侧留窗口深色底（横向居中、纵向贴顶）。
+    /// 与 V0.0.52 的 `min`（完整适配）相反，这里取 **max** —— 即「cover」：
+    ///   · 按宽度铺满 → 窗口胖时纵向溢出，从**底部**裁掉溢出的部分
+    ///     （顶部锚在状态栏下沿，所以顶栏永远不被裁，底栏只有在窗口明显过胖时才会掉）；
+    ///   · 按高度铺满 → 窗口瘦时横向溢出，左右对称裁掉。
+    /// 两种情况都**不会出现黑边**，这是用户 Aevon(46) 第 1 条的核心要求。
     ///
     /// - Parameters:
     ///   - windowWidth: 窗口宽度
@@ -224,8 +229,7 @@ enum AevonSnap {
         let byWidth = windowWidth / screen.width
         let avail = max(1, clipHeight - topPad)
         let byHeight = avail / usableHeight
-        let scale = min(byWidth, byHeight)
-        return max(0.02, scale)
+        return max(0.02, max(byWidth, byHeight))
     }
 
     /// 窗口高度 = 内容高度 + 上下留白（V0.0.46）

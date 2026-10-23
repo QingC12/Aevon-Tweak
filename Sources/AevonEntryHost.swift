@@ -173,16 +173,42 @@ enum AevonEntryHost {
             guard let win = view as? AevonWindowView else { continue }
             if win === keep { continue }
             guard !win.isHidden, win.alpha > 0.01, !win.isDocked else { continue }
-            // 停到离它当前位置最近的一侧；在屏幕中间（两侧都够远）就默认右侧
-            let slot = AevonSnap.slot(for: win.frame) ?? .right
-            win.snap(to: slot)
+            // V0.0.53（AevonDockKeepSideV53）：**优先回到它上一次停靠的那一列**。
+            // 上一版这里直接用 `slot(for: frame) ?? .right` 按当前位置猜 ——
+            // 一个从右侧列还原出来、被拖到屏幕中部的窗会被判成右侧，而一个停在左边的窗
+            // 会被判成左侧，于是用户看到 Aevon(46) 第 4 条的「自动吸附到另一侧、原侧缺口」。
+            // 只有从未停靠过的新窗，才按离哪边近来猜。
+            let preferred: AevonSnapSlot = (win.lastDockSide != .free)
+                ? win.lastDockSide
+                : (AevonSnap.slot(for: win.frame) ?? .right)
+            // 那一列已满 5 个就换另一侧 —— 否则 `snap` 会拒绝停靠，窗又留在自由态，
+            // 屏幕上就还是两个主窗（Aevon(46) 第 5 条）。
+            var slot = preferred
+            if dockedPeers(side: slot, excluding: win).count >= AevonSnap.dockMaxCount {
+                slot = (slot == .left) ? .right : .left
+            }
+            // force：正在做还原动画的窗也必须当场收掉，否则屏上会有两个主窗（第 5 条）
+            win.snap(to: slot, force: true)
             demoted += 1
         }
         if demoted > 0 {
+            // 两侧都重排：被降级的窗可能落回另一侧，那一列也要把空缺补上
+            relayoutAllDockedColumns()
             AevonLog.info("[窗口] 只允许一个主悬浮窗：\(demoted) 个旧主窗已自动吸附成停靠小窗"
-                + "（AevonSingleMainV51）")
+                + "（回到各自上一次停靠的那一侧，两侧列都已重排）"
+                + "（AevonSingleMainV51 AevonDockKeepSideV53 AevonDockForceV53）")
         }
         return demoted
+    }
+
+    /// 左右两侧的停靠列一起重排（V0.0.53）。
+    ///
+    /// Aevon(46) 第 4 条：「有概率自动吸附到另一侧，同时左/右侧的停靠小窗会有一个缺口」——
+    /// 缺口就是因为只重排了「被还原那一侧」，而 demote 把某个窗挪到了对面，
+    /// 对面那一列既没补位也没对齐。现在任何一次增减都两侧一起重排。
+    static func relayoutAllDockedColumns() {
+        relayoutDockedColumn(side: .left)
+        relayoutDockedColumn(side: .right)
     }
 
     /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。
@@ -206,15 +232,19 @@ enum AevonEntryHost {
         // 现在剩一个也要重排 —— 它会回到第 1 格（顶部 10%）。
         guard !column.isEmpty else { return }
         column.sort { $0.frame.minY < $1.frame.minY }
-        let height = column[0].frame.height
+        // V0.0.53（AevonDockSlotFitV53）：槽位高度用**目标尺寸** `dockSize.height`。
+        // 上一版取 `column[0].frame.height` —— 若第一个窗的缩放动画还没跑完，
+        // 拿到的是它在半路的尺寸，于是后面每一格都按错的高度累加，
+        // 排完就出现「中间空一格」的缺口（用户 Aevon(46) 第 4 条）。
+        let height = AevonSnap.dockSize.height
         let ys = AevonSnap.dockColumnYs(count: column.count, height: height)
         guard ys.count == column.count else { return }
         for (index, win) in column.enumerated() {
             win.setDockedY(ys[index])
         }
         AevonLog.info("[窗口] 停靠列已重排：\(column.count) 个小窗，顶部 10% 锚点向下、"
-            + "下方自动补位（\(ys.map { Int($0) })，尺寸 \(Int(column[0].frame.width))x\(Int(height))"
-            + "，AevonDockTop5V50 AevonDockFillAnimV50）")
+            + "下方自动补位（\(ys.map { Int($0) })，尺寸 \(Int(AevonSnap.dockSize.width))x\(Int(height))"
+            + "，AevonDockTop5V50 AevonDockFillAnimV50 AevonDockSlotFitV53）")
     }
 
     /// 已停靠小窗的**原始**矩形（不外扩）。

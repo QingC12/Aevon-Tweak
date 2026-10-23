@@ -240,6 +240,14 @@ final class AevonWindowView: UIView {
     /// 停靠成小窗之前的几何（V0.0.44）：轻点已停靠的小窗时用它还原主悬浮窗
     private var preDockFrame: CGRect?
 
+    /// 上一次停靠所在的侧（V0.0.53，AevonDockKeepSideV53）。
+    ///
+    /// 还原后 `currentSlot` 会变回 `.free`，于是「这个窗原本属于哪一列」的信息就丢了。
+    /// 下次它被 `demoteMainWindows` 降级时只能按当前位置猜 —— 落在屏幕中间就默认右侧，
+    /// 用户看到的就是 Aevon(46) 第 4 条的「自动吸附到另一侧、原侧出现缺口」。
+    /// 记住它，降级时回到原列。
+    private(set) var lastDockSide: AevonSnapSlot = .free
+
     /// 是否处于停靠状态（被别的浮窗当作「要避让的障碍」）
     var isDocked: Bool { return currentSlot != .free }
 
@@ -322,8 +330,8 @@ final class AevonWindowView: UIView {
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角只缩放，"
-            + "主窗形态：小胖屏 3:5（唯一形态，其余比例已移除），"
-            + "内容比例 \(String(format: "%.3f", aspect))，内容完整适配不裁底（AevonFitContentV52），"
+            + "主窗比例 1:2（0.500，铺满裁切 · 无黑边 · 顶栏底栏与右侧工具栏完整），"
+            + "内容比例 \(String(format: "%.3f", aspect))，内容按宽度铺满、底部溢出自动裁掉（AevonCoverCropV53），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
     }
@@ -377,6 +385,27 @@ final class AevonWindowView: UIView {
     /// `layoutSubviews` 里立刻把 scale 写成最终值，于是中间态是「窗口还是大的、
     /// 内容已经缩成一小块」，四周露出窗口背景 —— 即 Aevon(41) 说的
     /// 「停靠成小窗时先黑屏，然后才出现画面」。
+    /// 立即打断进行中的几何动画，把窗口落到动画终点（V0.0.53，AevonDockForceV53）。
+    ///
+    /// 用于「只允许一个主悬浮窗」：上一个窗的还原动画还没跑完，用户又去点别的小窗，
+    /// 必须先把这个正在动画的窗**当场收成停靠小窗**，否则两个主窗会同时在屏上。
+    /// `removeAllAnimations()` 会让图层直接取 model 值（也就是动画终点），不会跳回起点。
+    private func interruptGeometryAnimation() {
+        guard isAnimatingGeometry else { return }
+        layer.removeAllAnimations()
+        contentClip.layer.removeAllAnimations()
+        sceneHost.container.layer.removeAllAnimations()
+        isAnimatingGeometry = false
+        lastAppliedScale = -1
+        pendingDockY = nil
+        setNeedsLayout()
+        layoutIfNeeded()
+        updateShadowPath()
+        if layer.shadowOpacity < 0.01 { layer.shadowOpacity = AevonWindowView.shadowOpacity }
+        AevonLog.info("[窗口] 已打断进行中的几何动画，立即落到目标几何"
+            + "（避免两个主悬浮窗同时存在，AevonDockForceV53）")
+    }
+
     func animateGeometry(to target: CGRect,
                          duration: TimeInterval = AevonMotion.dockDuration,
                          alpha targetAlpha: CGFloat? = nil,
@@ -1008,8 +1037,14 @@ final class AevonWindowView: UIView {
     ///
     /// V0.0.48（AevonDockColumnV48）：落点改走「同侧一列」模型 ——
     /// 第一个在屏幕垂直中心、后续向下排、放不下整列上移（Aevon(41) 第 4 条）。
-    func snap(to slot: AevonSnapSlot) {
+    func snap(to slot: AevonSnapSlot, force: Bool = false) {
+        // V0.0.53（AevonDockForceV53）：`force` 用于「只允许一个主窗」的强制降级 ——
+        // 上一版这里遇到 `isAnimatingGeometry` 就直接 return，于是正在做还原动画的那个窗
+        // 降级被静默跳过，屏幕上就出现了两个主悬浮窗（Aevon(46) 第 5 条）。
+        if force { interruptGeometryAnimation() }
         guard slot != .free, !isLiveResizing, !isAnimatingGeometry else { return }
+        // 记住这一侧：还原后再被降级时要回到同一列，不能按位置乱猜（Aevon(46) 第 4 条）
+        lastDockSide = slot
         // V0.0.46（AevonDockTapRestoreV46）：从自由态进停靠时先记住主窗几何，
         // 之后轻点窗身还原能回到原来那个位置和大小。
         if !isDocked { preDockFrame = frame }
@@ -1051,9 +1086,9 @@ final class AevonWindowView: UIView {
         }
         AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗 9:16 · 顶部 10% 锚点向下第 "
+            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗小胖屏 3:5（0.60）· 顶部 10% 锚点向下第 "
             + "\(peers.count + 1) 格 / 最多 \(AevonSnap.dockMaxCount) 个 · 统一弹簧动效）"
-            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockTop5V50 AevonDockNoMoveV50 AevonFineMotionV49）")
+            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockTop5V50 AevonDockNoMoveV50 AevonFineMotionV49 AevonDockFatV53）")
     }
 
     /// 把自己挪到停靠列的指定纵向位置（V0.0.48，AevonGrowFromCenterV48）。
@@ -1129,9 +1164,10 @@ final class AevonWindowView: UIView {
         // 「右侧放了 3 个小窗，把中间那个还原之后，下面的小窗不会主动上移」。
         // 还原前先记住自己在哪一侧，置成自由态（这样它不会被算进停靠列），
         // 然后立刻让整列重新按「中心锚点 + 向下生长」对齐 —— 空位当场被补上。
-        let restoreSide = currentSlot
         currentSlot = .free
-        AevonEntryHost.relayoutDockedColumn(side: restoreSide)
+        // V0.0.53（AevonDockSlotFitV53）：两侧一起重排 —— 上面的 demote 可能刚把某个窗
+        // 挪到对面那一列，只重排本侧会留下缺口（Aevon(46) 第 4 条）。
+        AevonEntryHost.relayoutAllDockedColumns()
         // V0.0.48：还原也走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
         animateGeometry(to: target,
                         duration: AevonMotion.restoreDuration,

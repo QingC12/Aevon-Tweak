@@ -497,7 +497,7 @@ jobs:
           # V0.0.50：停靠列锚点从「屏幕中心」改成「顶部 10%」，
           # V47/V48/V49 里引用旧锚点文案的串同步换成仍然存在的「成列 / 重排」语义
           need = ["回到停靠前的位置与尺寸",
-                  "停靠小窗 9:16",
+                  "停靠小窗小胖屏 3:5",
                   "停靠列已重排"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
@@ -557,7 +557,7 @@ jobs:
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
           need = ["顶部 10% 锚点向下", "停靠位已满", "停靠小窗锁定",
-                  "停靠小窗落在圆盘热区内"]
+                  "停靠小窗与圆盘热区重叠"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.50 日志串: " + ", ".join(miss))
@@ -592,13 +592,32 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["小胖屏 3:5", "内容完整适配不裁底", "右下角只缩放",
+          need = ["小胖屏 3:5", "内容按宽度铺满", "右下角只缩放",
                   "点击切换形态已移除", "停靠小窗窗身按下"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.52 日志串: " + ", ".join(miss))
               sys.exit(1)
-          print("V0.0.52 校验: 小胖屏唯一形态 + 内容完整适配 + 右下角只缩放 已编入")
+          print("V0.0.52 校验: 小胖屏停靠窗 + 右下角只缩放 已编入")
+          PY
+
+          # ── V0.0.53：铺满裁切无黑边 / 停靠窗小胖屏 / 小窗接管吞摸 / 单主窗与停靠列 ──
+          for m in AevonCoverCropV53 AevonDockFatV53 AevonDockZoneTakeV53 \
+                   AevonDockKeepSideV53 AevonDockForceV53 AevonDockSlotFitV53; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::V0.0.53 标记缺失: $m"; exit 1; }
+          done
+          python3 - "$DYLIB" <<'PY'
+          import sys, pathlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          need = ["铺满裁切", "内容按宽度铺满", "停靠小窗小胖屏 3:5",
+                  "停靠小窗与圆盘热区重叠", "回到各自上一次停靠的那一侧",
+                  "已打断进行中的几何动画", "两侧列都已重排"]
+          miss = [s for s in need if s.encode("utf-8") not in data]
+          if miss:
+              print("::error::缺少 V0.0.53 日志串: " + ", ".join(miss))
+              sys.exit(1)
+          print("V0.0.53 校验: 铺满裁切 + 停靠小胖屏 + 小窗接管 + 单主窗与两侧补位 已编入")
           PY
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }

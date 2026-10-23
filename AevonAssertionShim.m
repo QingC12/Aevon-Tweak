@@ -196,6 +196,14 @@ __attribute__((used)) static const char AevonFatWindowV52Marker[] = "AevonFatWin
 __attribute__((used)) static const char AevonFitContentV52Marker[] = "AevonFitContentV52";
 __attribute__((used)) static const char AevonNoShapeTapV52Marker[] = "AevonNoShapeTapV52";
 
+// V0.0.53：主窗铺满裁切（无黑边）+ 停靠窗小胖屏 + 小窗接管吞摸 + 单主窗强制降级 + 停靠列按目标尺寸
+__attribute__((used)) static const char AevonCoverCropV53Marker[] = "AevonCoverCropV53";
+__attribute__((used)) static const char AevonDockFatV53Marker[] = "AevonDockFatV53";
+__attribute__((used)) static const char AevonDockZoneTakeV53Marker[] = "AevonDockZoneTakeV53";
+__attribute__((used)) static const char AevonDockKeepSideV53Marker[] = "AevonDockKeepSideV53";
+__attribute__((used)) static const char AevonDockForceV53Marker[] = "AevonDockForceV53";
+__attribute__((used)) static const char AevonDockSlotFitV53Marker[] = "AevonDockSlotFitV53";
+
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
  * AevonCrashTraceV39    = 崩溃捕获器升级：SIGSEGV 等致命信号落盘调用栈回溯；
