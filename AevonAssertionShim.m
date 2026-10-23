@@ -298,6 +298,8 @@ __attribute__((used)) static const char AevonSceneP1V71Marker[] = "AevonSceneP1V
 __attribute__((used)) static const char AevonSceneP1V72Marker[] = "AevonSceneP1V72";
 /// CI 标记（V0.0.73）：P1 provider 协议方法解析（代理转调下划线变体 + 全类扫描留证）
 __attribute__((used)) static const char AevonSceneP1V73Marker[] = "AevonSceneP1V73";
+/// CI 标记（V0.0.74）：浮窗按下时间戳通道（com.aevon.guardtap）——与坐标无关的穿透兜底
+__attribute__((used)) static const char AevonNotifyStampV74Marker[] = "AevonNotifyStampV74";
 
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；
@@ -418,6 +420,29 @@ void AevonNotifySetFloatTouch(int on) {
         pack |= AEVON_NOTIFY_VER;
         notify_set_state(token, pack);
         notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* V0.0.74（AevonGuardTapStampV74）：浮窗按下的**时间戳通道**（与坐标无关的最后一道防线）。
+ *
+ * Aevon(66) 日志暴露了坐标类 bug 的顽固性：App 进程 `locationInView:nil` 拿到的窗口坐标
+ * 与 SpringBoard 记下的屏幕坐标对不上（同一轻点 SB 记 374,161，Guard 记 386,72），
+ * 停靠槽位几何判据因此整条落空。V73 先用「窗口/屏幕双坐标系 + 纵向外扩」修，
+ * 但坐标空间任何变动都会再次失配 —— 所以再加一条**完全不看坐标**的判据：
+ * 浮窗一按下就写一个毫秒时间戳（CACurrentMediaTime，两进程同一时钟），
+ * Guard 在 ended 时若发现「本次触摸抬手时，浮窗刚被按下不超过 350ms」，
+ * 直接吞掉 ended（App 只剩 began，UIKit 不会合成点击）。
+ *
+ * 这条通道不依赖几何、不依赖 bit48 的读写先手，只依赖两台进程共享的系统时钟。 */
+void AevonNotifyStampFloatTouch(void) {
+    @try {
+        static int token = -1;
+        if (token < 0) { notify_register_check("com.aevon.guardtap", &token); }
+        if (token < 0) { return; }
+        uint64_t ms = (uint64_t)(CACurrentMediaTime() * 1000.0);
+        notify_set_state(token, ms);
+        notify_post("com.aevon.guardtap");
     } @catch (NSException *exception) {
     }
 }

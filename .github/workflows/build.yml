@@ -989,6 +989,19 @@ jobs:
                   print(f"::error::V0.0.73 缺串: {s}"); sys.exit(1)
           print("V0.0.73 校验: P1 provider 协议解析（代理/扫描）已编入")
           PY73M
+          # V0.0.74：浮窗按下时间戳通道（与坐标无关的穿透兜底）
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardTapStampV74' \
+            || { echo "::error::V0.0.74 Guard 标记缺失: AevonGuardTapStampV74（时间戳兜底）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonNotifyStampV74' \
+            || { echo "::error::V0.0.74 标记缺失: AevonNotifyStampV74（guardtap 通道）"; exit 1; }
+          python3 - "$GUARD_DYLIB" <<'PY74G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["Guard 版本 V74 激活","stamp=%d","晚到重判接管（ended"]:
+              if s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.74 Guard 缺串(utf16): {s}"); sys.exit(1)
+          print("V0.0.74 校验: Guard 时间戳兜底 + 取证字段 已编入")
+          PY74G
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

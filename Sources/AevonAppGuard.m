@@ -82,6 +82,7 @@ __attribute__((used)) static const char AevonGuardLateRejudgeV71Marker[] = "Aevo
 /// CI 标记（V0.0.72）：幽灵格自动记录 + began 放行取证 + 版本日志
 __attribute__((used)) static const char AevonGuardGhostAutoV72Marker[] = "AevonGuardGhostAutoV72";
 __attribute__((used)) static const char AevonGuardScreenPtV73Marker[] = "AevonGuardScreenPtV73";
+__attribute__((used)) static const char AevonGuardTapStampV74Marker[] = "AevonGuardTapStampV74";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -804,6 +805,37 @@ static CGPoint AevonGuardScreenPoint(UITouch *touch, CGPoint windowPoint) {
     return windowPoint;
 }
 
+/* V0.0.74（AevonGuardTapStampV74）：浮窗按下时间戳 —— **与坐标无关**的确定性判据。
+ *
+ * Aevon(66) 实锤：同一次轻点，SB 记 374,161，Guard 记 386,72，停靠槽位几何整条落空。
+ * 坐标空间只要再变一次（多窗口 / 缩放 / 键盘宿主），几何判据就再次失配。
+ * 所以再补一条只看时间的路：SB 每次浮窗按下写一个毫秒时间戳（同一系统时钟），
+ * Guard 抬手时若发现「浮窗刚被按下 < 350ms」，直接吞掉 ended —— App 只剩 began，
+ * UIKit 不会合成点击。跨进程时钟同源（CACurrentMediaTime = mach_absolute_time），
+ * 允许 -50ms 的轻微超前，避免两进程调度抖动误判。 */
+static CFTimeInterval AevonGuardFloatTapAge(void) {
+    @try {
+        static int token = -1;
+        if (token < 0) {
+            notify_register_check("com.aevon.guardtap", &token);
+        }
+        if (token < 0) { return -1.0; }
+        uint64_t ms = 0;
+        if (notify_get_state(token, &ms) != 0) { return -1.0; }
+        if (ms == 0) { return -1.0; }
+        CFTimeInterval nowMs = CACurrentMediaTime() * 1000.0;
+        return (nowMs - (CFTimeInterval)ms) / 1000.0;
+    } @catch (NSException *exception) {
+        return -1.0;
+    }
+}
+
+static BOOL AevonGuardRecentFloatTap(void) {
+    CFTimeInterval age = AevonGuardFloatTapAge();
+    if (age < 0) { return NO; }
+    return (age >= -0.05 && age <= 0.35);
+}
+
 static BOOL AevonGuardLateRejudgeHit(CGPoint winPt, CGPoint scrPt) {
     if (AevonGuardFloatTouch()) { return YES; }
     if (AevonGuardRingOpen()) { return YES; }
@@ -1020,16 +1052,19 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             if (AevonGuardGetTouchStart(touch, &start)) {
                 dist = hypot(snow.x - start.x, snow.y - start.y);
             }
-            if (dist < 25.0 && AevonGuardLateRejudgeHit(now, snow)) {
+            BOOL stampHit = AevonGuardRecentFloatTap();
+            if (dist < 25.0 && (stampHit || AevonGuardLateRejudgeHit(now, snow))) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
-                /* V0.0.72：取证（限频 1s）——ended 闸生效证据 */
+                /* V0.0.72：取证（限频 1s）——ended 闸生效证据
+                 * V0.0.74：stamp=1 表示「浮窗刚被按下」时间戳命中（不依赖坐标） */
                 static CFTimeInterval lastRejudgeEnded = 0;
                 CFTimeInterval now4 = CACurrentMediaTime();
-                if (now4 - lastRejudgeEnded > 1.0) {
+                if (now4 - lastRejudgeEnded > 0.5) {
                     lastRejudgeEnded = now4;
-                    AevonGuardWriteLog(NO, @"晚到重判接管（ended，位移 %.0fpt，win=%.0f,%.0f scr=%.0f,%.0f）",
-                                       dist, now.x, now.y, snow.x, snow.y);
+                    AevonGuardWriteLog(NO, @"晚到重判接管（ended，位移 %.0fpt，win=%.0f,%.0f scr=%.0f,%.0f，stamp=%d）",
+                                       dist, now.x, now.y, snow.x, snow.y,
+                                       stampHit ? 1 : 0);
                 }
             }
         }
@@ -1163,6 +1198,8 @@ static void AevonGuardInstall(void) {
     /* V0.0.73（AevonGuardScreenPtV73）：坐标换算到屏幕坐标再比几何 —— Aevon(66) 实锤
      * 窗口坐标与屏幕坐标纵向差约 90pt，停靠槽位判据整条落空。 */
     AevonGuardWriteLog(YES, @"Guard 版本 V73 激活（窗口/屏幕双坐标系判据 + 停靠格纵向外扩 24pt）（AevonGuardScreenPtV73）");
+    /* V0.0.74（AevonGuardTapStampV74）：与坐标无关的时间戳兜底 —— 抬手时浮窗刚被按下就吞 ended。 */
+    AevonGuardWriteLog(YES, @"Guard 版本 V74 激活（浮窗按下时间戳兜底 + 双坐标系几何）（AevonGuardTapStampV74）");
 }
 
 /*

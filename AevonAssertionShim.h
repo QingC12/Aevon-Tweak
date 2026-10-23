@@ -39,6 +39,13 @@ void AevonNotifySetRing(int on);
 /// 读到就整屏吞掉那几帧事件（手指正压在浮窗上，App 本就不该收到输入）。
 void AevonNotifySetFloatTouch(int on);
 
+/// V0.0.74（AevonGuardTapStampV74）：浮窗按下的毫秒时间戳（通道 com.aevon.guardtap）。
+///
+/// 坐标类判据在 App 进程里不可靠（窗口坐标 ≠ 屏幕坐标，Aevon(66) 实锤差 ~90pt），
+/// 这里改走**时间**：SB 每次浮窗按下写时间戳，Guard 在 ended 时若发现
+/// 「抬手时浮窗刚被按下 < 350ms」就直接吞掉 ended，与坐标完全无关。
+void AevonNotifyStampFloatTouch(void);
+
 /// V0.0.54（AevonGuardDockZoneV54）：停靠列数量状态位（notify state bit50~55）。
 ///
 /// Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。

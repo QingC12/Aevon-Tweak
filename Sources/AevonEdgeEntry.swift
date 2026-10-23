@@ -1091,6 +1091,10 @@ enum AevonEdgeEntry {
 
     private static func setFloatTouchFlag(_ on: Bool) {
         if on {
+            // V0.0.74（AevonGuardTapStampV74）：**每次按下都刷新时间戳**（不受下面
+            // floatTouchFlagOn 早退影响）—— 这是 Guard 侧「抬手时浮窗刚被按下」的判据，
+            // 与坐标无关，专门兜住窗口坐标 ≠ 屏幕坐标导致的停靠格几何失配。
+            AevonNotifyStampFloatTouch()
             // 新的按下：把可能挂着的「延迟清零」作废
             floatFlagGeneration += 1
             if floatTouchFlagOn { return }
