@@ -892,6 +892,13 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
         if (objc_getClass("UIApplication") == NULL) { return; }
         if (objc_getClass("SpringBoard") != NULL) { return; }
         /*
+         * V0.0.62（AevonGuardNoExtV61）：**UIApplication 实例不存在 = headless 进程**。
+         * 小组件/键盘等扩展进程链接 UIKit（类存在），但永远没有 sharedApplication 实例；
+         * V61 的 NSExtension/.appex 检查（按 bundle 信息判断）之外再加这层运行时保险：
+         * headless 环境绝不装 sendEvent 拦截 —— 修「桌面部分小组件空白」。
+         */
+        if ([UIApplication sharedApplication] == nil) { return; }
+        /*
          * V0.0.28：**排除「设置」App**。
          * 设置页里的三个触发区滑杆跨在热区里，若在 Preferences 进程也被接管，
          * 滑杆右半截就拖不动（用户会以为「滑条只能拖到最小值」）。

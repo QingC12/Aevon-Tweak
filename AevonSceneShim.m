@@ -175,7 +175,7 @@ static void AevonDcDiag(id obj) {
      * 没有 setSize:/sizeInPoints: 选择子 —— 剩下的唯一写入口是 ivar。
      * 这里把 ivar 名单和 size 相关方法名单全部落日志，写不进也能一眼看清
      * 真实布局，下一版不用再猜。 */
-    char ivars[224] = "";
+    char ivars[512] = "";
     unsigned int ivarCount = 0;
     Ivar *ivarList = class_copyIvarList(realClass, &ivarCount);
     size_t used = 0;
@@ -330,12 +330,16 @@ static id AevonAllocInit(Class cls) {
 /// 尽力把一个 displayConfiguration 的逻辑尺寸改成 target。
 /// 成功返回（可能就地改写的）配置对象，失败返回 nil。
 /// 策略位：0x100 = 旧配置拷贝 / 0x200 = 原对象直写 / 0x400 = 新建配置。
+/// V0.0.62（AevonReflowIvarV61 AevonPolicyTryV62）重大修复：**每个策略独立 @try**。
+/// V61 真机日志（Aevon(55)）暴露：策略 A 的 mutableCopy 运行时抛异常
+/// （respondsToSelector:YES 不代表调用成功），被本函数外层 @catch 一刀切
+/// return nil —— 策略 B（原对象 ivar 直写）从未执行，这就是「策略位全无」的真相。
 static id AevonResizeDisplayConfiguration(id oldDC, CGSize target, int *outBits) {
-    @try {
-        AevonDcDiag(oldDC);
-        if (oldDC == nil) { return nil; }
+    if (oldDC == nil) { return nil; }
+    AevonDcDiag(oldDC);
 
-        /* 策略 A：旧配置 mutableCopy（保留 displayID / mode 现场）再写尺寸 */
+    /* 策略 A：旧配置 mutableCopy（保留 displayID / mode 现场）再写尺寸 —— 独立 try */
+    @try {
         SEL copySel = NSSelectorFromString(@"mutableCopy");
         if ([oldDC respondsToSelector:copySel]) {
             id (*doCopy)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
@@ -345,15 +349,19 @@ static id AevonResizeDisplayConfiguration(id oldDC, CGSize target, int *outBits)
                 return copied;
             }
         }
+    } @catch (NSException *unused) {}
 
-        /* 策略 B：原对象直写（FBSDisplayConfiguration 这类可能本身可变；
-         * oldDC 本就来自我们刚 mutableCopy 出来的 settings，就地改无副作用） */
+    /* 策略 B：原对象直写（oldDC 来自我们刚 mutableCopy 的 settings，就地改无副作用）。
+     * FBSDisplayConfiguration 无任何 setter —— 到这里就是 ivar 内存直写（_pixelSize）。 */
+    @try {
         if (AevonWriteDcSize(oldDC, target, outBits)) {
             *outBits |= 0x200;
             return oldDC;
         }
+    } @catch (NSException *unused) {}
 
-        /* 策略 C：以真实类拷贝构造 / 新建（保留旧 UIDisplayConfiguration 兜底） */
+    /* 策略 C：以真实类拷贝构造 / 新建（保留旧 UIDisplayConfiguration 兜底）—— 独立 try */
+    @try {
         Class realClass = object_getClass(oldDC);
         SEL dcCopy = NSSelectorFromString(@"initWithDisplayConfiguration:");
         id candidate = nil;
@@ -370,9 +378,14 @@ static id AevonResizeDisplayConfiguration(id oldDC, CGSize target, int *outBits)
             *outBits |= 0x400;
             return candidate;
         }
+    } @catch (NSException *unused) {}
+
+    @try {
         Class ui = NSClassFromString(@"UIDisplayConfiguration");
-        if (ui != Nil && ui != realClass) {
-            candidate = nil;
+        Class realClass2 = object_getClass(oldDC);
+        if (ui != Nil && ui != realClass2) {
+            SEL dcCopy = NSSelectorFromString(@"initWithDisplayConfiguration:");
+            id candidate = nil;
             if ([ui instancesRespondToSelector:dcCopy]) {
                 id (*allocFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
                 id raw = allocFn((id)ui, NSSelectorFromString(@"alloc"));
@@ -387,10 +400,8 @@ static id AevonResizeDisplayConfiguration(id oldDC, CGSize target, int *outBits)
                 return candidate;
             }
         }
-        return nil;
-    } @catch (NSException *exception) {
-        return nil;
-    }
+    } @catch (NSException *unused) {}
+    return nil;
 }
 
 CGSize AevonSceneDisplaySize(id scene) {

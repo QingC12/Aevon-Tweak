@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 /*
  * App 场景容器钩子（V0.0.22）。
@@ -21,12 +22,143 @@
  * 安全性：全程 @try/@catch，任何异常都不外抛；类不存在时静默跳过。
  */
 
-extern void AevonSceneVCDidAppear(UIViewController *vc);
+extern void AevonSceneVCDidAppear(UIViewController *vc, NSString *bundleID);
 extern void AevonSceneVCDidDisappear(UIViewController *vc);
 
 static IMP AevonOrigDidAppear = NULL;
 static IMP AevonOrigDidDisappear = NULL;
 static BOOL AevonSceneHookInstalled = NO;
+
+/* ── V0.0.62（AevonFrontmostIDV62）：从场景 VC 深挖宿主 App 的 bundleID ──
+ * V59/V61 在 Swift 侧做字符串键探测（scene/representedScene/hostScene/_scene →
+ * identifier/persistentIdentifier），真机日志（Aevon(55)）显示恒失败（「前台场景=无」），
+ * 导致关浮窗后屏幕无法滑动的修复从未生效。
+ * 根因：SB 场景对象是 FBScene，它的 identifier 是 FBSceneIdentity **对象**
+ * （不是 NSString），`as? String` 永远失败。
+ * 这里在 ObjC 层多策略深挖：
+ *   ① 常见属性键拿 FBScene（representedScene / scene / hostedScene / _scene）
+ *   ② ivar 遍历 VC，找类型为 FBScene 的 ivar（不靠猜名字）
+ *   ③ 从 FBScene 拿 bundleID：sceneIdentifier（Stheno/TrollOpen 逆向数据实锤的键）
+ *      / identity.bundleIdentifier / bundleIdentifier
+ *   ④ FBScene 的 ivar 遍历找 FBSceneIdentity → bundleIdentifier（同样不靠猜名字）
+ *   ⑤ 兜底：VC 自身 ivar 里找「形如 bundleID 的 NSString」（含 '.' 且无空格）
+ * 任何一步拿到合法 bundleID 即返回；全程 @try/@catch，失败返回 nil（只影响
+ * 关窗休眠的精确性，不影响显示）。 */
+static BOOL AevonLooksLikeBundleID(NSString *s) {
+    if (s == nil || s.length < 4) { return NO; }
+    if ([s containsString:@" "] || [s containsString:@"/"]) { return NO; }
+    return [s containsString:@"."];
+}
+
+static NSString *AevonStringFromObject(id obj, NSString *key) {
+    if (obj == nil || key.length == 0) { return nil; }
+    @try {
+        SEL sel = NSSelectorFromString(key);
+        if (![obj respondsToSelector:sel]) { return nil; }
+        id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+        id result = fn(obj, sel);
+        if ([result isKindOfClass:[NSString class]]) { return result; }
+    } @catch (NSException *unused) {}
+    return nil;
+}
+
+static NSString *AevonBundleIDFromIdentity(id identity) {
+    if (identity == nil) { return nil; }
+    NSString *direct = AevonStringFromObject(identity, @"bundleIdentifier");
+    if (AevonLooksLikeBundleID(direct)) { return direct; }
+    /* FBSceneIdentity 的 ivar 遍历：找形如 bundleID 的 NSString（不猜名字） */
+    @try {
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList(object_getClass(identity), &count);
+        for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+            id value = object_getIvar(identity, ivars[i]);
+            if ([value isKindOfClass:[NSString class]] && AevonLooksLikeBundleID(value)) {
+                free(ivars);
+                return value;
+            }
+        }
+        if (ivars != NULL) { free(ivars); }
+    } @catch (NSException *unused) {}
+    return nil;
+}
+
+static NSString *AevonBundleIDFromScene(id scene) {
+    if (scene == nil) { return nil; }
+    /* ③ 常见键（sceneIdentifier 是 Stheno/TrollOpen 逆向数据实锤的字符串键） */
+    for (NSString *key in @[@"sceneIdentifier", @"bundleIdentifier"]) {
+        NSString *s = AevonStringFromObject(scene, key);
+        if (AevonLooksLikeBundleID(s)) { return s; }
+    }
+    /* identity 键 → FBSceneIdentity → bundleIdentifier */
+    @try {
+        SEL identitySel = NSSelectorFromString(@"identity");
+        if ([scene respondsToSelector:identitySel]) {
+            id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+            NSString *s = AevonBundleIDFromIdentity(fn(scene, identitySel));
+            if (s != nil) { return s; }
+        }
+    } @catch (NSException *unused) {}
+    /* ④ FBScene ivar 遍历：找 FBSceneIdentity 类型 ivar（不猜名字） */
+    @try {
+        Class identityCls = NSClassFromString(@"FBSceneIdentity");
+        if (identityCls != Nil) {
+            unsigned int count = 0;
+            Ivar *ivars = class_copyIvarList(object_getClass(scene), &count);
+            for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+                id value = object_getIvar(scene, ivars[i]);
+                if ([value isKindOfClass:identityCls]) {
+                    NSString *s = AevonBundleIDFromIdentity(value);
+                    if (s != nil) { free(ivars); return s; }
+                }
+            }
+            if (ivars != NULL) { free(ivars); }
+        }
+    } @catch (NSException *unused) {}
+    return nil;
+}
+
+static NSString *AevonSceneBundleIDFromVC(UIViewController *vc) {
+    @try {
+        /* ① 常见属性键直接拿 FBScene */
+        for (NSString *key in @[@"representedScene", @"scene", @"hostedScene", @"_scene"]) {
+            @try {
+                SEL sel = NSSelectorFromString(key);
+                if (![vc respondsToSelector:sel]) { continue; }
+                id (*fn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+                id scene = fn(vc, sel);
+                if (scene == nil || [scene isKindOfClass:[NSString class]]) { continue; }
+                NSString *s = AevonBundleIDFromScene(scene);
+                if (s != nil) { return s; }
+            } @catch (NSException *unused) {}
+        }
+        /* ② VC 的 ivar 遍历找 FBScene（iOS 17.3.1 属性名未知时靠类型匹配） */
+        Class sceneCls = NSClassFromString(@"FBScene");
+        if (sceneCls != Nil) {
+            unsigned int count = 0;
+            Ivar *ivars = class_copyIvarList([vc class], &count);
+            for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+                id value = object_getIvar(vc, ivars[i]);
+                if (value != nil && [value isKindOfClass:sceneCls]) {
+                    NSString *s = AevonBundleIDFromScene(value);
+                    if (s != nil) { free(ivars); return s; }
+                }
+            }
+            if (ivars != NULL) { free(ivars); }
+        }
+        /* ⑤ 兜底：VC 自身 ivar 里找形如 bundleID 的 NSString */
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList([vc class], &count);
+        for (unsigned int i = 0; i < count && ivars != NULL; i++) {
+            id value = object_getIvar(vc, ivars[i]);
+            if ([value isKindOfClass:[NSString class]] && AevonLooksLikeBundleID(value)) {
+                free(ivars);
+                return value;
+            }
+        }
+        if (ivars != NULL) { free(ivars); }
+    } @catch (NSException *unused) {}
+    return nil;
+}
 
 static void AevonSceneHookDidAppear(id self, SEL _cmd, BOOL animated) {
     if (AevonOrigDidAppear) {
@@ -34,7 +166,11 @@ static void AevonSceneHookDidAppear(id self, SEL _cmd, BOOL animated) {
     }
     @try {
         if ([self isKindOfClass:[UIViewController class]]) {
-            AevonSceneVCDidAppear((UIViewController *)self);
+            /* V0.0.62（AevonFrontmostIDV62）：把宿主场景 bundleID 一起传给 Swift，
+             * 修复「关浮窗后屏幕无法滑动」—— V59/V61 的修复依赖前台场景标识，
+             * 而标识探测在 Swift 层恒失败（FBScene.identifier 是对象不是字符串）。 */
+            NSString *bundleID = AevonSceneBundleIDFromVC((UIViewController *)self);
+            AevonSceneVCDidAppear((UIViewController *)self, bundleID);
         }
     } @catch (NSException *exception) {
         // 私有类回调出错绝不影响 SpringBoard

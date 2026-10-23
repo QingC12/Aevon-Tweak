@@ -670,9 +670,9 @@ enum AevonEntryHost {
         guard coversScreen(view) else { return }
         appSceneView = view
         // V0.0.59（AevonFrontmostCloseV59）：记下全屏前台场景的标识
-        if let identity = identity, !identity.isEmpty {
-            appSceneIdentity = identity
-        }
+        // V0.0.62：探测失败（nil）时清空 —— 宁可回退到无条件休眠（老行为），
+        // 也不能拿上一个 App 的标识误判「关的是前台自己」。
+        appSceneIdentity = (identity?.isEmpty == false) ? identity : nil
         attach(to: view, reason: reason)
         // 场景出现后系统会继续往这个 view 里塞内容，延后再顶一次
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -862,34 +862,19 @@ enum AevonEntryHost {
 
 // MARK: - C 入口（供 AevonSceneHook.m 调用）
 
-/// 从 `SBDeviceApplicationSceneViewController` 上多策略探测它承载的场景标识
-/// （V0.0.59，AevonFrontmostCloseV59）。拿不到返回 nil（只影响关窗休眠的精确性，
-/// 不影响任何显示功能）。
-private func aevonSceneIdentity(fromVC vc: UIViewController) -> String? {
-    for name in ["scene", "representedScene", "hostScene", "_scene"] {
-        let sel = Selector((name))
-        guard vc.responds(to: sel), let scene = AevonRuntime.send(vc, sel) else { continue }
-        for key in ["identifier", "persistentIdentifier"] {
-            if let id = AevonRuntime.send(scene, Selector((key))) as? String, !id.isEmpty {
-                return id
-            }
-        }
-        for ivar in ["_identifier", "_persistentIdentifier", "_sceneIdentifier"] {
-            if let id = AevonRuntime.ivarString(scene, ivar), !id.isEmpty { return id }
-        }
-    }
-    for ivar in ["_sceneIdentifier", "_sceneID"] {
-        if let id = AevonRuntime.ivarString(vc, ivar), !id.isEmpty { return id }
-    }
-    return nil
-}
+// V0.0.59 的 Swift 字符串键探测（aevonSceneIdentity(fromVC:)）已删除：
+// FBScene.identifier 是 FBSceneIdentity 对象而非 NSString，`as? String` 恒失败，
+// 「前台场景=无」= 关窗修复从未生效（Aevon(55) 日志实锤）。
+// V0.0.62 起由 hook 层 AevonSceneBundleIDFromVC 深挖传入（AevonFrontmostIDV62）。
 
 /// App 画面容器出现：把它交给宿主，容器会搬进去，从而压在全屏 App 之上。
+/// V0.0.62（AevonFrontmostIDV62）：bundleID 由 hook 层深挖传入（FBScene.identifier
+/// 是对象不是字符串，Swift 侧字符串探测恒失败 → 关窗修复从未生效）。
 @_cdecl("AevonSceneVCDidAppear")
-public func AevonSceneVCDidAppear(_ vc: UIViewController) {
+public func AevonSceneVCDidAppear(_ vc: UIViewController, _ bundleID: NSString?) {
     guard vc.isViewLoaded else { return }
     let view = vc.view!
-    let identity = aevonSceneIdentity(fromVC: vc)
+    let identity = bundleID as String?
     DispatchQueue.main.async {
         AevonEntryHost.appSceneAppeared(view, reason: "App 画面进入（AevonSceneVCHookV22）",
                                         identity: identity)

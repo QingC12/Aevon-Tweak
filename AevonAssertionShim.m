@@ -281,6 +281,8 @@ __attribute__((used)) static const char AevonReflowGateV60Marker[] = "AevonReflo
  *   AevonFrontmostRepreV61 关「前台 App 自己」的浮窗后强制前台回弹，逼系统重新
  *                          呈现全屏（presenter 销毁后状态不翻转 = 触摸路由断）。 */
 __attribute__((used)) static const char AevonReflowIvarV61Marker[] = "AevonReflowIvarV61";
+__attribute__((used)) static const char AevonFrontmostIDV62Marker[] = "AevonFrontmostIDV62";
+__attribute__((used)) static const char AevonPolicyTryV62Marker[] = "AevonPolicyTryV62";
 __attribute__((used)) static const char AevonFrontmostRepreV61Marker[] = "AevonFrontmostRepreV61";
 
 /* V0.0.39 CI 标记：
