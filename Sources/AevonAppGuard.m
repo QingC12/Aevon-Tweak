@@ -72,6 +72,7 @@ __attribute__((used)) static const char AevonNoWinResizeV57Marker[] = "AevonNoWi
 __attribute__((used)) static const char AevonGuardFloatBit36V59Marker[] = "AevonGuardFloatBit36V59";
 /// CI 标记（V0.0.61）：扩展进程（.appex）绝不装 Guard —— 修「桌面部分小组件空白」
 __attribute__((used)) static const char AevonGuardNoExtV61Marker[] = "AevonGuardNoExtV61";
+__attribute__((used)) static const char AevonGuardGhostRecordV67Marker[] = "AevonGuardGhostRecordV67";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -712,6 +713,16 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         if (phase == UITouchPhaseBegan) {
             CGPoint pt = [touch locationInView:nil];
             BOOL hardZone = NO;
+            /* V0.0.67（AevonGuardGhostRecordV67）：停靠格几何命中**先跑，且无论后面
+             * 哪条判据吞掉这一触摸都照跑**。
+             *
+             * 这是「轻点停靠小窗还原主窗 → App 内被点一下」多版本反复出现的真正根因：
+             * 旧实现是 else-if 链 —— bit48（浮窗手势期）先命中时 DockHitTest 根本不执行，
+             * 「幽灵格」从未被记下；而轻点还原时 SB 会在触摸刚结束就把停靠格几何位清零、
+             * bit48 又在 350ms 后放行 —— 原槽位从此零保护，用户连点的第二击直达
+             * App 画面合成一次点击。现在先跑几何命中（命中即记幽灵格，含 1 秒续期），
+             * 再用结果进判定链，两条吞摸路径互不遮挡。 */
+            BOOL dockHit = AevonGuardDockHitTest(pt);
             if (floatTouch) {
                 /* V0.0.49：浮窗手势期 —— 整屏吞。手指压在浮窗上时，
                  * App 不该收到任何输入（这是「点小窗还原 → 抖音暂停」的正面修法）。 */
@@ -726,7 +737,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * App 不该收到任何输入。双击的第二下（间隔 0.36s > bit48 的 350ms 放行）
                  * 就靠这条判据兜住。 */
                 hardZone = YES;
-            } else if (AevonGuardDockHitTest(pt)) {
+            } else if (dockHit) {
                 /* V0.0.54：落在某一格停靠小窗上 —— 这本来就是浮窗自己的那块屏幕，
                  * App 不该收到任何输入（点它 = 还原主窗，不是点 App）。 */
                 hardZone = YES;

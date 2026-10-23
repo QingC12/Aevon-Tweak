@@ -288,6 +288,7 @@ __attribute__((used)) static const char AevonReflowAppGateV64Marker[] = "AevonRe
 __attribute__((used)) static const char AevonTrueResizeWritesOffV65Marker[] = "AevonTrueResizeWritesOffV65";
 __attribute__((used)) static const char AevonFrontmostRepreV61Marker[] = "AevonFrontmostRepreV61";
 __attribute__((used)) static const char AevonSceneProbeP0Marker[] = "AevonSceneProbeP0";
+__attribute__((used)) static const char AevonRestoreGraceV67Marker[] = "AevonRestoreGraceV67";
 
 /* V0.0.39 CI 标记：
  * AevonBootShieldV39    = 启动关键路径 ObjC 异常保护（入口创建 @try 兜底，防自动注销）；

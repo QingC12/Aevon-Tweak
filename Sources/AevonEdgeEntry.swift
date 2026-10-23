@@ -1046,6 +1046,10 @@ enum AevonEdgeEntry {
                     win.grabEnd(at: layerPoint, commit: true)
                 } else if isTap {
                     win.grabCancel()
+                    // V0.0.67（AevonRestoreGraceV67）：还原动画 0.42s > bit48 默认清零延迟 0.35s，
+                    // 动画末段 App 输入已放行、窗口还在半路，落点即 App 画面 → 穿透点击。
+                    // 还原分支把放行延迟拉到 0.7s（动画 + 余量），其余手势维持 0.35s。
+                    floatFlagNextClearDelay = 0.70
                     win.restoreMainWindow()
                     AevonLog.info("[窗口] 轻点停靠小窗窗身 → 还原主悬浮窗"
                         + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）（AevonDockTapRestoreV46）")
@@ -1077,6 +1081,9 @@ enum AevonEdgeEntry {
     private static var floatTouchFlagOn = false
     /// 延迟清位的代次（V0.0.54）：每次新的按下都会让挂起中的清位作废。
     private static var floatFlagGeneration = 0
+    /// V0.0.67（AevonRestoreGraceV67）：下一次清 bit48 的延迟。默认 0.35s；
+    /// 轻点还原主窗分支把它拉到 0.7s（覆盖还原动画），用完即复位。
+    private static var floatFlagNextClearDelay: Double = 0.35
 
     private static func setFloatTouchFlag(_ on: Bool) {
         if on {
@@ -1104,13 +1111,20 @@ enum AevonEdgeEntry {
         // 配合 Guard 侧新增的「按停靠槽位几何吞摸」，两条路互为兜底。
         floatFlagGeneration += 1
         let gen = floatFlagGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+        // V0.0.67（AevonRestoreGraceV67）：读走本次延迟并复位默认（还原分支提前写成 0.7）
+        let clearDelay = floatFlagNextClearDelay
+        floatFlagNextClearDelay = 0.35
+        DispatchQueue.main.asyncAfter(deadline: .now() + clearDelay) {
             guard gen == floatFlagGeneration else { return }   // 期间又按下了
             guard floatTouchFlagOn else { return }
             floatTouchFlagOn = false
             AevonNotifySetFloatTouch(0)
-            AevonLog.info("[边缘] 浮窗手势期结束：延后 350ms 才放行 App 输入"
-                + "（避开快速连点的时序竞态）（AevonGuardDockZoneV54）")
+            if clearDelay > 0.5 {
+                AevonLog.info("[边缘] 还原宽限期结束：App 输入放行（0.7s 覆盖还原动画，防穿透点击）（AevonRestoreGraceV67）")
+            } else {
+                AevonLog.info("[边缘] 浮窗手势期结束：延后 350ms 才放行 App 输入"
+                    + "（避开快速连点的时序竞态）（AevonGuardDockZoneV54）")
+            }
         }
     }
 

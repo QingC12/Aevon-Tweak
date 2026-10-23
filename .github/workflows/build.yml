@@ -886,6 +886,21 @@ jobs:
           print("V0.0.66 校验: P0 运行时探测（五项判据）已编入")
           PY66
 
+          # ── V0.0.67（AevonRestoreGraceV67 + AevonGuardGhostRecordV67）：停靠还原穿透点击封堵 ──
+          strings "$DYLIB" | grep -q 'AevonRestoreGraceV67' \
+            || { echo "::error::V0.0.67 标记缺失: AevonRestoreGraceV67"; exit 1; }
+          python3 - "$DYLIB" <<'PY67'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["还原宽限期结束：App 输入放行","floatFlagNextClearDelay".replace("floatFlagNextClearDelay","还原宽限期")]:
+              if s.encode('utf-8') not in data:
+                  print(f"::error::V0.0.67 缺串: {s}"); sys.exit(1)
+          print("V0.0.67 校验: 还原宽限期（0.7s 覆盖动画）已编入")
+          PY67
+          # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
+            || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
+
           strings "$GUARD_DYLIB" | grep -q 'sendEvent:' \
             || { echo "::error::AevonGuard 没有 hook UIApplication sendEvent:"; exit 1; }
           GUARD_PLIST="$(find . -name 'AevonGuard.plist' -path '*DynamicLibraries*' | head -n1)"
