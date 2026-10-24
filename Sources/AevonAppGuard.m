@@ -96,6 +96,10 @@ __attribute__((used)) static const char AevonScrollHealV82Marker[] = "AevonScrol
  * CI 用 `strings` 抓 ASCII 标记做回归（注释不进二进制，必须写成 used 常量）。 */
 __attribute__((used)) static const char AevonRectGateV83Marker[] = "AevonRectGateV83";
 __attribute__((used)) static const char AevonScrollSrcV84Marker[] = "AevonScrollSrcV84";
+
+/* V0.0.84（AevonScrollSrcV84）：App 最近一次收到触摸的时刻（sendEvent 里刷新）。
+ * 声明必须放在 AevonGuardSendEvent 之前 —— C 不允许先用后声明（编译期硬错误）。 */
+static CFAbsoluteTime gAevonLastTouchAt = 0;
 __attribute__((used)) static const char AevonFloatOwnerV83Marker[] = "AevonFloatOwnerV83";
 /* V0.0.83：`AevonScrollHealV82` 的历史校验串「放行也还原」必须留着。
  * 这版把 force 恒置 NO 之后，LLVM 会把那个三元分支优化掉，二进制里就再也
@@ -1564,7 +1568,6 @@ static void AevonGuardRingClosed(CFNotificationCenterRef center,
  *   · 日志出现这条，前后都没有触摸 → 是②（非触摸源），调用方的符号会把元凶报出来。
  * 只观测、不改行为：无论记不记日志都照原样调用原实现。 */
 static void (*AevonGuardOrigSetContentOffset)(id, SEL, CGPoint, BOOL) = NULL;
-static CFAbsoluteTime gAevonLastTouchAt = 0;
 
 static void AevonGuardSetContentOffset(id target, SEL _cmd, CGPoint offset, BOOL animated) {
     if (AevonGuardOrigSetContentOffset == NULL) { return; }
