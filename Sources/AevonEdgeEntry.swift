@@ -386,7 +386,7 @@ enum AevonEdgeEntry {
                                            "com.aevon.prefschanged" as CFString,
                                            nil,
                                            .deliverImmediately)
-            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26）")
+            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26 AevonGuardCleanupV102）")
         }
         guard zoneTimer == nil else { return }
         syncGuardConfig()
@@ -769,7 +769,7 @@ enum AevonEdgeEntry {
                 let elapsed = CACurrentMediaTime() - globalBeganAt
                 let moved = hypot(point.x - globalStart.x, point.y - globalStart.y)
                 if elapsed <= 0.45, moved <= 10.0 {
-                    attemptTrigger("轻点（按 \(Int(elapsed * 1000))ms 位移 \(Int(moved))pt）", source: "global")
+                    attemptTrigger("轻点呼出（按 \(Int(elapsed * 1000))ms 位移 \(Int(moved))pt）（AevonTapSummonV102）", source: "global")
                 }
             }
             globalBeganAt = 0
@@ -926,7 +926,7 @@ enum AevonEdgeEntry {
         AevonNotifySetRing(1)
         postRingState("com.aevon.ringopen")
         if source == "global" {
-            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
+            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102）")
         }
     }
 
