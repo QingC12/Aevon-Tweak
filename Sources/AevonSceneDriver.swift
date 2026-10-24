@@ -176,15 +176,27 @@ final class AevonSceneDriver: NSObject {
     }
 
     /// V0.0.83：目标 App 现在是否真的有进程（0=not running / 1=?, 2=background, 3=suspended, 4=foreground）。
+    ///
+    /// V0.0.84（AevonEntityIntV84）：整型改由 ObjC 垫片按真实返回类型读。
+    /// 归档(84) 的 `进程状态=10750085536` 就是「64 位读 32 位」的残留垃圾 ——
+    /// 那个值必然 ≥ 2，于是这扇门永远敞开，目标 App 没启动也照样往第 4 步跑。
     static func targetAppIsRunning() -> Bool {
         guard let ctrl = tryShared(classNamed: "SBApplicationController", selector: "sharedInstance") else { return false }
         guard let app = AevonSafeObjCall1(ctrl, "applicationWithBundleIdentifier:",
-                                          AevonSceneDriver.experimentBundleID as NSString) else { return false }
-        if let st = AevonRuntime.int(app, Selector(("processState"))) {
-            AevonLog.info("[场景] P1 目标 App 进程状态=\(st)（0=未运行 4=前台）（AevonEntityLiveV83）")
-            return st >= 2
+                                          AevonSceneDriver.experimentBundleID as NSString) else {
+            AevonLog.info("[场景] P1 目标 App 对象=取不到（SBApplicationController 没给出 App）"
+                + "（AevonEntityIntV84）")
+            return false
         }
-        if let front = AevonRuntime.bool(app, key: "isFrontmost") { return front }
+        let st = AevonAppProcessState(app)
+        let front = AevonAppIsFrontmost(app)
+        AevonLog.info("[场景] P1 目标 App 状态：进程状态=\(st)（0=未运行 2=后台 3=挂起 4=前台），"
+            + "前台=\(front == 1 ? "是" : (front == 0 ? "否" : "取不到"))"
+            + "（AevonEntityLiveV83 AevonEntityIntV84）")
+        if st >= 2 { return true }
+        /* 进程状态读不到（-1）时退一步看前台标记；两个都拿不到就当没就绪，
+         * 宁可这轮不跑也不要再拿一个空进程去撞实体 init。 */
+        if st < 0 { return front == 1 }
         return false
     }
 

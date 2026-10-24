@@ -143,3 +143,16 @@ void AevonCrashAttrPrepare(void);
 /// 里有没有落在 Aevon 自身地址段内的帧。返回 1 = Aevon 参与（要负责），
 /// 0 = 外部模块引起（不背锅、不禁用）。纯指针比较，信号处理内安全。
 int AevonCrashAttrOwnsFrame(void **stack, int count, int skip);
+
+/// V0.0.84（AevonEntityIntV84）：按**真实返回类型**读 `SBApplication` 上的整型/布尔属性。
+///
+/// 为什么必须走垫片：Swift 那边用 `@convention(c) (AnyObject, Selector) -> Int`
+/// 把返回 `unsigned int` 的方法当成返回 64 位整型来读，x0 高 32 位是**残留垃圾**。
+/// 归档(84) 的实锤：`P1 目标 App 进程状态=10750085536`（0x2_80C0_xxxx），
+/// 于是「进程状态 ≥ 2 才算就绪」那扇门形同不存在 —— 目标 App 根本没启动也照样放行，
+/// 第 4 步自然又是「四个 init 全 nil」，白跑一轮。
+/// 返回 -1 = 取不到（对象为空 / 没有这个选择子 / 抛异常）。
+int AevonAppProcessState(id app);
+/// 同上，`isFrontmost`（BOOL）—— Swift 侧用 KVC 读会拿到 nil，这里给个确定值。
+/// 返回 -1 = 取不到。
+int AevonAppIsFrontmost(id app);

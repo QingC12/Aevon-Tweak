@@ -27,6 +27,39 @@ enum AevonPrefs {
         return defaultValue
     }
 
+    /// V0.0.84（AevonPrefShieldV84）：把原始值打成人能看的一行，用于「开关明明是开却读到 false」这类排查。
+    ///
+    /// 只用来写日志，不进触摸判定路径（会多一次 NSNumber/NSString 装箱）。
+    static func debugDescribe(_ key: String) -> String {
+        guard let value = rawValue(key) else { return "缺省(nil)" }
+        return "\(value) [\(type(of: value))]"
+    }
+
+    /// V0.0.84（AevonPrefShieldV84）：一次性自愈 —— `TouchEnabled` 为 false 时改回 true。
+    ///
+    /// 为什么必须自愈：这个开关一旦是 false，旧实现会把浮窗内容的宿主容器
+    /// `isUserInteractionEnabled` 压成 false。容器一关，UIKit 的 hitTest 直接返回 nil，
+    /// **SpringBoard 就不再接手这根手指**，事件被原样转投给背后的全屏 App —— 表现就是
+    /// 「在悬浮窗里滑动，背后 App 自己滚到底」。这不是「浮窗内容被禁用」，是「浮窗整块透明」。
+    /// 用户不会想要这种状态（浮窗里什么都点不动），而且 V0.0.84 起已经改成
+    /// 「容器恒可交互 + 上方盖一层拦截层」，这个开关只决定拦截层开不开。
+    /// 老版本可能把它写成了 false，这里做一次迁移，把状态摆回用户直觉的开。
+    static func healTouchEnabledOnce() {
+        let marker = "TouchEnabledHealV84"
+        if rawValue(marker) != nil { return }
+        let current = bool("TouchEnabled", default: true)
+        if !current {
+            set("TouchEnabled", true)
+            AevonLog.warn("[设置] 浮窗内容触摸开关原来是**关**的（TouchEnabled=\(debugDescribe("TouchEnabled"))）"
+                + " → 已一次性改回开；这个状态下浮窗内容完全收不到触摸，"
+                + "所有滑动都会直接落到背后的全屏 App（AevonPrefShieldV84 TouchEnabledHealV84）")
+        } else {
+            AevonLog.info("[设置] 浮窗内容触摸开关=开（TouchEnabled=\(debugDescribe("TouchEnabled"))）"
+                + "（AevonPrefShieldV84）")
+        }
+        set(marker, true)
+    }
+
     /// 读取整数；键不存在时返回 defaultValue。
     static func int(_ key: String, default defaultValue: Int) -> Int {
         if let value = rawValue(key) as? NSNumber {

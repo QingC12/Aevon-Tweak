@@ -57,6 +57,23 @@ final class AevonSceneHost {
     /// 现在由 `refreshContentPref()` 在设置广播与 0.2 秒轮询里实时刷新。
     private var contentInteractiveByPref: Bool = true
 
+    /// V0.0.84（AevonPrefShieldV84）：浮窗内容的**拦截层**。
+    ///
+    /// 这是本轮的真修法，替换掉「把 container 的 isUserInteractionEnabled 关掉」那条老路。
+    ///
+    /// 老路为什么是错的（这一点以前一直没看透）：
+    ///   · `isUserInteractionEnabled = false` 不是「吃掉触摸」，是**让 hitTest 返回 nil**，
+    ///     也就是「这块地方我不认领」；
+    ///   · 不认领之后，SpringBoard 不会接手这根手指，事件被原样转投给**背后的全屏 App**；
+    ///   · 于是用户在悬浮窗内容区滑动 → 浮窗毫无反应 → 背后 App 自己滚到底 / 滚到顶。
+    /// 归档(84) 日志实锤：`内容交互判定：容器=关，设置开关=false` 41/41 条全中
+    /// （归档(83) 里 59/59 也是 false），说明这个开关长期是关的，浮窗内容区一直是透的。
+    ///
+    /// 新做法：容器**恒可交互**，需要「内容不接收触摸」时在内容上方盖一层透明 UIView。
+    /// 这层视图被 hitTest 命中 → 事件留在 SpringBoard → 背后 App 一个事件都收不到。
+    /// 语义仍是「内容不接收触摸」，但绝不顺带把整块区域让给别人。
+    private weak var contentShield: UIView?
+
     /// V0.0.79（AevonGuardGraceV79）：Guard 存活判定的宽限期。
     ///
     /// Aevon(71) 日志实锤一次误判：22:44:38.767 判 com.apple.Preferences「无 Guard」
@@ -139,9 +156,27 @@ final class AevonSceneHost {
          * 语义上也不需要在别人的视图上动手：这块内容就在我们的 `container` 里，
          * `container.isUserInteractionEnabled = false` 已经让整棵子树收不到触摸
          * （UIKit 的 hitTest 在拿到 false 时直接返回 nil，不再往下递归）。 */
-        if container.isUserInteractionEnabled != allow {
-            container.isUserInteractionEnabled = allow
+        /* V0.0.84（AevonPrefShieldV84）：**容器恒可交互，不再压成 false**。
+         *
+         * `isUserInteractionEnabled = false` 的真实语义是「我不认领这块区域」，
+         * UIKit hitTest 到此返回 nil，SpringBoard 就不再接手这根手指 ——
+         * 事件被原样转投给背后的全屏 App。用户看到的就是
+         * 「在悬浮窗里滑动，背后 App 自己滚到底 / 滚到顶」。
+         * 归档(84) 的 `容器=关，设置开关=false` 41/41 条就是这个状态。
+         *
+         * 现在改成：容器永远可交互；要不要「内容不接收触摸」由盖在上面的
+         * `contentShield` 决定 —— 它被 hitTest 命中就代表事件留在 SpringBoard，
+         * 背后 App 一个都收不到。拦截语义不变，但不再漏给别人。 */
+        if !container.isUserInteractionEnabled {
+            container.isUserInteractionEnabled = true
             flipped += 1
+        }
+        if let shield = contentShield {
+            let shouldShield = !allow
+            if shield.isHidden != !shouldShield {
+                shield.isHidden = !shouldShield
+                flipped += 1
+            }
         }
         /* V0.0.81（AevonAppGateV81）：内容不接收触摸时，顺带把**整窗触摸门**关上 ——
          * App 进程里那一份 backboardd 直投的触摸也一并丢，停靠小窗被轻点就再也不可能
@@ -164,10 +199,10 @@ final class AevonSceneHost {
         /* V0.0.82：把门的判定依据全量写进日志（限次）—— 上一版只有「开/关」两行，
          * 用户报「点不动」时无法区分是门关了还是容器关了，只能靠猜。 */
         if reason != "每拍复查" && reason != "宽限复检" {
-            AevonLog.info("[场景] 内容交互判定：容器=\(allow ? "开" : "关")，整窗门=\(gateBlocked ? "关" : "开")"
+            AevonLog.info("[场景] 内容交互判定：拦截层=\((contentShield?.isHidden == false) ? "盖住(不吃到App)" : "透明(放行内容)")，整窗门=\(gateBlocked ? "关" : "开")"
                 + "（主窗态=\(desiredInteractive)，设置开关=\(contentInteractiveByPref)，"
                 + "无Guard=\(guardHardAbsent)，全屏App=\(isFullscreenApp)，依据=\(reason)）"
-                + "（\(bundleID)，AevonMainContentV82）")
+                + "（\(bundleID)，AevonMainContentV82 AevonPrefShieldV84）")
         }
         // 「设置变更 / 显式切换」两种是用户主动改的，单独记一行，不占强制计数
         if flipped > 0 && reason != "显式切换" && reason != "设置变更" {
@@ -448,6 +483,8 @@ final class AevonSceneHost {
         // 开关默认开，若怀疑触摸引发异常可在 设置 → Aevon 关掉。
         let interactive = AevonPrefs.bool("TouchEnabled", default: true)
         self.contentInteractiveByPref = interactive
+        AevonLog.info("[场景] 开窗内容触摸设置：TouchEnabled=\(AevonPrefs.debugDescribe("TouchEnabled")) → \(interactive ? "允许" : "禁止")"
+            + "（AevonPrefShieldV84）")
         /* V0.0.77（AevonGuardAliveV77）：先问一句「这个 App 进程里有没有 Guard」。
          * 有 → 正常（App 进程自己拦得住）；没有 → 内容触摸直接关掉，
          * 否则触摸经 presenter 的 UI 连接转发进去，App 自己合成一次点击
@@ -478,6 +515,20 @@ final class AevonSceneHost {
         // 这个 view 同时被 SpringBoard 用来全屏显示该 App，压成 false 会连累全屏触摸。
         view.isUserInteractionEnabled = true
         host.addSubview(view)
+        /* V0.0.84（AevonPrefShieldV84）：内容上方盖一层透明「拦截层」。
+         *
+         * 它只做一件事：需要「内容不接收触摸」时被 hitTest 命中，把事件留在 SpringBoard。
+         * 这样背后那个全屏 App 一个事件都收不到 —— 这是「浮窗里滑动，背后 App 自己滚到底」
+         * 的唯一根治办法（旧做法是关容器，等于把整块区域让给背后的 App）。
+         * 主窗 + 设置里允许内容触摸时它是 hidden 的，浮窗内容照常点、照常滑。 */
+        let shield = UIView(frame: host.bounds)
+        shield.backgroundColor = .clear
+        shield.autoresizingMask = [UIView.AutoresizingMask.flexibleWidth,
+                                   UIView.AutoresizingMask.flexibleHeight]
+        shield.isUserInteractionEnabled = true
+        shield.isHidden = true
+        host.addSubview(shield)
+        self.contentShield = shield
         self.container = host
         applyContentInteraction(reason: "初始化")
         // V0.0.80：把系统呈现视图的交互交还给系统（修上一版残留的「全屏点不动」）

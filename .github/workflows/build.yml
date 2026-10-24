@@ -1254,6 +1254,32 @@ jobs:
           # 反回退：矩形门必须真的进到 hardZone 那条判定链（不在链里 = 没生效）
           grep -q 'AevonGuardFloatAreaHit(pt, spt)' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
             || { echo "::error::V0.0.83 回退: 浮窗整窗矩形门没接进 began 判定链"; exit 1; }
+          # ── V0.0.84（AevonPrefShieldV84 / AevonEntityIntV84）──
+          # ①浮窗内容拦截层：容器恒可交互，靠一层透明视图「吃掉」触摸。
+          #   旧做法把容器 isUserInteractionEnabled 压成 false —— 那不是禁用，是把整块
+          #   区域让给背后的全屏 App，于是「浮窗里滑动 → 背后 App 自己滚到底」。
+          # ②TouchEnabled 一次性自愈：这个开关长期是 false，直接导致上面那条。
+          # ③P1 整型按真实返回类型读（旧读法把 processState 读成 10750085536）。
+          python3 - "$DYLIB" <<'PY84'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonPrefShieldV84","TouchEnabledHealV84","AevonEntityIntV84",
+                    "内容交互判定"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.84 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.84 校验: 内容拦截层 + 开关自愈 + P1 整型垫片 已编入主 dylib")
+          PY84
+          # 反回退：绝不能再把容器交互压成 allow（那等于把整块屏幕让给背后 App）
+          if grep -n 'container.isUserInteractionEnabled = allow' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
+            echo "::error::V0.0.84 回退: 又在把浮窗内容容器压成不可交互（会让触摸直接落到背后全屏 App）"
+            exit 1
+          fi
+          # 反回退：拦截层必须真的加进内容宿主（没加 = 开关关掉时又变成透明）
+          grep -q 'host.addSubview(shield)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::V0.0.84 回退: 浮窗内容拦截层没有挂进内容宿主"; exit 1; }
+          # 反回退：P1 就绪门必须走垫片（用 Swift 64 位 Int 读 processState 会拿到垃圾值）
+          grep -q 'AevonAppProcessState(app)' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
+            || { echo "::error::V0.0.84 回退: P1 就绪门又在用 64 位 Int 读 processState"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardNoWidgetV80' \
             || { echo "::error::V0.0.80 Guard 没有排除小组件宿主（AevonGuardNoWidgetV80）"; exit 1; }
           # 反回退：Guard 里绝不能再出现 win.frame = screen / 每秒 layoutIfNeeded

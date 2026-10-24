@@ -1157,3 +1157,42 @@ int AevonCrashAttrOwnsFrame(void **stack, int count, int skip) {
     }
     return 0;
 }
+
+/* V0.0.84（AevonEntityIntV84）：CI 校验串（ObjC `used` 常量，保证一定进二进制；
+ * Swift 那边的同类常量会被 LLVM 优化掉，历史上已踩过四次）。 */
+__attribute__((used)) static const char AevonEntityIntV84Marker[] = "AevonEntityIntV84";
+__attribute__((used)) static const char AevonPrefShieldV84ShimMarker[] = "AevonPrefShieldV84";
+
+/* V0.0.84（AevonEntityIntV84）：按真实返回类型读整型/布尔属性。
+ *
+ * 归档(84) 的实锤：Swift 侧把 `processState`（返回 unsigned int）当成返回 64 位
+ * `Int` 读，x0 高 32 位是上一次调用残留，打印出 `10750085536`。
+ * 结果「进程状态 >= 2 才继续」这扇门永远敞开：目标 App 没启动也照样跑第 4 步，
+ * 实体 init 又是全 nil —— 两轮都白跑了。这里用与真实类型一致的函数指针读，不猜。 */
+int AevonAppProcessState(id app) {
+    @try {
+        if (app == nil) { return -1; }
+        SEL sel = NSSelectorFromString(@"processState");
+        if (sel == NULL || ![app respondsToSelector:sel]) { return -1; }
+        int32_t (*fn)(id, SEL) = (int32_t (*)(id, SEL))[app methodForSelector:sel];
+        if (fn == NULL) { return -1; }
+        return (int)fn(app, sel);
+    } @catch (NSException *exception) {
+        return -1;
+    }
+    return -1;
+}
+
+int AevonAppIsFrontmost(id app) {
+    @try {
+        if (app == nil) { return -1; }
+        SEL sel = NSSelectorFromString(@"isFrontmost");
+        if (sel == NULL || ![app respondsToSelector:sel]) { return -1; }
+        BOOL (*fn)(id, SEL) = (BOOL (*)(id, SEL))[app methodForSelector:sel];
+        if (fn == NULL) { return -1; }
+        return fn(app, sel) ? 1 : 0;
+    } @catch (NSException *exception) {
+        return -1;
+    }
+    return -1;
+}

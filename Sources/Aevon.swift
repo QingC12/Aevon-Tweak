@@ -28,6 +28,13 @@ private func initializeAevon() {
         return
     }
 
+    /* V0.0.84（AevonPrefShieldV84）：一次性自愈「浮窗内容触摸」开关。
+     *
+     * 这个开关若是 false，旧实现会把内容宿主容器压成不可交互 —— 那不是「禁用内容」，
+     * 而是「把这整块屏幕让给背后的全屏 App」，用户在浮窗里滑动会把背后 App 滚到底。
+     * 放在这里（拿到总开关之后、任何窗口创建之前）执行，保证只跑一次、且早于第一次读值。 */
+    AevonPrefs.healTouchEnabledOnce()
+
     /*
      * V0.0.7 的关键改动（针对 V0.0.6「长按桌面图标 → 自动注销」）：
      *
