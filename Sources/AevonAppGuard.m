@@ -95,6 +95,7 @@ __attribute__((used)) static const char AevonScrollHealV82Marker[] = "AevonScrol
 /* V0.0.83（AevonRectGateV83 / AevonFloatOwnerV83）：浮窗整窗矩形门 + 主人指纹判定。
  * CI 用 `strings` 抓 ASCII 标记做回归（注释不进二进制，必须写成 used 常量）。 */
 __attribute__((used)) static const char AevonRectGateV83Marker[] = "AevonRectGateV83";
+__attribute__((used)) static const char AevonScrollSrcV84Marker[] = "AevonScrollSrcV84";
 __attribute__((used)) static const char AevonFloatOwnerV83Marker[] = "AevonFloatOwnerV83";
 /* V0.0.83：`AevonScrollHealV82` 的历史校验串「放行也还原」必须留着。
  * 这版把 force 恒置 NO 之后，LLVM 会把那个三元分支优化掉，二进制里就再也
@@ -1207,6 +1208,9 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
         UITouchPhase phase = [touch phase];
         if (phase == UITouchPhaseStationary) { continue; }
         active += 1;
+        /* V0.0.84（AevonScrollSrcV84）：记下「App 最近一次收到触摸」的时刻，
+         * 供滚动取证判断那次 contentOffset 跳变到底是触摸引起还是别的东西引起。 */
+        gAevonLastTouchAt = CACurrentMediaTime();
 
         BOOL owned = AevonGuardTouchOwned(touch);
 
@@ -1547,6 +1551,53 @@ static void AevonGuardRingClosed(CFNotificationCenterRef center,
     AevonGuardRingOpenAt = 0;
 }
 
+/* V0.0.84（AevonScrollSrcV84）：**取证 —— 到底是谁在动 App 的滚动视图**。
+ *
+ * 用户连着两轮都说「关掉浮窗后，全屏 App 自己滑到底 / 滑到顶，底部一片空白」。
+ * 目前有两条互相排斥的解释：
+ *   ① 浮窗上的手指被 backboardd 也投给了背后 App（真触摸，我们该拦）；
+ *   ② 根本没有触摸，是场景 sleep/wakeUp 或重新呈现让 App 自己重排 / 复位偏移。
+ * 归档(84) 的 100 秒日志里 `began 放行` 只有 2 条、`吞摸取证` 只有 2 条 —— 说明
+ * 那段时间 App 进程几乎没收到触摸，也就没法证明是哪一条。与其继续猜，不如直接
+ * 在「滚动被改」的那一刻抓调用栈：
+ *   · 日志出现这条，且间隔 0.45 秒内确实有过触摸 → 是①（触摸漏进去了）；
+ *   · 日志出现这条，前后都没有触摸 → 是②（非触摸源），调用方的符号会把元凶报出来。
+ * 只观测、不改行为：无论记不记日志都照原样调用原实现。 */
+static void (*AevonGuardOrigSetContentOffset)(id, SEL, CGPoint, BOOL) = NULL;
+static CFAbsoluteTime gAevonLastTouchAt = 0;
+
+static void AevonGuardSetContentOffset(id target, SEL _cmd, CGPoint offset, BOOL animated) {
+    if (AevonGuardOrigSetContentOffset == NULL) { return; }
+    @try {
+        CFAbsoluteTime now = CACurrentMediaTime();
+        UIScrollView *sv = (UIScrollView *)target;
+        CGPoint old = sv.contentOffset;
+        CGFloat dy = fabs(offset.y - old.y);
+        /* 摘 24pt 以上的跳变，且这时 App 已经 0.45 秒没收到任何触摸 —— 那就是「自己动的」。 */
+        if (dy >= 24.0 && (now - gAevonLastTouchAt) > 0.45) {
+            static CFAbsoluteTime lastSrcLog = 0;
+            if (now - lastSrcLog > 1.0) {
+                lastSrcLog = now;
+                NSString *caller = @"?";
+                @try {
+                    NSArray<NSString *> *stack = [NSThread callStackSymbols];
+                    if (stack.count >= 4) {
+                        NSString *frame = stack[3];
+                        caller = frame.length > 90 ? [frame substringToIndex:90] : frame;
+                    }
+                } @catch (NSException *e) { }
+                AevonGuardWriteLog(NO, @"滚动被非触摸源移动（y %.0f→%.0f 跳变 %.0fpt，内容高 %.0f 可视高 %.0f，"
+                                   @"动画=%d，app=%@，调用方=%@）（AevonScrollSrcV84）",
+                                   old.y, offset.y, dy, sv.contentSize.height, sv.bounds.size.height,
+                                   animated ? 1 : 0,
+                                   [[NSBundle mainBundle] bundleIdentifier] ?: @"?", caller);
+            }
+        }
+    } @catch (NSException *exception) {
+    }
+    AevonGuardOrigSetContentOffset(target, _cmd, offset, animated);
+}
+
 static void AevonGuardInstall(void) {
     if (AevonGuardOrigSendEvent != NULL) { return; }
 
@@ -1558,6 +1609,19 @@ static void AevonGuardInstall(void) {
     // 构造函数阶段不读 UIScreen / 偏好，等第一次 sendEvent 再加载（主线程、UIKit 已就绪）
     AevonGuardConfigAt = 0;
     AevonGuardOrigSendEvent = method_setImplementation(method, (IMP)AevonGuardSendEvent);
+
+    /* V0.0.84（AevonScrollSrcV84）：滚动取证开关 —— 只观测「谁把 contentOffset 挪了」。 */
+    @try {
+        Class scrollClass = objc_getClass("UIScrollView");
+        Method co = (scrollClass != Nil)
+            ? class_getInstanceMethod(scrollClass, sel_registerName("setContentOffset:animated:"))
+            : NULL;
+        if (co != NULL && AevonGuardOrigSetContentOffset == NULL) {
+            AevonGuardOrigSetContentOffset =
+                (void (*)(id, SEL, CGPoint, BOOL))method_setImplementation(co, (IMP)AevonGuardSetContentOffset);
+        }
+    } @catch (NSException *exception) {
+    }
 
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                                     NULL,

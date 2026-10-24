@@ -1280,6 +1280,15 @@ jobs:
           # 反回退：P1 就绪门必须走垫片（用 Swift 64 位 Int 读 processState 会拿到垃圾值）
           grep -q 'AevonAppProcessState(app)' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
             || { echo "::error::V0.0.84 回退: P1 就绪门又在用 64 位 Int 读 processState"; exit 1; }
+          # ④滚动取证：setContentOffset 必须被挂上，日志要能报出「非触摸源移动」
+          python3 - "$GUARD_DYLIB" <<'PY84G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonScrollSrcV84","滚动被非触摸源移动","setContentOffset:animated:"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.84 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.84 校验: 滚动取证（谁在动 contentOffset）已编入 Guard")
+          PY84G
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardNoWidgetV80' \
             || { echo "::error::V0.0.80 Guard 没有排除小组件宿主（AevonGuardNoWidgetV80）"; exit 1; }
           # 反回退：Guard 里绝不能再出现 win.frame = screen / 每秒 layoutIfNeeded
