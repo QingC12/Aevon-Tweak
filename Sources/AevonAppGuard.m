@@ -451,7 +451,6 @@ static CGRect AevonGuardFloatRectRect(void) {
  * 所以这里不再缩小任何窗口，只保留「还原整屏」的兜底（修上一版可能留下的残局，
  * 以及任何被别的东西改小的窗口）。真正的显示适配在 SpringBoard 侧做：
  * 整屏画面等比完整缩放（AevonContentFitV57）。 */
-static BOOL gAevonWindowKeptFullLogged = NO;
 static BOOL gAevonWinResizeWarned = NO;
 
 /* V0.0.80（AevonNoWinResizeV80）：**这条通道整个关掉，只留诊断**。
