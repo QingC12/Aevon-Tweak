@@ -776,6 +776,19 @@ static void AevonGuardSetContentOffsetPlain(id target, SEL _cmd, CGPoint offset)
                         caller = stack[3];
                         if (caller.length > 100) { caller = [caller substringToIndex:100]; }
                     }
+                    /* V0.0.89（AevonGuardBigJumpV89）：单次 ≥200pt 的跳变不可能是手指
+                     * 逐帧拖出来的（拖动每帧只有十几 pt）—— 归档(10) 16:31:40.769 的
+                     * -150→1058（1207pt 一次调用）就是程序性写入，只打一帧定位不到人。
+                     * 这里把调用栈前三帧都打出来。 */
+                    if (dy >= 200.0 && stack.count >= 6) {
+                        NSMutableArray<NSString *> *frames = [NSMutableArray array];
+                        for (NSUInteger i = 3; i < 6 && i < stack.count; i++) {
+                            NSString *f = stack[i];
+                            if (f.length > 90) { f = [f substringToIndex:90]; }
+                            [frames addObject:f];
+                        }
+                        caller = [frames componentsJoinedByString:@" | "];
+                    }
                 } @catch (NSException *e) { }
                 AevonGuardWriteLog(YES, @"setContentOffset: 被调用（y %.0f→%.0f 跳变 %.0fpt，触龄 %.2fs，"
                                    @"拖动中=%d 减速中=%d，app=%@，调用方=%@）（AevonScrollAnchorV86）",

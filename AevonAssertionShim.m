@@ -1175,4 +1175,12 @@ __attribute__((used)) static const char AevonSlimWindowV87Text[] = "主窗形态
 __attribute__((used)) static const char AevonFatProjectEndV87Text[] = "真小胖屏项目已终止";
 __attribute__((used)) static const char AevonSlimProjectEndNote[] = "0.60 小胖屏与真重排项目已终止";
 
+/* V0.0.89（AevonGuardRelaunchV89 / AevonGuardBigJumpV89）：
+ * ① 开窗前 Guard 存活检查 —— 无 Guard 老进程（tweak 加载前就在跑）对触摸零防御
+ *    （归档(10) 16:31:31.988 实锤「直投点击」），开窗前自动 kill 重启以注入；
+ * ② setContentOffset 单次 ≥200pt 巨跳取证 —— 打调用栈前三帧（拖动逐帧只有十几 pt，
+ *    单次巨跳必是程序性写入，归档(10) 40.769 的 1207pt 只打一帧定位不到人）。 */
+__attribute__((used)) static const char AevonGuardRelaunchV89Marker[] = "AevonGuardRelaunchV89";
+__attribute__((used)) static const char AevonGuardBigJumpV89Marker[] = "AevonGuardBigJumpV89";
+
 

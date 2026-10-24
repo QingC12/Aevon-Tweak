@@ -40,6 +40,40 @@ enum AevonWindowManager {
         }
     }
 
+    // ── V0.0.89（AevonGuardRelaunchV89）：无 Guard 进程自动重启注入 ──
+    // 归档(10) 证据链：stormbreaker.prod 是 tweak 加载前的老进程，进程里没有 Guard
+    // （SB 侧警告「停靠小窗被轻点时 App 可能收到一次直投点击，只能靠注入解决」）。
+    // 用户手动「彻底退出再重开」能解决 —— 那这里就自动做：kill 旧进程 → 重走拉起
+    // 流程，新进程启动时必然被 substrate 注入。每个 bundle 每会话只自动重启一次，
+    // 重启后再无 Guard 就放行走老路径（不锁死用户功能，只记警告）。
+    private static var guardRelaunchTriedV89: Set<String> = []
+
+    /// 返回 true = 可以继续开窗；false = 已安排自动重启，调用方直接 return。
+    static func ensureGuardAliveV89(bundleID: String,
+                                    slot: AevonSnapSlot,
+                                    completion: ((Bool) -> Void)?) -> Bool {
+        if AevonGuardAliveState(bundleID) > 0 { return true }
+        guard let pid = AevonAppInfo.pid(bundleID: bundleID), pid > 0,
+              AevonAppInfo.isRunning(bundleID: bundleID) else {
+            /* 进程根本没在跑 → 正常拉起路径，新进程启动时必然被注入 */
+            return true
+        }
+        if guardRelaunchTriedV89.contains(bundleID) {
+            AevonLog.warn("[窗口] \(bundleID) 仍无 Guard（本会话已自动重启过一次，不再重启；"
+                + "触摸穿透在它身上仍可能出现）")
+            return true
+        }
+        guardRelaunchTriedV89.insert(bundleID)
+        AevonLog.warn("[窗口] \(bundleID) 进程内无 Guard（tweak 加载前的老进程，触摸零防御）"
+            + "→ 自动终止重启以注入（pid=\(pid)）（AevonGuardRelaunchV89）")
+        kill(pid_t(pid), SIGKILL)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            AevonLog.info("[窗口] 无 Guard 进程已终止，重新拉起 \(bundleID)（AevonGuardRelaunchV89）")
+            launchAndOpen(bundleID: bundleID, slot: slot, completion: completion)
+        }
+        return false
+    }
+
     /// 为指定 App 开窗（带场景就绪等待与全路径守卫，任何失败都静默放弃）。
     static func open(bundleID: String,
                      sceneID: String?,
@@ -55,6 +89,11 @@ enum AevonWindowManager {
             completion?(true)
             return
         }
+
+        // V0.0.89（AevonGuardRelaunchV89）：开窗前确认进程里真的有 Guard。
+        // 归档(10) 16:31:31.988 实锤：tweak 加载前就在跑的老进程没有 Guard，
+        // 对「停靠小窗被轻点 / 浮窗上操作」零防御（日志原文：App 可能收到一次直投点击）。
+        if !ensureGuardAliveV89(bundleID: bundleID, slot: slot, completion: completion) { return }
 
         // V0.0.36（AevonFloatInEntryV36）：浮窗外壳直接挂进唯一入口容器的浮窗层。
         // 旧路：独立宿主窗口 level 9,999,990 —— App 前台时画面在

@@ -1467,6 +1467,23 @@ jobs:
             exit 1
           fi
           echo "V0.0.88 校验: 小胖屏 P0/P1/内容模式 开关均已从设置面板移除"
+
+          # ── V0.0.89（AevonGuardRelaunchV89）：无 Guard 老进程自动重启注入 + 巨跳取证 ──
+          python3 - "$DYLIB" <<'PY89'
+          import struct, sys
+          d = open(sys.argv[1], 'rb').read()
+          need = ["AevonGuardRelaunchV89", "AevonGuardBigJumpV89",
+                  "自动终止重启以注入", "进程内无 Guard", "无 Guard 进程已终止"]
+          for s in need:
+              b = s.encode('utf-8')
+              if b not in d and s.encode('utf-16-le') not in d:
+                  print(f"::error::V0.0.89 产物缺串 [{s}]（自动重启注入/巨跳取证没编入）")
+                  sys.exit(1)
+          print("V0.0.89 校验: Guard 存活前置 + 自动重启注入 + 巨跳三帧取证 已编入")
+          PY89
+          # 反回退：开窗入口必须先过 Guard 存活检查
+          grep -q 'ensureGuardAliveV89(bundleID: bundleID, slot: slot, completion: completion)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::V0.0.89 回退: open() 又跳过 Guard 存活检查了（无 Guard 老进程会穿透）"; exit 1; }
           # V0.0.25 新增：触发区域三个滑杆必须在「细节调整」二级页（V0.0.30 起 Root 只放开关）
           for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
             plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q "$K" \
