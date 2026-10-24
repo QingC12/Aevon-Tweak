@@ -242,7 +242,7 @@ enum AevonSnap {
         //      init **全部返回 nil**（诊断里 app / sceneHandle / displayIdentity 都在），
         //      说明这个实体在 SpringBoard 之外的构造链上根本立不起来；
         //   3) 用户 2026-10-24 决定：本版做不到小胖屏就终止项目、主窗回细长。
-        // 所以这里不再读 `FullContent`（开关保留只为兼容旧偏好与历史日志串）。
+        // 所以这里不再读任何「内容模式」偏好（开关已随小胖屏项目整体移除）。
         let usable = max(1, screen.height - AevonSnap.cropTop)
         return screen.width / usable
     }
