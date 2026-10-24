@@ -529,6 +529,7 @@ final class AevonSceneDriver: NSObject {
         let candidates: [(String, Int)] = [
             ("initWithApplication:generatingNewPrimarySceneIfRequired:sceneHandleProvider:displayIdentity:", 4),
             ("initWithApplication:sceneHandleProvider:displayIdentity:", 3),
+            ("initWithApplicationForMainDisplay:", 1),
             ("initWithApplication:uniqueIdentifier:targetContentIdentifier:sceneHandleProvider:displayIdentity:", 5),
         ]
         var usable: [(String, Int)] = []
@@ -587,14 +588,38 @@ final class AevonSceneDriver: NSObject {
             return
         }
 
-        AevonLog.info("[场景] P1 第 4 步预习：将尝试 \(usable.count) 个 init（\(usable.map { $0.0.components(separatedBy: ":")[0] }.joined(separator: "/"))）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
+        /* V0.0.80（AevonProviderProbeV80）：上一版三个 init 全 nil，但 provider 已经命中
+         * `SBMainDisplaySceneManager`。返回 nil 只能来自 init 内部拿不到 sceneHandle ——
+         * 也就是 provider 的 identity 链给我们回了 nil。这里把整条链的**真实返回值**
+         * 打出来（identity 两种选择子 × create 真假 + handle + App 的 sceneIdentifier +
+         * 多场景声明），下一轮一眼能定死是「单场景 App 建不了第二个场景」还是「参数传错」。
+         * 同时把 provider 类（含父类）的方法表按 create/application/scene 过滤 dump 一次，
+         * 直接看它到底提供了哪些「给 App 建场景」的官方入口。 */
+        if let p = effProvider {
+            AevonCrumbWrite("第4步-provider探测")
+            var probe = ""
+            tryRun("第4步-provider探测") {
+                probe = AevonProviderProbeReport(p, app) ?? ""
+            }
+            diag.items.append("链探测=\(probe.isEmpty ? "空" : probe)")
+            let clsName = AevonSafeClassName(p) ?? ""
+            if !clsName.isEmpty {
+                var dump = ""
+                tryRun("第4步-方法表") {
+                    dump = AevonClassMethodDump(clsName, "create,application,scene") ?? ""
+                }
+                diag.items.append("方法表(\(clsName))=\(dump.isEmpty ? "空" : dump)")
+            }
+        }
 
         AevonCrumbWrite("第4步-init")
+        AevonLog.info("[场景] P1 第 4 步预习：将尝试 \(usable.count) 个 init（\(usable.map { $0.0 }.joined(separator: " / "))）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73 AevonProviderProbeV80）")
         tryRun("第4步") {
             typealias Init4 = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init3 = @convention(c) (NSObject, Selector, NSObject, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init5 = @convention(c) (NSObject, Selector, NSObject, NSObject, NSObject?, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init2Main = @convention(c) (NSObject, Selector, NSObject, Bool) -> Unmanaged<NSObject>?
+            typealias Init1Main = @convention(c) (NSObject, Selector, NSObject) -> Unmanaged<NSObject>?
             for (selName, argc) in usable {
                 let sel = NSSelectorFromString(selName)
                 let short = selName.components(separatedBy: ":")[0]
@@ -607,6 +632,8 @@ final class AevonSceneDriver: NSObject {
                     guard let fresh = AevonAllocInstance(cls) else { return }
                     var result: Unmanaged<NSObject>? = nil
                     switch argc {
+                    case 1:
+                        result = unsafeBitCast(imp, to: Init1Main.self)(fresh, sel, app)
                     case 2:
                         result = unsafeBitCast(imp, to: Init2Main.self)(fresh, sel, app, true)
                     case 4:
@@ -629,10 +656,10 @@ final class AevonSceneDriver: NSObject {
                 }
                 if let attempt {
                     entity = attempt
-                    diag.items.append("成功=\(short)")
+                    diag.items.append("成功=\(selName)")
                     break
                 }
-                diag.items.append("返回nil=\(short)")
+                diag.items.append("返回nil=\(selName)")
             }
         }
         guard let entity else {

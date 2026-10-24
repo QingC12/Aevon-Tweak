@@ -121,6 +121,14 @@ enum AevonSceneHelper {
         }
     }
 
+    /// 读场景当前的前台标记（V0.0.80，AevonFrontHealV80）。
+    /// 返回 nil = 读不到（场景没有 settings / 没有 foreground 键），调用方不要据此做判断。
+    static func isForeground(_ scene: AnyObject) -> Bool? {
+        guard scene.responds(to: Selector(("settings"))) else { return nil }
+        guard let settings = AevonRuntime.send(scene, Selector(("settings"))) else { return nil }
+        return AevonRuntime.bool(settings, key: "foreground")
+    }
+
     static func wakeUp(_ bundleID: String) {
         guard let scene = scene(for: bundleID) else { return }
         setForeground(scene, true)

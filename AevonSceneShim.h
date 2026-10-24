@@ -210,3 +210,11 @@ NSString *AevonIvarDumpReport(id obj, int limit);
 /// 文件式存活登记（比 notify state 稳；Aevon.log 已证明 App 进程能写 /var/mobile）
 void AevonGuardAlivePublishFile(NSString *bundleID);
 int AevonGuardAliveFileState(NSString *bundleID);
+
+/* V0.0.80（AevonProviderProbeV80）：provider 能力探测。
+ * 打 identity 链（两种选择子 × create 真假）+ handle 链 + App 的 sceneIdentifier
+ * + 多场景声明，全部只读。用来定死「为什么 SBDeviceApplicationSceneEntity
+ * 的三个 init 都返回 nil」。 */
+NSString *AevonProviderProbeReport(id provider, id app);
+/// 类（含父类）方法表按关键字过滤，诊断用。
+NSString *AevonClassMethodDump(NSString *clsName, NSString *keywordCSV);

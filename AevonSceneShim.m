@@ -1367,3 +1367,139 @@ int AevonGuardAliveFileState(NSString *bundleID) {
         return pid;
     } @catch (NSException *e) { return 0; }
 }
+
+#pragma mark - V0.0.80：provider 能力探测 / 类方法表打印
+
+/* Aevon(72) 日志：provider 已经是 `SBMainDisplaySceneManager`（对象图命中），
+ * 但 SBDeviceApplicationSceneEntity 的三个 init 全部返回 nil。返回 nil 几乎必然意味着
+ * init 内部走 `-sceneHandleForSceneIdentity:` 拿不到 handle —— 也就是
+ * `-sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:` 返回了 nil。
+ * 为什么 nil？两种可能：
+ *   ① 这个 App 是单场景 App（Info.plist 没有 UIApplicationSupportsMultipleScenes），
+ *      已经有 primary scene，`createPrimaryIfRequired:YES` 也不给第二个；
+ *   ② sceneSessionRole 传错（要的是 @"UIWindowSceneSessionRoleApplication"）。
+ * 这个函数把整条链的实际返回值原样打出来，下一轮能一眼定死是哪种。 */
+NSString *AevonProviderProbeReport(id provider, id app) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    @try {
+        if (provider == nil) { return @"provider=nil"; }
+        if (app == nil) { [out addObject:@"app=nil"]; }
+        /* ① identity 链 */
+        NSArray<NSString *> *idSels = @[@"sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:",
+                                        @"_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"];
+        for (NSString *name in idSels) {
+            SEL sel = NSSelectorFromString(name);
+            if (![provider respondsToSelector:sel]) {
+                [out addObject:[NSString stringWithFormat:@"%@=不支持", [name componentsSeparatedByString:@":"][0]]];
+                continue;
+            }
+            for (NSNumber *flag in @[@NO, @YES]) {
+                id identity = nil;
+                @try {
+                    id (*fn)(id, SEL, id, BOOL, id) = (void *)objc_msgSend;
+                    identity = fn(provider, sel, app, (BOOL)flag.boolValue,
+                                  @"UIWindowSceneSessionRoleApplication");
+                } @catch (NSException *e) { identity = nil; }
+                NSString *cls = identity ? NSStringFromClass([identity class]) : @"nil";
+                [out addObject:[NSString stringWithFormat:@"%@(create=%d)=%@",
+                                [name componentsSeparatedByString:@":"][0],
+                                flag.boolValue ? 1 : 0, cls]];
+                /* ② 拿到 identity 就继续探 handle */
+                if (identity != nil) {
+                    for (NSString *hsel in @[@"sceneHandleForSceneIdentity:",
+                                             @"existingSceneHandleForSceneIdentity:",
+                                             @"sceneHandleForIdentity:"]) {
+                        SEL hs = NSSelectorFromString(hsel);
+                        if (![provider respondsToSelector:hs]) { continue; }
+                        id handle = nil;
+                        @try {
+                            id (*hfn)(id, SEL, id) = (void *)objc_msgSend;
+                            handle = hfn(provider, hs, identity);
+                        } @catch (NSException *e) { handle = nil; }
+                        [out addObject:[NSString stringWithFormat:@"%@=%@",
+                                        [hsel componentsSeparatedByString:@":"][0],
+                                        handle ? NSStringFromClass([handle class]) : @"nil"]];
+                    }
+                }
+            }
+        }
+        /* ③ App 自身的场景标识（判断「是不是已经有 primary」） */
+        for (NSString *sel in @[@"primarySceneIdentifier", @"sceneIdentifier", @"bundleIdentifier",
+                                @"persistentIdentifier"]) {
+            SEL s = NSSelectorFromString(sel);
+            if (app == nil || ![app respondsToSelector:s]) { continue; }
+            id v = nil;
+            @try { v = ((id (*)(id, SEL))objc_msgSend)(app, s); } @catch (NSException *e) { v = nil; }
+            if ([v isKindOfClass:[NSString class]]) {
+                [out addObject:[NSString stringWithFormat:@"app.%@=%@", sel, v]];
+            } else if (v != nil) {
+                [out addObject:[NSString stringWithFormat:@"app.%@=<%@>", sel, NSStringFromClass([v class])]];
+            }
+        }
+        /* ④ 多场景支持（App 的 Info.plist 声明）—— 单场景 App 建不了第二个 scene。
+         * 注意：不能用 `[NSBundle mainBundle]`（那是 SpringBoard 自己的 Info.plist），
+         * 只能顺着 SBApplication 拿它自己的 bundle。 */
+        @try {
+            id multi = nil;
+            if (app != nil && [app respondsToSelector:@selector(bundle)]) {
+                id b = ((id (*)(id, SEL))objc_msgSend)(app, @selector(bundle));
+                if ([b isKindOfClass:[NSBundle class]]) {
+                    multi = ((NSBundle *)b).infoDictionary[@"UIApplicationSceneManifest"][@"UIApplicationSupportsMultipleScenes"];
+                }
+            }
+            if (multi == nil) { multi = @"未声明(默认NO)"; }
+            [out addObject:[NSString stringWithFormat:@"多场景声明=%@", multi]];
+        } @catch (NSException *e) {
+            [out addObject:@"多场景声明=读取失败"];
+        }
+    } @catch (NSException *e) {
+        [out addObject:[NSString stringWithFormat:@"异常=%@", e.reason ?: @"?"]];
+    }
+    return [out componentsJoinedByString:@","];
+}
+
+/* 类方法表（按关键字过滤）—— 下一轮从 SBMainDisplaySceneManager 上直接找
+ * 「给某个 App 建新场景」的官方 API，不再靠猜属性名。只读，不改任何东西。 */
+NSString *AevonClassMethodDump(NSString *clsName, NSString *keywordCSV) {
+    @try {
+        Class cls = NSClassFromString(clsName);
+        if (cls == Nil) { return @"类不存在"; }
+        NSArray<NSString *> *keywords = [keywordCSV componentsSeparatedByString:@","];
+        NSMutableArray<NSString *> *hits = [NSMutableArray array];
+        unsigned int count = 0;
+        Method *methods = class_copyMethodList(cls, &count);
+        if (methods != NULL) {
+            for (unsigned int i = 0; i < count; i++) {
+                NSString *name = NSStringFromSelector(method_getName(methods[i]));
+                for (NSString *kw in keywords) {
+                    if (kw.length > 0 && [name rangeOfString:kw].location != NSNotFound) {
+                        [hits addObject:name];
+                        break;
+                    }
+                }
+            }
+            free(methods);
+        }
+        /* 超类也扫一遍（SBSceneManager 的创建 API 在父类上） */
+        Class super_ = class_getSuperclass(cls);
+        if (super_ != Nil && super_ != [NSObject class]) {
+            unsigned int sc = 0;
+            Method *sm = class_copyMethodList(super_, &sc);
+            if (sm != NULL) {
+                for (unsigned int i = 0; i < sc; i++) {
+                    NSString *name = NSStringFromSelector(method_getName(sm[i]));
+                    for (NSString *kw in keywords) {
+                        if (kw.length > 0 && [name rangeOfString:kw].location != NSNotFound) {
+                            [hits addObject:[@"父:" stringByAppendingString:name]];
+                            break;
+                        }
+                    }
+                }
+                free(sm);
+            }
+        }
+        return hits.count ? [hits componentsJoinedByString:@" | "] : @"无命中";
+    } @catch (NSException *e) {
+        return @"异常";
+    }
+}

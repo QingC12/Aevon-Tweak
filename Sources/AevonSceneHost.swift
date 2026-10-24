@@ -113,24 +113,50 @@ final class AevonSceneHost {
     private func applyContentInteraction(reason: String) {
         let allow = contentInteractiveByPref && desiredInteractive && !guardHardAbsent
         var flipped = 0
+        /* V0.0.80（AevonNoSysViewGateV80）：**只关我们自己的宿主容器，
+         * 绝不再去动 `presentationView` / 它的子树。**
+         *
+         * Aevon(72) 第 2 条：「关闭所有悬浮窗后全屏触摸完全失效，必须回桌面重开 App」。
+         * V78 的写法是每 0.5 秒把 `presentationView.isUserInteractionEnabled` 压成 false
+         * 并且递归关掉整棵子树。日志里那句「内容触摸被系统重新打开 → 已强制关闭」
+         * 恰恰说明**这个 view 是系统在管**：它属于 scene 的呈现层，SpringBoard 自己
+         * 显示这个 App 全屏时用的就是同一个呈现视图。我们把它压成 false 之后，
+         * 关窗只停掉了定时器、**没有任何代码把 true 写回去** —— App 全屏了，
+         * 画面在、触摸全被这个 view 吃掉，只有重开（系统新建一个呈现视图）才恢复。
+         *
+         * 语义上也不需要在别人的视图上动手：这块内容就在我们的 `container` 里，
+         * `container.isUserInteractionEnabled = false` 已经让整棵子树收不到触摸
+         * （UIKit 的 hitTest 在拿到 false 时直接返回 nil，不再往下递归）。 */
         if container.isUserInteractionEnabled != allow {
             container.isUserInteractionEnabled = allow
             flipped += 1
-        }
-        if presentationView.isUserInteractionEnabled != allow {
-            presentationView.isUserInteractionEnabled = allow
-            flipped += 1
-        }
-        if !allow {
-            flipped += disableInteractionTree(presentationView, depth: 0)
         }
         // 「设置变更 / 显式切换」两种是用户主动改的，单独记一行，不占强制计数
         if flipped > 0 && reason != "显式切换" && reason != "设置变更" {
             enforcementCount += 1
             if enforcementCount <= 6 || enforcementCount % 20 == 0 {
                 AevonLog.warn("[场景] 内容触摸被系统重新打开 → 已强制关闭（第 \(enforcementCount) 次，"
-                    + "\(reason)，bundle=\(bundleID)，本轮改动 \(flipped) 处）（AevonContentGateV78）")
+                    + "\(reason)，bundle=\(bundleID)，本轮改动 \(flipped) 处）（AevonContentGateV78 AevonNoSysViewGateV80）")
             }
+        }
+    }
+
+    /// 把系统呈现视图交还给系统（V0.0.80，AevonNoSysViewGateV80）。
+    ///
+    /// 两件事：
+    ///   ① 修历史遗留 —— V78/V79 可能把这个 view 及其子树压成了
+    ///      `isUserInteractionEnabled = false` 且再也没还原（就是全屏点不动的病灶）；
+    ///   ② 开窗时先归零，确保我们自己的门控只作用在 `container` 上。
+    private func restoreSystemPresentationInteraction(reason: String) {
+        var n = 0
+        if !presentationView.isUserInteractionEnabled {
+            presentationView.isUserInteractionEnabled = true
+            n += 1
+        }
+        n += enableInteractionTree(presentationView, depth: 0)
+        if n > 0 {
+            AevonLog.warn("[场景] 已把系统呈现视图的交互还原（\(reason)，\(bundleID)，还原 \(n) 处）"
+                + "—— 上一版把它压成 false 后没有还原，会让 App 全屏点不动（AevonNoSysViewGateV80）")
         }
     }
 
@@ -160,6 +186,21 @@ final class AevonSceneHost {
                 n += 1
             }
             n += disableInteractionTree(sub, depth: depth + 1)
+        }
+        return n
+    }
+
+    /// 递归打开整棵子树的交互（V0.0.80：修 V78/V79 留下的「全屏点不动」）
+    @discardableResult
+    private func enableInteractionTree(_ view: UIView, depth: Int) -> Int {
+        guard depth < 6 else { return 0 }
+        var n = 0
+        for sub in view.subviews {
+            if !sub.isUserInteractionEnabled {
+                sub.isUserInteractionEnabled = true
+                n += 1
+            }
+            n += enableInteractionTree(sub, depth: depth + 1)
         }
         return n
     }
@@ -391,10 +432,14 @@ final class AevonSceneHost {
         view.frame = host.bounds
         view.autoresizingMask = [UIView.AutoresizingMask.flexibleWidth,
                                  UIView.AutoresizingMask.flexibleHeight]
-        view.isUserInteractionEnabled = interactive
+        // V0.0.80：**系统呈现视图恒可交互**。门控只做在 `host` 上 ——
+        // 这个 view 同时被 SpringBoard 用来全屏显示该 App，压成 false 会连累全屏触摸。
+        view.isUserInteractionEnabled = true
         host.addSubview(view)
         self.container = host
         applyContentInteraction(reason: "初始化")
+        // V0.0.80：把系统呈现视图的交互交还给系统（修上一版残留的「全屏点不动」）
+        restoreSystemPresentationInteraction(reason: "开窗")
         startContentGate()
 
         AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(container.isUserInteractionEnabled ? "开" : "关")）")
@@ -559,6 +604,11 @@ final class AevonSceneHost {
         stopProbing()
         stopContentGate()
         hasContent = false
+
+        /* V0.0.80（AevonNoSysViewGateV80）：拆之前把系统呈现视图的交互交还回去。
+         * 关窗之后这个 view 可能还被系统用来全屏显示这个 App —— 留着 false
+         * 就是「关掉所有浮窗后全屏点不动」的直接原因。 */
+        restoreSystemPresentationInteraction(reason: "关窗")
 
         // 先摘视图，再 deactivate + invalidate（顺序错了会留下悬挂的呈现者）
         presentationView.removeFromSuperview()

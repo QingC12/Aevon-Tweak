@@ -335,8 +335,43 @@ enum AevonEntryHost {
             + "（浮窗盖住的区域 App 不再收到触摸，双击/连点都不会漏）（AevonGuardFloatRectV56）")
     }
 
-    /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。
+    /* V0.0.80（AevonAllClosedResetV80）：最后一个浮窗关掉之后的彻底复位。
+     *
+     * Aevon(72) 第 2 条：「关闭所有悬浮窗后全屏触摸会出现问题，无法触摸，
+     * 必须回桌面再次打开全屏应用，或者清除后台卡片重新打开才恢复」。
+     *
+     * 关窗本身已经把「主窗矩形」清给 Guard 了，但另外三样东西没清：
+     *   ① SB 侧全局通道的接管状态（`ownsTouch` / `floatTouchID` / bit48）；
+     *   ② App 侧 Guard 手里可能还留着的「浮窗手势期」时间戳；
+     *   ③ 前台场景的 foreground 标记 —— 关窗收尾那次 sleep/wake 回弹若被打断，
+     *      场景会停在「前台但不呈现」的状态，触摸不投递。
+     * 这里一次性把三样都处理掉，并在 1 秒后再校验一次前台场景。 */
+    static func onAllWindowsClosed() {
+        lastGuardFloatRect = .null          /* 强制重发一次「清零」包 */
+        syncFloatRectToGuard()
+        AevonEdgeEntry.resetGlobalTouchState(reason: "全部浮窗已关闭")
+        AevonLog.info("[窗口] 已关闭全部浮窗：全局吞摸已复位 / 主窗矩形已清零 / "
+            + "1 秒后校验前台场景（AevonAllClosedResetV80）")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            reassertFrontmost(reason: "全部浮窗关闭后 1 秒")
+        }
+    }
+
+    /// 校验「当前全屏前台场景」是不是真的还在前台；被误判成后台就强制拉回来。
     ///
+    /// 症状对应：关掉浮窗后画面还在（停在最后一帧）但整屏点不动，切回桌面再进一次才好。
+    /// 根因是 `FBScene.settings.foreground == false` —— 场景不呈现、输入不路由。
+    static func reassertFrontmost(reason: String) {
+        guard let identity = appSceneIdentity, !identity.isEmpty else { return }
+        guard let scene = AevonSceneHelper.scene(for: identity) else { return }
+        guard let foreground = AevonSceneHelper.isForeground(scene) else { return }
+        guard foreground == false else { return }
+        AevonSceneHelper.setForeground(scene, true)
+        AevonLog.warn("[自愈] 全屏前台场景被误判为后台 → 已强制拉回前台"
+            + "（\(identity)，\(reason)，AevonFrontHealV80）")
+    }
+
+    /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。    ///
     /// 用户 Aevon(43)：「第一个小窗在屏幕右上角、距离顶部 10% 处，然后向下依次类推，
     /// 总数量只有 5 个，当其中一个被还原成主悬浮窗时，下面的自动补空缺（这里需要有动画）」。
     /// 槽位算法见 `AevonSnap.dockColumnYs`（顶部 10% 锚点、固定 5 格），
@@ -828,6 +863,17 @@ enum AevonEntryHost {
         // 入口视图按最新配置重新落位（V0.0.25：设置里改了热区位置/宽高要立即生效，
         // 不能等下次注销 —— 这里每 3 秒对一次，代价可以忽略）
         AevonEdgeEntry.refreshLayoutIfNeeded()
+
+        /* V0.0.80（AevonAllClosedResetV80）：无浮窗期的触摸自愈。
+         *
+         * 一个浮窗都没有的时候，SB 侧不该有任何触摸接管状态残留。
+         * 每 3 秒便宜地对一次：真有残留才清（`resetGlobalTouchState` 内部只在
+         * 「确实有状态」时写日志），顺手校验前台场景有没有被误判成后台。
+         * 这是 Aevon(72)「关掉所有浮窗后全屏点不动」的最后一道兜底。 */
+        if !AevonWindowManager.hasAnyWindow {
+            AevonEdgeEntry.resetGlobalTouchState(reason: "看门狗：当前没有浮窗")
+            if tickCount % 2 == 0 { reassertFrontmost(reason: "看门狗周期校验") }
+        }
 
         // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
         if tickCount <= 60, tickCount % 10 == 0 {

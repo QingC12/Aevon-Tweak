@@ -11,6 +11,16 @@ enum AevonWindowManager {
         return windows[bundleID] != nil
     }
 
+    /// 当前是否有任何浮窗（V0.0.80）。
+    ///
+    /// 用来给「全局吞摸」加一道硬门：一个浮窗都没有的时候，
+    /// 全局通道没有任何理由继续吞触摸 —— Aevon(72) 的「关掉所有浮窗后全屏点不动」
+    /// 最坏的情况就是某个残留状态让 `ownsTouch` 一直为真（AevonAllClosedResetV80）。
+    static var hasAnyWindow: Bool { return !windows.isEmpty }
+
+    /// 同时开着的浮窗数量（保活 / 内存压力观测用）
+    static var openCount: Int { return windows.count }
+
     /// 当前已开窗的 App（按开窗顺序）。
     static var openBundleIDs: [String] {
         return order.filter { windows[$0] != nil }
@@ -261,6 +271,12 @@ enum AevonWindowManager {
             // 漏掉这一步，Guard 会一直以为那块屏幕还盖着浮窗，把 App 的触摸白白吞掉
             // （「关掉浮窗后某一块区域点不动」就是这么来的）。
             AevonEntryHost.syncFloatRectToGuard()
+            /* V0.0.80（AevonAllClosedResetV80）：最后一个浮窗也关掉了 ——
+             * 做一次彻底复位（全局吞摸状态 / Guard 状态位 / 前台场景保活）。
+             * Aevon(72)：「关闭所有悬浮窗后全屏触摸失灵，必须回桌面重开 App」。 */
+            if windows.isEmpty {
+                AevonEntryHost.onAllWindowsClosed()
+            }
             // 真正拆完视图后再判定（退场动画期间窗还在，计数不能提前减）
             AevonIdleGuard.shared.refresh()
             // V0.0.61（AevonFrontmostRepreV61）：前台回弹 —— 关的是前台 App 自己时，

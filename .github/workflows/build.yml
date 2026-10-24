@@ -1127,6 +1127,30 @@ jobs:
             exit 1
           fi
           echo "V0.0.79 校验: 内容触摸开关可实时切换，provider ivar 候选已接上"
+          # ── V0.0.80（AevonNoWinResizeV80 / AevonAllClosedResetV80 / AevonProviderProbeV80）──
+          python3 - "$DYLIB" <<'PY80'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonAllClosedResetV80","AevonFrontHealV80",
+                    "AevonProviderProbeV80","AevonNoSysViewGateV80","触摸接管状态已全部复位",
+                    "全部浮窗关闭后 1 秒","看门狗：当前没有浮窗"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.80 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.80 校验: 关窗全复位 + 前台自愈 + provider 链探测 + 系统视图门控移除 已编入")
+          PY80
+          if grep -n 'presentationView.isUserInteractionEnabled = allow' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
+            echo "::error::V0.0.80 回退: 又在把系统呈现视图的交互压成 false（会让 App 全屏点不动）"
+            exit 1
+          fi
+          strings "$GUARD_DYLIB" | grep -q 'AevonNoWinResizeV80' \
+            || { echo "::error::V0.0.80 Guard 没有停用「强制放大窗口」（AevonNoWinResizeV80）"; exit 1; }
+          strings "$GUARD_DYLIB" | grep -q 'AevonGuardNoWidgetV80' \
+            || { echo "::error::V0.0.80 Guard 没有排除小组件宿主（AevonGuardNoWidgetV80）"; exit 1; }
+          # 反回退：Guard 里绝不能再出现 win.frame = screen / 每秒 layoutIfNeeded
+          if grep -n 'win.frame = screen' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m"; then
+            echo "::error::V0.0.80 回退: Guard 又在强行改 App 窗口尺寸（会吃掉整屏触摸 / 每秒强制布局）"
+            exit 1
+          fi
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

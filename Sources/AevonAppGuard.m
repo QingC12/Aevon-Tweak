@@ -72,6 +72,11 @@ __attribute__((used)) static const char AevonNoWinResizeV57Marker[] = "AevonNoWi
 __attribute__((used)) static const char AevonGuardFloatBit36V59Marker[] = "AevonGuardFloatBit36V59";
 /// CI 标记（V0.0.61）：扩展进程（.appex）绝不装 Guard —— 修「桌面部分小组件空白」
 __attribute__((used)) static const char AevonGuardNoExtV61Marker[] = "AevonGuardNoExtV61";
+/// CI 标记（V0.0.80）：小组件宿主（Chrono / WidgetKit）也不装 Guard —— Aevon(72) 第 3 条
+__attribute__((used)) static const char AevonGuardNoWidgetV80Marker[] = "AevonGuardNoWidgetV80";
+/// CI 标记（V0.0.80）：不再强行放大 App 窗口（旧实现每秒改 frame + layoutIfNeeded，
+/// 会吃掉整屏触摸、把内容拽得自己上滑）
+__attribute__((used)) static const char AevonNoWinResizeV80Marker[] = "AevonNoWinResizeV80";
 __attribute__((used)) static const char AevonGuardGhostRecordV67Marker[] = "AevonGuardGhostRecordV67";
 /// CI 标记（V0.0.68）：「设置」App 解除整体排除（装 Guard、热区禁用）+ 注入自检日志
 __attribute__((used)) static const char AevonGuardPrefsAliveV68Marker[] = "AevonGuardPrefsAliveV68";
@@ -447,34 +452,58 @@ static CGRect AevonGuardFloatRectRect(void) {
  * 以及任何被别的东西改小的窗口）。真正的显示适配在 SpringBoard 侧做：
  * 整屏画面等比完整缩放（AevonContentFitV57）。 */
 static BOOL gAevonWindowKeptFullLogged = NO;
+static BOOL gAevonWinResizeWarned = NO;
 
+/* V0.0.80（AevonNoWinResizeV80）：**这条通道整个关掉，只留诊断**。
+ *
+ * Aevon(72) 报了三件事，指向的是同一处：
+ *   · 关闭所有浮窗后全屏触摸失灵，回桌面重开 App 才恢复；
+ *   · 任何 App 的任何页面里，内容会自己整体往上滑并钉住，手动滑不下来，
+ *     只能清后台重开；
+ *   · 桌面部分小组件变空白。
+ *
+ * 旧实现每 1 秒（`sendEvent` 里调用，节流 1s）做一次：
+ *   keyWindow（取不到就 `windows.firstObject`）frame ← `UIScreen.main.bounds`
+ *   + `setNeedsLayout` + `layoutIfNeeded`
+ * 三个问题：
+ *   ① `windows.firstObject` 往往不是主窗口（可能是 alert / HUD / 键盘宿主窗口，
+ *      甚至有 0 尺寸的垫片窗口）—— 把这种窗口撑成整屏，它会盖在主窗口上面，
+ *      **整屏触摸全被它吃掉** = 「关掉浮窗后点不动」；
+ *   ② 只要 frame 与屏幕差 0.5pt（浮点误差 / 系统过渡中间态），就会每秒无条件
+ *      `frame = 屏幕` 并强制布局一次 —— App 的 UIScrollView 每秒钟被重排一次，
+ *      contentOffset 反复被拽到同一个位置，就是「内容自己往上滑并钉住」；
+ *   ③ V57 起我们**根本不再改小任何窗口**（显示改走浮窗侧等比缩放），
+ *      这条「还原」兜底已经没有正当触发场景，剩下的只有风险。
+ *
+ * 现在：只在**真的检测到主窗口被改小**时写一条日志，绝不写 frame、绝不触发布局。
+ * 保留旧日志串（AevonNoWinResizeV57）作为历史校验锚点 —— CI 用历史版本串做回归，
+ * 串只能加不能改。 */
 static void AevonGuardKeepWindowFull(void) {
     @try {
         static CFTimeInterval lastAt = 0;
         CFTimeInterval now = CACurrentMediaTime();
-        if (now - lastAt < 1.0) { return; }
+        if (now - lastAt < 10.0) { return; }
         lastAt = now;
+        if (gAevonWinResizeWarned) { return; }   /* 只报一次，不给日志刷屏 */
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         UIApplication *app = [UIApplication sharedApplication];
-        NSArray<UIWindow *> *wins = (app != nil) ? app.windows : nil;
-        UIWindow *win = nil;
-        for (UIWindow *candidate in wins) {
-            if (candidate.isKeyWindow) { win = candidate; break; }
-        }
-        if (win == nil) { win = wins.firstObject; }
-        if (win == nil) { return; }
+        if (app == nil) { return; }
+        UIWindow *key = app.keyWindow;
+        if (key == nil) { return; }               /* 没有 keyWindow 就什么都不做 */
         CGRect screen = [UIScreen mainScreen].bounds;
-        if (CGRectEqualToRect(win.frame, screen)) { return; }
-        win.frame = screen;
-        [win.rootViewController.view setNeedsLayout];
-        [win.rootViewController.view layoutIfNeeded];
-        if (!gAevonWindowKeptFullLogged) {
-            gAevonWindowKeptFullLogged = YES;
-            AevonGuardWriteLog(YES, @"App 窗口曾被改小，已还原成整屏"
-                               @"（本版不再改窗口尺寸：内容适配改由浮窗侧等比整屏缩放负责）"
-                               @"（AevonNoWinResizeV57）");
-        }
+        if (screen.size.width < 1 || screen.size.height < 1) { return; }
+        if (CGRectEqualToRect(key.frame, screen)) { return; }
+        /* 只关心「明显被改小」的主窗口（< 屏高 90%）。轻微差异 = 正常过渡态，不管。 */
+        if (key.frame.size.height >= screen.size.height * 0.9) { return; }
+        if (key.windowLevel != UIWindowLevelNormal) { return; }
+        gAevonWinResizeWarned = YES;
+        AevonGuardWriteLog(NO, @"检测到主窗口被改小（%.0fx%.0f，屏幕 %.0fx%.0f）——"
+                           @"本版**不再强行还原**（强行还原会吃掉整屏触摸 / 每秒强制布局"
+                           @"导致内容自己上滑），如遇黑屏请重开该 App"
+                           @"（AevonNoWinResizeV80 AevonNoWinResizeV57）",
+                           key.frame.size.width, key.frame.size.height,
+                           screen.size.width, screen.size.height);
 #pragma clang diagnostic pop
     } @catch (NSException *exception) {
     }
@@ -1366,6 +1395,14 @@ __attribute__((constructor)) static void AevonGuardConstructor(void) {
         if (guardInfo[@"NSExtension"] != nil) { return; }
         NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
         if ([bundlePath hasSuffix:@".appex"]) { return; }
+        /* V0.0.80（AevonGuardNoWidgetV80）：小组件宿主（Chrono / WidgetKit）再排一道。
+         * Aevon(72) 第 3 条「桌面部分小组件消失、默认空白」—— .appex 已经拦掉扩展本体，
+         * 但小组件的渲染宿主还有几个非 .appex 的进程。它们完全不需要浮窗触摸门控，
+         * 装上 sendEvent 拦截只会增加崩掉 / 空白的概率。 */
+        if ([bundleID hasPrefix:@"com.apple."] &&
+            ([bundleID containsString:@"widget"] || [bundleID containsString:@"chrono"])) {
+            return;
+        }
 
         /* V0.0.69：constructor 时 sharedApplication 几乎必然未创建 → 走延迟安装 */
         AevonGuardDeferredInstall(0);

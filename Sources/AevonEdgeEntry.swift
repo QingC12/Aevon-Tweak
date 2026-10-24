@@ -1251,6 +1251,18 @@ enum AevonEdgeEntry {
            touchID == globalTouchID, CACurrentMediaTime() <= swallowDeadline {
             return true
         }
+        /* V0.0.80（AevonAllClosedResetV80）——「无浮窗期」硬门。
+         *
+         * Aevon(72)：「关闭所有悬浮窗后全屏触摸会出现问题，完全点不动，
+         * 必须回桌面再打开全屏 App，或者清后台重开」。
+         * 这时 SB 侧没有任何浮窗、圆盘也没开，全局通道**没有任何理由**继续吞触摸。
+         * 只要有任何一条残留状态（ownsTouch / globalTouchID / 一个已经过期的 deadline）
+         * 让这里返回 YES，整屏的触摸就全被我们这个 hook 吃掉了，App 一个事件都收不到。
+         * 所以这里加一道无条件放行：没窗口 + 没圆盘 = 不吞。 */
+        if !AevonWindowManager.hasAnyWindow, !AevonRingMenu.isPresented,
+           globalTouchID == 0 || touchID != globalTouchID {
+            return false
+        }
         guard globalTouchID != 0, touchID == globalTouchID else { return false }
         guard CACurrentMediaTime() <= swallowDeadline else { return false }
         // V0.0.33（AevonTouchOwnV33）：ownsTouch 成立后**锁定不再回查** mountedInAppScene。
@@ -1265,6 +1277,45 @@ enum AevonEdgeEntry {
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。
     static func setStripInteraction(_ enabled: Bool) {
         strip?.isUserInteractionEnabled = enabled
+    }
+
+    /* V0.0.80（AevonAllClosedResetV80）：把「触摸接管」相关的全部状态清干净。
+     *
+     * 什么时候调：最后一个浮窗被关掉时（AevonEntryHost.onAllWindowsClosed）、
+     * 以及看门狗发现「没有浮窗却还残留接管状态」时。
+     *
+     * 为什么必须做：全局通道（`UIApplication -sendEvent:`）的吞事件完全由这些
+     * 静态变量决定。只要 `ownsTouch` 卡在 true（抬手那一帧没到 / 窗口在动画中途被拆），
+     * 之后整屏的触摸都会被这个 hook 丢掉 —— 表现就是「全屏 App 完全点不动」，
+     * 而且因为状态在 SB 进程里，只有切场景 / 重启 App 才会碰巧复位。
+     * 圆盘正在用时不动它（那根手指还要继续驱动圆盘）。 */
+    static func resetGlobalTouchState(reason: String) {
+        if AevonRingMenu.isPresented { return }
+        let hadAny = ownsTouch || globalTouchID != 0 || floatTouchID != 0
+            || ringExtraTouchID != 0 || floatTouchFlagOn
+        globalTouchID = 0
+        globalStart = .zero
+        globalFired = false
+        ownsTouch = false
+        swallowDeadline = 0
+        ringSource = ""
+        ringExtraTouchID = 0
+        ringExtraDeadline = 0
+        floatTouchID = 0
+        floatDeadline = 0
+        floatBodyInZone = false
+        /* bit48 立刻清零：关窗后 App 侧 Guard 不该再收到「浮窗手势期」。
+         * 这里绕过 0.7s 宽限直接写 0（关窗场景没有「快速连点第二下」要防）。 */
+        floatFlagGeneration += 1
+        if floatTouchFlagOn {
+            floatTouchFlagOn = false
+            AevonNotifySetFloatTouch(0)
+        }
+        if hadAny {
+            AevonLog.warn("[边缘] 触摸接管状态已全部复位（\(reason)）："
+                + "全局吞摸/浮窗手势/bit48 全部清零，App 恢复全屏触摸"
+                + "（AevonAllClosedResetV80）")
+        }
     }
 
     /// 打开完整应用面板（V0.0.30 起只有单窗模式）。
