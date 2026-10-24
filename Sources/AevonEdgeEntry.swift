@@ -379,14 +379,14 @@ enum AevonEdgeEntry {
                                            "com.aevon.prefschanged" as CFString,
                                            nil,
                                            .deliverImmediately)
-            // V0.0.35：Guard 回执通道（呼出圆盘后据此确证 App 侧注入与状态读取）
+            // V0.1.2（AevonGuardCleanupV102）：Guard 回执通道已随 Guard 移除
             CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                                            nil,
-                                           aevonGuardAckHandler,
-                                           "com.aevon.guardack" as CFString,
+                                           aevonPrefsChangedHandler,
+                                           "com.aevon.prefschanged" as CFString,
                                            nil,
                                            .deliverImmediately)
-            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged / guardack）（AevonPrefsLiveV26）")
+            AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26）")
         }
         guard zoneTimer == nil else { return }
         syncGuardConfig()
@@ -435,48 +435,16 @@ enum AevonEdgeEntry {
         syncGuardConfig()
     }
 
-    /// V0.0.32（AevonGuardNotifyV32）：把当前热区几何同步给 AevonGuard。
-    ///
-    /// 为什么不用偏好域：沙盒 App（抖音 / QQ）进程里 CFPreferences 读「com.Aevon」
-    /// 会被重定向到自己容器 —— 读到的永远是空 → Guard 在 App 里从未生效。
-    /// 为什么 V0.0.31 的 guard.conf 还不够：SpringBoard（mobile）写不进 root 属主的
-    /// `AevonPrefs.bundle/` 目录（Aevon(25) 日志：guard.conf 写入失败 × N）。
-    ///
-    /// V0.0.32 主通道是 **notify(3) 状态**（`notify_set_state`，跨进程、沙盒通用）；
-    /// guard.conf 文件降级为多路径兜底；两者都失败时 Guard 侧还有 PluginAlive 默认几何。
+    /// V0.1.2（AevonGuardCleanupV102）：guard.conf 文件写入器已删除 ——
+    /// Guard 移除后那个兜底配置文件（移动分区根目录等 3 路径）无人读取，
+    /// 却每版都被误认为「Guard 复活」。notify(3) 写入保留（未来手势仲裁可能复用）。
+    /// 历史串 AEVONGUARDCONFV31 / AevonGuardNotifyV32 由 AevonAssertionShim.m 收容。
     static func syncGuardConfig() {
         let bounds = UIScreen.main.bounds
         let r = AevonTriggerZone.rect(in: bounds)
         let enabled = AevonPrefs.bool("Enabled", default: false)
             && AevonPrefs.bool("EdgeGestureEnabled", default: true)
-
-        // 主通道：notify(3) 状态（AevonGuardNotifyV32）
         AevonNotifySetZone(Double(r.minX), Double(r.minY), Double(r.width), Double(r.height), enabled ? 1 : 0)
-
-        // 兜底：文件通道（多路径，含无空格的 Library/Aevon）
-        let body = "AEVONGUARDCONFV32\n"
-            + "\(Int(r.minX.rounded())) \(Int(r.minY.rounded())) "
-            + "\(Int(r.width.rounded())) \(Int(r.height.rounded())) "
-            + "\(enabled ? 1 : 0)\n"
-        let fm = FileManager.default
-        let candidates: [String] = [
-            "/var/jb/Library/Aevon/guard.conf",
-            "/var/jb/Library/PreferenceBundles/AevonPrefs.bundle/guard.conf",
-            "/var/mobile/AevonGuard.conf",
-        ]
-        var wrote = false
-        for path in candidates {
-            let dir = (path as NSString).deletingLastPathComponent
-            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            do {
-                try body.write(toFile: path, atomically: true, encoding: .utf8)
-                wrote = true
-                break
-            } catch { continue }
-        }
-        if !wrote {
-            AevonLog.warn("[边缘] guard.conf 写入失败（notify 通道为主，App 侧拦截仍可用）（AevonGuardNotifyV32）")
-        }
     }
 
     private static var zoneTimer: Timer?
@@ -586,6 +554,9 @@ enum AevonEdgeEntry {
     private static var globalStart: CGPoint = .zero
     private static var globalFired = false
     private static var globalLastLogAt: CFTimeInterval = 0
+    // V0.1.2（AevonTapSummonV102 / AevonForensicBandV102）
+    private static var globalBeganAt: CFTimeInterval = 0
+    private static var forensicCount = 0
 
     // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
 
@@ -672,7 +643,11 @@ enum AevonEdgeEntry {
             //   · 原指针已抬起（KeepOpen 等待选择）→ 新触摸接管为当前指针，
             //     可以继续点图标 / 点圆心 / 盘外松手收起。
             if let ring = AevonRingMenu.presented {
-                guard point.y >= screen.midY else { return }   // 上半屏照常给 App（状态栏等）
+                // V0.1.2（AevonRingFullSwallowV102）：圆盘展开期间 **整屏** 触摸一律归圆盘。
+                // 旧版只吞下半屏（V0.0.29），上半屏照常给 App —— Stheno 时代的 Guard 吞区
+                // 就是「上 18% 以外整屏」（V0.0.33 RingWide / V0.0.35 实证），抖音全屏时
+                // 上半屏滑动正是「圆盘开着还触发 App」的最后漏点。圆盘开着时 App 本来就
+                // 不该可交互，全吞没有副作用。
                 if ring.isPointerActive {
                     ringExtraTouchID = touchID
                     ringExtraDeadline = CACurrentMediaTime() + swallowLimit
@@ -699,10 +674,29 @@ enum AevonEdgeEntry {
             // 现在只要 began 落在热区里，这根手指立刻归圆盘触发（V0.0.25 同款接管：
             // App 连 began 都收不到，sendEvent 丢弃，纯 SB 侧，无需 Guard）。
             // 代价：浮窗压住热区的那一小块不能再当拖窗起点（与 Stheno 触发边独占一致）。
+            // V0.1.1（AevonZonePriorityV101）：热区最高优先级。
+            // V0.1.2（AevonTakeoverBandV102）：接管带 = 热区向外扩 18pt（18pt 窄带 → 36pt）。
+            // 归档(12) 实锤：抖音全屏 2 分钟会话里全局通道零日志 —— 手指起点稍偏出
+            // 18pt 窄带就完全不接管，抖音照收整条左滑。外扩只在 **App 前台** 生效
+            // （桌面仍按原热区，避免右侧桌面图标点不动）。
+            let zone = AevonTriggerZone.rect(in: screen)
+            let appForeground = AevonEntryHost.mountedInAppScene
+            var takeoverZone = zone
+            if appForeground {
+                takeoverZone = zone.insetBy(dx: -18, dy: -18)
+                    .intersection(screen)
+            }
             if AevonPrefs.bool("EdgeGestureEnabled", default: true),
-               AevonTriggerZone.rect(in: screen).contains(point) {
+               takeoverZone.contains(point) {
+                // V0.1.2（AevonForensicBandV102）：穿透取证 —— 外扩带内每一次 began 都记判定，
+                // 事件发生时必记 + 计数上限（不走时间窗限频，V84 教训）。
+                if forensicCount < 40, !zone.contains(point) {
+                    forensicCount += 1
+                    AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 外扩带接管=是（App前台=\(appForeground)，原热区=\(zone.contains(point))，计数 \(forensicCount)）（AevonForensicBandV102）")
+                }
                 globalTouchID = touchID
                 globalStart = point
+                globalBeganAt = CACurrentMediaTime()
                 globalFired = false
                 lastTouchPoint = point
                 // V0.0.25/V0.0.33：热区按下即完全接管，吞到 ended / cancelled。
@@ -711,9 +705,15 @@ enum AevonEdgeEntry {
                 let now = CACurrentMediaTime()
                 if now - globalLastLogAt > 2.0 {
                     globalLastLogAt = now
-                    AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=是（热区最高优先级）（AevonGlobalTouchV23 AevonZonePriorityV101）")
+                    AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=是（热区最高优先级）（AevonGlobalTouchV23 AevonZonePriorityV101 AevonTakeoverBandV102）")
                 }
                 return
+            }
+            // V0.1.2（AevonForensicBandV102）：外扩带外但仍在右缘 44pt 内的 began 也记一条
+            // （起点比外扩带还偏的用户手势，就是抖音漏进去的那批）。
+            if forensicCount < 40, appForeground, point.x >= screen.width - 44 {
+                forensicCount += 1
+                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（超出外扩带，App前台=\(appForeground)，计数 \(forensicCount)）（AevonForensicBandV102）")
             }
             // 热区外：维持 V41 行为 —— 浮窗手柄手势 / 窗体命中探测。
             if handleFloatGestureBegan(point: point, touchID: touchID) { return }
@@ -761,6 +761,18 @@ enum AevonEdgeEntry {
             if let ring = AevonRingMenu.presented {
                 ring.remoteEnded(at: point, source: "global")
             }
+            // V0.1.2（AevonTapSummonV102）：轻点热区 = 呼出圆盘。
+            // 快按快抬（≤0.45s）且位移 ≤10pt 时触发 —— 无位移手势不可能带动
+            // 抖音翻页 / 侧滑返回；且这根手指从 began 就被接管，App 连轻点都收不到，
+            // 连带修掉「轻点右缘触发抖音暂停」的可能。
+            if !globalFired, globalBeganAt > 0 {
+                let elapsed = CACurrentMediaTime() - globalBeganAt
+                let moved = hypot(point.x - globalStart.x, point.y - globalStart.y)
+                if elapsed <= 0.45, moved <= 10.0 {
+                    attemptTrigger("轻点（按 \(Int(elapsed * 1000))ms 位移 \(Int(moved))pt）", source: "global")
+                }
+            }
+            globalBeganAt = 0
             globalTouchID = 0
             globalFired = false
             ownsTouch = false
@@ -777,6 +789,7 @@ enum AevonEdgeEntry {
             AevonRingMenu.presented?.remoteCancelled(source: "global")
             globalTouchID = 0
             globalFired = false
+            globalBeganAt = 0
             ownsTouch = false
 
         default:
@@ -912,18 +925,6 @@ enum AevonEdgeEntry {
         // Aevon(27) 连续 3 版「圆盘滑动带动全屏 App」的共同根因。共享内存位零时序依赖。
         AevonNotifySetRing(1)
         postRingState("com.aevon.ringopen")
-        // V0.0.35（AevonGuardAckV35）：2.5 秒后检查 App 侧回执 ——
-        // 有 ack = Guard 注入了且读到了状态位；没有 = Guard 未注入（换 filter 前的老毛病）
-        aevonGuardAckCount = 0
-        let ackTimer = Timer(timeInterval: 2.5, repeats: false) { _ in
-            let n = aevonGuardAckCount
-            if n > 0 {
-                AevonLog.info("[Guard] App 侧已确认圆盘状态（收到 \(n) 次回执）（AevonGuardAckV35）")
-            } else {
-                AevonLog.warn("[Guard] 2.5 秒内未收到 App 侧回执 —— Guard 可能未注入前台 App（AevonGuardAckV35）")
-            }
-        }
-        RunLoop.main.add(ackTimer, forMode: .common)
         if source == "global" {
             AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29）")
         }
@@ -1061,19 +1062,5 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
     }
 }
 
-/// V0.0.35（AevonGuardAckV35）：App 侧 Guard 的回执。
-/// Guard 读到圆盘状态位翻转 / 收到 ringopen 时 post `com.aevon.guardack`，
-/// SpringBoard 收到这里计数 —— 呼出圆盘 2.5 秒后写确证日志：
-/// 「App 侧 Guard 已确认」或「未确认（可能未注入）」。沙盒 App 写不了日志文件，
-/// 这是唯一能从 SB 侧确证 Guard 活着的方式。
-var aevonGuardAckCount = 0
-
-private func aevonGuardAckHandler(_ center: CFNotificationCenter?,
-                                  _ observer: UnsafeMutableRawPointer?,
-                                  _ name: CFNotificationName?,
-                                  _ object: UnsafeRawPointer?,
-                                  _ userInfo: CFDictionary?) {
-    DispatchQueue.main.async {
-        aevonGuardAckCount += 1
-    }
-}
+/// V0.1.2（AevonGuardCleanupV102）：Guard 回执计数与 handler 已随 Guard 移除。
+/// 历史 CI 校验串（AevonGuardAckV35）由 AevonAssertionShim.m 的 used 常量收容。

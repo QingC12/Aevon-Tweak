@@ -53,13 +53,26 @@ import UIKit
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - Self.lastBlockLog > 2.0 {
                     Self.lastBlockLog = now
-                    AevonLog.info("[场景] 已拦截场景停用（\(identifier)，AevonDeactivationGateV37）")
+                    let infoDesc = reasonInfo.map { String(describing: type(of: $0)) } ?? "nil"
+                    AevonLog.info("[场景] 已拦截场景停用（\(identifier)，AevonDeactivationGateV37）（reasons=\(String(reasons, radix: 16)) reasonInfo=\(infoDesc)，AevonGateSafeV102）")
                 }
             }
         }
-        AevonRuntime.sendVoid(self,
-                              Selector(("sk_uasdm_setDeactivationReasons:onScene:withSettings:reason:")),
-                              finalReasons, scene, settings, reasonInfo)
+        // V0.1.2（AevonGateSafeV102）：原始实现包 ObjC 异常保护。
+        // 归档(12) 实锤（0.1.0 注销）：「浮窗开着设置 → 桌面点设置图标」的场景转正过渡期，
+        // 清零 reasons 后调用原始实现，FrontBoardServices 内部断言崩溃（SIGTRAP，
+        // 符号化定位在 orig 调用链内）。NSException 在这里捕获后 SpringBoard 继续活着，
+        // 最坏结果是浮窗场景被正常停用（浮窗内容暂时不可交互，重开浮窗即恢复）。
+        var exName: NSString?
+        var exReason: NSString?
+        AevonTryExecute({
+            AevonRuntime.sendVoid(self,
+                                  Selector(("sk_uasdm_setDeactivationReasons:onScene:withSettings:reason:")),
+                                  finalReasons, scene, settings, reasonInfo)
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[场景] 停用门控原始实现抛异常已拦截（\(name): \(exReason ?? "无")，reasons=\(finalReasons)）（AevonGateSafeV102）")
+        }
     }
 
     static var lastBlockLog: TimeInterval = 0

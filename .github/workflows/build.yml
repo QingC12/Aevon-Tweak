@@ -160,6 +160,19 @@ jobs:
           fi
           echo "V0.1.1 校验: 恢复默认双击 + 热区优先级 已编入；换档/顶部放大 无残留"
 
+          # V0.1.2（归档(12) 修复）：①接管带外扩+轻点呼出+圆盘全屏吞（穿透）②停用门控
+          # 原始实现异常保护（浮窗开着设置→桌面点图标→注销）③Guard 遗留清理
+          # （guard.conf 写入器 / ack 检查 / guardack 通道）。
+          for s in AevonTakeoverBandV102 AevonTapSummonV102 AevonRingFullSwallowV102 AevonGateSafeV102 AevonForensicBandV102 AevonGuardCleanupV102; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.2 标记 $s 未编入"; exit 1; }
+          done
+          if grep -rn 'com\.aevon\.guardack\|aevonGuardAckCount\|/var/mobile/AevonGuard\.conf\|AEVONGUARDCONFV32\|body\.write' Sources/ 2>/dev/null | grep -q .; then
+            echo "::error::Guard 遗留代码残留（V0.1.2 已清理，禁止回退）"
+            exit 1
+          fi
+          echo "V0.1.2 校验: 接管带外扩 + 轻点呼出 + 圆盘全屏吞 + 门控异常保护 已编入；Guard 遗留 无残留"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
