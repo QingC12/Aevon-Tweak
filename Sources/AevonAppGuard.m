@@ -91,6 +91,7 @@ __attribute__((used)) static const char AevonGuardTapStampV74Marker[] = "AevonGu
 /// CI 标记（V0.0.81）：整窗触摸门（坐标无关）+ 浮窗手势误滚还原
 __attribute__((used)) static const char AevonAppGateV81Marker[] = "AevonAppGateV81";
 __attribute__((used)) static const char AevonScrollLeakV81Marker[] = "AevonScrollLeakV81";
+__attribute__((used)) static const char AevonScrollHealV82Marker[] = "AevonScrollHealV82";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -443,6 +444,30 @@ static CGRect AevonGuardFloatRectRect(void) {
 }
 
 /// 停靠小窗「刚被点走」留下的幽灵格 —— 变量定义已上移到 AevonGuardDockHitTest 之前。
+
+/* V0.0.82（AevonScrollHealV82）：主悬浮窗**整窗**矩形（`com.aevon.floatwin`）。
+ *
+ * 与上面那条「底边环带」（用来吞摸）用途不同：这条带的是整个窗口，
+ * Guard 只拿它判断「这根手指是不是压在我的浮窗内容上」，从而记 / 还原滚动偏移。
+ * 不做任何吞摸 —— 浮窗内容必须能点能滑。 */
+static CGRect AevonGuardFloatWindowRect(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.floatwin", &token);
+    });
+    if (token < 0) { return CGRectZero; }
+    uint64_t pack = 0;
+    notify_get_state(token, &pack);
+    if (((pack >> 48) & 0xFFULL) != 0x37ULL) { return CGRectZero; }
+    if (((pack >> 40) & 1ULL) == 0) { return CGRectZero; }
+    CGFloat x = (CGFloat)(pack & 0x3FFULL);
+    CGFloat y = (CGFloat)((pack >> 10) & 0x3FFULL);
+    CGFloat w = (CGFloat)((pack >> 20) & 0x3FFULL);
+    CGFloat h = (CGFloat)((pack >> 30) & 0x3FFULL);
+    if (w < 1 || h < 1) { return CGRectZero; }
+    return CGRectMake(x, y, w, h);
+}
 
 /* V0.0.57（AevonNoWinResizeV57）：App 窗口尺寸 —— **只允许单向还原**。
  *
@@ -926,6 +951,16 @@ static BOOL AevonGuardAppGateBlocked(void) {
 static __weak UIScrollView *gAevonScrollWatch = nil;
 static CGPoint gAevonScrollWatchOffset = {0, 0};
 static BOOL gAevonScrollWatchArmed = NO;
+/* V0.0.82（AevonScrollHealV82）：这条触摸**按在浮窗整窗范围里**（不是被我们吞掉的那种）。
+ * 区别很关键：
+ *   · force = NO（旧的 V81 路径）：只有当我们后来接管这条触摸（began 泄漏成真滚动）才还原；
+ *   · force = YES（V82 新路径）：这条触摸我们是**主动放行**的（浮窗内容要能滑），
+ *     但它在 App 这儿是「同一屏幕坐标上的另一份」，App 自己的 UIScrollView 会当真滚 ——
+ *     抬手时必须无条件还原（阈值 20pt，避免把轻微回弹也当成泄漏）。 */
+static BOOL gAevonScrollWatchForce = NO;
+
+/// 抬手阶段要不要做「放行也还原」
+static BOOL AevonGuardScrollForced(void) { return gAevonScrollWatchForce; }
 
 static UIScrollView *AevonGuardScrollAncestor(UIView *view) {
     UIView *cur = view;
@@ -936,8 +971,9 @@ static UIScrollView *AevonGuardScrollAncestor(UIView *view) {
     return nil;
 }
 
-static void AevonGuardArmScrollWatch(UIWindow *window, CGPoint point, UIEvent *event) {
+static void AevonGuardArmScrollWatch(UIWindow *window, CGPoint point, UIEvent *event, BOOL force) {
     @try {
+        gAevonScrollWatchForce = force;
         if (window == nil) { gAevonScrollWatchArmed = NO; return; }
         UIView *hit = [window hitTest:point withEvent:event];
         UIScrollView *sv = AevonGuardScrollAncestor(hit);
@@ -952,21 +988,30 @@ static void AevonGuardArmScrollWatch(UIWindow *window, CGPoint point, UIEvent *e
 static void AevonGuardRestoreScrollIfLeaked(const char *why) {
     if (!gAevonScrollWatchArmed) { return; }
     gAevonScrollWatchArmed = NO;
+    BOOL forced = gAevonScrollWatchForce;
+    gAevonScrollWatchForce = NO;
     UIScrollView *sv = gAevonScrollWatch;
     if (sv == nil) { return; }
     @try {
         CGPoint now = sv.contentOffset;
         CGFloat dy = fabs(now.y - gAevonScrollWatchOffset.y);
         CGFloat dx = fabs(now.x - gAevonScrollWatchOffset.x);
-        if (dy < 1.0 && dx < 1.0) { return; }
-        sv.contentOffset = gAevonScrollWatchOffset;
+        // 放行路径（force）用 20pt 阈值：真滚动 >> 20，回弹 / 抖动远小于它
+        CGFloat threshold = forced ? 20.0 : 1.0;
+        if (dy < threshold && dx < threshold) { return; }
+        CGSize sizeNow = sv.contentSize;
+        CGPoint before = gAevonScrollWatchOffset;
+        sv.contentOffset = before;
         SEL stopSel = NSSelectorFromString(@"_stopScrollingNotify:pinContent:");
         if ((sv.isDragging || sv.isTracking) && [sv respondsToSelector:stopSel]) {
             void (*fn)(id, SEL, BOOL, BOOL) = (void *)[sv methodForSelector:stopSel];
             if (fn) { fn(sv, stopSel, YES, NO); }
         }
-        AevonGuardWriteLog(NO, @"浮窗手势泄漏把 App 滚动了 %.0fpt → 已还原（%s，app=%@）（AevonScrollLeakV81）",
-                           dy, why, [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+        AevonGuardWriteLog(NO, @"浮窗手势泄漏把 App 滚动了 %.0fpt → 已还原（%s，%s，%.0f,%.0f → %.0f,%.0f，内容 %.0fx%.0f，app=%@）（AevonScrollLeakV81 AevonScrollHealV82）",
+                           dy, why, forced ? "放行也还原" : "接管还原",
+                           now.x, now.y, before.x, before.y,
+                           sizeNow.width, sizeNow.height,
+                           [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
     } @catch (NSException *exception) {
     }
 }
@@ -1130,8 +1175,20 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             } else {
                 /* V0.0.81（AevonScrollLeakV81）：这条 began 准备放行 —— 先记下它落点
                  * 所属滚动视图的偏移。万一之后我们判定它其实属于浮窗（接管），
-                 * 就能把被带着滚走的偏移还原回去（见 AevonGuardRestoreScrollIfLeaked）。 */
-                AevonGuardArmScrollWatch(touch.window, pt, event);
+                 * 就能把被带着滚走的偏移还原回去（见 AevonGuardRestoreScrollIfLeaked）。
+                 *
+                 * V0.0.82（AevonScrollHealV82）：如果落点就在**浮窗整窗范围**里，
+                 * 这条触摸本质是「用户想操作浮窗」，而 App 收到的这一份是
+                 * backboardd 的同一根手指 —— 它一定会被 App 自己的 UIScrollView
+                 * 当真滚动。所以 force=YES：抬手时无条件还原（阈值 20pt）。 */
+                BOOL inFloatWin = NO;
+                @try {
+                    CGRect fw = AevonGuardFloatWindowRect();
+                    if (!CGRectIsEmpty(fw)) {
+                        inFloatWin = AevonGuardPointInRect(fw, pt, spt);
+                    }
+                } @catch (NSException *e) { inFloatWin = NO; }
+                AevonGuardArmScrollWatch(touch.window, pt, event, inFloatWin);
                 /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
                  * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。
                  * V0.0.73：同时打两套坐标 + 窗口 frame + Guard 自己算出的槽位几何，
@@ -1247,6 +1304,20 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             swallowed += 1;
             if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled) {
                 AevonGuardSetTouchOwned(touch, NO);
+            }
+        }
+
+        /* V0.0.82（AevonScrollHealV82）：抬手统一收尾 —— **放行的那一条也要还原**。
+         *
+         * Aevon(74) 的复现是「全屏设置 + 浮窗电池数据」，在浮窗里滑一下，
+         * 设置自己被滚到最底（关窗后才看见，底部一片空白，100% 复现）。
+         * 这条触摸我们本来就放行（浮窗内容必须能滑），所以旧逻辑（只在接管时还原）
+         * 一次都不会触发 —— 日志里 `已还原` 是 0 条就是这么来的。
+         * 现在：只要这条触摸的落点在浮窗整窗范围内（began 时打的 force 标记），
+         * 抬手就把它带着滚走的 App 内容还原回去。 */
+        if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled) {
+            if (AevonGuardScrollForced()) {
+                AevonGuardRestoreScrollIfLeaked("抬手");
             }
         }
     }

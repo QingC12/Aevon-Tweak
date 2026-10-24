@@ -530,6 +530,54 @@ void AevonNotifySetFloatRect(double x, double y, double w, double h) {
     }
 }
 
+/* ──────────────────────────────────────────────────────────────────
+ * V0.0.82（AevonScrollHealV82）：主悬浮窗**整窗**矩形通道（独立 token）
+ *
+ * 与上一条 `com.aevon.guardfloat`（底边环带、用于吞摸）分工不同：
+ *   guardfloat = 该吞的地方（窄）
+ *   floatwin   = 手指落在浮窗上的完整范围（宽），Guard 只用它判断
+ *                「这条触摸是不是压在我的浮窗上」，从而记/还原滚动偏移。
+ *
+ * Aevon(74) 实测：全屏「设置」+ 浮窗「电池数据」，在浮窗里滑一下，
+ * 设置自己被滚到最底、底部一片空白（关窗后才被看见，100% 复现）。
+ * 根因是 backboardd 把同一根手指也投给了前台 App —— 它落点在自己全屏窗口的
+ * 同一屏幕坐标上，被它自己的 UIScrollView 当真。V81 只在「我们接管」时还原，
+ * 而内容区我们本来就是放行的，所以永远不会触发还原（日志 `已还原`=0 实锤）。
+ * 打包：x:10 y:10 w:10 h:10 valid:1(bit40) 版本:8(bit48~55)
+ * ────────────────────────────────────────────────────────────────── */
+#define AEVON_WIN2_VER (0x37ULL << 48)
+
+static int AevonNotifyFloatWindowRectToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.floatwin", &token);
+    });
+    return token;
+}
+
+void AevonNotifySetFloatWindowRect(double x, double y, double w, double h) {
+    @try {
+        int token = AevonNotifyFloatWindowRectToken();
+        if (token < 0) { return; }
+        uint64_t pack = 0;
+        if (w >= 1.0 && h >= 1.0) {
+            pack |= ((uint64_t)llround(x) & 0x3FFULL);
+            pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
+            pack |= (((uint64_t)llround(w)) & 0x3FFULL) << 20;
+            pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 30;
+            pack |= (1ULL << 40);
+        }
+        pack |= AEVON_WIN2_VER;
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        if (old == pack) { return; }   // 幂等：几何没变就不做跨进程写
+        notify_set_state(token, pack);
+        notify_post("com.aevon.floatwin");
+    } @catch (NSException *exception) {
+    }
+}
+
 /* V0.0.56（AevonAdaptiveWindowV56）：App 窗口目标尺寸通道。
  *
  * Aevon(50) 第 4 条：改成场景尺寸后「字体变大、画面被剪裁、抖音右侧工具栏依旧不显示」。

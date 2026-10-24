@@ -319,6 +319,29 @@ enum AevonEntryHost {
                 union = union.union(band)
             }
         }
+        /* V0.0.82（AevonScrollHealV82）：另发一条「**整窗**矩形」给 Guard，
+         * 用途只有一个 —— 判断「这根手指是不是按在浮窗上」，从而在抬手时把
+         * 被 App 自己滚走的偏移还原回去。
+         *
+         * 为什么必须和上面那条环带分开：环带是「该吞的窄条」，整窗是「用户可以
+         * 正常操作的大块」，两者语义相反，混用就会出现 V81 那种
+         * 「要么吞掉内容、要么整窗锁死」的二选一。
+         * Aevon(74) 100% 复现的「浮窗里滑一下 → 全屏设置滚到最底 + 底部空白」
+         * 正是靠这条通道修的（触摸同时投给 SB 与前台 App，App 那份没人管）。 */
+        var winUnion = CGRect.null
+        if let layer = floatLayer, !layer.subviews.isEmpty {
+            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
+                guard let win = view as? AevonWindowView, !win.isDocked else { continue }
+                winUnion = winUnion.union(win.frame)
+            }
+        }
+        if winUnion.isNull {
+            AevonNotifySetFloatWindowRect(0, 0, 0, 0)
+        } else {
+            AevonNotifySetFloatWindowRect(Double(winUnion.minX), Double(winUnion.minY),
+                                          Double(winUnion.width), Double(winUnion.height))
+        }
+
         let rect = union.isNull ? CGRect.zero : union
         if rect == lastGuardFloatRect { return }
         lastGuardFloatRect = rect

@@ -56,6 +56,15 @@ enum AevonSceneProbe {
 
         AevonTryExecute({ probeDisplayConfiguration() }, &ex, &reason)
         if let n = ex { AevonLog.warn("场景探测：⑤异常 \(n) \(reason ?? "")") }
+        ex = nil; reason = nil
+
+        /* V0.0.82（AevonEntityPrecondV82）：P1 第 5 步 —— 实体初始化失败时，
+         * 到底缺的是哪一条前置条件。V0.0.81 已实证：provider 命中、
+         * identity 链与 sceneHandle 链都成功，但 `SBDeviceApplicationSceneEntity`
+         * 的 4 个 init 全部返回 nil。继续盲试参数组合没有意义，必须先把
+         * 「App 对象当前状态 / 主屏 displayIdentity / 每个 init 的签名」摆出来。 */
+        AevonTryExecute({ probeEntityPreconditions() }, &ex, &reason)
+        if let n = ex { AevonLog.warn("场景探测：⑥异常 \(n) \(reason ?? "")") }
 
         let pass = [r1, r2, r3, r4, r5].filter { $0 }.count
         AevonLog.info("场景探测：P0 判据汇总 通过\(pass)/5 ①实体=\(r1 ? "过" : "败") ②参数定义=\(r2 ? "过" : "败") ③管理器=\(r3 ? "过" : "败") ④拉起事务=\(r4 ? "过" : "败") ⑤dc=\(r5 ? "过" : "败")")
@@ -120,6 +129,81 @@ enum AevonSceneProbe {
         let ivars = ivarNames(cls, limit: 40)
         AevonLog.info("场景探测：⑤dc类=在 类方法=\(classMethods.joined(separator: " | ")) dcivar=\(ivars.joined(separator: ","))")
         r5 = true
+    }
+
+    // MARK: - ⑥ P1 第 5 步：实体 init 的前置条件（V0.0.82，AevonEntityPrecondV82）
+    //
+    // 已知事实（V0.0.81 真机）：`SBDeviceApplicationSceneEntity` 四个 init
+    // 全部返回 nil，而 identity / sceneHandle 两条链都是通的。所以问题不在
+    // 「找不到对象」，而在 init 内部对参数或 App 状态的前置要求。
+    // 这里把三组判据一次摆清（全部只读，不创建任何场景）：
+    //   ① App 对象状态：是否前台 / 进程状态 / primarySceneIdentifier / 多场景声明
+    //   ② 主屏 displayIdentity 的真实类名与描述（init 要求的就是它，传错类型 = nil）
+    //   ③ 四个 init 的完整签名（参数类型编码）—— 判断哪个参数我们传错了类型
+    private static func probeEntityPreconditions() {
+        let target = (AevonPrefs.rawValue("ExperimentBundleID") as? String) ?? "com.apple.Preferences"
+
+        // ① App 对象
+        var appDesc = "取不到"
+        if let controller = AevonRuntime.sendClass("SBApplicationController", Selector(("sharedInstance"))),
+           controller.responds(to: Selector(("applicationWithBundleIdentifier:"))),
+           let app = AevonRuntime.send(controller, Selector(("applicationWithBundleIdentifier:")),
+                                       argument: target as NSString) {
+            let front = AevonRuntime.bool(app, key: "isFrontmost").map { String($0) } ?? "?"
+            // processState 是返回 C 整型的方法，必须走 IMP 直调（perform 会误用标量）
+            let proc = AevonRuntime.int(app, Selector(("processState"))).map { String($0) } ?? "?"
+            let primary = AevonRuntime.send(app, Selector(("primarySceneIdentifier"))) as? String ?? "无"
+            let sceneSel = object_getClass(app).map {
+                methodNames($0, containing: ["scene", "multiple", "display"], limit: 14)
+            } ?? []
+            appDesc = "前台=\(front) 进程状态=\(proc) 主场景=\(primary)"
+                + " 场景相关选择子=\(sceneSel.joined(separator: " | "))"
+        }
+        AevonLog.info("场景探测：⑥App 对象（\(target)）→ \(appDesc)（AevonEntityPrecondV82）")
+
+        // ② 主屏 displayIdentity
+        var idDesc = "取不到"
+        if let displayManager = NSClassFromString("FBDisplayManager"),
+           let mainSel = NSSelectorFromString("mainDisplay"),
+           displayManager.responds(to: mainSel),
+           let display = AevonRuntime.send(displayManager, mainSel) {
+            let cls = AevonRuntime.className(display) ?? "?"
+            let identity = AevonRuntime.send(display, Selector(("identity")))
+            idDesc = "display=\(cls) identity=\(identity.map { AevonRuntime.className($0) ?? "?" } ?? "无")"
+                + " 描述=\(identity.map { "\($0)" } ?? "无")"
+        }
+        AevonLog.info("场景探测：⑥主屏 identity → \(idDesc)（AevonEntityPrecondV82）")
+
+        // ③ 四个 init 的签名
+        guard let cls = NSClassFromString("SBDeviceApplicationSceneEntity") else {
+            AevonLog.warn("场景探测：⑥实体类不存在，剩余判据跳过")
+            return
+        }
+        let sels = [
+            "initWithApplication:",
+            "initWithApplicationForMainDisplay:",
+            "initWithApplication:sceneHandleProvider:displayIdentity:",
+            "initWithApplication:generatingNewPrimarySceneIfRequired:sceneHandleProvider:displayIdentity:"
+        ]
+        for name in sels {
+            let sel = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(cls, sel) else {
+                AevonLog.info("场景探测：⑥init \(name) → 不存在（AevonEntityPrecondV82）")
+                continue
+            }
+            let sig = method_getTypeEncoding(method)
+            let args = method_getNumberOfArguments(method)
+            let enc = sig.map { String(cString: $0) } ?? "?"
+            var types: [String] = []
+            for i in 0..<args {
+                if let t = method_copyArgumentType(method, i) {
+                    types.append(String(cString: t))
+                    free(t)
+                }
+            }
+            AevonLog.info("场景探测：⑥init \(name) → 存在 参数 \(args) 个 类型=\(types.joined(separator: ","))"
+                + " 编码=\(enc)（AevonEntityPrecondV82）")
+        }
     }
 
     // MARK: - 运行时只读辅助

@@ -78,6 +78,9 @@ final class AevonSceneHost {
     /// 这种进程只能从宿主侧断掉转发：内容触摸一律关掉，宁可不给滑，也不让点穿。
     private(set) var guardAbsent = false
 
+    /// V0.0.82：无 Guard 的「已知降级」只记一次日志
+    private var guardAbsentLogged = false
+
     /// V0.0.78（AevonContentGateV78）：**宿主请求的**内容交互状态。
     ///
     /// 之前只有 `setContentInteraction(_:)` 把结果往两个视图上一写了事，而
@@ -111,7 +114,16 @@ final class AevonSceneHost {
     /// 只在 `allow == false` 时递归关子树：系统在场景激活后会重建 presentationView
     /// 的下级视图，只关根节点等于没关。
     private func applyContentInteraction(reason: String) {
-        let allow = contentInteractiveByPref && desiredInteractive && !guardHardAbsent
+        /* V0.0.82（AevonMainContentV82）：容器开关只看两件事 ——
+         * 「设置里允许内容触摸」+「这是主窗（不是停靠小窗）」。
+         *
+         * 原来还叠了一条 `!guardHardAbsent`（该 App 进程里没有 Guard 就整块关掉内容），
+         * Aevon(74) 现场证明这条的代价太大：GitHub 这类进程暂时拿不到 Guard 时，
+         * **主悬浮窗里什么都点不动、也滑不动**，用户会认为整个插件坏了。
+         * 而且它并不能真的防住穿透 —— 穿透那一份是 backboardd 直投给 App 的
+         * （不经过我们的 presenter），关掉容器根本拦不到它，只是把好用的功能也关掉了。
+         * 现在把它降级成一条警告（见下面 guardHardAbsent 分支的日志），内容照常可用。 */
+        let allow = contentInteractiveByPref && desiredInteractive
         var flipped = 0
         /* V0.0.80（AevonNoSysViewGateV80）：**只关我们自己的宿主容器，
          * 绝不再去动 `presentationView` / 它的子树。**
@@ -133,14 +145,30 @@ final class AevonSceneHost {
         }
         /* V0.0.81（AevonAppGateV81）：内容不接收触摸时，顺带把**整窗触摸门**关上 ——
          * App 进程里那一份 backboardd 直投的触摸也一并丢，停靠小窗被轻点就再也不可能
-         * 在 App 里合成点击（Aevon(73) 报的正是这个）。开门条件是「主窗 + 内容可交互」，
-         * 也正好等于 `allow`，两边永远一致，不会有「内容能点但门还关着」的错位。
+         * 在 App 里合成点击（Aevon(73) 报的正是这个）。
          *
-         * 唯一的例外：这个 App **本身就是当前全屏显示的那个 App**（场景标识对得上）。
-         * 那种情况下屏幕主体还是它，绝不能整窗锁死（否则用户会觉得「手机卡死了」），
-         * 宁可保留原来那一点点穿透风险。 */
+         * V0.0.82（AevonMainContentV82）：**这扇门的唯一依据改成「这个窗是不是停靠态」**。
+         *
+         * Aevon(74) 的现场：门是关着的，于是「不穿透了，但主悬浮窗里什么都点不动、也滑不动」。
+         * 根因是这里原来用 `!allow` 当依据，而 `allow` 里混了三件事：
+         *   ① desiredInteractive —— 真正的「停靠 / 还原」状态（应该管这扇门）；
+         *   ② contentInteractiveByPref —— 用户在设置里关掉内容触摸（只该关我们自己的容器）；
+         *   ③ guardHardAbsent —— 该进程没有 Guard（同上，只该关容器，别锁整窗）。
+         * ②③ 一旦成立，连**主窗**也被整窗锁死 —— 这就是「什么都点不动」。
+         * 现在只有 ① 关门：停靠小窗的整块区域本来就不该把触摸给 App（它唯一操作是轻点还原），
+         * 主窗永远开门，内容照常可点可滑。
+         * 全屏 App 例外照旧：那种情况屏幕主体还是它，绝不能整窗锁死。 */
         let isFullscreenApp = (AevonEntryHost.appSceneIdentity?.contains(bundleID) ?? false)
-        AevonSceneHelper.setAppGate(bundleID, blocked: (!allow && !isFullscreenApp), reason: reason)
+        let gateBlocked = (!desiredInteractive && !isFullscreenApp)
+        AevonSceneHelper.setAppGate(bundleID, blocked: gateBlocked, reason: reason)
+        /* V0.0.82：把门的判定依据全量写进日志（限次）—— 上一版只有「开/关」两行，
+         * 用户报「点不动」时无法区分是门关了还是容器关了，只能靠猜。 */
+        if reason != "每拍复查" && reason != "宽限复检" {
+            AevonLog.info("[场景] 内容交互判定：容器=\(allow ? "开" : "关")，整窗门=\(gateBlocked ? "关" : "开")"
+                + "（主窗态=\(desiredInteractive)，设置开关=\(contentInteractiveByPref)，"
+                + "无Guard=\(guardHardAbsent)，全屏App=\(isFullscreenApp)，依据=\(reason)）"
+                + "（\(bundleID)，AevonMainContentV82）")
+        }
         // 「设置变更 / 显式切换」两种是用户主动改的，单独记一行，不占强制计数
         if flipped > 0 && reason != "显式切换" && reason != "设置变更" {
             enforcementCount += 1
@@ -418,7 +446,7 @@ final class AevonSceneHost {
         // 以前这里硬关掉交互，等于只能看画面。presentationView 的触摸会由 UIKit
         // 通过 presenter 的 UI 连接转发进 App 进程，不需要我们自己造触摸事件。
         // 开关默认开，若怀疑触摸引发异常可在 设置 → Aevon 关掉。
-        var interactive = AevonPrefs.bool("TouchEnabled", default: true)
+        let interactive = AevonPrefs.bool("TouchEnabled", default: true)
         self.contentInteractiveByPref = interactive
         /* V0.0.77（AevonGuardAliveV77）：先问一句「这个 App 进程里有没有 Guard」。
          * 有 → 正常（App 进程自己拦得住）；没有 → 内容触摸直接关掉，
@@ -428,12 +456,15 @@ final class AevonSceneHost {
         let absent = (alivePid <= 0)
         self.guardAbsent = absent
         if absent {
-            /* V0.0.79：先给 1.5 秒宽限再真关（见 guardGraceDeadline 注释） */
+            /* V0.0.79：先给 1.5 秒宽限再复检（见 guardGraceDeadline 注释）
+             * V0.0.82（AevonMainContentV82）：**不再因此关掉内容触摸**。
+             * 关掉它换不来防穿透（那一份是 backboardd 直投，不经过 presenter），
+             * 只会让主悬浮窗彻底点不动 —— Aevon(74) 报的就是这个。
+             * 现在只记警告，内容照常可用。 */
             self.guardGraceDeadline = CACurrentMediaTime() + 1.5
-            interactive = false
             AevonLog.warn("[场景] Guard 存活探测：\(bundleID) → **暂无 Guard**（该 App 是 tweak 加载前就在跑的老进程，"
-                + "或刚被拉起还没登记）；先给 1.5 秒宽限，到期仍未登记才强制关闭内容触摸"
-                + "（AevonGuardAliveV77 AevonGuardGraceV79）")
+                + "或注入被拦）；内容触摸**照常放行**，不因此锁死浮窗，"
+                + "停靠小窗被轻点时该 App 可能收到一次直投点击（AevonGuardAliveV77 AevonMainContentV82）")
         } else {
             AevonLog.info("[场景] Guard 存活探测：\(bundleID) → 有（pid=\(alivePid)），内容触摸跟随设置（AevonGuardAliveV77）")
         }
@@ -488,6 +519,17 @@ final class AevonSceneHost {
             }
             // ③ 系统又改回来了 → 再关一次
             self.applyContentInteraction(reason: self.guardAbsent ? "宽限复检" : "每拍复查")
+            /* V0.0.82：宽限期过了仍然没有 Guard → 明确记一条「已知降级」。
+             * 内容照常可用（见 applyContentInteraction 的 allow），但停靠小窗被轻点时
+             * App 侧没人拦直投的那一份触摸。下轮先查该进程为什么没注入
+             * （App Store App / 老进程 / 架构都可能，日志里 alive 文件是判据）。 */
+            if self.guardAbsent, !self.guardAbsentLogged, self.guardHardAbsent {
+                self.guardAbsentLogged = true
+                AevonLog.warn("[场景] \(self.bundleID) 宽限期过后仍无 Guard：内容触摸照常放行"
+                    + "（停靠小窗被轻点时 App 可能收到一次直投点击，只能靠注入解决）"
+                    + "—— 请先彻底退出该 App 再重开浮窗，若仍无 Guard 说明注入被拦"
+                    + "（AevonMainContentV82）")
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         contentGateTimer = timer

@@ -1197,6 +1197,37 @@ jobs:
             echo "::error::V0.0.80 回退: 又在把系统呈现视图的交互压成 false（会让 App 全屏点不动）"
             exit 1
           fi
+          # ── V0.0.82（AevonMainContentV82 / AevonScrollHealV82 / AevonEntityPrecondV82）──
+          # ①主窗内容必须可用：内容交互只看「设置开关 + 主窗态」，不再因「该 App 没 Guard」整块关掉；
+          #   整窗触摸门只由「停靠态」驱动。
+          # ②误滚还原补齐「放行也还原」：浮窗整窗矩形单独一条通道，抬手即还原 App 被带走的偏移。
+          # ③P1 第 5 步：实体 init 的前置条件只读探测（App 状态 / 主屏 identity / 四个 init 签名）。
+          python3 - "$DYLIB" <<'PY82'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonMainContentV82","内容交互判定","AevonEntityPrecondV82"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.82 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.82 校验: 主窗内容放行 + 判定日志 + P1 前置条件探测 已编入主 dylib")
+          PY82
+          python3 - "$GUARD_DYLIB" <<'PY82G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonScrollHealV82","放行也还原","com.aevon.floatwin"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.82 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.82 校验: 误滚「放行也还原」+ 浮窗整窗矩形通道 已编入 Guard")
+          PY82G
+          # 反回退：内容交互不能再看 guardHardAbsent（会把无 Guard 的 App 主窗整块锁死）
+          if grep -n 'let allow = contentInteractiveByPref && desiredInteractive && !guardHardAbsent' \
+             "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
+            echo "::error::V0.0.82 回退: 内容交互又叠了「无 Guard 就关掉」（主悬浮窗会整块点不动）"
+            exit 1
+          fi
+          if grep -n 'blocked: (!allow' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
+            echo "::error::V0.0.82 回退: 整窗触摸门又用 allow 当依据（主窗会被锁死）"
+            exit 1
+          fi
           strings "$GUARD_DYLIB" | grep -q 'AevonNoWinResizeV80' \
             || { echo "::error::V0.0.80 Guard 没有停用「强制放大窗口」（AevonNoWinResizeV80）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardNoWidgetV80' \

@@ -87,6 +87,23 @@ void AevonNotifySetWindowSize(double w, double h);
 /// 保证任何异常情况下 App 都不会被莫名其妙锁死。
 void AevonNotifySetAppGate(NSString *bundleID, int blocked);
 
+/// V0.0.82（AevonScrollHealV82）：**主悬浮窗整窗矩形**（独立 token `com.aevon.floatwin`）。
+///
+/// 和 `AevonNotifySetFloatRect`（只带底边手势环带、用来**吞摸**）是两个用途，
+/// 千万别合并：这个矩形带的是**整窗**（含内容区），Guard 只用它做两件事：
+///   ① 手指按在浮窗上时，记下 App 最上层 UIScrollView 的 contentOffset；
+///   ② 抬手时若偏移被带着跑了 > 20pt，还原回去。
+///
+/// 为什么要它：Aevon(74)「全屏开设置 + 浮窗开电池数据，关掉浮窗后设置滑到最底、
+/// 底部一片空白，100% 复现」。那条触摸**同时**投给了 SpringBoard 和前台 App
+/// （backboardd 直投），App 那份落在它自己的全屏窗口上，于是被它自己的
+/// UIScrollView 当真滚了 —— 这一路上我们没有任何代码在拦（V81 的误滚还原只在
+/// 「我们接管了这条触摸」时才还原，而内容区的触摸我们是放行的，所以日志里
+/// `已还原` 一条都没有）。这里补上「放行也要还原」这一半。
+///
+/// 传 w/h < 1 表示当前没有主悬浮窗（Guard 不做误滚还原）。
+void AevonNotifySetFloatWindowRect(double x, double y, double w, double h);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，
