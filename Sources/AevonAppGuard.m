@@ -660,7 +660,26 @@ static void AevonAnchorTickV86(void) {
         if (AevonGuardIsFloatOwner()) { return; }
 
         UIWindow *win = nil;
-        @try { win = [UIApplication sharedApplication].keyWindow; } @catch (NSException *e) { win = nil; }
+        @try {
+            /* 不能用 `UIApplication.keyWindow` —— iOS 13 起废弃，Theos 的
+             * -Werror 会直接把构建打断。改从场景拿：优先前台活跃场景的 keyWindow。 */
+            UIWindowScene *fallbackScene = nil;
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+                UIWindowScene *ws = (UIWindowScene *)scene;
+                if (fallbackScene == nil) { fallbackScene = ws; }
+                if (ws.activationState != UISceneActivationStateForegroundActive) { continue; }
+                win = ws.keyWindow;
+                if (win == nil && ws.windows.count > 0) { win = ws.windows.firstObject; }
+                if (win != nil) { break; }
+            }
+            if (win == nil && fallbackScene != nil) {
+                win = fallbackScene.keyWindow;
+                if (win == nil && fallbackScene.windows.count > 0) {
+                    win = fallbackScene.windows.firstObject;
+                }
+            }
+        } @catch (NSException *e) { win = nil; }
         if (win == nil) { return; }
         AevonAnchorRefreshProbesV86(win);
         if (gAevonProbesV86.count == 0) { return; }
@@ -694,7 +713,7 @@ static void AevonAnchorTickV86(void) {
             /* —— 没触摸却被挪了 ≥ 8pt：这就是主诉现场 —— */
             if (now - gAevonLastAnchorLogAtV86 > 0.5) {
                 gAevonLastAnchorLogAtV86 = now;
-                AevonGuardWriteLog(NO, @"滚动被非触摸源挪动：y %.0f → %.0f（跳变 %.0fpt，内容高 %.0f 可视高 %.0f，"
+                AevonGuardWriteLog(YES, @"滚动被非触摸源挪动：y %.0f → %.0f（跳变 %.0fpt，内容高 %.0f 可视高 %.0f，"
                                    @"触龄 %.2fs，拖动中=0 减速中=0，app=%@）→ 正在复位（累计 %ld 次）（AevonScrollAnchorV86）",
                                    p.anchor.y, cur.y, dy, sv.contentSize.height, sv.bounds.size.height,
                                    (gAevonLastTouchAt > 0) ? (now - gAevonLastTouchAt) : -1.0,
@@ -758,7 +777,7 @@ static void AevonGuardSetContentOffsetPlain(id target, SEL _cmd, CGPoint offset)
                         if (caller.length > 100) { caller = [caller substringToIndex:100]; }
                     }
                 } @catch (NSException *e) { }
-                AevonGuardWriteLog(NO, @"setContentOffset: 被调用（y %.0f→%.0f 跳变 %.0fpt，触龄 %.2fs，"
+                AevonGuardWriteLog(YES, @"setContentOffset: 被调用（y %.0f→%.0f 跳变 %.0fpt，触龄 %.2fs，"
                                    @"拖动中=%d 减速中=%d，app=%@，调用方=%@）（AevonScrollAnchorV86）",
                                    sv.contentOffset.y, offset.y, dy,
                                    (gAevonLastTouchAt > 0) ? (now - gAevonLastTouchAt) : -1.0,
