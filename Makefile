@@ -9,13 +9,10 @@ THEOS_PACKAGE_SCHEME = roothide
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = Aevon AevonGuard
+TWEAK_NAME = Aevon
 
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
-    AevonIdleShim.m \
-    AevonOverlayShim.m \
-    AevonSceneShim.m \
     Sources/AevonSceneHook.m \
     Sources/AevonTouchHook.m \
     Sources/Aevon.swift \
@@ -42,40 +39,11 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonWindowView.swift \
     Sources/AevonSnap.swift \
     Sources/AevonWindowManager.swift \
-    Sources/AevonIdleGuard.swift \
-    Sources/AevonSwitcherGuard.swift \
     Sources/AevonGestureHandler.swift \
     Sources/Hooks.swift
 
 Aevon_CFLAGS = -fobjc-arc
 Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
-
-# ─────────────────────────────────────────────────────────────────────
-# AevonGuard：只注入前台 App 进程的极小程序（纯 ObjC，不含 Swift）。
-# 职责单一：把圆盘热区内按下的那根手指的整条触摸事件丢弃，
-# 让 App 自己的横向手势（QQ 左滑删除、抖音左滑进主页）不可能被触发。
-# ─────────────────────────────────────────────────────────────────────
-AevonGuard_FILES = Sources/AevonAppGuard.m
-AevonGuard_CFLAGS = -fobjc-arc
-AevonGuard_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation QuartzCore
-
-# ─────────────────────────────────────────────────────────────────────
-# V0.0.81（AevonGuardFat81）：Guard 必须是 arm64 + arm64e **双切片**。
-#
-# Aevon(73) 日志实锤：浮窗里的 GitHub（com.github.stormbreaker.prod）从头到尾
-# 没有一条「Guard 已注入」，也没有 /var/mobile/Aevon.alive.com.github... ——
-# 那个进程里根本没有 Guard，所以停靠小窗一被轻点就穿透进 App。同机的系统 App
-# （设置/Spotlight）和越狱 App（BatteryInfo/Filza）全都有。
-#
-# 原因：App Store 的 App 主二进制只有 **arm64** 切片，而我们把 ARCHS 写死成
-# arm64e —— arm64e 的 dylib 加载进 arm64 进程会被 dyld 判为架构不兼容而
-# **静默跳过**（不报错、不写日志，表现就是「这个 App 没有 Guard」）。
-# Theos 支持按 target 覆盖架构（instance/rules.mk 的
-# `$(THEOS_CURRENT_INSTANCE)_ARCHS`，优先级高于全局 ARCHS），且会自动 lipo
-# 合并成 fat 二进制 —— 主 dylib 仍只编 arm64e（只进 SpringBoard），
-# deb 架构因此保持 iphoneos-arm64e 不变。
-# ─────────────────────────────────────────────────────────────────────
-AevonGuard_ARCHS = arm64 arm64e
 
 SUBPROJECTS += AevonPrefs
 
