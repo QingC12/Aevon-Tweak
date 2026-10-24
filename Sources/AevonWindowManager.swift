@@ -287,6 +287,17 @@ enum AevonWindowManager {
         }
     }
 
+    /// V0.0.79（AevonTouchLiveV79）：设置里改了「浮窗内可直接触摸操作」。
+    ///
+    /// 旧版这个偏好只在开窗那一刻读进 `AevonSceneHost`（还是 `let`），
+    /// 所以改开关对已经开着的浮窗完全无效 —— 用户 Aevon(71) 看到的就是
+    /// 「关掉之后内容彻底点不动，再打开也不恢复」。现在广播 / 轮询都会走到这里。
+    static func refreshContentTouch() {
+        for view in windows.values {
+            view.refreshContentTouch()
+        }
+    }
+
     /// App 的图层列表更新时通知浮窗重排。
     ///
     /// 这个回调来自 `FBSceneLayerManager _setLayers`，随 App 自己的渲染帧率触发，

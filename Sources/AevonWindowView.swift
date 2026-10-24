@@ -106,6 +106,11 @@ final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
 
+    /// V0.0.79（AevonTouchLiveV79）：设置里改了「浮窗内可直接触摸操作」→ 立刻生效。
+    func refreshContentTouch() {
+        sceneHost.refreshContentPref()
+    }
+
     /// 内容可视区宽高比 = 屏宽 ÷（屏高 − 顶部状态栏空白）。见 `AevonSnap.aspect`。
     ///
     /// V0.0.44：不再用整屏比例。宿主不画状态栏，那条 59pt 在浮窗里是纯空白，

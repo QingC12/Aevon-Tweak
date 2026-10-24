@@ -1096,6 +1096,33 @@ jobs:
                   print(f"::error::V0.0.78 Guard dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.78 校验: Guard 时间戳宽窗 + 泄漏取证 + 文件存活登记 已编入")
           PY78G
+          # V0.0.79（AevonTouchLiveV79 / AevonProviderIvarV79 / AevonMainDisplayInitV79 / AevonGuardGraceV79）：
+          # ①「浮窗内容可点击」实时生效 —— Aevon(71) 报「关掉后浮窗内容完全不接收触摸」。
+          #   除了那个开关本来的效果，真 bug 是它被写成 `let`：只在开窗那一刻读一次，
+          #   之后关掉不生效、再打开也不恢复，用户只能关窗重开，表现成「开关坏了」。
+          # ②provider 换成**带容器展开**的 ivar 候选：旧对象图 BFS 的 AevonGraphSkipClass
+          #   把 NSArray/NSDictionary 整类跳过，而 iOS 17 的 scene manager 就在
+          #   SBSceneManagerCoordinator 的字典里 → 图报告恒「无」（Aevon(71) 实锤）。
+          # ③兜底：主屏两参 init（不需要 provider，出自 ScreenCore 字符串表）。
+          # ④Guard 未登记误判给 1.5 秒宽限（Aevon(71) 22:44:38.767→39.281 实锤误判）。
+          python3 - "$DYLIB" <<'PY79'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonTouchLiveV79","AevonContentGateV79","AevonProviderIvarV79",
+                    "AevonMainDisplayInitV79","AevonGuardGraceV79","内容触摸开关已更新"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.79 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.79 校验: 内容触摸实时生效 + ivar 候选 + 主屏两参 init + Guard 宽限 已编入")
+          PY79
+          if grep -n "let contentInteractiveByPref" Sources/AevonSceneHost.swift; then
+            echo "::error::V0.0.79 回退: contentInteractiveByPref 又变回 let（开关只读一次，改设置对已开浮窗无效）"
+            exit 1
+          fi
+          if ! grep -q "AevonIvarCandidates" Sources/AevonSceneDriver.swift; then
+            echo "::error::V0.0.79 回退: SceneDriver 没接 ivar 候选（provider 还会是 nil）"
+            exit 1
+          fi
+          echo "V0.0.79 校验: 内容触摸开关可实时切换，provider ivar 候选已接上"
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

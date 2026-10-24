@@ -197,6 +197,16 @@ NSObject *AevonFindResponderInGraph(id root, NSString *selName, NSString *prefer
 /// 对象图里响应某选择子的实例清单（日志用，`类名` 逗号分隔，最多 limit 个）。
 NSString *AevonGraphResponderReport(id root, NSString *selName, int depth, int limit);
 
+/* V0.0.79（AevonProviderIvarV79）：
+ * Aevon(71) 日志把上一条路也堵死了 —— 图报告(SBMainWorkspace)=无、图报告(SBSceneManagerCoordinator)=无。
+ * 原因不是「没有」，而是 `AevonGraphSkipClass` 把 NSArray / NSDictionary 整类跳过了：
+ * iOS 17 的 scene manager 就藏在 `SBSceneManagerCoordinator` 的**字典**里
+ * （`_sceneManagers`，key=role，value=SBSceneManager 实例），沿 ivar 走到字典就断了。
+ * 所以这里加一条**带容器展开**的候选收集：ivar 是容器就摊开前几个元素，再下钻一层。 */
+NSArray<NSObject *> *AevonIvarCandidates(id root);
+/// ivar 表（诊断用）：`名字=值类名`，逗号分隔，最多 limit 项。
+NSString *AevonIvarDumpReport(id obj, int limit);
+
 /// 文件式存活登记（比 notify state 稳；Aevon.log 已证明 App 进程能写 /var/mobile）
 void AevonGuardAlivePublishFile(NSString *bundleID);
 int AevonGuardAliveFileState(NSString *bundleID);

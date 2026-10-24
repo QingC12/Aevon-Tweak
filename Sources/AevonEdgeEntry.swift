@@ -402,6 +402,8 @@ enum AevonEdgeEntry {
             // V0.0.58（AevonCardVisPanV58）：内容模式 / 小胖屏可视区位置变了 →
             // 所有浮窗立即按新偏好重排（PullOverMF 的可视中心也是设置驱动）。
             checkContentModeChange()
+            // V0.0.79（AevonTouchLiveV79）：「浮窗内容可点击」变了 → 已开着的浮窗立刻跟上
+            checkContentTouchChange()
         }
         RunLoop.main.add(timer, forMode: .common)
         zoneTimer = timer
@@ -455,6 +457,25 @@ enum AevonEdgeEntry {
         AevonEntryHost.refreshContentLayoutForPrefs()
         AevonLog.info("[窗口] 内容模式已更新，浮窗内容与场景重排立即生效"
             + "（签名 \(signature)，AevonCardVisPanV58 AevonTrueResizeV59）")
+    }
+
+    /// V0.0.79（AevonTouchLiveV79）：设置里的「浮窗内可直接触摸操作」。
+    ///
+    /// 这个开关以前只在开窗那一刻读一次（而且是 `let`），所以「关掉 / 再打开」
+    /// 对已经开着的浮窗全无反应 —— 用户 Aevon(71) 报的「关掉后内容完全不接收触摸」
+    /// 里就有一半是它：关了不生效、开回来也不生效，只能关窗重开。
+    /// 现在走两条通道：设置页广播（延迟≈0）+ 0.2 秒轮询兜底。
+    private static var contentTouchSignature = ""
+
+    static func checkContentTouchChange() {
+        let signature = "\(AevonPrefs.bool("TouchEnabled", default: true))"
+        if contentTouchSignature.isEmpty {
+            contentTouchSignature = signature
+            return
+        }
+        guard signature != contentTouchSignature else { return }
+        contentTouchSignature = signature
+        AevonWindowManager.refreshContentTouch()
     }
 
     /// V0.0.32（AevonGuardNotifyV32）：把当前热区几何同步给 AevonGuard。
@@ -1310,6 +1331,8 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
         AevonEdgeEntry.checkContentModeChange()
+        // V0.0.79（AevonTouchLiveV79）：开关一变，已开着的浮窗立即生效（延迟≈0）
+        AevonEdgeEntry.checkContentTouchChange()
         AevonEdgeEntry.syncGuardConfig()
         // V0.0.68（AevonSceneDriverP1）：真小胖屏 P1 自建场景实验（开关从关→开触发，
         // 内部防重入 + 全程异常隔离，失败只写日志不影响任何现有功能）

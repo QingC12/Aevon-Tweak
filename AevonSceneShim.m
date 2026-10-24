@@ -1198,6 +1198,149 @@ NSString *AevonGraphResponderReport(id root, NSString *selName, int depth, int l
     return hits.count ? [hits componentsJoinedByString:@","] : @"";
 }
 
+#pragma mark - V0.0.79：带容器展开的 ivar 候选（AevonProviderIvarV79）
+
+/* 纯 ObjC、只用公开运行时 API，任何一步都在 @try 里：
+ * 这些对象都是系统单例，读 ivar 只读不写，失败最多是少一条线索。 */
+
+static NSString *AevonPtrKey(id obj) {
+    return [NSString stringWithFormat:@"%p", obj];
+}
+
+static BOOL AevonIsContainerObject(id v) {
+    if (v == nil) { return NO; }
+    @try {
+        if ([v isKindOfClass:[NSArray class]]) { return YES; }
+        if ([v isKindOfClass:[NSDictionary class]]) { return YES; }
+        if ([v isKindOfClass:[NSSet class]]) { return YES; }
+        if ([v isKindOfClass:[NSOrderedSet class]]) { return YES; }
+    } @catch (NSException *e) { }
+    return NO;
+}
+
+/// 容器里前 8 个「像对象的东西」（跳过字符串 / 数字 / 值包装）
+static NSArray *AevonContainerPeek(id v) {
+    NSMutableArray *out = [NSMutableArray array];
+    @try {
+        NSArray *items = nil;
+        if ([v isKindOfClass:[NSDictionary class]]) { items = [(NSDictionary *)v allValues]; }
+        if (items == nil && [v isKindOfClass:[NSSet class]]) { items = [(NSSet *)v allObjects]; }
+        if (items == nil && [v isKindOfClass:[NSOrderedSet class]]) { items = [(NSOrderedSet *)v array]; }
+        if (items == nil && [v isKindOfClass:[NSArray class]]) { items = (NSArray *)v; }
+        int n = 0;
+        for (id it in items) {
+            if (n >= 8) { break; }
+            n += 1;
+            if (it == nil) { continue; }
+            Class c = object_getClass(it);
+            if (c == Nil || class_isMetaClass(c)) { continue; }
+            const char *cn = class_getName(c);
+            if (cn == NULL) { continue; }
+            NSString *name = [NSString stringWithUTF8String:cn];
+            if (name.length == 0) { continue; }
+            if ([name hasPrefix:@"NSString"] || [name hasPrefix:@"NSNumber"]
+                || [name hasPrefix:@"NSValue"] || [name hasPrefix:@"NSData"]
+                || [name hasPrefix:@"NSDate"] || [name hasPrefix:@"NSURL"]) { continue; }
+            [out addObject:it];
+        }
+    } @catch (NSException *e) { }
+    return out;
+}
+
+NSArray *AevonIvarCandidates(id root) {
+    NSMutableArray *out = [NSMutableArray array];
+    if (root == nil) { return out; }
+    NSMutableSet *seen = [NSMutableSet set];
+    NSMutableArray *layer = [NSMutableArray arrayWithObject:root];
+    for (int d = 0; d < 2; d++) {
+        NSMutableArray *next = [NSMutableArray array];
+        for (id node in layer) {
+            @try {
+                NSString *key = AevonPtrKey(node);
+                if ([seen containsObject:key]) { continue; }
+                [seen addObject:key];
+                Class c = object_getClass(node);
+                if (c == Nil || class_isMetaClass(c)) { continue; }
+                unsigned int count = 0;
+                Ivar *ivars = class_copyIvarList(c, &count);
+                if (ivars == NULL) { continue; }
+                for (unsigned int i = 0; i < count && out.count < 200; i++) {
+                    const char *enc = ivar_getTypeEncoding(ivars[i]);
+                    if (enc == NULL || enc[0] != '@') { continue; }
+                    id v = object_getIvar(node, ivars[i]);
+                    if (v == nil) { continue; }
+                    NSString *vk = AevonPtrKey(v);
+                    if (![seen containsObject:vk]) { [out addObject:v]; }
+                    if (AevonIsContainerObject(v)) {
+                        /* 关键一步：字典 / 数组直接摊开 —— scene manager 就在这里 */
+                        for (id it in AevonContainerPeek(v)) {
+                            NSString *ik = AevonPtrKey(it);
+                            if (![seen containsObject:ik]) { [out addObject:it]; }
+                            [next addObject:it];
+                        }
+                    } else if (!AevonGraphSkipClass(object_getClass(v))) {
+                        [next addObject:v];
+                    }
+                }
+                free(ivars);
+            } @catch (NSException *e) { }
+        }
+        layer = next;
+        if (layer.count == 0) { break; }
+    }
+    return out;
+}
+
+NSString *AevonIvarDumpReport(id obj, int limit) {
+    if (obj == nil || limit <= 0) { return @""; }
+    NSMutableArray *out = [NSMutableArray array];
+    @try {
+        Class c = object_getClass(obj);
+        if (c == Nil || class_isMetaClass(c)) { return @""; }
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList(c, &count);
+        if (ivars == NULL) { return @""; }
+        for (unsigned int i = 0; i < count && (int)out.count < limit; i++) {
+            Ivar iv = ivars[i];
+            const char *nm = ivar_getName(iv);
+            if (nm == NULL) { continue; }
+            NSString *name = [NSString stringWithUTF8String:nm];
+            const char *enc = ivar_getTypeEncoding(iv);
+            NSString *val = @"?";
+            if (enc != NULL && enc[0] == '@') {
+                id v = object_getIvar(obj, iv);
+                if (v == nil) {
+                    val = @"nil";
+                } else if (AevonIsContainerObject(v)) {
+                    NSUInteger n = 0;
+                    @try {
+                        if ([v isKindOfClass:[NSDictionary class]]) { n = [(NSDictionary *)v count]; }
+                        else if ([v isKindOfClass:[NSSet class]]) { n = [(NSSet *)v count]; }
+                        else if ([v isKindOfClass:[NSOrderedSet class]]) { n = [(NSOrderedSet *)v count]; }
+                        else { n = [(NSArray *)v count]; }
+                    } @catch (NSException *e) { }
+                    Class ic = Nil;
+                    NSArray *peek = AevonContainerPeek(v);
+                    if (peek.count > 0) { ic = object_getClass(peek.firstObject); }
+                    const char *icn = ic ? class_getName(ic) : NULL;
+                    val = [NSString stringWithFormat:@"容器(%lu)%@",
+                           (unsigned long)n, icn ? [NSString stringWithUTF8String:icn] : @"?"];
+                } else {
+                    const char *cn = class_getName(object_getClass(v));
+                    val = cn ? [NSString stringWithUTF8String:cn] : @"?";
+                }
+            } else if (enc != NULL) {
+                val = [NSString stringWithUTF8String:enc];
+            }
+            if (name.length > 0) {
+                [out addObject:[NSString stringWithFormat:@"%@=%@", name, val]];
+            }
+        }
+        free(ivars);
+    } @catch (NSException *e) { }
+    return out.count ? [out componentsJoinedByString:@","] : @"";
+}
+
 #pragma mark - 文件式存活登记
 
 void AevonGuardAlivePublishFile(NSString *bundleID) {

@@ -43,6 +43,13 @@ final class AevonSceneDriver: NSObject {
     /// iOS 17.3.1 上 SBMainWorkspace 实际实现的「下划线变体」
     static let entityProviderAltSelector = "_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"
 
+    /// V0.0.79（AevonMainDisplayInitV79）：不需要 sceneHandleProvider 的两参 init。
+    ///
+    /// 出处：ScreenCore 字符串表里 `SBSceneManagerCoordinator` / `mainDisplaySceneManager`
+    /// 紧跟其后的选择子就是它 —— 说明这条路自己会去主屏 scene manager，
+    /// 调用方不必先把 provider 抠出来（我们卡了三轮的就是那一步）。
+    static let mainDisplayInitSelector = "initWithApplicationForMainDisplay:generatingNewPrimarySceneIfRequired:"
+
     /// 连崩这么多次就锁定实验（连崩 = 用户开了开关就注销，体验不可接受）
     static let maxCrashesBeforeLock = 2
 
@@ -374,12 +381,15 @@ final class AevonSceneDriver: NSObject {
                 }
             }
         }
-        if let coord = tryShared(classNamed: "SBSceneManagerCoordinator", selector: "sharedInstance") {
+        let coord = tryShared(classNamed: "SBSceneManagerCoordinator", selector: "sharedInstance")
+        if let coord {
             add(coord, "SBSceneManagerCoordinator")
             for sel in ["mainDisplaySceneManager", "mainWindowSceneManager", "mainSwitcherSceneManager"] {
                 add(AevonSafeObjCall(coord, sel), "Coord.\(sel)")
             }
         }
+        // Stheno/ScreenCore 用的是 SBWorkspace +mainWorkspace（不是 SBMainWorkspace sharedInstance）
+        add(tryShared(classNamed: "SBWorkspace", selector: "mainWorkspace"), "SBWorkspace.mainWorkspace")
         add(tryShared(classNamed: "FBSceneManager", selector: "sharedInstance"), "FBSceneManager")
         for selName in ["sharedInstance", "defaultProvider", "sharedProvider"] {
             add(tryShared(classNamed: "FBSSceneHandleProvider", selector: selName), "FBSSceneHandleProvider.\(selName)")
@@ -433,6 +443,33 @@ final class AevonSceneDriver: NSObject {
             guard let root else { continue }
             let rep = AevonGraphResponderReport(root, entityProviderSelector, 2, 6) ?? ""
             diag.items.append("图报告(\(rootLabel))=\(rep.isEmpty ? "无" : rep)")
+        }
+
+        /* 2.6) V0.0.79（AevonProviderIvarV79）：BFS 为什么全空？
+         *
+         * Aevon(71) 日志：图报告(SBMainWorkspace)=无；图报告(SBSceneManagerCoordinator)=无。
+         * 而实现类里明明有 SBSceneManager。差别在 `AevonGraphSkipClass` ——
+         * 它把 NSArray / NSDictionary / NSSet 整类跳过，而 iOS 17 的 scene manager
+         * 正是躺在 `SBSceneManagerCoordinator` 的**字典**里（_sceneManagers，value=实例）。
+         * 沿 ivar 一走到字典就断链，所以「无」。
+         * 这里换成带容器展开的候选收集：ivar 是容器就摊开前 8 个元素，再下钻一层，
+         * 拿到实例后逐个试协议方法。命中就直接用，顺便把 ivar 表打出来留证。 */
+        for (root, rootLabel) in [(ws, "WS"), (coord, "Coord")] {
+            guard let root else { continue }
+            let dump = AevonIvarDumpReport(root, 22) ?? ""
+            diag.items.append("ivar表(\(rootLabel))=\(dump.isEmpty ? "无" : dump)")
+            let cands: [NSObject] = AevonIvarCandidates(root) ?? []
+            diag.items.append("ivar候选(\(rootLabel))=\(cands.count)个（AevonProviderIvarV79）")
+            for cand in cands where AevonObjRespondsTo(cand, entityProviderSelector) {
+                diag.items.append("provider=ivar命中（\(rootLabel) 下 \(AevonSafeClassName(cand) ?? "nil")）")
+                return cand
+            }
+            for cand in cands where AevonObjRespondsTo(cand, entityProviderAltSelector) {
+                if let proxy = AevonProviderProxyCreate(cand) {
+                    diag.items.append("provider=ivar命中→ObjC代理（\(rootLabel) 下 \(AevonSafeClassName(cand) ?? "nil")._sceneIdentity…）")
+                    return proxy
+                }
+            }
         }
 
         /* 3) 全类扫描留证（下一轮按真实实现类补链路）
@@ -528,19 +565,36 @@ final class AevonSceneDriver: NSObject {
         let providerName: String = provider.map { AevonSafeClassName($0) ?? "nil" } ?? "nil"
         diag.items.append("displayID=\(displayName)")
         diag.items.append("provider=\(providerName)")
-        AevonLog.info("[场景] P1 第 4 步预习：将尝试 \(usable.count) 个 init（\(usable.map { $0.0.components(separatedBy: ":")[0] }.joined(separator: "/"))）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
 
         // provider 是关键参数：没有就停（带 nil 硬调 = Aevon(65) 的断言异常）
-        guard let provider else {
+        /* V0.0.79（AevonMainDisplayInitV79）：provider 解析不到时的兜底路。
+         *
+         * ScreenCore 的字符串表里，紧跟在 `SBSceneManagerCoordinator` /
+         * `mainDisplaySceneManager` 之后还有一条：
+         *   `initWithApplicationForMainDisplay:generatingNewPrimarySceneIfRequired:`
+         * 两参、**不需要 provider**（SpringBoard 内部自己去取主屏 scene manager）。
+         * 我们从 V0.0.77 起连着三轮卡在 provider=nil 上，先让场景真的建起来：
+         * 这条走通就等于拿到「App 在 266x458 画布里重排」的第一手证据。 */
+        let effProvider = provider
+        var hasMainDisplayInit = false
+        if effProvider == nil, AevonClassHasInstanceMethod(cls, AevonSceneDriver.mainDisplayInitSelector) {
+            usable.append((AevonSceneDriver.mainDisplayInitSelector, 2))
+            hasMainDisplayInit = true
+            diag.items.append("兜底=主屏两参 init（无需 provider，AevonMainDisplayInitV79）")
+        }
+        if effProvider == nil && !hasMainDisplayInit {
             AevonLog.warn("[场景] P1 第 4 步失败：解析不到 sceneHandleProvider，本轮不调 init（避免断言异常 / 野指针）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
             return
         }
+
+        AevonLog.info("[场景] P1 第 4 步预习：将尝试 \(usable.count) 个 init（\(usable.map { $0.0.components(separatedBy: ":")[0] }.joined(separator: "/"))）｜\(diag.items.joined(separator: "；"))（AevonSceneDriverP1 AevonSceneP1V73）")
 
         AevonCrumbWrite("第4步-init")
         tryRun("第4步") {
             typealias Init4 = @convention(c) (NSObject, Selector, NSObject, Bool, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init3 = @convention(c) (NSObject, Selector, NSObject, NSObject?, NSObject?) -> Unmanaged<NSObject>?
             typealias Init5 = @convention(c) (NSObject, Selector, NSObject, NSObject, NSObject?, NSObject?, NSObject?) -> Unmanaged<NSObject>?
+            typealias Init2Main = @convention(c) (NSObject, Selector, NSObject, Bool) -> Unmanaged<NSObject>?
             for (selName, argc) in usable {
                 let sel = NSSelectorFromString(selName)
                 let short = selName.components(separatedBy: ":")[0]
@@ -553,13 +607,18 @@ final class AevonSceneDriver: NSObject {
                     guard let fresh = AevonAllocInstance(cls) else { return }
                     var result: Unmanaged<NSObject>? = nil
                     switch argc {
+                    case 2:
+                        result = unsafeBitCast(imp, to: Init2Main.self)(fresh, sel, app, true)
                     case 4:
-                        result = unsafeBitCast(imp, to: Init4.self)(fresh, sel, app, true, provider, displayID)
+                        guard let p = effProvider else { return }
+                        result = unsafeBitCast(imp, to: Init4.self)(fresh, sel, app, true, p, displayID)
                     case 3:
-                        result = unsafeBitCast(imp, to: Init3.self)(fresh, sel, app, provider, displayID)
+                        guard let p = effProvider else { return }
+                        result = unsafeBitCast(imp, to: Init3.self)(fresh, sel, app, p, displayID)
                     case 5:
+                        guard let p = effProvider else { return }
                         guard let uid = AevonSafeObjCall(app, "uniqueIdentifier") else { return }
-                        result = unsafeBitCast(imp, to: Init5.self)(fresh, sel, app, uid, nil, provider, displayID)
+                        result = unsafeBitCast(imp, to: Init5.self)(fresh, sel, app, uid, nil, p, displayID)
                     default:
                         return
                     }

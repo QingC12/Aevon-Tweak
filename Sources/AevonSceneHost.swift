@@ -37,11 +37,38 @@ final class AevonSceneHost {
     private var presenter: AnyObject?
     private let presentationView: UIView
     private var probeTimer: Timer?
+    /* V0.0.79（AevonContentGateV79）：内容触摸的**独立**守护定时器。
+     * probe 在出画面两拍后就自己停了（省电），可内容触摸要处理的三件事都发生在之后：
+     *   ① 系统在场景激活 / 重连时把 presentationView 改回可交互；
+     *   ② Guard 比窗口晚登记（刚拉起的 App）；
+     *   ③ 用户在设置里改「浮窗内容可点击」。
+     * 所以单独跑 10 秒（20 拍 × 0.5s），每拍重施一遍 + 复检，到点自然收工。 */
+    private var contentGateTimer: Timer?
+    private var contentGateTicks = 0
     private var ticks = 0
     private var invalidated = false
 
     /// 用户是否允许浮窗内容接收触摸（设置里的 TouchEnabled）
-    private let contentInteractiveByPref: Bool
+    ///
+    /// V0.0.79（AevonTouchLiveV79）：从 `let` 改成 `var` —— 用户 Aevon(71) 报
+    /// 「设置里关掉浮窗内容可点击，内容就完全不接收触摸」。除了那一项本身的效果，
+    /// 还有一个真 bug：这个值只在**开窗那一刻**读一次，之后改开关对已经开着的浮窗
+    /// 毫无作用（关掉不生效、再打开也不恢复），于是表现成「开关坏了 / 怎么点都点不动」。
+    /// 现在由 `refreshContentPref()` 在设置广播与 0.2 秒轮询里实时刷新。
+    private var contentInteractiveByPref: Bool = true
+
+    /// V0.0.79（AevonGuardGraceV79）：Guard 存活判定的宽限期。
+    ///
+    /// Aevon(71) 日志实锤一次误判：22:44:38.767 判 com.apple.Preferences「无 Guard」
+    /// （那一秒 App 刚被我们拉起，Guard 还没登记），内容触摸被强制关掉，
+    /// 22:44:39.281 复检才恢复 —— 中间这 0.5 秒里用户点浮窗什么都点不动。
+    /// 现在判「无 Guard」后先给 1.5 秒宽限，宽限期内照设置走，到期才真的关。
+    private var guardGraceDeadline: CFTimeInterval = 0
+
+    /// 宽限期过后仍然没有 Guard → 才算真的没有
+    private var guardHardAbsent: Bool {
+        guardAbsent && CACurrentMediaTime() >= guardGraceDeadline
+    }
 
     /// V0.0.77（AevonGuardAliveV77）：这个 App 进程里**没有** Guard。
     ///
@@ -84,7 +111,7 @@ final class AevonSceneHost {
     /// 只在 `allow == false` 时递归关子树：系统在场景激活后会重建 presentationView
     /// 的下级视图，只关根节点等于没关。
     private func applyContentInteraction(reason: String) {
-        let allow = contentInteractiveByPref && desiredInteractive && !guardAbsent
+        let allow = contentInteractiveByPref && desiredInteractive && !guardHardAbsent
         var flipped = 0
         if container.isUserInteractionEnabled != allow {
             container.isUserInteractionEnabled = allow
@@ -97,7 +124,8 @@ final class AevonSceneHost {
         if !allow {
             flipped += disableInteractionTree(presentationView, depth: 0)
         }
-        if flipped > 0 && reason != "显式切换" {
+        // 「设置变更 / 显式切换」两种是用户主动改的，单独记一行，不占强制计数
+        if flipped > 0 && reason != "显式切换" && reason != "设置变更" {
             enforcementCount += 1
             if enforcementCount <= 6 || enforcementCount % 20 == 0 {
                 AevonLog.warn("[场景] 内容触摸被系统重新打开 → 已强制关闭（第 \(enforcementCount) 次，"
@@ -105,6 +133,21 @@ final class AevonSceneHost {
             }
         }
     }
+
+    /// 设置里的「浮窗内可直接触摸操作」变了 → 立刻重新算一遍（AevonTouchLiveV79）。
+    ///
+    /// 关掉时的效果是**明确的**：内容不再接收触摸（不会转发给里面的 App），
+    /// 但窗口本身照旧 —— 侧条拖动、底边拖动 / 双击关闭、下角缩放、轻点停靠还原
+    /// 全都走容器那一层，不受这里影响。这一点也写进日志，免得下次又怀疑「是不是坏了」。
+    func refreshContentPref() {
+        let latest = AevonPrefs.bool("TouchEnabled", default: true)
+        guard latest != contentInteractiveByPref else { return }
+        contentInteractiveByPref = latest
+        applyContentInteraction(reason: "设置变更")
+        AevonLog.info("[场景] 内容触摸开关已更新：\(latest ? "开（浮窗里可直接操作 App）" : "关（内容不再接收触摸，不会转发进 App；窗口拖动 / 停靠 / 关闭 / 缩放照常）")"
+            + "（\(bundleID)，即时生效，AevonTouchLiveV79）")
+    }
+
 
     /// 递归关掉整棵子树的交互（返回实际改动数量）
     @discardableResult
@@ -334,9 +377,12 @@ final class AevonSceneHost {
         let absent = (alivePid <= 0)
         self.guardAbsent = absent
         if absent {
+            /* V0.0.79：先给 1.5 秒宽限再真关（见 guardGraceDeadline 注释） */
+            self.guardGraceDeadline = CACurrentMediaTime() + 1.5
             interactive = false
-            AevonLog.warn("[场景] Guard 存活探测：\(bundleID) → **无 Guard**（该 App 是 tweak 加载前就在跑的老进程）"
-                + "；浮窗内容触摸已强制关闭，避免触摸转发进去被 App 合成点击（AevonGuardAliveV77）")
+            AevonLog.warn("[场景] Guard 存活探测：\(bundleID) → **暂无 Guard**（该 App 是 tweak 加载前就在跑的老进程，"
+                + "或刚被拉起还没登记）；先给 1.5 秒宽限，到期仍未登记才强制关闭内容触摸"
+                + "（AevonGuardAliveV77 AevonGuardGraceV79）")
         } else {
             AevonLog.info("[场景] Guard 存活探测：\(bundleID) → 有（pid=\(alivePid)），内容触摸跟随设置（AevonGuardAliveV77）")
         }
@@ -349,8 +395,9 @@ final class AevonSceneHost {
         host.addSubview(view)
         self.container = host
         applyContentInteraction(reason: "初始化")
+        startContentGate()
 
-        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")）")
+        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(container.isUserInteractionEnabled ? "开" : "关")）")
 
         // 激活 presenter 之后再把场景推一次前台：只有场景处于前台，App 才会持续渲染。
         AevonSceneHelper.setForeground(scene, true)
@@ -363,6 +410,38 @@ final class AevonSceneHost {
     }
 
     // MARK: - 首帧探测
+
+    /// 内容触摸守护（AevonContentGateV79）：每 0.5 秒重施一遍，持续 10 秒。
+    private func startContentGate() {
+        guard contentGateTimer == nil else { return }
+        contentGateTicks = 0
+        AevonLog.info("[场景] 内容触摸守护已启动（10 秒内每 0.5 秒复查：系统重开 / Guard 晚登记 / 设置变更）"
+            + "（\(bundleID)，AevonContentGateV79）")
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard !self.invalidated else { self.stopContentGate(); return }
+            self.contentGateTicks += 1
+            if self.contentGateTicks > 20 { self.stopContentGate(); return }
+            // ① 用户改过设置 → 立刻跟上（不必等 0.2 秒轮询）
+            self.refreshContentPref()
+            // ② Guard 晚登记 → 一登记上就放开
+            if self.guardAbsent && AevonGuardAliveState(self.bundleID) > 0 {
+                self.guardAbsent = false
+                self.guardGraceDeadline = 0
+                let pid = AevonGuardAliveState(self.bundleID)
+                AevonLog.info("[场景] Guard 存活复检：\(self.bundleID) 已登记（pid=\(pid)），内容触摸恢复跟随设置（AevonGuardAliveV77）")
+            }
+            // ③ 系统又改回来了 → 再关一次
+            self.applyContentInteraction(reason: self.guardAbsent ? "宽限复检" : "每拍复查")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        contentGateTimer = timer
+    }
+
+    private func stopContentGate() {
+        contentGateTimer?.invalidate()
+        contentGateTimer = nil
+    }
 
     func startSyncing() {
         guard probeTimer == nil, !invalidated else { return }
@@ -390,6 +469,7 @@ final class AevonSceneHost {
             let pid = AevonGuardAliveState(bundleID)
             if pid > 0 {
                 guardAbsent = false
+                guardGraceDeadline = 0
                 applyContentInteraction(reason: "存活复检")
                 AevonLog.info("[场景] Guard 存活复检：\(bundleID) 已登记（pid=\(pid)），内容触摸恢复跟随设置（AevonGuardAliveV77）")
             }
@@ -477,6 +557,7 @@ final class AevonSceneHost {
 
     private func teardownPresenter() {
         stopProbing()
+        stopContentGate()
         hasContent = false
 
         // 先摘视图，再 deactivate + invalidate（顺序错了会留下悬挂的呈现者）
