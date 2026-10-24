@@ -1291,6 +1291,34 @@ jobs:
           PY84G
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardNoWidgetV80' \
             || { echo "::error::V0.0.80 Guard 没有排除小组件宿主（AevonGuardNoWidgetV80）"; exit 1; }
+          # ── V0.0.85（AevonRectRingV85 / AevonRingReclaimV85 / AevonEntityPidV85）──
+          # ①判定区从「窗内」扩到「窗外 48pt 环带」：归档(6) 里背后 App 收到的落点
+          #   345,809 / 351,771 / 365,821 全在窗外 —— 抓手本来就在窗外。
+          # ②滚动中途回收：指头从环带起步、在背后 App 里拖出 18pt 就接管并还原偏移。
+          # ③P1 就绪判据换锚：Guard 存活 pid 优先（processState 连两轮返回垃圾）。
+          python3 - "$GUARD_DYLIB" <<'PY85'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonRectRingV85","AevonScrollSrcV85","AevonRingReclaimV85",
+                    "浮窗环带起步的滚动已回收"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.85 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.85 校验: 环带判定 + 滚动中途回收 + 加宽取证 已编入 Guard")
+          PY85
+          python3 - "$DYLIB" <<'PY85M'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonEntityPidV85","AevonSelectorTypeEncoding"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.85 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.85 校验: P1 就绪锚点 + 选择子编码探针 已编入主 dylib")
+          PY85M
+          # 反回退：环带判定必须真的用上（窗内矩形单用 = 又回到「抓手在窗外」的老坑）
+          grep -q 'AevonGuardFloatRingRect()' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
+            || { echo "::error::V0.0.85 回退: 环带矩形没接进判定"; exit 1; }
+          # 反回退：P1 就绪门必须把 Guard 存活 pid 当第一判据
+          grep -q 'AevonGuardAliveState(bundleID)' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
+            || { echo "::error::V0.0.85 回退: P1 就绪门又只靠 processState（垃圾值会让它永远等不到）"; exit 1; }
           # 反回退：Guard 里绝不能再出现 win.frame = screen / 每秒 layoutIfNeeded
           if grep -n 'win.frame = screen' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m"; then
             echo "::error::V0.0.80 回退: Guard 又在强行改 App 窗口尺寸（会吃掉整屏触摸 / 每秒强制布局）"

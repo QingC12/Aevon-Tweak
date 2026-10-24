@@ -156,3 +156,8 @@ int AevonAppProcessState(id app);
 /// 同上，`isFrontmost`（BOOL）—— Swift 侧用 KVC 读会拿到 nil，这里给个确定值。
 /// 返回 -1 = 取不到。
 int AevonAppIsFrontmost(id app);
+/// V0.0.85（AevonEntityPidV85）：把一个选择子在**这个对象真实类**上的类型编码吐出来。
+/// 用途：`processState` 连续两轮返回垃圾（10750085536 / -2127615328），
+/// 说明我们按错误的返回类型读了它。有了编码就能确定该怎么读，不用再猜。
+/// 返回 NULL 表示没有这个选择子。
+const char *AevonSelectorTypeEncoding(id obj, const char *selName);

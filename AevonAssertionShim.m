@@ -1161,6 +1161,7 @@ int AevonCrashAttrOwnsFrame(void **stack, int count, int skip) {
 /* V0.0.84（AevonEntityIntV84）：CI 校验串（ObjC `used` 常量，保证一定进二进制；
  * Swift 那边的同类常量会被 LLVM 优化掉，历史上已踩过四次）。 */
 __attribute__((used)) static const char AevonEntityIntV84Marker[] = "AevonEntityIntV84";
+__attribute__((used)) static const char AevonEntityPidV85Marker[] = "AevonEntityPidV85";
 __attribute__((used)) static const char AevonPrefShieldV84ShimMarker[] = "AevonPrefShieldV84";
 
 /* V0.0.84（AevonEntityIntV84）：按真实返回类型读整型/布尔属性。
@@ -1195,4 +1196,31 @@ int AevonAppIsFrontmost(id app) {
         return -1;
     }
     return -1;
+}
+
+/* V0.0.85（AevonEntityPidV85）：真实类型编码查询。
+ *
+ * `processState` 连续两轮给出垃圾值（10750085536、-2127615328），说明
+ * 「按 int32 读」的前提本身就是错的 —— 要么返回类型不是 32 位整型，要么这个
+ * 对象根本不是 SBApplication。与其继续猜，不如把方法签名打出来：
+ * 取到编码后就能确定该怎么调（'I' 无符号 32 位 / 'Q' 64 位 / 'B' 布尔 / '@' 对象）。
+ * 结果写进静态缓冲区，调用方不要 free。 */
+const char *AevonSelectorTypeEncoding(id obj, const char *selName) {
+    static char buffer[128];
+    buffer[0] = '\0';
+    @try {
+        if (obj == nil || selName == NULL) { return NULL; }
+        SEL sel = sel_registerName(selName);
+        if (sel == NULL || ![obj respondsToSelector:sel]) { return NULL; }
+        Method m = class_getInstanceMethod(object_getClass(obj), sel);
+        if (m == NULL) { return NULL; }
+        const char *enc = method_getTypeEncoding(m);
+        if (enc == NULL) { return NULL; }
+        strncpy(buffer, enc, sizeof(buffer) - 1);
+        buffer[sizeof(buffer) - 1] = '\0';
+        return buffer;
+    } @catch (NSException *exception) {
+        return NULL;
+    }
+    return NULL;
 }

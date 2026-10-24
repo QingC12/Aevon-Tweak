@@ -96,6 +96,9 @@ __attribute__((used)) static const char AevonScrollHealV82Marker[] = "AevonScrol
  * CI 用 `strings` 抓 ASCII 标记做回归（注释不进二进制，必须写成 used 常量）。 */
 __attribute__((used)) static const char AevonRectGateV83Marker[] = "AevonRectGateV83";
 __attribute__((used)) static const char AevonScrollSrcV84Marker[] = "AevonScrollSrcV84";
+__attribute__((used)) static const char AevonRectRingV85Marker[] = "AevonRectRingV85";
+__attribute__((used)) static const char AevonScrollSrcV85Marker[] = "AevonScrollSrcV85";
+__attribute__((used)) static const char AevonRingReclaimV85Marker[] = "AevonRingReclaimV85";
 
 /* V0.0.84（AevonScrollSrcV84）：App 最近一次收到触摸的时刻（sendEvent 里刷新）。
  * 声明必须放在 AevonGuardSendEvent 之前 —— C 不允许先用后声明（编译期硬错误）。 */
@@ -507,13 +510,48 @@ static CGRect AevonGuardFloatWindowRect(void) {
 static BOOL AevonGuardIsFloatOwner(void);
 static BOOL AevonGuardPointInRect(CGRect rect, CGPoint a, CGPoint b);
 
+/* V0.0.85（AevonRectRingV85）：判定区从「窗内矩形」扩到「窗外 48pt 环带」。
+ *
+ * 归档(6) 把上一版为什么还没修好指出来了：用户在全屏「设置」上开了「电池数据」
+ * 浮窗（55,235 291x499），Guard 在**背后那个 App（设置）**进程里收到的落点是
+ * `345,809` / `351,771` / `365,821` —— 全都在窗**外**（窗底 734、右缘 346）。
+ * 为什么在窗外？因为浮窗的抓手本来就在窗外：侧条 20pt、底边条 46pt、转角 48pt，
+ * 命中区还要再外扩 10pt（V45/V49）。小窗只有 291x499，手指一偏就落到环带上：
+ * 这一份触摸 SB 没接（环带归我们的浮窗），背后 App 照收 → 它自己滚到底。
+ *
+ * 所以判据改成「窗内 ∪ 窗外 48pt 环带」。环带里的一切对背后 App 都是无效输入：
+ * 那块屏幕要么是浮窗的抓手，要么是我们浮窗之外一丁点（用户手指的余量）。
+ * 主人（浮窗里那个 App）仍然完全豁免 —— 它自己的滚动是正当操作。 */
+static const CGFloat kAevonFloatRingPadV85 = 48.0;
+
+static CGRect AevonGuardFloatRingRect(void) {
+    CGRect fw = AevonGuardFloatWindowRect();
+    if (CGRectIsEmpty(fw)) { return CGRectZero; }
+    return CGRectInset(fw, -kAevonFloatRingPadV85, -kAevonFloatRingPadV85);
+}
+
 static BOOL AevonGuardFloatAreaHit(CGPoint a, CGPoint b) {
     @try {
-        CGRect fw = AevonGuardFloatWindowRect();
-        if (CGRectIsEmpty(fw)) { return NO; }
-        if (!AevonGuardPointInRect(fw, a, b)) { return NO; }
+        CGRect ring = AevonGuardFloatRingRect();
+        if (CGRectIsEmpty(ring)) { return NO; }
+        if (!AevonGuardPointInRect(ring, a, b)) { return NO; }
         /* 主人例外：浮窗里显示的那个 App，用户就是在操作它。
          * 它收到的这份触摸是浮窗内容的正当输入，绝不能吞。 */
+        if (AevonGuardIsFloatOwner()) { return NO; }
+        return YES;
+    } @catch (NSException *e) {
+        return NO;
+    }
+}
+
+/* V0.0.85：began 已经漏出去之后的中途回收判据。
+ * 指头从环带/窗内起步、且在背后 App 里已经拖动超过 18pt —— 这就是「浮窗上的
+ * 那一下被带进背后 App」的现场，立刻接管并把滚动偏移还原。 */
+static BOOL AevonGuardShouldReclaimScroll(CGPoint startScreen) {
+    @try {
+        CGRect ring = AevonGuardFloatRingRect();
+        if (CGRectIsEmpty(ring)) { return NO; }
+        if (!CGRectContainsPoint(ring, startScreen)) { return NO; }
         if (AevonGuardIsFloatOwner()) { return NO; }
         return YES;
     } @catch (NSException *e) {
@@ -1261,20 +1299,25 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                        (unsigned long)dockSwallowCount);
                 }
             } else if (AevonGuardFloatAreaHit(pt, spt)) {
-                /* V0.0.83（AevonRectGateV83）：落点在悬浮窗整窗矩形内，而本进程
-                 * 不是浮窗主人 → 这条触摸是 backboardd 同时投给「背后全屏 App」的
-                 * 那一份，整条不投递。用户主诉的「浮窗里滑一下，背后 App 被滚到底」
-                 * 就是这条漏的（旧实现只吞底边环带，浮窗主体完全没管）。 */
+                /* V0.0.83（AevonRectGateV83）：落点在悬浮窗整窗矩形（V0.0.85 起含
+                 * 窗外 48pt 环带）内，而本进程不是浮窗主人 → 这条触摸是
+                 * backboardd 同时投给「背后全屏 App」的那一份，整条不投递。
+                 * 用户主诉的「浮窗里滑一下，背后 App 被滚到底」就是这条漏的
+                 * （旧实现只吞底边环带，浮窗主体与抓手环带完全没管）。 */
                 hardZone = YES;
-                static CFTimeInterval lastRectGate = 0;
-                CFTimeInterval rectNow = CACurrentMediaTime();
-                if (rectNow - lastRectGate > 1.0) {
-                    lastRectGate = rectNow;
+                /* V0.0.85：前 60 条全记，之后每 10 条记一条 —— 旧实现 1 秒限频，
+                 * 一次滑动只产生一条 began，很容易整段被吞掉看不出规律。 */
+                static NSUInteger ringSwallowCount = 0;
+                ringSwallowCount += 1;
+                if (ringSwallowCount <= 60 || ringSwallowCount % 10 == 0) {
                     CGRect fw = AevonGuardFloatWindowRect();
-                    AevonGuardWriteLog(NO, @"浮窗整窗拦下触摸（落点 %.0f,%.0f 在浮窗 %.0f,%.0f %.0fx%.0f 内，"
-                                       @"本进程不是浮窗主人 → 背后 App 不该收到浮窗上的操作，app=%@）（AevonRectGateV83）",
-                                       spt.x, spt.y, fw.origin.x, fw.origin.y,
-                                       fw.size.width, fw.size.height,
+                    CGRect rg = AevonGuardFloatRingRect();
+                    AevonGuardWriteLog(NO, @"浮窗整窗拦下触摸（落点 %.0f,%.0f，窗 %.0f,%.0f %.0fx%.0f，"
+                                       @"环 %.0f,%.0f %.0fx%.0f，累计 %lu 条；"
+                                       @"本进程不是浮窗主人 → 背后 App 不该收到浮窗上的操作，app=%@）（AevonRectGateV83 AevonRectRingV85）",
+                                       spt.x, spt.y, fw.origin.x, fw.origin.y, fw.size.width, fw.size.height,
+                                       rg.origin.x, rg.origin.y, rg.size.width, rg.size.height,
+                                       (unsigned long)ringSwallowCount,
                                        [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
                 }
             }
@@ -1310,11 +1353,13 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * 当真滚动。所以 force=YES：抬手时无条件还原（阈值 20pt）。 */
                 BOOL inFloatWin = NO;
                 CGRect fwRect = CGRectZero;
+                CGRect fwRing = CGRectZero;
                 BOOL isOwner = NO;
                 @try {
                     fwRect = AevonGuardFloatWindowRect();
-                    if (!CGRectIsEmpty(fwRect)) {
-                        inFloatWin = AevonGuardPointInRect(fwRect, pt, spt);
+                    fwRing = AevonGuardFloatRingRect();
+                    if (!CGRectIsEmpty(fwRing)) {
+                        inFloatWin = AevonGuardPointInRect(fwRing, pt, spt);
                     }
                     isOwner = AevonGuardIsFloatOwner();
                 } @catch (NSException *e) { inFloatWin = NO; }
@@ -1326,15 +1371,23 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * 现在改由上面的「浮窗整窗矩形门」在 began 就整条阻断，不需要事后补偿。
                  * 这里保留 arm（force 恒 NO），继续兜「晚到重判接管」那条老路径。 */
                 AevonGuardArmScrollWatch(touch.window, pt, event, NO);
-                /* V0.0.83 诊断：浮窗整窗矩形到底有没有收到（限频 2s）。
-                 * 下轮日志只要出现 `窗=` 非 0x0 且 `内=1`，就证明通道与判据都通了。 */
+                /* V0.0.85（AevonRectRingV85）：诊断改成「环带内必记」。
+                 * 旧实现 2 秒限频，而用户滑一下只有一次 began —— 掉进限频窗口里
+                 * 就永远看不见，等于自己把证据藏了。现在只要落点在环带内就记
+                 * （每个进程最多 40 条，避免刷爆日志），其余情况 4 秒一条心跳。 */
+                static NSUInteger ringProbeCount = 0;
                 static CFTimeInterval lastFwProbe = 0;
                 CFTimeInterval fwNow = CACurrentMediaTime();
-                if (fwNow - lastFwProbe > 2.0) {
+                BOOL ringHitNow = !CGRectIsEmpty(fwRing) && inFloatWin;
+                if ((ringHitNow && ringProbeCount < 40) || (fwNow - lastFwProbe > 4.0)) {
+                    if (ringHitNow) { ringProbeCount += 1; }
                     lastFwProbe = fwNow;
-                    AevonGuardWriteLog(NO, @"浮窗整窗判定（窗=%.0f,%.0f %.0fx%.0f 落点 %.0f,%.0f 内=%d 主人=%d app=%@）（AevonRectGateV83）",
+                    AevonGuardWriteLog(NO, @"浮窗整窗判定（窗=%.0f,%.0f %.0fx%.0f 环=%.0f,%.0f %.0fx%.0f "
+                                       @"落点 %.0f,%.0f 内=%d 主人=%d app=%@）（AevonRectGateV83 AevonRectRingV85）",
                                        fwRect.origin.x, fwRect.origin.y,
                                        fwRect.size.width, fwRect.size.height,
+                                       fwRing.origin.x, fwRing.origin.y,
+                                       fwRing.size.width, fwRing.size.height,
                                        spt.x, spt.y, inFloatWin ? 1 : 0, isOwner ? 1 : 0,
                                        [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
                 }
@@ -1358,7 +1411,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                         AevonGuardDockCounts(&r2, &l2);
                         CGRect wf = CGRectZero;
                         @try { if (touch.window) { wf = touch.window.frame; } } @catch (NSException *e) { }
-                        AevonGuardWriteLog(NO, @"began 放行（win=%.0f,%.0f scr=%.0f,%.0f float=%d ring=%d rect=%d dockR=%lu ghost=%lu winFrame=%.0f,%.0f,%.0f,%.0f slot=%.0f,%.0f %.0fx%.0f）",
+                        AevonGuardWriteLog(NO, @"began 放行（win=%.0f,%.0f scr=%.0f,%.0f float=%d ring=%d rect=%d dockR=%lu ghost=%lu winFrame=%.0f,%.0f,%.0f,%.0f slot=%.0f,%.0f %.0fx%.0f app=%@）",
                                            pt.x, pt.y, spt.x, spt.y,
                                            floatTouch ? 1 : 0,
                                            ringOpen ? 1 : 0,
@@ -1366,7 +1419,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                            (unsigned long)r2,
                                            (unsigned long)gAevonDockGhostCount,
                                            wf.origin.x, wf.origin.y, wf.size.width, wf.size.height,
-                                           sw2 - gAevonDockW, gAevonDockTop, gAevonDockW, gAevonDockH);
+                                           sw2 - gAevonDockW, gAevonDockTop, gAevonDockW, gAevonDockH,
+                                           [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
                     }
                 }
             }
@@ -1397,6 +1451,25 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                 if (dx < -8.0 && fabs(dx) >= fabs(dy)) {
                     AevonGuardSetTouchOwned(touch, YES);
                     owned = YES;
+                } else if (hypot(dx, dy) > 18.0 && AevonGuardShouldReclaimScroll(start)) {
+                    /* V0.0.85（AevonRectRingV85）：**滚动中途回收**。
+                     * 指头从浮窗环带/窗内起步，却在背后 App 里拖出了 18pt ——
+                     * 就是「浮窗上那一下被带进背后 App」的现场。立刻接管，
+                     * 并把已经被带走的滚动偏移还原（带 `_stopScrollingNotify`，
+                     * 否则滚动会话卡住 = 内容滑到底 + 底部空白）。
+                     * 只对「非主人」生效，浮窗里那个 App 的滚动一律不动。 */
+                    AevonGuardSetTouchOwned(touch, YES);
+                    owned = YES;
+                    AevonGuardRestoreScrollIfLeaked("moved-环带");
+                    static NSUInteger ringReclaimCount = 0;
+                    ringReclaimCount += 1;
+                    if (ringReclaimCount <= 40 || ringReclaimCount % 10 == 0) {
+                        AevonGuardWriteLog(NO, @"浮窗环带起步的滚动已回收（位移 %.0fpt，起点 %.0f,%.0f，累计 %lu 条，app=%@）"
+                                           @"（AevonRectRingV85）",
+                                           hypot(dx, dy), start.x, start.y,
+                                           (unsigned long)ringReclaimCount,
+                                           [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+                    }
                 } else if (AevonGuardRecentFloatTap()
                            || (hypot(dx, dy) < 25.0 && AevonGuardLateRejudgeHit(now, snow))) {
                     /* V0.0.71（AevonGuardLateRejudgeV71）：began 竞态泄漏的回收 ——
@@ -1576,10 +1649,16 @@ static void AevonGuardSetContentOffset(id target, SEL _cmd, CGPoint offset, BOOL
         UIScrollView *sv = (UIScrollView *)target;
         CGPoint old = sv.contentOffset;
         CGFloat dy = fabs(offset.y - old.y);
-        /* 摘 24pt 以上的跳变，且这时 App 已经 0.45 秒没收到任何触摸 —— 那就是「自己动的」。 */
-        if (dy >= 24.0 && (now - gAevonLastTouchAt) > 0.45) {
+        /* V0.0.85（AevonScrollSrcV85）：条件放宽 —— **有触摸也记**。
+         * 上一版只在「0.45 秒内无触摸」时记，而用户就是在连着滑动的那几十秒里
+         * 看到内容滑到底的，条件永远不成立 → 一条日志都没有，等于没取证。
+         * 现在只要竖向跳变 ≥ 8pt 就记（0.4 秒限频），并把「触龄 / 是否拖动中 /
+         * 调用方」一起打出来：
+         *   · 触龄很小 + 拖动中 = 真的是手指驱使它（那就是触摸漏进了这个 App）；
+         *   · 触龄很大 = 非触摸源（调用方符号直接点名）。 */
+        if (dy >= 8.0) {
             static CFAbsoluteTime lastSrcLog = 0;
-            if (now - lastSrcLog > 1.0) {
+            if (now - lastSrcLog > 0.4) {
                 lastSrcLog = now;
                 NSString *caller = @"?";
                 @try {
@@ -1589,9 +1668,12 @@ static void AevonGuardSetContentOffset(id target, SEL _cmd, CGPoint offset, BOOL
                         caller = frame.length > 90 ? [frame substringToIndex:90] : frame;
                     }
                 } @catch (NSException *e) { }
+                CGFloat age = (gAevonLastTouchAt > 0) ? (now - gAevonLastTouchAt) : -1.0;
                 AevonGuardWriteLog(NO, @"滚动被非触摸源移动（y %.0f→%.0f 跳变 %.0fpt，内容高 %.0f 可视高 %.0f，"
-                                   @"动画=%d，app=%@，调用方=%@）（AevonScrollSrcV84）",
+                                   @"触龄 %.2fs，拖动中=%d 减速中=%d，动画=%d，app=%@，调用方=%@）"
+                                   @"（AevonScrollSrcV84 AevonScrollSrcV85）",
                                    old.y, offset.y, dy, sv.contentSize.height, sv.bounds.size.height,
+                                   age, sv.isDragging ? 1 : 0, sv.isDecelerating ? 1 : 0,
                                    animated ? 1 : 0,
                                    [[NSBundle mainBundle] bundleIdentifier] ?: @"?", caller);
             }

@@ -156,8 +156,9 @@ final class AevonSceneDriver: NSObject {
                 }
                 return
             }
-            AevonLog.warn("[场景] P1 放弃本轮：等了 60 秒，\(AevonSceneDriver.experimentBundleID) 仍未在前台运行 —— "
-                + "请先把它打开到前台，再重新开关一次实验开关（AevonEntityLiveV83）")
+            AevonLog.warn("[场景] P1 放弃本轮：等了 60 秒，\(AevonSceneDriver.experimentBundleID) 仍没有进程 —— "
+                + "先把它打开（前台或开成浮窗都算，只要有进程），再重新开关一次实验开关"
+                + "（AevonEntityLiveV83 AevonEntityPidV85）")
             waitTicks = 0
             return
         }
@@ -181,22 +182,41 @@ final class AevonSceneDriver: NSObject {
     /// 归档(84) 的 `进程状态=10750085536` 就是「64 位读 32 位」的残留垃圾 ——
     /// 那个值必然 ≥ 2，于是这扇门永远敞开，目标 App 没启动也照样往第 4 步跑。
     static func targetAppIsRunning() -> Bool {
+        let bundleID = AevonSceneDriver.experimentBundleID
+        /* V0.0.85（AevonEntityPidV85）：**就绪判据彻底换锚**。
+         *
+         * 归档(6) 里 P1 明明「设置」已经起来了（Guard 在同一秒注入成功，
+         * pid=45130），可 `processState` 还是返回垃圾（-2127615328），
+         * 于是这扇门一直不开，白白等满 60 秒放弃 —— 两轮都卡在这一步。
+         *
+         * 现在按可靠度排优先级：
+         *   ① Guard 存活文件里的 pid（`AevonGuardAliveState`，里面有 kill(pid,0) 校验）
+         *      —— 有 pid 就等于「进程真的在跑」，这是最硬的信号；
+         *   ② `processState` 落在 1…8 这种合理区间（垃圾值一律不认）；
+         *   ③ 前台标记为真。
+         */
         guard let ctrl = tryShared(classNamed: "SBApplicationController", selector: "sharedInstance") else { return false }
         guard let app = AevonSafeObjCall1(ctrl, "applicationWithBundleIdentifier:",
-                                          AevonSceneDriver.experimentBundleID as NSString) else {
+                                          bundleID as NSString) else {
             AevonLog.info("[场景] P1 目标 App 对象=取不到（SBApplicationController 没给出 App）"
-                + "（AevonEntityIntV84）")
+                + "（AevonEntityIntV84 AevonEntityPidV85）")
             return false
         }
         let st = AevonAppProcessState(app)
         let front = AevonAppIsFrontmost(app)
-        AevonLog.info("[场景] P1 目标 App 状态：进程状态=\(st)（0=未运行 2=后台 3=挂起 4=前台），"
-            + "前台=\(front == 1 ? "是" : (front == 0 ? "否" : "取不到"))"
-            + "（AevonEntityLiveV83 AevonEntityIntV84）")
-        if st >= 2 { return true }
-        /* 进程状态读不到（-1）时退一步看前台标记；两个都拿不到就当没就绪，
-         * 宁可这轮不跑也不要再拿一个空进程去撞实体 init。 */
-        if st < 0 { return front == 1 }
+        let alivePid = AevonGuardAliveState(bundleID)
+        var encoding = "无"
+        if let enc = AevonSelectorTypeEncoding(app, "processState") {
+            encoding = String(cString: enc)
+        }
+        AevonLog.info("[场景] P1 目标 App 状态：进程状态=\(st)（编码 \(encoding)），"
+            + "前台=\(front == 1 ? "是" : (front == 0 ? "否" : "取不到"))，"
+            + "Guard存活pid=\(alivePid)"
+            + "（AevonEntityLiveV83 AevonEntityIntV84 AevonEntityPidV85）")
+
+        if alivePid > 0 { return true }
+        if st >= 1 && st <= 8 { return true }
+        if front == 1 { return true }
         return false
     }
 
