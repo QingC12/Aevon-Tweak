@@ -617,7 +617,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["铺满裁切", "停靠小窗小胖屏 3:5",
+          need = ["停靠小窗小胖屏 3:5",
                   "停靠小窗与圆盘热区重叠", "回到各自上一次停靠的那一侧",
                   "已打断进行中的几何动画", "两侧列都已重排"]
           miss = [s for s in need if s.encode("utf-8") not in data]
@@ -731,9 +731,8 @@ jobs:
           python3 - "$DYLIB" <<'PY58'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["可视区位置", "PullOverMF 同款",
-                  "内容模式=完整显示", "整屏等比缩放",
-                  "铺满裁切", "停靠小窗小胖屏 3:5"]
+          need = ["内容模式=完整显示", "整屏等比缩放",
+                  "停靠小窗小胖屏 3:5"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.58 日志串: " + ", ".join(miss))
@@ -755,11 +754,8 @@ jobs:
           python3 - "$DYLIB" <<'PY59'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["自动回退整屏等比缩放",
-                  "跳过场景休眠、保持前台",
+          need = ["跳过场景休眠、保持前台",
                   "内容模式=完整显示",
-                  "可视区位置", "PullOverMF 同款",
-                  "铺满裁切",
                   "停靠小窗小胖屏 3:5", "整屏等比缩放",
                   "停靠列落地校验"]
           miss = [s for s in need if s.encode("utf-8") not in data]
@@ -785,7 +781,7 @@ jobs:
           python3 - "$DYLIB" <<'PY60'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["自动回退整屏等比缩放"]
+          need = ["内容模式=完整显示"]  # V0.0.88：本版专属串已随真重排移除
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.60 日志串: " + ", ".join(miss))
@@ -854,7 +850,7 @@ jobs:
           python3 - "$DYLIB" <<'PY65'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["场景保持整屏","TrueResizeWrites"]:
+          for s in ["AevonTrueResizeWritesOffV65"]:  # V0.0.88：只验历史标记
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.65 缺串: {s}"); sys.exit(1)
           print("V0.0.65 校验: 场景几何写入停用（V58 整屏前提恢复）已编入")
