@@ -178,8 +178,8 @@ final class AevonSceneDriver: NSObject {
     /// V0.0.83：目标 App 现在是否真的有进程（0=not running / 1=?, 2=background, 3=suspended, 4=foreground）。
     static func targetAppIsRunning() -> Bool {
         guard let ctrl = tryShared(classNamed: "SBApplicationController", selector: "sharedInstance") else { return false }
-        guard let app = AevonSafeCallObject1(ctrl, "applicationWithBundleIdentifier:",
-                                             AevonSceneDriver.experimentBundleID as NSString) else { return false }
+        guard let app = AevonSafeObjCall1(ctrl, "applicationWithBundleIdentifier:",
+                                          AevonSceneDriver.experimentBundleID as NSString) else { return false }
         if let st = AevonRuntime.int(app, Selector(("processState"))) {
             AevonLog.info("[场景] P1 目标 App 进程状态=\(st)（0=未运行 4=前台）（AevonEntityLiveV83）")
             return st >= 2
