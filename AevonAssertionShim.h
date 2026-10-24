@@ -152,12 +152,12 @@ int AevonCrashAttrOwnsFrame(void **stack, int count, int skip);
 /// 于是「进程状态 ≥ 2 才算就绪」那扇门形同不存在 —— 目标 App 根本没启动也照样放行，
 /// 第 4 步自然又是「四个 init 全 nil」，白跑一轮。
 /// 返回 -1 = 取不到（对象为空 / 没有这个选择子 / 抛异常）。
-int AevonAppProcessState(id app);
+
 /// 同上，`isFrontmost`（BOOL）—— Swift 侧用 KVC 读会拿到 nil，这里给个确定值。
 /// 返回 -1 = 取不到。
-int AevonAppIsFrontmost(id app);
+
 /// V0.0.85（AevonEntityPidV85）：把一个选择子在**这个对象真实类**上的类型编码吐出来。
 /// 用途：`processState` 连续两轮返回垃圾（10750085536 / -2127615328），
 /// 说明我们按错误的返回类型读了它。有了编码就能确定该怎么读，不用再猜。
 /// 返回 NULL 表示没有这个选择子。
-const char *AevonSelectorTypeEncoding(id obj, const char *selName);
+

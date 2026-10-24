@@ -56,18 +56,6 @@
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
-			<string>FullContent</string>
-			<key>label</key>
-			<string>细长窗口（整屏等比，不裁切；V0.0.87 起恒开）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
 			<string>TouchEnabled</string>
 			<key>label</key>
 			<string>浮窗内可直接触摸操作（关掉=内容不接收触摸；停靠成小窗时一律不接收，防止点穿到下面的 App。窗口拖动 / 停靠 / 关闭 / 缩放照常，改动立即生效）</string>
@@ -131,40 +119,6 @@
 			<string>ForceForeground</string>
 			<key>label</key>
 			<string>强制前台保持（实验）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>实验功能</string>
-			<key>footerText</key>
-			<string>真小胖屏 P0 探测：开启后注销重启一次，SpringBoard 会把真重排所需系统 API 的探测结果写进日志（/var/mobile/Aevon.log，搜「场景探测」）。纯只读探测，不改任何行为；关闭 = 与旧版完全一致。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>TrueResizeScene</string>
-			<key>label</key>
-			<string>真小胖屏 P0 探测（只写日志，不改行为）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>AevonTrueResizeP1</string>
-			<key>label</key>
-			<string>真小胖屏 P1：自建场景实验（已终止，开关无效）</string>
-			<key>footerText</key>
-			<string>V0.0.87 起本实验**已终止**：V0.0.86 真机日志里 SBDeviceApplicationSceneEntity 的 5 个候选 init 全部返回 nil，自建场景这条路线在这台设备上立不起来。开关保留只为兼容，打开也不会运行；主悬浮窗已恢复「细长」形态（整屏等比、不裁切）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

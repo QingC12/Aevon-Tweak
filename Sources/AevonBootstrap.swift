@@ -24,20 +24,8 @@ enum AevonBootstrap {
                                object: nil,
                                queue: .main) { _ in
             AevonLog.info("[引导] 收到 didFinishLaunching，4 秒后创建入口（边缘手势条 / 圆盘）")
-            // V0.0.75（AevonCrashFuseV75）：**第一件事**就是检查上一轮 P1 有没有把进程搞崩。
-            // Aevon(67)：P1 第 4 步野指针 → SpringBoard 退出 → 重启后 20s 自检又跑 P1 又崩，
-            // 5 次启动崩 4 次（用户完全没法测试）。这里读到残留面包屑就把开关写关，
-            // 彻底断掉「一开机就注销」的死循环。
-            AevonSceneDriver.consumeCrashFuse()
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                 installEntries(reason: "didFinishLaunching")
-            }
-            // V0.0.70（AevonSceneProbeP0 同源通道）：P1 实验启动自检 ——
-            // prefschanged 只在设置变化时触发；若用户上一版就把 P1 开关打开并
-            // 一直保留（Aevon(63)：全程开着但实验从未排程），这里启动后补查一次。
-            // maybeRunExperiment 自带防重入（跑过即跳过），不会重复实验。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) {
-                AevonSceneDriver.shared.maybeRunExperiment()
             }
         }
 
@@ -106,17 +94,6 @@ enum AevonBootstrap {
     /// 任何一步抛 NSException 只记日志不中断启动，后续步骤照常；绝不再把异常抛回系统。
     private static func installEntries(reason: String) {
         guard AevonPrefs.bool("Enabled", default: false) else { return }
-
-        // V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 运行时探测（开关 TrueResizeScene 默认关；
-        // 只读探测不建对象，一次进程一遍，独立异常隔离，绝不影响入口安装）。
-        var probeEx: NSString? = nil
-        var probeWhy: NSString? = nil
-        AevonTryExecute({
-            AevonSceneProbe.runOnceIfNeeded()
-        }, &probeEx, &probeWhy)
-        if let n = probeEx {
-            AevonLog.warn("[引导] 场景探测抛异常（\(n): \(probeWhy ?? "无")），已拦截（AevonSceneProbeP0）")
-        }
 
         var exName: NSString?
         var exReason: NSString?

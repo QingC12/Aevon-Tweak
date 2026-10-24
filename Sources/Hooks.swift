@@ -98,22 +98,6 @@ import UIKit
             finalSettings = mutable
         }
 
-        // V0.0.55（AevonAdaptiveContentV55）：窗口化场景的尺寸必须一直是「窗口内容区」。
-        // 系统每次推新 settings（布局更新 / 前台切换）都会把 frame 带回整屏 ——
-        // 那一瞬间 App 就重排回整屏，之后我们下次请求再改小，画面会来回抖。
-        // 这里在透传之前统一盖回去，语义等价于 Stheno 的
-        // `setFrame:` + `updateSettings:withTransitionContext:completion:`。
-        // V0.0.59（AevonTrueResizeV59）：displayConfiguration 也要一起盖回去 ——
-        // 它才是让 App 进程真的按小窗重排的杠杆，被系统冲掉就会来回抖。
-        if let target = AevonSceneHelper.adaptiveFrame(for: identifier),
-           let mutable = finalSettings as? NSObject {
-            let frameOK = AevonSettingsSetFrame(mutable, CGRect(origin: .zero, size: target))
-            let dcOK = AevonSettingsApplyDisplaySize(mutable, target)
-            if frameOK || dcOK {
-                finalSettings = mutable
-            }
-        }
-
         AevonRuntime.sendVoid(self,
                            Selector(("sk_fbscene_updateSettings:withTransitionContext:completion:")),
                            finalSettings, ctx, completion)

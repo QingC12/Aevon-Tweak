@@ -599,7 +599,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["小胖屏 3:5", "内容按宽度铺满", "拖动才缩放，轻点无动作",
+          need = ["小胖屏 3:5", "拖动才缩放，轻点无动作",
                   "右下角轻点 → 不缩放也不切换形态", "停靠小窗窗身按下"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
@@ -617,7 +617,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["铺满裁切", "内容按宽度铺满", "停靠小窗小胖屏 3:5",
+          need = ["铺满裁切", "停靠小窗小胖屏 3:5",
                   "停靠小窗与圆盘热区重叠", "回到各自上一次停靠的那一侧",
                   "已打断进行中的几何动画", "两侧列都已重排"]
           miss = [s for s in need if s.encode("utf-8") not in data]
@@ -637,7 +637,7 @@ jobs:
           python3 - "$DYLIB" <<'PY'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["0.600 小胖屏", "拖动才缩放，轻点无动作",
+          need = ["拖动才缩放，轻点无动作",
                   "右下角轻点 → 不缩放也不切换形态",
                   "停靠列已同步给 Guard", "按进入顺序排序",
                   "已隐藏浮窗", "已启用空闲计时器重置通道"]
@@ -731,9 +731,9 @@ jobs:
           python3 - "$DYLIB" <<'PY58'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["内容模式=小胖屏铺满", "可视区位置", "PullOverMF 同款",
-                  "内容模式=完整显示", "整屏等比缩放", "0.600 小胖屏",
-                  "铺满裁切", "内容按宽度铺满", "停靠小窗小胖屏 3:5"]
+          need = ["可视区位置", "PullOverMF 同款",
+                  "内容模式=完整显示", "整屏等比缩放",
+                  "铺满裁切", "停靠小窗小胖屏 3:5"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.58 日志串: " + ", ".join(miss))
@@ -750,21 +750,16 @@ jobs:
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::V0.0.59 标记缺失: $m"; exit 1; }
           done
-          # 真重排垫片必须真的在调 displayConfiguration / setResizesHostedContext:
-          strings "$DYLIB" | grep -q 'setDisplayConfiguration:' \
-            || { echo "::error::V0.0.59 缺 setDisplayConfiguration:（Mango 实证的关键杠杆没编入）"; exit 1; }
-          strings "$DYLIB" | grep -q 'setResizesHostedContext:' \
-            || { echo "::error::V0.0.59 缺 setResizesHostedContext:（Stheno 同款托管开关没编入）"; exit 1; }
+          # V0.0.88：真重排垫片（displayConfiguration / setResizesHostedContext:）
+          # 已随小胖屏项目整体移除，这两条杠杆 grep 一并删除。
           python3 - "$DYLIB" <<'PY59'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["App 已按小窗尺寸重新排版",
-                  "自动回退整屏等比缩放",
+          need = ["自动回退整屏等比缩放",
                   "跳过场景休眠、保持前台",
-                  "真重排请求已下发",
-                  "内容模式=完整显示", "内容模式=小胖屏铺满",
+                  "内容模式=完整显示",
                   "可视区位置", "PullOverMF 同款",
-                  "0.600 小胖屏", "铺满裁切", "内容按宽度铺满",
+                  "铺满裁切",
                   "停靠小窗小胖屏 3:5", "整屏等比缩放",
                   "停靠列落地校验"]
           miss = [s for s in need if s.encode("utf-8") not in data]
@@ -790,12 +785,7 @@ jobs:
           python3 - "$DYLIB" <<'PY60'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["场景保持整屏，回退整屏等比缩放",
-                  "displayConfiguration 未能写入场景",
-                  # V59 历史串必须原样保留
-                  "App 已按小窗尺寸重新排版",
-                  "自动回退整屏等比缩放",
-                  "真重排请求已下发"]
+          need = ["自动回退整屏等比缩放"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.60 日志串: " + ", ".join(miss))
@@ -813,15 +803,8 @@ jobs:
           python3 - "$DYLIB" <<'PY61'
           import sys, pathlib
           data = pathlib.Path(sys.argv[1]).read_bytes()
-          need = ["策略=ivar内存直写",
-                  "关窗收尾决策",
-                  "已触发前台回弹",
-                  # V60/V59 历史串必须原样保留
-                  "场景保持整屏，回退整屏等比缩放",
-                  "displayConfiguration 未能写入场景",
-                  "App 已按小窗尺寸重新排版",
-                  "自动回退整屏等比缩放",
-                  "真重排请求已下发"]
+          need = ["关窗收尾决策",
+                  "已触发前台回弹"]
           miss = [s for s in need if s.encode("utf-8") not in data]
           if miss:
               print("::error::缺少 V0.0.61 日志串: " + ", ".join(miss))
@@ -859,7 +842,7 @@ jobs:
           python3 - "$DYLIB" <<'PY64'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["画布证据收集","确认门=App 进程证据","托管上下文开关未被 scene 接受"]:
+          for s in ["AevonReflowAppGateV64"]:
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.64 缺串: {s}"); sys.exit(1)
           print("V0.0.64 校验: App 进程证据门 + scene 方法表诊断 已编入")
@@ -871,7 +854,7 @@ jobs:
           python3 - "$DYLIB" <<'PY65'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["真重排写入已停用","场景保持整屏","TrueResizeWrites"]:
+          for s in ["场景保持整屏","TrueResizeWrites"]:
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.65 缺串: {s}"); sys.exit(1)
           print("V0.0.65 校验: 场景几何写入停用（V58 整屏前提恢复）已编入")
@@ -883,11 +866,7 @@ jobs:
           python3 - "$DYLIB" <<'PY66'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["场景探测：","P0 判据汇总","SBDeviceApplicationSceneEntity",
-                    "FBSSceneParameters","FBSMutableSceneDefinition","FBSceneManager",
-                    "createSceneWithDefinition:initialParameters:",
-                    "FBApplicationProcessLaunchTransaction","FBSDisplayConfiguration",
-                    "TrueResizeScene"]:
+          for s in ["AevonSceneProbeP0"]:  # V0.0.88：P0 探针已移除，只验历史标记
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.66 缺串: {s}"); sys.exit(1)
           print("V0.0.66 校验: P0 运行时探测（五项判据）已编入")
@@ -912,7 +891,7 @@ jobs:
           python3 - "$DYLIB" <<'PY68'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["P1 实验开始","P1 实验已排程","场景探测："]:
+          for s in ["AevonSceneDriverP1"]:  # V0.0.88：P1 已移除，只验历史标记
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.68 缺串: {s}"); sys.exit(1)
           print("V0.0.68 校验: Guard 设置 App 解除排除 + P1 自建场景实验 已编入")
@@ -923,7 +902,7 @@ jobs:
           python3 - "$DYLIB" <<'PY69'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["P1 实验开始","P1 实验已排程","从零构造小窗 dc","小窗 dc：母本拷贝"]:
+          for s in ["AevonSceneDriverP1"]:  # V0.0.88：P1 已移除，只验历史标记
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.69 缺串: {s}"); sys.exit(1)
           print("V0.0.69 校验: Guard 延迟安装 + P1 dc 母本拷贝/小窗烙定 已编入")
@@ -934,7 +913,7 @@ jobs:
           python3 - "$DYLIB" <<'PY70'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonRestoreGraceAllV70","P1 实验开始","P1 实验已排程","场景探测："]:
+          for s in ["AevonRestoreGraceAllV70","AevonSceneDriverP1"]:  # V0.0.88：P1 已移除
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.70 缺串: {s}"); sys.exit(1)
           print("V0.0.70 校验: 宽限统一 0.7s + 幽灵格多格 2s + P1 启动自检 已编入")
@@ -947,7 +926,7 @@ jobs:
           python3 - "$DYLIB" <<'PY71'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonSceneP1V71","全部候选 init 都构造不出实体","sc_configureInitialParameters"]:
+          for s in ["AevonSceneP1V71"]:  # V0.0.88：P1 已移除，只验历史标记
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.71 缺串: {s}"); sys.exit(1)
           print("V0.0.71 校验: Guard 晚到重判 + P1 第 4/5 步修复 已编入")
@@ -1031,7 +1010,7 @@ jobs:
           python3 - "$DYLIB" <<'PY76'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["P1 第 4 步预习", "AevonSceneP1V73", "P1 实验已锁定"]:
+          for s in ["AevonSceneP1V73"]:  # V0.0.88：P1 已移除，只验历史标记
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.76 缺串: {s}"); sys.exit(1)
           print("V0.0.76 校验: 静态类型化垫片 + 前置体检 + 实验锁定 已编入")
@@ -1041,12 +1020,12 @@ jobs:
           # 注意：本步骤前面 `cd verify` 过，源码必须用 $GITHUB_WORKSPACE 绝对路径，
           # 否则 grep 找不到文件 → 检查变成空转（V0.0.76~78 实际一直空转，V0.0.79 修掉）。
           # 文件头注释里写着「禁止 as?」这类说明，所以先滤掉注释行再判。
-          if grep -nE 'as\? |as! |type\(of:|String\(describing:' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
-             | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)'; then
-            echo "::error::V0.0.76 回退: AevonSceneDriver.swift 出现动态转换（as?/as!/type(of:)，会重新触发 swift_dynamicCast 野指针崩溃）"
+          # V0.0.88：SceneDriver 已随 P1 整体移除 —— 文件不允许再出现
+          if [ -f "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" ]; then
+            echo "::error::V0.0.88 回退: AevonSceneDriver.swift 不应存在（P1 已随小胖屏项目移除）"
             exit 1
           fi
-          echo "V0.0.76 校验: SceneDriver 无动态转换（as?/as!/type(of:)）已确认"
+          echo "V0.0.76 校验: SceneDriver 已随 P1 移除（V0.0.88）"
           # V0.0.77（AevonSceneScanObjCV77）：第二次自动注销的根治点 ——
           # Aevon(69) 崩溃帧 img+0x51ad8 就是 classesResponding 里的
           # `swift_dynamicCast`（跑在 objc_copyClassList 的逐类循环里）。
@@ -1058,7 +1037,7 @@ jobs:
           python3 - "$DYLIB" <<'PY77'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["Guard 存活探测", "AevonGuardAliveV77"]:
+          for s in ["AevonGuardAliveV77"]:
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.77 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.77 校验: 类扫描下沉 ObjC + Guard 存活探测 已编入")
@@ -1072,11 +1051,8 @@ jobs:
                   print(f"::error::V0.0.77 Guard dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.77 校验: Guard 吞摸正向取证 + 部分吞修正 已编入")
           PY77G
-          if grep -n "classesResponding" "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift"; then
-            echo "::error::V0.0.77 回退: SceneDriver 又出现 Swift 版 classesResponding（会重新触发 swift_dynamicCast 崩溃）"
-            exit 1
-          fi
-          echo "V0.0.77 校验: SceneDriver 已无 Swift 类扫描"
+          # V0.0.88：SceneDriver 文件已删除（见 V0.0.76 段的存在性检查）
+          echo "V0.0.77 校验: SceneDriver 已随 P1 移除，类扫描不存在于 Swift"
           # V0.0.78（AevonProviderGraphV78 / AevonContentGateV78）：
           # ①P1 第 4 步 provider 真身 —— Aevon(70) 实现类表白纸黑字写着
           #   SBSceneIdentityProvider / SBSceneManager / SBSecureMainDisplaySceneManager，
@@ -1092,7 +1068,7 @@ jobs:
           python3 - "$DYLIB" <<'PY78'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["对象图命中", "内容触摸被系统重新打开", "AevonContentGateV78"]:
+          for s in ["内容触摸被系统重新打开", "AevonContentGateV78"]:
               if s.encode('utf-8') not in data:
                   print(f"::error::V0.0.78 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.78 校验: 对象图 provider + 内容触摸强制门 已编入")
@@ -1119,8 +1095,8 @@ jobs:
           python3 - "$DYLIB" <<'PY79'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonTouchLiveV79","AevonContentGateV79","AevonProviderIvarV79",
-                    "AevonMainDisplayInitV79","AevonGuardGraceV79","内容触摸开关已更新"]:
+          for s in ["AevonTouchLiveV79","AevonContentGateV79",
+                    "AevonGuardGraceV79","内容触摸开关已更新"]:
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.79 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.79 校验: 内容触摸实时生效 + ivar 候选 + 主屏两参 init + Guard 宽限 已编入")
@@ -1129,17 +1105,13 @@ jobs:
             echo "::error::V0.0.79 回退: contentInteractiveByPref 又变回 let（开关只读一次，改设置对已开浮窗无效）"
             exit 1
           fi
-          if ! grep -q "AevonIvarCandidates" "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift"; then
-            echo "::error::V0.0.79 回退: SceneDriver 没接 ivar 候选（provider 还会是 nil）"
-            exit 1
-          fi
-          echo "V0.0.79 校验: 内容触摸开关可实时切换，provider ivar 候选已接上"
+          echo "V0.0.79 校验: 内容触摸开关可实时切换（provider ivar 候选已随 P1 移除，V0.0.88）"
           # ── V0.0.80（AevonNoWinResizeV80 / AevonAllClosedResetV80 / AevonProviderProbeV80）──
           python3 - "$DYLIB" <<'PY80'
           import sys
           data = open(sys.argv[1],'rb').read()
           for s in ["AevonAllClosedResetV80","AevonFrontHealV80",
-                    "AevonProviderProbeV80","AevonNoSysViewGateV80","触摸接管状态已全部复位",
+                    "AevonNoSysViewGateV80","触摸接管状态已全部复位",
                     "全部浮窗关闭后 1 秒","看门狗：当前没有浮窗"]:
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.80 主 dylib 缺串: {s}"); sys.exit(1)
@@ -1205,7 +1177,7 @@ jobs:
           python3 - "$DYLIB" <<'PY82'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonMainContentV82","内容交互判定","AevonEntityPrecondV82"]:
+          for s in ["AevonMainContentV82","内容交互判定"]:
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.82 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.82 校验: 主窗内容放行 + 判定日志 + P1 前置条件探测 已编入主 dylib")
@@ -1238,7 +1210,7 @@ jobs:
           python3 - "$DYLIB" <<'PY83'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonRectGateV83","AevonFloatOwnerV83","AevonEntityLiveV83"]:
+          for s in ["AevonRectGateV83","AevonFloatOwnerV83"]:
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.83 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.83 校验: 浮窗整窗矩形通道 + 主人指纹 + P1 就绪门 已编入主 dylib")
@@ -1277,9 +1249,7 @@ jobs:
           # 反回退：拦截层必须真的加进内容宿主（没加 = 开关关掉时又变成透明）
           grep -q 'host.addSubview(shield)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::V0.0.84 回退: 浮窗内容拦截层没有挂进内容宿主"; exit 1; }
-          # 反回退：P1 就绪门必须走垫片（用 Swift 64 位 Int 读 processState 会拿到垃圾值）
-          grep -q 'AevonAppProcessState(app)' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
-            || { echo "::error::V0.0.84 回退: P1 就绪门又在用 64 位 Int 读 processState"; exit 1; }
+          # V0.0.88：P1 就绪门已随 SceneDriver 移除，本条反回退随之删除。
           # ④滚动取证：setContentOffset 必须被挂上，日志要能报出「非触摸源移动」
           python3 - "$GUARD_DYLIB" <<'PY84G'
           import sys
@@ -1308,7 +1278,7 @@ jobs:
           python3 - "$DYLIB" <<'PY85M'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonEntityPidV85","AevonSelectorTypeEncoding"]:
+          for s in ["AevonEntityPidV85"]:  # V0.0.88：编码探针已移除，只验历史标记
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.85 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.85 校验: P1 就绪锚点 + 选择子编码探针 已编入主 dylib")
@@ -1316,9 +1286,9 @@ jobs:
           # 反回退：环带判定必须真的用上（窗内矩形单用 = 又回到「抓手在窗外」的老坑）
           grep -q 'AevonGuardFloatRingRect()' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
             || { echo "::error::V0.0.85 回退: 环带矩形没接进判定"; exit 1; }
-          # 反回退：P1 就绪门必须把 Guard 存活 pid 当第一判据
-          grep -q 'AevonGuardAliveState(bundleID)' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
-            || { echo "::error::V0.0.85 回退: P1 就绪门又只靠 processState（垃圾值会让它永远等不到）"; exit 1; }
+          # 反回退：Guard 存活 pid 判据必须还在（V0.0.88 起在 SceneHost 的内容触摸降级里用）
+          grep -q 'AevonGuardAliveState(bundleID)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::V0.0.88 回退: Guard 存活 pid 判据丢了（内容触摸降级会误关）"; exit 1; }
           # 反回退：Guard 里绝不能再出现 win.frame = screen / 每秒 layoutIfNeeded
           if grep -n 'win.frame = screen' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m"; then
             echo "::error::V0.0.80 回退: Guard 又在强行改 App 窗口尺寸（会吃掉整屏触摸 / 每秒强制布局）"
@@ -1342,7 +1312,7 @@ jobs:
           python3 - "$DYLIB" <<'PY86M'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonP1ExcV86","AevonP1Init2V86","两参生成主场景"]:
+          for s in ["AevonP1ExcV86","AevonP1Init2V86"]:  # V0.0.88：P1 已移除，只验历史标记
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.86 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.86 校验: P1 异常取证 + 两参 init 候选 已编入主 dylib")
@@ -1353,9 +1323,7 @@ jobs:
           # 反回退：锚点复位必须严格限定「非浮窗主人 + 非触摸期」
           grep -q 'AevonGuardIsFloatOwner()' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
             || { echo "::error::V0.0.86 回退: 锚点守护丢了浮窗主人豁免"; exit 1; }
-          # 反回退：P1 的 processState 必须按真实编码读（按 int32 读会拿到指针低位）
-          grep -q "ret == '@'" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
-            || { echo "::error::V0.0.86 回退: processState 又按固定整型读了（实测编码是 @，会拿到垃圾）"; exit 1; }
+          # V0.0.88：processState 垫片已随 P1 移除，本条反回退随之删除。
           # ── V0.0.87（AevonSlimWindowV87 / AevonFatProjectEndV87）──
           # 归档(8) 终审：P1 第 1/2/3 步全过，第 4 步 SBDeviceApplicationSceneEntity 的
           # 5 个候选 init **全部返回 nil**（诊断里 app / sceneHandle / displayIdentity 都在）
@@ -1375,13 +1343,17 @@ jobs:
             echo "::error::V0.0.87 回退: 主窗比例又回到 0.60 小胖屏常量（会被裁掉约 20% 屏高）"
             exit 1
           fi
-          # 反回退 2：P1 必须默认不排程（真小胖屏项目已终止）
-          grep -q 'AevonFatProjectReviveV87' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
-            || { echo "::error::V0.0.87 回退: P1 又无条件排程了（项目已终止，不许再跑自建场景实验）"; exit 1; }
-          # 反回退 3：完整显示默认必须为开（旧默认 false = 0.60 裁底口径）
-          grep -q 'FullContent", default: true' "$GITHUB_WORKSPACE/Sources/AevonPrefs.swift" \
-            || grep -q 'FullContent", default: true' "$GITHUB_WORKSPACE/Sources/AevonSnap.swift" \
-            || { echo "::error::V0.0.87 回退: 完整显示默认值又变回关（会退回 0.60 裁底形态）"; exit 1; }
+          # 反回退 2（V0.0.88 收紧）：小胖屏 / P1 代码不允许再回来
+          if grep -rnE 'AevonSceneDriver|AevonSceneProbe|AevonTrueResize|applySceneResize|updateAdaptiveSize|fullContentEnabled|cardVisPanRatio|healSlimWindowOnce' \
+             "$GITHUB_WORKSPACE/Sources" "$GITHUB_WORKSPACE/AevonPrefs" 2>/dev/null; then
+            echo "::error::V0.0.88 回退: 小胖屏 / P1 相关代码又出现了（用户已明确要求整体移除）"
+            exit 1
+          fi
+          if grep -rq 'FullContent' "$GITHUB_WORKSPACE/Sources/AevonSnap.swift" "$GITHUB_WORKSPACE/Sources/AevonPrefs.swift" \
+             "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
+            echo "::error::V0.0.88 回退: FullContent 开关又出现了（小胖屏设置项已整体移除）"
+            exit 1
+          fi
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
@@ -1485,14 +1457,20 @@ jobs:
           # V0.0.15 新增：边缘手势主入口开关必须在
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'EdgeGestureEnabled' \
             || { echo "::error::Root.plist 缺少 EdgeGestureEnabled（边缘圆盘入口）开关"; exit 1; }
-          # ── V0.0.66（AevonSceneProbeP0）：真小胖屏 P0 探测开关必须在一级 Root.plist ──
-          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'TrueResizeScene' \
-            || { echo "::error::Root.plist 缺少 TrueResizeScene（真小胖屏 P0 探测）开关"; exit 1; }
-          echo "V0.0.66 校验: P0 探测开关（TrueResizeScene）已就位"
-          # ── V0.0.68（AevonSceneDriverP1）：P1 自建场景实验开关必须在一级 Root.plist ──
-          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'AevonTrueResizeP1' \
-            || { echo "::error::Root.plist 缺少 AevonTrueResizeP1（真小胖屏 P1 自建场景实验）开关"; exit 1; }
-          echo "V0.0.68 校验: P1 自建场景实验开关（AevonTrueResizeP1）已就位"
+          # ── V0.0.88（反转）：小胖屏 P0/P1 开关不允许再出现在设置里 ──
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'TrueResizeScene'; then
+            echo "::error::Root.plist 仍残留 TrueResizeScene（小胖屏 P0 探测已随项目移除）"
+            exit 1
+          fi
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'AevonTrueResizeP1'; then
+            echo "::error::Root.plist 仍残留 AevonTrueResizeP1（小胖屏 P1 实验已随项目移除）"
+            exit 1
+          fi
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'FullContent'; then
+            echo "::error::Root.plist 仍残留 FullContent（小胖屏内容模式开关已随项目移除）"
+            exit 1
+          fi
+          echo "V0.0.88 校验: 小胖屏 P0/P1/内容模式 开关均已从设置面板移除"
           # V0.0.25 新增：触发区域三个滑杆必须在「细节调整」二级页（V0.0.30 起 Root 只放开关）
           for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
             plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q "$K" \

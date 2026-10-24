@@ -338,12 +338,6 @@ static NSArray *AevonBuildFallback(id target) {
     if (s2 != nil) [result addObject:s2];
     id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作（关掉=内容不接收触摸；停靠小窗一律不接收）", target, @"TouchEnabled", @YES);
     if (s2a != nil) [result addObject:s2a];
-    /* V0.0.57（AevonContentFitV57）：完整显示内容。
-     * V0.0.58（AevonPomoDefaultV58）曾默认关（0.60 小胖屏）。
-     * V0.0.87（AevonSlimWindowV87）：真小胖屏项目终止，主窗恒细长 —— 本开关默认开，
-     * 且比例已与屏幕比绑定，关掉也不再有裁底形态。 */
-    id s2f = AevonNewSwitch(@"细长窗口（整屏等比，不裁切；V0.0.87 起恒开）", target, @"FullContent", @YES);
-    if (s2f != nil) [result addObject:s2f];
     id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
     if (s2c != nil) [result addObject:s2c];
     id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
@@ -387,10 +381,6 @@ static NSArray *AevonBuildFallbackDetail(id target) {
         AevonSetProperty(ringButton, @"aevonOpenRingEditor", @"buttonAction");
         [result addObject:ringButton];
     }
-
-    /* V0.0.59（AevonNoPanSliderV59）：小胖屏可视区位置滑杆已移除 ——
-     * 真重排（App 按小窗尺寸排版）后顶栏/底栏/右侧工具栏原生在场，
-     * 不存在「竖向溢出选哪段」的问题，滑杆随之失去意义。 */
 
     id groupZone1 = AevonNewGroup(@"① 触发位置（底边锚定）",
                                   @"热区底边在屏幕高度的百分比。100% = 区底边贴住屏幕底部，"

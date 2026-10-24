@@ -115,9 +115,6 @@ enum AevonWindowManager {
             // V0.0.48（AevonFloatAnimV48）：入场动画 —— 从下方 22pt 处浮上来 + 淡入。
             // 只动位置和透明度、不动尺寸，所以不会触发内容缩放，第一帧不会闪黑。
             windowView.playEntryAnimation()
-            // V0.0.59（AevonTrueResizeV59）：开窗即请求场景按小窗尺寸真重排 ——
-            // App 自己按小窗排版，顶栏/底栏/右侧工具栏原生在场（场景拒绝会自动回退）。
-            windowView.applySceneResize(reason: "开窗")
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)

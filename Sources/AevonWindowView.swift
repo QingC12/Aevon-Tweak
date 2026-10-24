@@ -360,13 +360,6 @@ final class AevonWindowView: UIView {
                 self?.hintLabel.isHidden = true
             }
         }
-        // V0.0.59（AevonTrueResizeV59）：场景重排状态翻转（确认 / 回退）→ 内容管线立即重算
-        sceneHost.onReflowChanged = { [weak self] in
-            DispatchQueue.main.async {
-                self?.invalidateContentLayout()
-            }
-        }
-
         // V0.0.43（AevonSthenoGestureV43）：顶部 ✕ 已移除（用户要求），
         // 关闭浮窗改成「底边手势区双击」。这里只装手势区，不加任何窗内控件 ——
         // 窗内 100% 留给 App 内容。
@@ -375,23 +368,8 @@ final class AevonWindowView: UIView {
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
-            // V0.0.59（AevonTrueResizeV59）：真重排为主形态；若场景拒绝（探测 5 秒未确认），
-            // 自动回退到 V58 的两种整屏等比形态 —— 回退分支的措辞原样保留，
-            // 既是真机可读的状态，也是历史版本字符串校验的落点。
-            + "内容=App 按小窗尺寸真重排（TrollOpen/Mango 路线：帧+显示配置随 settings 下发，"
-            + "场景拒绝则 5 秒内自动回退）（AevonTrueResizeV59），"
-            // V0.0.64（AevonReflowAppGateV64）：确认门=App 进程证据，未建立前 1:1 分支
-            // 不可达 —— 显示形态恒走下方「回退形态」（整屏等比缩放），绝不放大。
-            + "确认门=App 进程证据（未建立前显示恒走等比缩放），"
-            + (AevonSnap.fullContentEnabled
-               ? "回退形态=内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
-               : "回退形态=内容模式=小胖屏铺满（0.600 小胖屏，铺满裁切、内容按宽度铺满、底部溢出裁掉），"
-                 + "可视区位置 \(Int(AevonSnap.cardVisPanRatio * 100))%"
-                 + "（PullOverMF 同款：卡片=整屏画面的一个可视区，铺满裁掉溢出，"
-                 + "想看被裁的底栏就在设置里把「小胖屏内容位置」往下调）（AevonPomoCoverV58），")
+            + "内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
             + "内容比例 \(String(format: "%.3f", aspect))（AevonContentFitV57），"
-            + "内容 \(Int(restored.width))x\(Int(restored.height))，"
-            + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
 
         // V0.0.87（AevonSlimWindowV87）：形态一句话说清 —— 细长、等比、不裁切。
         // 真小胖屏项目已终止（P1 自建场景第 4 步实体 5 个 init 全 nil），
@@ -489,17 +467,12 @@ final class AevonWindowView: UIView {
         isAnimatingGeometry = true
         // V0.0.57（AevonContentFitV57）：动画中间态与 `applyContentScale` 必须用**同一条**
         // 公式（等比完整适配 + 居中），否则动画期按一套、落位按另一套，结束瞬间会跳一下。
-        let source = sceneHost.sourceSize
         // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
         let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-        // V0.0.58（AevonPomoCoverV58）：主窗在「小胖屏」模式 = PullOverMF 同款可视区
-        // 逻辑（铺满裁切 + 可视区位置可调）；停靠小窗是缩略图，保持贴顶铺满。
-        let fill = self.isDocked || !AevonSnap.fullContentEnabled
-        let pan: CGFloat = (self.isDocked || AevonSnap.fullContentEnabled)
-            ? 0 : AevonSnap.cardVisPanRatio
+        // 停靠小窗是缩略图 → 贴顶铺满；主窗恒整屏等比（fit）。
+        let fill = self.isDocked
         let layout = AevonSnap.contentLayout(windowSize: target.size, topPad: topPad,
-                                             source: source, fill: fill,
-                                             panRatio: pan)
+                                             fill: fill)
         let scale = layout.scale
         let offset = layout.offset
         let container = sceneHost.container
@@ -550,11 +523,6 @@ final class AevonWindowView: UIView {
             if let pending = self.pendingDockY {
                 self.pendingDockY = nil
                 self.setDockedY(pending)
-            }
-            // V0.0.59（AevonTrueResizeV59）：主窗几何落定 → 场景按最终内容区尺寸重排
-            // （停靠 / 关窗退场不重排：停靠小窗是缩略图，关窗走还原整屏）。
-            if !self.isDocked, !self.isDismissing {
-                self.applySceneResize(reason: "几何动画落定")
             }
             // V0.0.56：几何落定 → 同步主窗矩形给 Guard
             AevonEntryHost.syncFloatRectToGuard()
@@ -607,30 +575,6 @@ final class AevonWindowView: UIView {
         }
     }
 
-    // MARK: - 真 resize 请求（V0.0.59，AevonTrueResizeV59）
-
-    /// 让场景按「当前窗口内容区」的尺寸重新排版（帧 + displayConfiguration 一起下发）。
-    ///
-    /// 只对主窗有意义：内容区宽高比 = `AevonSnap.aspect`（0.60 小胖屏 / 完整显示时为屏幕比），
-    /// App 按这个逻辑尺寸排版后，顶栏 / 底栏 / 右侧工具栏都是原生布局，1:1 显示无需缩放。
-    /// 停靠小窗是同一场景的缩略图（比例恰好也是 0.60 → 铺满即完整，无裁切无黑边），
-    /// 不触发场景重排。
-    func applySceneResize(reason: String) {
-        guard !isDocked, !isDismissing, !isAnimatingGeometry else { return }
-        guard frame.width > 1, frame.height > 1 else { return }
-        let topPad = AevonSnap.contentTopPadding
-        let target = CGSize(width: frame.width, height: max(1, frame.height - topPad))
-        sceneHost.updateAdaptiveSize(target, reason: reason)
-    }
-
-    /// 缩放抬手：等布局落定一拍再请求场景重排（避免同帧叠加两次跨进程写入）。
-    private func scheduleSceneResizeAfterSettle() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.applySceneResize(reason: "缩放落定")
-        }
-    }
-
-    /// 关窗退场（V0.0.48）：缩到 94% + 淡出，动画结束再真正拆视图。
     func playDismissAnimation(completion: @escaping () -> Void) {
         guard !isDismissing else { return }
         isDismissing = true
@@ -716,72 +660,25 @@ final class AevonWindowView: UIView {
         let clipSize = contentClip.bounds.size
         guard clipSize.width > 0, clipSize.height > 0 else { return }
 
-        // V0.0.59（AevonTrueResizeV59）：**真重排确认后主窗内容 1:1 原生显示**。
-        //
-        // App 已经按小窗尺寸重新排版（探测确认画布 = 目标尺寸）——
-        // 顶栏/底栏/右侧工具栏都是 App 原生画出来的，任何缩放都是多余的：
-        // scale 恒 1.0，容器边界 = 场景逻辑尺寸，位置 = (0, 顶部留白)。
-        // **停靠小窗不进这个分支**：它是同一场景的缩略图，必须继续按 fill 公式
-        // 缩进小窗（走下面的 V58 路径，source 已自动变成场景逻辑尺寸）。
-        // 探测未确认 / 场景拒绝 → 也走下面的整屏等比缩放路径（自动回退）。
-        if !isDocked, sceneHost.isAdaptiveContent {
-            let adaptive = sceneHost.adaptiveContentSize
-            let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-            let scale: CGFloat = 1.0
-            let offset = CGPoint(x: 0, y: topPad)
-            if abs(clipSize.width - lastClipSize.width) < 0.01,
-               abs(clipSize.height - lastClipSize.height) < 0.01,
-               abs(scale - lastAppliedScale) < 0.0001,
-               abs(offset.x - lastContentOffset.x) < 0.5,
-               abs(offset.y - lastContentOffset.y) < 0.5,
-               abs(adaptive.width - lastSourceSize.width) < 0.5,
-               abs(adaptive.height - lastSourceSize.height) < 0.5 {
-                return
-            }
-            lastClipSize = clipSize
-            lastAppliedScale = scale
-            lastContentOffset = offset
-            lastSourceSize = adaptive
-
-            let container = sceneHost.container
-            if container.layer.anchorPoint != .zero {
-                container.layer.anchorPoint = .zero
-            }
-            let targetBounds = CGRect(origin: .zero, size: adaptive)
-            if container.bounds != targetBounds {
-                container.bounds = targetBounds
-            }
-            if !container.transform.isIdentity {
-                container.transform = .identity
-            }
-            container.layer.position = offset
-            return
-        }
-
-        // V0.0.57（AevonContentFitV57）：这里**不再**请求改 App 场景尺寸 / 改 App 窗口。
+        // 恒走「整屏画面等比缩放」（Stheno 同款 containerScale 思路）：
+        // 场景 frame 恒整屏、App 永远按整屏排版（真重排路线 V0.0.59~V0.0.65
+        // 五版实锤走不通、V0.0.88 已整体移除）。
         //
         // Aevon(51) 的日志与截图把 V0.0.55/V0.0.56 两条路都判死了：
         //   · 改场景 frame：只裁渲染视口（App 的 UIWindow 还是 430×932），内容按整屏
         //     排版、视口只露左 62% → 「字变大 + 右边被切 + 抖音右侧工具栏不显示」；
         //   · 在 App 进程改 keyWindow.frame：抖音这类按 UIScreen 排版的 App 依旧错位，
         //     而且关窗后会残留小窗口 → 全屏打开大面积黑屏（第 4 条）。
-        // 现在回到 Stheno 的做法（`containerScale` / `finalScale`）：整屏画面等比缩放，
         // 只做「完整适配」，任何情况下都不裁切。
-        // V0.0.59：这条路径成了真重排被场景拒绝时的自动回退（AevonTrueResizeV59）。
         let source = sceneHost.sourceSize
         // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）。
         let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-        // V0.0.58（AevonPomoCoverV58）：主窗小胖屏模式 = PullOverMF 同款可视区逻辑；
-        // 停靠小窗是缩略图 → 贴顶铺满（cover）。拖动/动画期间窗口尺寸不变时
-        // scale 与 offset 都不会重算 —— 这就是 PullOverMF 的「拖动时可视区冻结」
-        // （mfMainCardFrozenVis*）：卡片在动、画面内容不跟着游移。
-        let fill = isDocked || !AevonSnap.fullContentEnabled
-        let pan: CGFloat = (isDocked || AevonSnap.fullContentEnabled)
-            ? 0 : AevonSnap.cardVisPanRatio
+        // 停靠小窗是缩略图 → 贴顶铺满（cover）；拖动/动画期间窗口尺寸不变时
+        // scale 与 offset 都不会重算（「拖动时画面冻结」）。
+        let fill = isDocked
 
         let layout = AevonSnap.contentLayout(windowSize: clipSize, topPad: topPad,
-                                             source: source, fill: fill,
-                                             panRatio: pan)
+                                             fill: fill)
         let scale = layout.scale
         let offset = layout.offset
 
@@ -1227,8 +1124,6 @@ final class AevonWindowView: UIView {
         AevonWindowView.applyRadius(to: contentClip, width: frame.width)
         setNeedsLayout()
         persistFrame()
-        // V0.0.59（AevonTrueResizeV59）：拖角缩放落定 → 场景按新内容区重排
-        scheduleSceneResizeAfterSettle()
         AevonLog.info("[窗口] 缩放到 \(Int(frame.width))x\(Int(frame.height))"
             + "（圆角 \(Int(contentClip.layer.cornerRadius)) · 全程实时渲染"
             + " · 拖动合帧已生效 \(resizeStepCount) 帧）（AevonLiveResizeV44 AevonFloatSmoothV45）")
@@ -1513,9 +1408,7 @@ final class AevonWindowView: UIView {
         // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
         // NSInternalInconsistencyException: Must be invalidated before deallocating
         sceneHost.onFirstContent = nil
-        // V0.0.55（AevonAdaptiveContentV55）：关窗前把场景尺寸还原成整屏，
-        // 否则这个 App 下次真的全屏打开时只有一小块（场景设置是我们改的）。
-        sceneHost.resetAdaptiveSize()
+        // V0.0.88：场景尺寸还原通道已随真重排移除（场景 frame 从未被改过）。
         sceneHost.invalidate()
         sceneHost.container.removeFromSuperview()
         removeFromSuperview()

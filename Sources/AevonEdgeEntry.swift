@@ -399,9 +399,6 @@ enum AevonEdgeEntry {
             // 旧版这里还顺手 AevonRingStore.invalidateCache()，0.2 秒一次跨进程重读
             // 导致圆盘 App 数与排序漂移（Aevon(24)），已删除。列表只在设置页广播时刷新。
             checkTriggerZoneChange()
-            // V0.0.58（AevonCardVisPanV58）：内容模式 / 小胖屏可视区位置变了 →
-            // 所有浮窗立即按新偏好重排（PullOverMF 的可视中心也是设置驱动）。
-            checkContentModeChange()
             // V0.0.79（AevonTouchLiveV79）：「浮窗内容可点击」变了 → 已开着的浮窗立刻跟上
             checkContentTouchChange()
         }
@@ -438,25 +435,6 @@ enum AevonEdgeEntry {
         zoneSignature = signature
         refreshLayoutIfNeeded(logChange: true)
         syncGuardConfig()
-    }
-
-    /// V0.0.58（AevonCardVisPanV58）→ V0.0.59（AevonNoPanSliderV59）：
-    /// 内容模式指纹。滑杆已移除，指纹只看「完整显示内容」开关 ——
-    /// 它改变窗口比例，主窗场景要按新比例重新排版（真重排）。
-    private static var contentModeSignature = ""
-
-    static func checkContentModeChange() {
-        let signature = "\(AevonPrefs.bool("FullContent", default: false))"
-        // 首次只是记录基线（启动时没有必要重排）
-        if contentModeSignature.isEmpty {
-            contentModeSignature = signature
-            return
-        }
-        guard signature != contentModeSignature else { return }
-        contentModeSignature = signature
-        AevonEntryHost.refreshContentLayoutForPrefs()
-        AevonLog.info("[窗口] 内容模式已更新，浮窗内容与场景重排立即生效"
-            + "（签名 \(signature)，AevonCardVisPanV58 AevonTrueResizeV59）")
     }
 
     /// V0.0.79（AevonTouchLiveV79）：设置里的「浮窗内可直接触摸操作」。
@@ -1381,13 +1359,9 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         // 设置里可能刚改过圆盘 App 列表 / 顺序 —— V0.0.31：带快照防漂移地刷新
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
-        AevonEdgeEntry.checkContentModeChange()
         // V0.0.79（AevonTouchLiveV79）：开关一变，已开着的浮窗立即生效（延迟≈0）
         AevonEdgeEntry.checkContentTouchChange()
         AevonEdgeEntry.syncGuardConfig()
-        // V0.0.68（AevonSceneDriverP1）：真小胖屏 P1 自建场景实验（开关从关→开触发，
-        // 内部防重入 + 全程异常隔离，失败只写日志不影响任何现有功能）
-        AevonSceneDriver.shared.maybeRunExperiment()
     }
 }
 

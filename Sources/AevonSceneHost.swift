@@ -278,180 +278,17 @@ final class AevonSceneHost {
         return n
     }
 
-    // MARK: - 真 resize（V0.0.59，AevonTrueResizeV59）
+    // MARK: - 内容来源尺寸（V0.0.88：真重排 / 小胖屏机制已整体移除）
 
-    /// V0.0.57 曾把这条路线整条停用（只改 frame = 只裁渲染视口）。
-    /// V0.0.59 按 Mango 实证补齐 displayConfiguration + `setResizesHostedContext:`
-    /// 三路杠杆重开 —— 且加了**探测自证**：场景写完之后，呈现视图里 App 的实际
-    /// 画布尺寸若没有跟着变成目标尺寸（App 真的重排了），5 秒内自动回退到
-    /// 整屏等比缩放（V58 形态），最坏情况 = 上一版行为，绝不会更糟。
+    /// 浮窗里显示的**永远是整屏画面**：场景 frame 恒为整屏，内容按
+    /// `AevonSnap.aspect`（= 屏宽 ÷（屏高 − 状态栏））等比缩放进窗口。
+    /// 这就是 V0.0.50 及以前的「细长」形态。
     ///
-    /// 「场景已按我们的请求改小」的目标尺寸（App 应当按它排版）。
-    private(set) var adaptiveContentSize: CGSize = .zero
-
-    /// 探测确认：App 的画布真的变成了 adaptiveContentSize（重排成功）。
-    private(set) var contentReflowConfirmed = false
-
-    var isAdaptiveContent: Bool { adaptiveContentSize != .zero && contentReflowConfirmed }
-
-    /// 内容来源尺寸：确认重排后 = 场景逻辑尺寸（scale=1 原生显示）；
-    /// 未确认 / 回退 = 整屏（V58 等比缩放路径）。
-    var sourceSize: CGSize {
-        if isAdaptiveContent { return adaptiveContentSize }
-        return UIScreen.main.bounds.size
-    }
-
-    /// 请求场景按指定逻辑尺寸重排。bits=0 表示垫片层完全失败。
-    ///
-    /// V0.0.65（AevonTrueResizeWritesOffV65）：**几何写入整体停用**（运行时开关，
-    /// 默认关）。V64 真机实锤：只关 1:1 显示分支不够——frame+dc 仍被写入时
-    /// 场景 frame 变成小窗尺寸，而等比缩放分支的基准是整屏 430x932，两者矛盾
-    /// = 大部分黑屏 + 左上角残留画面 + 状态栏放大；且 5 秒回退只清内容管线、
-    /// 不还原场景 frame，错乱持续到关窗。V58 形态的正确前提 = **场景 frame
-    /// 恒整屏**。真重排的 SB 侧通道已被三家逆向 + 三版真机彻底排除（FBScene
-    /// 方法表 dump 亦无 resizesHosted 类选择子），剩下的 App 进程路线是独立
-    /// 工程 —— 在它落地前，这里绝不碰场景几何。写入代码全部保留在本开关
-    /// 之后（历史日志串随之保留，证据通道建立后开关一开即接上）。
-    private static let trueResizeWritesEnabled =
-        AevonPrefs.bool("TrueResizeWrites", default: false)
-
-    func updateAdaptiveSize(_ size: CGSize, reason: String) {
-        guard size.width > 1, size.height > 1 else { return }
-        guard Self.trueResizeWritesEnabled else {
-            AevonLog.info("[场景] 真重排写入已停用（\(reason)，场景保持整屏，"
-                + "显示走整屏等比缩放；App 进程证据通道未建立前不碰场景几何，"
-                + "AevonTrueResizeWritesOffV65）")
-            return
-        }
-        let bits = AevonSceneHelper.applyDisplaySize(scene: scene, sceneID: sceneID,
-                                                     size: size, floatMode: true)
-        if bits == 0 {
-            AevonLog.warn("[场景] 真重排请求被垫片拒绝（\(reason)，AevonTrueResizeV59）")
-            return
-        }
-        // V0.0.60（AevonReflowGateV60）硬闸门：displayConfiguration 没写进
-        // settings（0x10 未置位）= App 进程拿不到小窗显示配置，**绝不会重排**。
-        // 垫片此时也已整单放弃（没写 frame、没推 diff），场景保持整屏 ——
-        // 这里直接回退 V58 整屏等比缩放，绝不进入 1:1 分支。
-        // （V0.0.59 的「内容放大 + 显示不全」= 探测假阳性 + 只推 frame 的组合：
-        //   presentationView 首子视图是我们自己的承载容器，永远等于目标尺寸，
-        //   第 1 次探测就假确认，于是 1:1 分支吃到了 430x932 的整屏画面。）
-        guard bits & 0x10 != 0 else {
-            adaptiveContentSize = .zero
-            contentReflowConfirmed = false
-            reflowChecking = false
-            AevonLog.warn("[场景] displayConfiguration 未能写入场景（\(reason)，"
-                + "\(AevonSceneHelper.describeApplyBits(bits, target: size))，"
-                + "诊断 \(AevonSceneHelper.displayConfigDiag())）"
-                + "—— 场景保持整屏，回退整屏等比缩放（AevonTrueResizeV60）")
-            onReflowChanged?()
-            return
-        }
-        adaptiveContentSize = size
-        contentReflowConfirmed = false
-        reflowCheckTicks = 0
-        reflowCheckTarget = size
-        reflowChecking = true
-        // 探测定时器可能早已停止（首帧确认后就停了）：重启它，确认/回退后自然再停。
-        startSyncing()
-        AevonLog.info("[场景] 真重排请求已下发（\(AevonSceneHelper.describeApplyBits(bits, target: size))"
-            + "，\(reason)，等探测确认，AevonTrueResizeV59）")
-        // V0.0.64：首次下发时带出 scene 方法表诊断（找 setResizesHostedContext: 的
-        // 正确调用对象 —— Stheno 实锤该选择子存在，但我们手里的 FBScene 不响应）。
-        if bits & 0x20 == 0 {
-            AevonLog.warn("[场景] 托管上下文开关未被 scene 接受（\(AevonSceneHelper.sceneMethodDiag())"
-                + "，AevonReflowAppGateV64）")
-        }
-    }
-
-    /// 关窗 / 还原：场景恢复整屏（帧+显示配置一起还原）。
-    func resetAdaptiveSize() {
-        guard adaptiveContentSize != .zero || AevonSceneHelper.adaptiveFrame(for: sceneID) != nil else {
-            AevonNotifySetWindowSize(0, 0)
-            return
-        }
-        adaptiveContentSize = .zero
-        contentReflowConfirmed = false
-        reflowChecking = false
-        AevonSceneHelper.restoreSceneFrame(scene: scene, sceneID: sceneID)
-        AevonNotifySetWindowSize(0, 0)
-    }
-
-    /// 探测状态（probe 每 0.5s 一次）
-    private var reflowChecking = false
-    private var reflowCheckTicks = 0
-    private var reflowCheckTarget: CGSize = .zero
-
-    /// probe 里调用：确认 App 画布是否真的变成了目标尺寸。
-    /// 确认 → contentReflowConfirmed = true（内容管线切 1:1 原生）；
-    /// 10 次探测（5 秒）仍未确认 → 自动回退整屏等比缩放（V58 形态）。
-    ///
-    /// V0.0.64（AevonReflowAppGateV64）终审结论：**SB 侧没有任何信号能证明
-    /// App 进程真的重排了。** presentationView 的子树 frame 全部由系统按我们
-    /// 写入的 settings 直接设置（恒等于目标）——V59/V60 的「首子视图 ≈ 目标 +
-    /// 无超尺寸视图」两道检查都是假阳性；V63 dc ivar 直写成功 + diff 下发 +
-    /// 回读一致，App 进程照样没重排（画面放大 = 整屏画面被 1:1 塞进小窗）。
-    /// 远程场景事后改 dc 只影响 SB 侧布局（Stheno/TrollOpen/Mango 三家逆向
-    /// 交叉印证：真重排必须 App 进程内动手）。
-    /// 所以：确认门 = **App 进程证据**（本版证据源尚未建立，开关恒关），
-    /// 关着的时候内容恒走整屏等比缩放（V58 形态）——绝不再放大。
-    private static let appProcessConfirmEnabled =
-        AevonPrefs.bool("AppProcessReflowConfirm", default: false)
-
-    /// 画布证据（每轮探测第 1 次采样，落日志供下一版判断）。
-    private var evidenceLogged = false
-
-    private func checkReflow() {
-        guard reflowChecking, adaptiveContentSize != .zero else { return }
-        reflowCheckTicks += 1
-        let inner = presentationView.subviews.first?.frame.size ?? .zero
-        let target = reflowCheckTarget
-        // 证据采样（不参与判定）：子树里超过目标一圈的视图 = App 仍按整屏渲染的
-        // 残留痕迹（如果 App 真重排了，这类视图应消失）。只在第 1 次落日志。
-        var oversizedDesc = "无"
-        var queue = presentationView.subviews
-        var visited = 0
-        while visited < 64, let view = queue.popLast() {
-            visited += 1
-            if view.frame.width > target.width + 20 || view.frame.height > target.height + 20 {
-                oversizedDesc = "\(AevonRuntime.className(view) ?? "?") \(Int(view.frame.width))x\(Int(view.frame.height))"
-                break
-            }
-            queue.append(contentsOf: view.subviews)
-        }
-        if !evidenceLogged {
-            evidenceLogged = true
-            AevonLog.info("[场景] 画布证据收集：首子=\(presentationView.subviews.first.flatMap { AevonRuntime.className($0) } ?? "?")"
-                + " \(Int(inner.width))x\(Int(inner.height))，超尺寸视图=\(oversizedDesc)"
-                + "（SB 侧信号不作为确认依据，AevonReflowAppGateV64）")
-        }
-        let innerOK = inner.width > 1 && abs(inner.width - target.width) <= 2
-            && abs(inner.height - target.height) <= 2
-        // 确认门：只有 App 进程证据通道建立（开关打开）时才允许确认。
-        // 本版恒关 —— innerOK 只说明系统把 SB 侧 frame 设成了目标，不代表
-        // App 进程重排（V59/V60/V63 三版真机实证），绝不据此切 1:1。
-        if innerOK && Self.appProcessConfirmEnabled {
-            contentReflowConfirmed = true
-            reflowChecking = false
-            AevonLog.info("[场景] App 已按小窗尺寸重新排版（画布 \(Int(inner.width))"
-                + "x\(Int(inner.height)) ≈ 目标 \(Int(target.width))x\(Int(target.height))"
-                + "，顶栏/底栏/右侧工具栏原生在场，内容 1:1 显示）（AevonReflowCheckV59）")
-            onReflowChanged?()
-            return
-        }
-        if reflowCheckTicks >= 10 {
-            reflowChecking = false
-            adaptiveContentSize = .zero
-            contentReflowConfirmed = false
-            AevonLog.warn("[场景] 5 秒内未确认 App 重排（画布 \(Int(inner.width))x\(Int(inner.height))"
-                + " ≠ 目标 \(Int(target.width))x\(Int(target.height))），自动回退整屏等比缩放"
-                + "（场景拒绝真 resize：帧+显示配置+托管开关三路都未让 App 重排）（AevonReflowCheckV59）")
-            onReflowChanged?()
-        }
-    }
-
-    /// 重排状态翻转时回调（窗口视图据此重算内容管线）。
-    var onReflowChanged: (() -> Void)?
+    /// V0.0.88 起这里不再有任何「把场景改成小窗尺寸」的状态：
+    /// 自建场景路线已判死（V0.0.86 真机日志：SBDeviceApplicationSceneEntity
+    /// 5 个候选 init 全 nil），事后改 frame/dc 只影响 SB 侧布局、App 进程
+    /// 永远按整屏排版（V0.0.59~V0.0.65 五版实锤）。相关代码与探针已全部删除。
+    var sourceSize: CGSize { return UIScreen.main.bounds.size }
 
     init?(scene: AnyObject, sceneID: String, bundleID: String) {
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
@@ -624,10 +461,6 @@ final class AevonSceneHost {
             }
         }
 
-        // V0.0.59（AevonReflowCheckV59）：真重排确认走这里 —— 每 0.5s 看一眼
-        // App 的画布有没有真的变成目标尺寸，确认或超时回退都会翻转状态。
-        checkReflow()
-
         if !hasContent && contentLooksAlive() {
             hasContent = true
             // 记下呈现视图与首个子视图的实际尺寸：两者比例不一致就说明系统在内部留边
@@ -641,8 +474,6 @@ final class AevonSceneHost {
         }
 
         if hasContent {
-            // V0.0.59：重排确认期内不能停探测（确认/回退后这里自然变 false）
-            if reflowChecking { return }
             if ticks >= 2 { stopProbing() }
             return
         }
@@ -699,7 +530,6 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         invalidated = true
         onFirstContent = nil
-        onReflowChanged = nil
         teardownPresenter()
         AevonLog.info("[场景] 已释放 presenter（\(bundleID)）")
     }
