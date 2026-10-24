@@ -369,7 +369,9 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
             + "内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
-            + "内容比例 \(String(format: "%.3f", aspect))（AevonContentFitV57），"
+            + "内容比例 \(String(format: "%.3f", aspect))，"
+            + "内容 \(Int(restored.width))x\(Int(restored.height))，"
+            + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
 
         // V0.0.87（AevonSlimWindowV87）：形态一句话说清 —— 细长、等比、不裁切。
         // 真小胖屏项目已终止（P1 自建场景第 4 步实体 5 个 init 全 nil），
