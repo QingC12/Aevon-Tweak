@@ -962,6 +962,25 @@ static BOOL gAevonScrollWatchForce = NO;
 /// 抬手阶段要不要做「放行也还原」
 static BOOL AevonGuardScrollForced(void) { return gAevonScrollWatchForce; }
 
+/* V0.0.82：本进程是不是「浮窗里那个 App」（主人）。
+ * 主人自己滑动是正当操作，绝不能还原 —— SB 在开窗/关窗时写 `com.aevon.floatowner.<bundle>`。 */
+static BOOL AevonGuardIsFloatOwner(void) {
+    static int token = -1;
+    static BOOL tried = NO;
+    if (!tried) {
+        tried = YES;
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        if (bid.length > 0) {
+            NSString *name = [@"com.aevon.floatowner." stringByAppendingString:bid];
+            if (notify_register_check(name.UTF8String, &token) != 0) { token = -1; }
+        }
+    }
+    if (token < 0) { return NO; }
+    uint64_t v = 0;
+    if (notify_get_state(token, &v) != 0) { return NO; }
+    return (v != 0);
+}
+
 static UIScrollView *AevonGuardScrollAncestor(UIView *view) {
     UIView *cur = view;
     while (cur != nil) {
@@ -1188,6 +1207,8 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                         inFloatWin = AevonGuardPointInRect(fw, pt, spt);
                     }
                 } @catch (NSException *e) { inFloatWin = NO; }
+                /* 主人排除：浮窗里的那个 App 自己的滚动是正当的，不能还原。 */
+                if (inFloatWin && AevonGuardIsFloatOwner()) { inFloatWin = NO; }
                 AevonGuardArmScrollWatch(touch.window, pt, event, inFloatWin);
                 /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
                  * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。

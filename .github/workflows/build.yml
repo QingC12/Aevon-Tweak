@@ -1213,7 +1213,7 @@ jobs:
           python3 - "$GUARD_DYLIB" <<'PY82G'
           import sys
           data = open(sys.argv[1],'rb').read()
-          for s in ["AevonScrollHealV82","放行也还原","com.aevon.floatwin"]:
+          for s in ["AevonScrollHealV82","放行也还原","com.aevon.floatwin","com.aevon.floatowner"]:
               if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
                   print(f"::error::V0.0.82 Guard dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.82 校验: 误滚「放行也还原」+ 浮窗整窗矩形通道 已编入 Guard")

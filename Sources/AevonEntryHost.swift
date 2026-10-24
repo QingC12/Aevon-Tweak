@@ -278,6 +278,8 @@ enum AevonEntryHost {
     /// 停靠格几何又不覆盖主窗本体 —— 所以主窗矩形必须单独下发。
     /// Guard 命中就吞，与触摸时序彻底无关。
     private static var lastGuardFloatRect: CGRect = .zero
+    /// V0.0.82：上一次标记为「浮窗主人」的 App（用于撤销，避免留着旧主人不还原）
+    private static var lastFloatOwners: Set<String> = []
     private static var guardFloatRectAt: CFTimeInterval = 0
     private static var guardFloatRectPending = false
 
@@ -329,10 +331,12 @@ enum AevonEntryHost {
          * Aevon(74) 100% 复现的「浮窗里滑一下 → 全屏设置滚到最底 + 底部空白」
          * 正是靠这条通道修的（触摸同时投给 SB 与前台 App，App 那份没人管）。 */
         var winUnion = CGRect.null
+        var owners: Set<String> = []
         if let layer = floatLayer, !layer.subviews.isEmpty {
             for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
                 guard let win = view as? AevonWindowView, !win.isDocked else { continue }
                 winUnion = winUnion.union(win.frame)
+                owners.insert(win.bundleID)
             }
         }
         if winUnion.isNull {
@@ -341,6 +345,15 @@ enum AevonEntryHost {
             AevonNotifySetFloatWindowRect(Double(winUnion.minX), Double(winUnion.minY),
                                           Double(winUnion.width), Double(winUnion.height))
         }
+        /* V0.0.82：主人标记 —— 误滚还原要放过「浮窗里那个 App」（它自己滚动是正当的），
+         * 只还原背后那个全屏 App。这里把主人集合的增删都补上（含撤销）。 */
+        for bid in owners where !lastFloatOwners.contains(bid) {
+            AevonNotifySetFloatOwner(bid, 1)
+        }
+        for bid in lastFloatOwners where !owners.contains(bid) {
+            AevonNotifySetFloatOwner(bid, 0)
+        }
+        lastFloatOwners = owners
 
         let rect = union.isNull ? CGRect.zero : union
         if rect == lastGuardFloatRect { return }

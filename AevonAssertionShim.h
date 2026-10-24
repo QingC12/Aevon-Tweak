@@ -104,6 +104,14 @@ void AevonNotifySetAppGate(NSString *bundleID, int blocked);
 /// 传 w/h < 1 表示当前没有主悬浮窗（Guard 不做误滚还原）。
 void AevonNotifySetFloatWindowRect(double x, double y, double w, double h);
 
+/// V0.0.82（AevonScrollHealV82）：标记「这个 App 就是当前主悬浮窗里显示的那个 App」
+/// （每 App 一个独立 token `com.aevon.floatowner.<bundle>`，1=是 0=不是）。
+///
+/// 为什么误滚还原必须把主人排除掉：浮窗里的内容本来就是**这个 App 自己的画面**，
+/// 用户在上面滑动 = 正当滚动，还原它等于把用户的操作撤销掉。
+/// 需要还原的只是「背后那个全屏 App」—— 它收到的是同一根手指的另一份投递。
+void AevonNotifySetFloatOwner(NSString *bundleID, int isOwner);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，

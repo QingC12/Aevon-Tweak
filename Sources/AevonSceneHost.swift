@@ -464,7 +464,8 @@ final class AevonSceneHost {
             self.guardGraceDeadline = CACurrentMediaTime() + 1.5
             AevonLog.warn("[场景] Guard 存活探测：\(bundleID) → **暂无 Guard**（该 App 是 tweak 加载前就在跑的老进程，"
                 + "或注入被拦）；内容触摸**照常放行**，不因此锁死浮窗，"
-                + "停靠小窗被轻点时该 App 可能收到一次直投点击（AevonGuardAliveV77 AevonMainContentV82）")
+                + "停靠小窗被轻点时该 App 可能收到一次直投点击"
+                + "（AevonGuardAliveV77 AevonGuardGraceV79 AevonMainContentV82）")
         } else {
             AevonLog.info("[场景] Guard 存活探测：\(bundleID) → 有（pid=\(alivePid)），内容触摸跟随设置（AevonGuardAliveV77）")
         }

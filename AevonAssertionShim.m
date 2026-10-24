@@ -578,6 +578,26 @@ void AevonNotifySetFloatWindowRect(double x, double y, double w, double h) {
     }
 }
 
+/* V0.0.82（AevonScrollHealV82）：浮窗主人标记（每 App 独立 token）。
+ *
+ * 误滚还原只能作用在「背后那个全屏 App」上。浮窗里显示的那个 App 是主人，
+ * 用户在上面滑动就是正当滚动，还原它等于撤销用户操作。
+ * 打包：只用 state 的 bit0（1=主人）。 */
+void AevonNotifySetFloatOwner(NSString *bundleID, int isOwner) {
+    @try {
+        if (bundleID.length == 0) { return; }
+        NSString *name = [@"com.aevon.floatowner." stringByAppendingString:bundleID];
+        int token = -1;
+        if (notify_register_check(name.UTF8String, &token) != 0 || token < 0) { return; }
+        uint64_t want = (isOwner != 0) ? 1ULL : 0ULL;
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        if (old != want) { notify_set_state(token, want); notify_post(name.UTF8String); }
+        notify_cancel(token);
+    } @catch (NSException *exception) {
+    }
+}
+
 /* V0.0.56（AevonAdaptiveWindowV56）：App 窗口目标尺寸通道。
  *
  * Aevon(50) 第 4 条：改成场景尺寸后「字体变大、画面被剪裁、抖音右侧工具栏依旧不显示」。
