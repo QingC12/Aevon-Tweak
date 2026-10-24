@@ -150,9 +150,5 @@ enum AevonBootstrap {
         }
         AevonSceneHookInstall()
         AevonLog.info("[入口] App 画面容器钩子已安装（viewDidAppear / viewDidDisappear，包装全屏 App 用）（AevonSceneVCHookV22）")
-        // V0.0.54（AevonSwitcherHideV54）：上滑进后台卡片时把浮窗藏起来 ——
-        // App 画面被 transform 缩小时 `viewDidDisappear` 并不触发，只能自己看「还铺满整屏吗」。
-        AevonSwitcherGuard.shared.start()
-        AevonLog.info("[入口] 后台卡片隐藏守卫已启动（切换器通知 + 0.15 秒兜底轮询）（AevonSwitcherHideV54）")
     }
 }

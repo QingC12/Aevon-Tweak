@@ -87,15 +87,7 @@ enum AevonEntryHost {
     /// 浮窗层（V0.0.36）：容器内专门承载浮窗外壳的子视图，永远在入口控件之下。
     private static var floatLayer: AevonWindowLayerView?
     /// 当前 App 场景的容器视图（弱引用；App 关掉后自动失效）
-    static private(set) weak var appSceneView: UIView?
-
-    /// 当前全屏前台场景的标识（V0.0.59，AevonFrontmostCloseV59）。
-    ///
-    /// 由 `AevonSceneVCDidAppear` 从 `SBDeviceApplicationSceneViewController` 上探测
-    /// （scene / representedScene → identifier）。用它判断「浮窗的 App 是不是就是
-    /// 当前全屏前台的那个 App」—— 是的话关窗绝不能把场景睡掉，否则前台 App 被设为
-    /// 后台：画面停在最后一帧、触摸不再投递 = 用户说的「关掉浮窗后屏幕无法滑动」。
-    static private(set) var appSceneIdentity: String?
+    private static weak var appSceneView: UIView?
 
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
@@ -105,215 +97,14 @@ enum AevonEntryHost {
     /// 不加这道判断，浮窗压住热区时拖浮窗就会误呼圆盘。
     /// V0.0.37（AevonSthenoEdgeBarV37）：手势区伸到浮窗外侧 barThickness pt，
     /// 判定矩形同步外扩，防止拖边条 / 缩放时被当成热区触摸接管。
-    ///
-    /// V0.0.90：`ignoringDocked` 参数已随停靠小窗移除（不再有停靠小窗压热区的问题）。
     static func pointHitsFloatingWindow(at point: CGPoint) -> Bool {
-        let margin = AevonWindowView.maxHandleMargin
+        let margin = AevonWindowView.barThickness
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return false }
         for win in layer.subviews where !win.isHidden && win.alpha > 0.01 {
             if win.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return true }
         }
         return false
     }
-
-    /// 当前浮窗总数。用于「有浮窗时禁止系统空闲锁屏」。
-    static var floatingWindowCount: Int {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return 0 }
-        var count = 0
-        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-            if view is AevonWindowView { count += 1 }
-        }
-        return count
-    }
-
-    /// 把「主悬浮窗（含外侧手势区）的矩形」同步给 App 侧的 AevonGuard
-    /// （V0.0.56，AevonGuardFloatRectV56）。
-    ///
-    /// Aevon(50) 第 2 条：全屏 App 里双击浮窗底边关闭，App 会吃到一次点击。
-    /// bit48 只有 350ms 宽（双击间隔 0.36s 正好错过）—— 所以底边环带必须单独下发。
-    /// Guard 命中就吞，与触摸时序彻底无关。
-    ///
-    /// V0.0.90：停靠列同步（AevonGuardDockZoneV54 的「每侧几个停靠小窗」）
-    /// 已随停靠小窗移除 —— 不再有停靠格几何，Guard 只用主窗环带 + 整窗矩形。
-    private static var lastGuardFloatRect: CGRect = .zero
-    /// V0.0.82：上一次标记为「浮窗主人」的 App（用于撤销，避免留着旧主人不还原）
-    private static var lastFloatOwners: Set<String> = []
-    private static var lastOwnerBundle: String = ""
-    private static var lastFloatWinRect: CGRect = .zero
-    private static var guardFloatRectAt: CFTimeInterval = 0
-    private static var guardFloatRectPending = false
-
-    static func syncFloatRectToGuard() {
-        // 拖动 / 动画期会调用得很密，节流到 ~8Hz，且保证最后一次一定写到
-        let now = CACurrentMediaTime()
-        if now - guardFloatRectAt < 0.12 {
-            if !guardFloatRectPending {
-                guardFloatRectPending = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
-                    guardFloatRectPending = false
-                    syncFloatRectToGuard()
-                }
-            }
-            return
-        }
-        guardFloatRectAt = now
-
-        var union = CGRect.null
-        if let layer = floatLayer, !layer.subviews.isEmpty {
-            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-                // V0.0.90：不再有停靠小窗的独立槽位几何，这里覆盖所有浮窗
-                guard let win = view as? AevonWindowView else { continue }
-                /* V0.0.56 关键取舍：**只下发「底边手势环带」，不是整个窗口**。
-                 *
-                 * 一开始想的是把整个窗口矩形都交给 Guard 常驻吞，但浮窗里的内容
-                 * 本身也是一条真实的 App 触摸（经 presenter 转发进 App 进程的
-                 * `UIApplication -sendEvent:`）—— 整窗吞会把浮窗内容也一起吞掉，
-                 * 抖音在浮窗里就完全点不动了。
-                 * 而漏点击真正发生的地方只有底边条：它挂在窗口**下方**
-                 * （`layoutGestureHandles` 里 barY = h），双击间隔 0.36s 又刚好越过
-                 * bit48 的 350ms 放行窗口。所以只需要把这一条环带常驻吞：
-                 * 窗内 12pt（手指压边时的落点）+ 窗外整条 barThickness。 */
-                let bandHeight = 12 + AevonWindowView.bottomBarThickness + AevonWindowView.barHitSlop
-                let band = CGRect(x: win.frame.minX,
-                                  y: win.frame.maxY - 12,
-                                  width: win.frame.width,
-                                  height: bandHeight)
-                union = union.union(band)
-            }
-        }
-        /* V0.0.82（AevonScrollHealV82）：另发一条「**整窗**矩形」给 Guard，
-         * 用途只有一个 —— 判断「这根手指是不是按在浮窗上」，从而在抬手时把
-         * 被 App 自己滚走的偏移还原回去。
-         *
-         * 为什么必须和上面那条环带分开：环带是「该吞的窄条」，整窗是「用户可以
-         * 正常操作的大块」，两者语义相反，混用就会出现 V81 那种
-         * 「要么吞掉内容、要么整窗锁死」的二选一。
-         * Aevon(74) 100% 复现的「浮窗里滑一下 → 全屏设置滚到最底 + 底部空白」
-         * 正是靠这条通道修的（触摸同时投给 SB 与前台 App，App 那份没人管）。 */
-        var winUnion = CGRect.null
-        var owners: Set<String> = []
-        if let layer = floatLayer, !layer.subviews.isEmpty {
-            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-                guard let win = view as? AevonWindowView else { continue }
-                winUnion = winUnion.union(win.frame)
-                owners.insert(win.bundleID)
-            }
-        }
-        if winUnion.isNull {
-            AevonNotifySetFloatWindowRect(0, 0, 0, 0)
-            if lastFloatWinRect != .zero {
-                lastFloatWinRect = .zero
-                AevonLog.info("[窗口] 浮窗整窗矩形已清空（Guard 侧不再拦「浮窗上的触摸」，恢复全屏 App 输入）"
-                    + "（AevonRectGateV83）")
-            }
-        } else {
-            AevonNotifySetFloatWindowRect(Double(winUnion.minX), Double(winUnion.minY),
-                                          Double(winUnion.width), Double(winUnion.height))
-            /* V0.0.83（AevonRectGateV83）：这条矩形是「背后 App 不许收触摸」的范围。
-             * 值和上一版不同（V0.0.82 只用来做滚动还原，实测帮了倒忙），
-             * 现在 Guard 用它做**源头阻断** —— 落点在窗内的触摸对非主人 App 整条丢弃。 */
-            let snapped = CGRect(x: winUnion.minX.rounded(), y: winUnion.minY.rounded(),
-                                 width: winUnion.width.rounded(), height: winUnion.height.rounded())
-            if snapped != lastFloatWinRect {
-                lastFloatWinRect = snapped
-                AevonLog.info("[窗口] 浮窗整窗矩形已下发给 Guard：\(Int(snapped.width))x\(Int(snapped.height))"
-                    + " 位置 \(Int(snapped.minX)),\(Int(snapped.minY))"
-                    + "（落在浮窗范围内的触摸不再投给背后的全屏 App —— 浮窗里滑动不会把 App 带走）"
-                    + "（AevonRectGateV83）")
-            }
-        }
-        /* V0.0.82：主人标记 —— 误滚还原要放过「浮窗里那个 App」（它自己滚动是正当的），
-         * 只还原背后那个全屏 App。这里把主人集合的增删都补上（含撤销）。 */
-        for bid in owners where !lastFloatOwners.contains(bid) {
-            AevonNotifySetFloatOwner(bid, 1)
-            /* V0.0.83：主人标记必须写明（V0.0.82 实测 Guard 侧认成了「非主人」，
-             * 于是把浮窗里那个 App 自己的滚动也还原了 —— 日志里 BatteryInfo 0,952 → 0,873）。 */
-            AevonLog.info("[窗口] 浮窗主人标记：\(bid)=是（该 App 在浮窗里，它自己的滚动是正当的，"
-                + "Guard 不拦它的触摸、也不还原它的滚动）（AevonFloatOwnerV83）")
-        }
-        for bid in lastFloatOwners where !owners.contains(bid) {
-            AevonNotifySetFloatOwner(bid, 0)
-            AevonLog.info("[窗口] 浮窗主人标记：\(bid)=否（不再是浮窗内容，恢复按「浮窗整窗矩形」拦触摸）"
-                + "（AevonFloatOwnerV83）")
-        }
-        /* V0.0.83（AevonFloatOwnerV83）：全局指纹通道 —— 我们本来就只有单主窗，
-         * 所以「当前浮窗主人」永远只有一个值；Guard 用整数比对，不依赖 per-bundle token。
-         * 传空串 = 没有主窗，清掉标记（之后 Guard 不再认主人）。 */
-        let ownerBundle = owners.first ?? ""
-        if ownerBundle != lastOwnerBundle {
-            lastOwnerBundle = ownerBundle
-            AevonNotifySetFloatOwnerBundle(ownerBundle)
-            AevonLog.info("[窗口] 浮窗主人指纹已下发：\(ownerBundle.isEmpty ? "（无，清空）" : ownerBundle)"
-                + "（Guard 侧据此放过「浮窗里那个 App」，只拦背后全屏 App 的触摸）（AevonFloatOwnerV83）")
-        }
-        lastFloatOwners = owners
-
-        let rect = union.isNull ? CGRect.zero : union
-        if rect == lastGuardFloatRect { return }
-        lastGuardFloatRect = rect
-        if rect.isEmpty {
-            AevonNotifySetFloatRect(0, 0, 0, 0)
-            AevonLog.info("[窗口] 已清空主窗矩形（没有主悬浮窗了，App 恢复全屏触摸）"
-                + "（AevonGuardFloatRectV56）")
-            return
-        }
-        AevonNotifySetFloatRect(Double(rect.minX), Double(rect.minY),
-                                Double(rect.width), Double(rect.height))
-        AevonLog.info("[窗口] 主窗矩形已下发给 Guard：\(Int(rect.width))x\(Int(rect.height))"
-            + " 位置 \(Int(rect.minX)),\(Int(rect.minY))"
-            + "（浮窗盖住的区域 App 不再收到触摸，双击/连点都不会漏）（AevonGuardFloatRectV56）")
-    }
-
-    /* V0.0.80（AevonAllClosedResetV80）：最后一个浮窗关掉之后的彻底复位。
-     *
-     * Aevon(72) 第 2 条：「关闭所有悬浮窗后全屏触摸会出现问题，无法触摸，
-     * 必须回桌面再次打开全屏应用，或者清除后台卡片重新打开才恢复」。
-     *
-     * 关窗本身已经把「主窗矩形」清给 Guard 了，但另外三样东西没清：
-     *   ① SB 侧全局通道的接管状态（`ownsTouch` / `floatTouchID` / bit48）；
-     *   ② App 侧 Guard 手里可能还留着的「浮窗手势期」时间戳；
-     *   ③ 前台场景的 foreground 标记 —— 关窗收尾那次 sleep/wake 回弹若被打断，
-     *      场景会停在「前台但不呈现」的状态，触摸不投递。
-     * 这里一次性把三样都处理掉，并在 1 秒后再校验一次前台场景。 */
-    static func onAllWindowsClosed() {
-        lastGuardFloatRect = .null          /* 强制重发一次「清零」包 */
-        syncFloatRectToGuard()
-        AevonEdgeEntry.resetGlobalTouchState(reason: "全部浮窗已关闭")
-        AevonLog.info("[窗口] 已关闭全部浮窗：全局吞摸已复位 / 主窗矩形已清零 / "
-            + "1 秒后校验前台场景（AevonAllClosedResetV80）")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            reassertFrontmost(reason: "全部浮窗关闭后 1 秒")
-        }
-    }
-
-    /// 校验「当前全屏前台场景」是不是真的还在前台；被误判成后台就强制拉回来。
-    ///
-    /// 症状对应：关掉浮窗后画面还在（停在最后一帧）但整屏点不动，切回桌面再进一次才好。
-    /// 根因是 `FBScene.settings.foreground == false` —— 场景不呈现、输入不路由。
-    static func reassertFrontmost(reason: String) {
-        guard let identity = appSceneIdentity, !identity.isEmpty else { return }
-        guard let scene = AevonSceneHelper.scene(for: identity) else {
-            /* 找不到场景 = 这条自愈路径本身失效（正常情况应该有），
-             * 记一行限频日志，下一轮能看出是不是 `scene(for:)` 在 iOS 17 上取不到。 */
-            let now = CACurrentMediaTime()
-            if now - lastHealMissLogAt > 30 {
-                lastHealMissLogAt = now
-                AevonLog.warn("[自愈] 有前台标识但取不到 scene 对象，无法校验前台状态"
-                    + "（\(identity)，\(reason)，AevonFrontHealV80）")
-            }
-            return
-        }
-        guard let foreground = AevonSceneHelper.isForeground(scene) else { return }
-        guard foreground == false else { return }
-        AevonSceneHelper.setForeground(scene, true)
-        AevonLog.warn("[自愈] 全屏前台场景被误判为后台 → 已强制拉回前台"
-            + "（\(identity)，\(reason)，AevonFrontHealV80）")
-    }
-
-    private static var lastHealMissLogAt: CFTimeInterval = 0
-
-    // V0.0.90：停靠列重排 / 落地校验 / 停靠矩形收集 / 停靠避让通知
-    // 已随「停靠小窗回退到最初版本」整体移除 —— 不再有停靠列与停靠小窗。
 
     /// 屏幕点 → 命中的浮窗与抓取目标（V0.0.41，AevonFloatGlobalV41）。
     ///
@@ -512,32 +303,18 @@ enum AevonEntryHost {
     /// 这是 V0.0.22 解决「全屏 App 里看不到触发条」的关键：
     /// SpringBoard 的前台 App 画面不是 UIWindow，而是挂在这个控制器的 view 里，
     /// 窗口层级对它无效；把容器直接塞进同一个 view 才能压在上面。
-    static func appSceneAppeared(_ view: UIView, reason: String, identity: String? = nil) {
+    static func appSceneAppeared(_ view: UIView, reason: String) {
         guard container != nil else { return }
         // App 切换器里的小卡片、分屏窄条、被推到后台的场景容器都不接管，
         // 只认「真的铺满整屏、并且确实在窗口里显示着」的那一个。
         guard coversScreen(view) else { return }
         appSceneView = view
-        // V0.0.59（AevonFrontmostCloseV59）：记下全屏前台场景的标识
-        // V0.0.62：探测失败（nil）时清空 —— 宁可回退到无条件休眠（老行为），
-        // 也不能拿上一个 App 的标识误判「关的是前台自己」。
-        appSceneIdentity = (identity?.isEmpty == false) ? identity : nil
         attach(to: view, reason: reason)
         // 场景出现后系统会继续往这个 view 里塞内容，延后再顶一次
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard appSceneView === view, coversScreen(view) else { return }
             attach(to: view, reason: "\(reason)（延后重顶）")
         }
-    }
-
-    /// 当前 App 画面是否**仍然真的铺满整屏**（V0.0.54，AevonSwitcherHideV54）。
-    ///
-    /// 上滑进后台卡片视图时，系统不会让 `SBDeviceApplicationSceneViewController`
-    /// `viewDidDisappear`，只是把它 transform 缩小 —— 容器跟着缩小就成了卡片上那一小块浮窗。
-    /// 这个判定给 `AevonSwitcherGuard` 用：false = 该把浮窗藏起来。
-    static func appSceneCoversScreen() -> Bool {
-        guard let view = appSceneView else { return true }
-        return coversScreen(view)
     }
 
     /// 宿主是否真的铺满整屏并且正在显示（用于区分 App 画面容器与切换器卡片 / 后台场景）。
@@ -555,36 +332,7 @@ enum AevonEntryHost {
     static func appSceneDisappeared(_ view: UIView) {
         guard appSceneView === view else { return }
         appSceneView = nil
-        appSceneIdentity = nil
         attachToWindowRoot(reason: "App 场景消失")
-    }
-
-    /// App 画面还剩多少高度（占屏高的比例）。上滑回家过程中这个值会一路变小。
-    static func appSceneVisibleHeightRatio() -> CGFloat {
-        guard let view = appSceneView, let window = view.window else { return 1 }
-        let rect = view.convert(view.bounds, to: window)
-        let screenHeight = max(1, UIScreen.main.bounds.height)
-        return max(0, min(1, rect.height / screenHeight))
-    }
-
-    /// 把容器从「正在缩小的 App 画面」里搬回桌面窗口（V0.0.55，AevonOverlayPolicyV55）。
-    ///
-    /// 用户 Aevon(48) 第 1 条：上滑回家时小窗消失、回到桌面又出现。
-    /// 根因是容器挂在 App 画面里，画面被系统带着缩小 / 淡出，容器只能跟着走。
-    /// 现在在画面明显缩小（不到半屏）时立刻搬回桌面窗口 ——
-    /// 容器在两个宿主里都是整屏坐标系、尺寸相同，所以画面**完全不动**，
-    /// 只是不再跟着 App 卡片一起缩。
-    static func detachFromAppScene(reason: String) {
-        guard container != nil, appSceneView != nil, mountedInAppScene else { return }
-        attachToWindowRoot(reason: reason)
-        AevonLog.info("[入口] App 画面正在缩小，浮窗已留在桌面层（\(reason)）（AevonOverlayPolicyV55）")
-    }
-
-    /// 画面恢复整屏（用户取消了上滑 / 又切回该 App）→ 把容器搬回 App 画面。
-    static func reattachAppSceneIfPossible() {
-        guard container != nil, !mountedInAppScene else { return }
-        guard let view = appSceneView, isUsableHost(view), coversScreen(view) else { return }
-        attach(to: view, reason: "App 画面恢复整屏")
     }
 
     /// 搬回入口窗口根视图。
@@ -678,20 +426,6 @@ enum AevonEntryHost {
         // 不能等下次注销 —— 这里每 3 秒对一次，代价可以忽略）
         AevonEdgeEntry.refreshLayoutIfNeeded()
 
-        /* V0.0.80（AevonAllClosedResetV80）：无浮窗期的触摸自愈。
-         *
-         * 一个浮窗都没有的时候，SB 侧不该有任何触摸接管状态残留。
-         * 每 3 秒便宜地对一次：真有残留才清（`resetGlobalTouchState` 内部只在
-         * 「确实有状态」时写日志），顺手校验前台场景有没有被误判成后台。
-         * 这是 Aevon(72)「关掉所有浮窗后全屏点不动」的最后一道兜底。 */
-        if !AevonWindowManager.hasAnyWindow {
-            AevonEdgeEntry.resetGlobalTouchState(reason: "看门狗：当前没有浮窗")
-            if tickCount % 2 == 0 { reassertFrontmost(reason: "看门狗周期校验") }
-        }
-        /* V0.0.81（AevonAppGateV81）：整窗触摸门的兜底复位 —— 关窗路径万一被打断
-         * （异常 / 崩溃 / 用户连点），残留的「关门」会让那个 App 永远点不动。 */
-        AevonSceneHelper.clearStaleAppGates()
-
         // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
         if tickCount <= 60, tickCount % 10 == 0 {
             dumpWindowStack("周期")
@@ -725,22 +459,13 @@ enum AevonEntryHost {
 
 // MARK: - C 入口（供 AevonSceneHook.m 调用）
 
-// V0.0.59 的 Swift 字符串键探测（aevonSceneIdentity(fromVC:)）已删除：
-// FBScene.identifier 是 FBSceneIdentity 对象而非 NSString，`as? String` 恒失败，
-// 「前台场景=无」= 关窗修复从未生效（Aevon(55) 日志实锤）。
-// V0.0.62 起由 hook 层 AevonSceneBundleIDFromVC 深挖传入（AevonFrontmostIDV62）。
-
 /// App 画面容器出现：把它交给宿主，容器会搬进去，从而压在全屏 App 之上。
-/// V0.0.62（AevonFrontmostIDV62）：bundleID 由 hook 层深挖传入（FBScene.identifier
-/// 是对象不是字符串，Swift 侧字符串探测恒失败 → 关窗修复从未生效）。
 @_cdecl("AevonSceneVCDidAppear")
-public func AevonSceneVCDidAppear(_ vc: UIViewController, _ bundleID: NSString?) {
+public func AevonSceneVCDidAppear(_ vc: UIViewController) {
     guard vc.isViewLoaded else { return }
     let view = vc.view!
-    let identity = bundleID as String?
     DispatchQueue.main.async {
-        AevonEntryHost.appSceneAppeared(view, reason: "App 画面进入（AevonSceneVCHookV22）",
-                                        identity: identity)
+        AevonEntryHost.appSceneAppeared(view, reason: "App 画面进入（AevonSceneVCHookV22）")
     }
 }
 

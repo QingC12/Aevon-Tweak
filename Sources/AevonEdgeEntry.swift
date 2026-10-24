@@ -399,8 +399,6 @@ enum AevonEdgeEntry {
             // 旧版这里还顺手 AevonRingStore.invalidateCache()，0.2 秒一次跨进程重读
             // 导致圆盘 App 数与排序漂移（Aevon(24)），已删除。列表只在设置页广播时刷新。
             checkTriggerZoneChange()
-            // V0.0.79（AevonTouchLiveV79）：「浮窗内容可点击」变了 → 已开着的浮窗立刻跟上
-            checkContentTouchChange()
         }
         RunLoop.main.add(timer, forMode: .common)
         zoneTimer = timer
@@ -435,25 +433,6 @@ enum AevonEdgeEntry {
         zoneSignature = signature
         refreshLayoutIfNeeded(logChange: true)
         syncGuardConfig()
-    }
-
-    /// V0.0.79（AevonTouchLiveV79）：设置里的「浮窗内可直接触摸操作」。
-    ///
-    /// 这个开关以前只在开窗那一刻读一次（而且是 `let`），所以「关掉 / 再打开」
-    /// 对已经开着的浮窗全无反应 —— 用户 Aevon(71) 报的「关掉后内容完全不接收触摸」
-    /// 里就有一半是它：关了不生效、开回来也不生效，只能关窗重开。
-    /// 现在走两条通道：设置页广播（延迟≈0）+ 0.2 秒轮询兜底。
-    private static var contentTouchSignature = ""
-
-    static func checkContentTouchChange() {
-        let signature = "\(AevonPrefs.bool("TouchEnabled", default: true))"
-        if contentTouchSignature.isEmpty {
-            contentTouchSignature = signature
-            return
-        }
-        guard signature != contentTouchSignature else { return }
-        contentTouchSignature = signature
-        AevonWindowManager.refreshContentTouch()
     }
 
     /// V0.0.32（AevonGuardNotifyV32）：把当前热区几何同步给 AevonGuard。
@@ -608,7 +587,7 @@ enum AevonEdgeEntry {
     private static var globalFired = false
     private static var globalLastLogAt: CFTimeInterval = 0
 
-    // MARK: - 浮窗手势（V0.0.41 起，V0.0.43 按用户要求改交互）
+    // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
 
     /// 当前被全局通道接管的那根手指（0 = 没接管浮窗）
     private static var floatTouchID: UInt = 0
@@ -616,32 +595,19 @@ enum AevonEdgeEntry {
     private static weak var floatWindow: AevonWindowView?
     private static var floatGrab: AevonFloatGrab?
     private static var floatDeadline: CFTimeInterval = 0
-    /// 按下点 / 按下时刻：用来区分「轻点」还是「拖动」
-    private static var floatStart: CGPoint = .zero
-    private static var floatStartAt: CFTimeInterval = 0
-    /// 是否已真正进入拖动 / 缩放。侧条必须先越过阈值才算拖动，
-    /// 否则「想吸附的那一下轻点」会被当成微小拖动，永远触发不了贴边吸附。
-    private static var floatEngaged = false
-    /// 越过多少点算拖动（不超过它抬手 = 轻点）
-    private static let floatMoveSlop: CGFloat = 10
-    /// 轻点允许的最长按压时间
-    private static let floatTapLimit: CFTimeInterval = 0.45
     /// 拖拽硬上限：拖到 30 秒一定解除，杜绝「窗口一直吸着手指」的最坏情况
     private static let floatDragLimit: CFTimeInterval = 30
 
-    /// 底边条双击关闭（全局通道没有 UITapGestureRecognizer，只能自己记）
-    private static var floatBottomLastTapAt: CFTimeInterval = 0
-    private static weak var floatBottomLastTapWindow: AevonWindowView?
-    private static let floatDoubleTapGap: CFTimeInterval = 0.36
+    /// 双击识别（全局通道没有 UITapGestureRecognizer，得自己记）
+    private static var floatLastTapAt: CFTimeInterval = 0
+    private static var floatLastTapPoint: CGPoint = .zero
+    private static weak var floatLastTapWindow: AevonWindowView?
+    private static let floatDoubleTapGap: CFTimeInterval = 0.34
+    private static let floatDoubleTapRadius: CGFloat = 26
 
     /// 浮窗手势是否正压着某根手指（供吞事件判断）
-    ///
-    /// V0.0.49（AevonFloatTouchBitV49）：判定从「`floatTouchID != 0` 且 `floatWindow != nil`」
-    /// 收窄成只看 touchID。窗口若是 `weak` 提前释放（关窗 / 场景回收）而 ended 还没到，
-    /// 旧写法会立刻停止吞事件 —— App 就会收到这段手势的残余事件（含抬手合成点击）。
-    /// 手指的归属只跟 touchID 有关，窗口没了也不该把这段事件还给 App。
     private static var floatGestureActive: Bool {
-        return floatTouchID != 0
+        return floatTouchID != 0 && floatWindow != nil
     }
 
     /// 圆盘接管期（V0.0.24）：只有「全局通道唤起的圆盘」需要把这根手指从 App 手里拿走。
@@ -820,14 +786,9 @@ enum AevonEdgeEntry {
         }
     }
 
-    // MARK: - 浮窗手势状态机（V0.0.43，AevonSthenoGestureV43）
+    // MARK: - 浮窗手势状态机（V0.0.41，AevonFloatGlobalV41）
 
-    /// 按下：命中浮窗侧条 / 下角块 / 底边条就整段接管这根手指。
-    ///
-    /// 交互（V0.0.90 回退最初版本）：
-    ///   · 左右侧条：长按或拖动 = 移动窗口（贴边松手自动吸附）；
-    ///   · 底边条：**双击 = 关闭浮窗**（顶部的 ✕ 已移除）；
-    ///   · 下角块：拖动 = 对角缩放。
+    /// 按下：命中浮窗外侧手柄 / ✕ 就整段接管这根手指。
     ///
     /// 返回 true = 这根触摸已归浮窗，调用方必须立刻 return（既不再判热区，也不给 App）。
     private static func handleFloatGestureBegan(point: CGPoint, touchID: UInt) -> Bool {
@@ -842,38 +803,39 @@ enum AevonEdgeEntry {
         }
 
         let now = CACurrentMediaTime()
+        // 双击边条 = 小窗 / 大窗换档。原来是手柄上的 UITapGestureRecognizer，
+        // 全屏 App 里同样收不到，这里用同一套全局通道补上。
+        if case .close = hit.grab {
+            // ✕ 不算双击候选
+        } else if now - floatLastTapAt <= floatDoubleTapGap,
+                  floatLastTapWindow === hit.window,
+                  hypot(point.x - floatLastTapPoint.x,
+                        point.y - floatLastTapPoint.y) <= floatDoubleTapRadius {
+            floatLastTapAt = 0
+            floatLastTapWindow = nil
+            floatTouchID = touchID
+            floatWindow = hit.window
+            floatGrab = nil              // 双击不拖拽，抬手直接收尾
+            floatDeadline = now + floatDragLimit
+            hit.window.cycleSize()
+            AevonLog.info("[窗口] 双击换档（全局通道）（AevonFloatGlobalV41）")
+            return true
+        }
+
         floatTouchID = touchID
         floatWindow = hit.window
         floatGrab = hit.grab
-        floatStart = point
-        floatStartAt = now
         floatDeadline = now + floatDragLimit
-        floatEngaged = false
         hit.window.grabBegin(hit.grab, at: hit.layerPoint)
-        // V0.0.49（AevonFloatTouchBitV49）：告诉 App 侧的 AevonGuard「手指正压在浮窗上」。
-        // 前台 App 的触摸是 backboardd **直投 App 进程**的，SB 里吞只吞掉自己那一份；
-        // 不通知 Guard 的话，轻点小窗仍会在 App 里合成一次点击（Aevon(42) 第 1 条）。
-        setFloatTouchFlag(true)
         switch hit.grab {
-        case .side:
-            // 先不移动：到底是「轻点（无动作）」还是「长按移动」，要等抬手/阈值才知道
-            AevonLog.info("[窗口] 侧条按下 \(Int(point.x)),\(Int(point.y))（长按拖动 · 轻点无动作）（AevonSthenoGestureV44）")
+        case .bar:
+            AevonLog.info("[窗口] 全局通道开始拖动（移动）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
         case .corner:
-            // V0.0.54（AevonCornerNoFlashV54）：下角块只做缩放，按下**先不进入缩放**。
-            // `beginLiveResize` 会关投影（拖动期不做离屏合成），若按下就调用，
-            // 一次纯点击就是「投影消失→恢复」= 边缘闪两下（Aevon(47) 第 1 条）。
-            // 现在等 `handleFloatGestureMoved` 越过 10pt 阈值后由 `rebaseGrab` 真正进入。
-            AevonLog.info("[窗口] 下角块按下 \(Int(point.x)),\(Int(point.y))"
-                + "（拖动才缩放，轻点无动作）（AevonCornerNoFlashV54）")
-        case .bottom:
-            AevonLog.info("[窗口] 底边条按下 \(Int(point.x)),\(Int(point.y))（拖动移动 · 双击关闭）（AevonSthenoGestureV44）")
+            AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
+        case .close:
+            AevonLog.info("[窗口] 全局通道命中关闭钮（AevonFloatGlobalV41）")
         }
         return true
-    }
-
-    /// 当前抓取目标对应的「算拖动」阈值。
-    private static func floatSlopForCurrentGrab() -> CGFloat {
-        return floatMoveSlop
     }
 
     /// 拖动中。返回 true = 已消费，调用方 return。
@@ -890,23 +852,6 @@ enum AevonEdgeEntry {
             return false
         }
         floatDeadline = now + floatDragLimit      // 手指还在动就续期
-
-        if !floatEngaged {
-            // 侧条 / 底边条：越过阈值才算拖动，之前都只是「可能的轻点」
-            let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
-            let slop = floatSlopForCurrentGrab()
-            guard moved > slop else { return true }
-            floatEngaged = true
-            // 基准点重设到当前点，否则第一帧会瞬移一个阈值距离，手感发跳
-            win.rebaseGrab(at: AevonEntryHost.floatLayerPoint(fromScreen: point))
-            if case .some(.bottom) = floatGrab {
-                AevonLog.info("[窗口] 底边条拖动 → 移动窗口 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV44）")
-            } else if case .some(.corner) = floatGrab {
-                AevonLog.info("[窗口] 下角块拖动 → 缩放 \(Int(point.x)),\(Int(point.y))（AevonLiveResizeV44）")
-            } else {
-                AevonLog.info("[窗口] 侧条开始移动 \(Int(point.x)),\(Int(point.y))（AevonSthenoGestureV44）")
-            }
-        }
         win.grabUpdate(to: AevonEntryHost.floatLayerPoint(fromScreen: point))
         return true
     }
@@ -917,63 +862,19 @@ enum AevonEdgeEntry {
         guard floatTouchID != 0, touchID == floatTouchID else { return false }
         let win = floatWindow
         let layerPoint = AevonEntryHost.floatLayerPoint(fromScreen: point)
-        let elapsed = CACurrentMediaTime() - floatStartAt
-        let moved = hypot(point.x - floatStart.x, point.y - floatStart.y)
-        // 轻点 = 没越阈值、时间短、位移小
-        let isTap = !cancelled && !floatEngaged && elapsed <= floatTapLimit
-            && moved <= floatSlopForCurrentGrab()
-
         if cancelled {
             win?.grabCancel()
-        } else if let win = win, let grab = floatGrab {
-            switch grab {
-            case .side(let edges):
-                if floatEngaged {
-                    // 拖过 = 正常结束（贴边松手会自动吸附）
-                    win.grabEnd(at: layerPoint, commit: true)
-                } else if isTap {
-                    // 轻点侧条：V0.0.90 起无任何动作（停靠小窗已回退移除）
-                    win.grabCancel()
-                    AevonLog.info("[窗口] 侧条轻点 → 无动作（停靠小窗已移除，贴边吸附改为拖动松手触发）"
-                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt）"
-                        + "（AevonSnapKeepSizeV90）")
-                } else {
-                    // 按住太久又没动：既不算轻点也没拖动，原样恢复
-                    win.grabCancel()
-                }
-            case .corner:
-                // V0.0.54（AevonCornerNoFlashV54）：右下角只缩放。
-                // 轻点（没越过阈值）= 什么都不做，只 `grabCancel` 丢掉这段「只按下没拖」的抓取。
-                // 旧版这里走 `grabEnd` → `finishEdgeResize`，而缩放一启动就把投影关了，
-                // 抬手再恢复 —— 这就是用户看到的「点右下角边缘闪烁」。
-                if floatEngaged {
-                    win.grabEnd(at: layerPoint, commit: true)
-                } else {
-                    win.grabCancel()
-                    AevonLog.info("[窗口] 右下角轻点 → 不缩放也不切换形态"
-                        + "（按住 \(Int(elapsed * 1000))ms，位移 \(Int(moved))pt，投影全程不变）"
-                        + "（AevonCornerNoFlashV54）")
-                }
-            case .bottom:
-                if floatEngaged {
-                    // V0.0.44：底边条拖动 = 移动窗口（用户 Aevon(37) 指定）
-                    win.grabEnd(at: layerPoint, commit: true)
-                } else if isTap {
-                    // 轻点：丢掉这次「按下但没动」的抓取（frame 未变，等于无操作）
-                    win.grabCancel()
-                    let now = CACurrentMediaTime()
-                    if now - floatBottomLastTapAt <= floatDoubleTapGap,
-                       floatBottomLastTapWindow === win {
-                        floatBottomLastTapAt = 0
-                        floatBottomLastTapWindow = nil
-                        AevonLog.info("[窗口] 底边双击 → 关闭 \(win.bundleID)（AevonSthenoGestureV44）")
-                        win.closeSelf()
-                    } else {
-                        floatBottomLastTapAt = now
-                        floatBottomLastTapWindow = win
-                    }
-                } else {
-                    win.grabCancel()
+        } else {
+            win?.grabEnd(at: layerPoint, commit: true)
+            // 记一次双击候选：只有「手柄上的轻点」才算，✕ 不算
+            if let grab = floatGrab, win != nil {
+                switch grab {
+                case .close:
+                    break
+                case .bar, .corner:
+                    floatLastTapAt = CACurrentMediaTime()
+                    floatLastTapPoint = point
+                    floatLastTapWindow = win
                 }
             }
         }
@@ -986,74 +887,7 @@ enum AevonEdgeEntry {
         floatWindow = nil
         floatGrab = nil
         floatDeadline = 0
-        floatEngaged = false
-        // V0.0.49：手指离开浮窗 —— 立刻放行 App 进程的输入通道
-        setFloatTouchFlag(false)
     }
-
-    /// V0.0.49（AevonFloatTouchBitV49）：浮窗手势期状态位（notify state bit48）。
-    ///
-    /// 只在真正翻转时写（notify_set_state + notify_post 是跨进程调用，不能每条触摸都刷）。
-    /// 写成幂等：`clearFloatGesture()` 在没接管过的情况下也会被调用，若不加标志位
-    /// 会每段触摸都白写一次共享内存。
-    private static var floatTouchFlagOn = false
-    /// 延迟清位的代次（V0.0.54）：每次新的按下都会让挂起中的清位作废。
-    private static var floatFlagGeneration = 0
-    /// V0.0.67（AevonRestoreGraceV67）：下一次清 bit48 的延迟。
-    /// V0.0.70（AevonRestoreGraceAllV70）：**所有分支统一 0.7s**（原默认 0.35s 只给非还原手势）。
-    /// Aevon(63) 实测：弹簧动画落定 ~0.48s（02.394 还原 → 02.871 落定），0.35s 的
-    /// 非还原分支（判定为拖动、侧条等）在快速连点中偶发放行早于动画余量 → 偶发穿透。
-    /// 统一 0.7s 无副作用：bit48 只吞「App 画面」的触摸副本，浮窗自身交互走 SB
-    /// 进程 hit-test 不受影响；下一次按下会作废挂起并重新置位。
-    private static var floatFlagNextClearDelay: Double = 0.70
-
-    private static func setFloatTouchFlag(_ on: Bool) {
-        if on {
-            // V0.0.74（AevonGuardTapStampV74）：**每次按下都刷新时间戳**（不受下面
-            // floatTouchFlagOn 早退影响）—— 这是 Guard 侧「抬手时浮窗刚被按下」的判据，
-            // 与坐标无关，专门兜住窗口坐标 ≠ 屏幕坐标导致的几何判据失配。
-            AevonNotifyStampFloatTouch()
-            // 新的按下：把可能挂着的「延迟清零」作废
-            floatFlagGeneration += 1
-            if floatTouchFlagOn { return }
-            floatTouchFlagOn = true
-            AevonNotifySetFloatTouch(1)
-            // 日志证据：下一版能确证「SB 确实写了这一位」。限频 3 秒，
-            // 免得用户连续点小窗时把日志刷满（一次手势只该有一条）。
-            let now = CACurrentMediaTime()
-            if now - floatFlagLastLogAt > 3.0 {
-                floatFlagLastLogAt = now
-                AevonLog.info("[边缘] 浮窗手势期开始：已通知 App 侧 Guard 接管输入"
-                    + "（notify bit48）（AevonFloatTouchBitV49）")
-            }
-            return
-        }
-        // V0.0.54（AevonGuardDockZoneV54 时代引入）：**不要立刻清位**。
-        //
-        // 抬手时立刻清 bit48，而下一指的 began 往往只有几十毫秒之后；
-        // 两个进程的 sendEvent 谁先到不确定，Guard 一旦读到 0 就放行 → App 合成一次点击。
-        // 这里把清位延后（期间又有按下就让代次作废，不清），与 Guard 几何判据互为兜底。
-        floatFlagGeneration += 1
-        let gen = floatFlagGeneration
-        // V0.0.67（AevonRestoreGraceV67）：读走本次延迟并复位默认
-        // （V0.0.70 起默认即 0.7s，所有分支统一宽限）
-        let clearDelay = floatFlagNextClearDelay
-        floatFlagNextClearDelay = 0.70
-        DispatchQueue.main.asyncAfter(deadline: .now() + clearDelay) {
-            guard gen == floatFlagGeneration else { return }   // 期间又按下了
-            guard floatTouchFlagOn else { return }
-            floatTouchFlagOn = false
-            AevonNotifySetFloatTouch(0)
-            if clearDelay > 0.5 {
-                AevonLog.info("[边缘] 还原宽限期结束：App 输入放行（0.7s 覆盖还原动画，防穿透点击）（AevonRestoreGraceV67）")
-            } else {
-                AevonLog.info("[边缘] 浮窗手势期结束：延后 350ms 才放行 App 输入"
-                    + "（避开快速连点的时序竞态）（AevonGuardDockZoneV54）")
-            }
-        }
-    }
-
-    private static var floatFlagLastLogAt: CFTimeInterval = 0
 
     /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
     static func presentRing(source: String) {
@@ -1146,18 +980,6 @@ enum AevonEdgeEntry {
            touchID == globalTouchID, CACurrentMediaTime() <= swallowDeadline {
             return true
         }
-        /* V0.0.80（AevonAllClosedResetV80）——「无浮窗期」硬门。
-         *
-         * Aevon(72)：「关闭所有悬浮窗后全屏触摸会出现问题，完全点不动，
-         * 必须回桌面再打开全屏 App，或者清后台重开」。
-         * 这时 SB 侧没有任何浮窗、圆盘也没开，全局通道**没有任何理由**继续吞触摸。
-         * 只要有任何一条残留状态（ownsTouch / globalTouchID / 一个已经过期的 deadline）
-         * 让这里返回 YES，整屏的触摸就全被我们这个 hook 吃掉了，App 一个事件都收不到。
-         * 所以这里加一道无条件放行：没窗口 + 没圆盘 = 不吞。 */
-        if !AevonWindowManager.hasAnyWindow, !AevonRingMenu.isPresented,
-           globalTouchID == 0 || touchID != globalTouchID {
-            return false
-        }
         guard globalTouchID != 0, touchID == globalTouchID else { return false }
         guard CACurrentMediaTime() <= swallowDeadline else { return false }
         // V0.0.33（AevonTouchOwnV33）：ownsTouch 成立后**锁定不再回查** mountedInAppScene。
@@ -1172,44 +994,6 @@ enum AevonEdgeEntry {
     /// 圆盘展开期间关掉边缘手势条（避免它继续吃掉圆盘上的滑动），收起时恢复。
     static func setStripInteraction(_ enabled: Bool) {
         strip?.isUserInteractionEnabled = enabled
-    }
-
-    /* V0.0.80（AevonAllClosedResetV80）：把「触摸接管」相关的全部状态清干净。
-     *
-     * 什么时候调：最后一个浮窗被关掉时（AevonEntryHost.onAllWindowsClosed）、
-     * 以及看门狗发现「没有浮窗却还残留接管状态」时。
-     *
-     * 为什么必须做：全局通道（`UIApplication -sendEvent:`）的吞事件完全由这些
-     * 静态变量决定。只要 `ownsTouch` 卡在 true（抬手那一帧没到 / 窗口在动画中途被拆），
-     * 之后整屏的触摸都会被这个 hook 丢掉 —— 表现就是「全屏 App 完全点不动」，
-     * 而且因为状态在 SB 进程里，只有切场景 / 重启 App 才会碰巧复位。
-     * 圆盘正在用时不动它（那根手指还要继续驱动圆盘）。 */
-    static func resetGlobalTouchState(reason: String) {
-        if AevonRingMenu.isPresented { return }
-        let hadAny = ownsTouch || globalTouchID != 0 || floatTouchID != 0
-            || ringExtraTouchID != 0 || floatTouchFlagOn
-        globalTouchID = 0
-        globalStart = .zero
-        globalFired = false
-        ownsTouch = false
-        swallowDeadline = 0
-        ringSource = ""
-        ringExtraTouchID = 0
-        ringExtraDeadline = 0
-        floatTouchID = 0
-        floatDeadline = 0
-        /* bit48 立刻清零：关窗后 App 侧 Guard 不该再收到「浮窗手势期」。
-         * 这里绕过 0.7s 宽限直接写 0（关窗场景没有「快速连点第二下」要防）。 */
-        floatFlagGeneration += 1
-        if floatTouchFlagOn {
-            floatTouchFlagOn = false
-            AevonNotifySetFloatTouch(0)
-        }
-        if hadAny {
-            AevonLog.warn("[边缘] 触摸接管状态已全部复位（\(reason)）："
-                + "全局吞摸/浮窗手势/bit48 全部清零，App 恢复全屏触摸"
-                + "（AevonAllClosedResetV80）")
-        }
     }
 
     /// 打开完整应用面板（V0.0.30 起只有单窗模式）。
@@ -1275,8 +1059,6 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         // 设置里可能刚改过圆盘 App 列表 / 顺序 —— V0.0.31：带快照防漂移地刷新
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
-        // V0.0.79（AevonTouchLiveV79）：开关一变，已开着的浮窗立即生效（延迟≈0）
-        AevonEdgeEntry.checkContentTouchChange()
         AevonEdgeEntry.syncGuardConfig()
     }
 }

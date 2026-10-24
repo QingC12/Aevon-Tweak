@@ -11,16 +11,6 @@ enum AevonWindowManager {
         return windows[bundleID] != nil
     }
 
-    /// 当前是否有任何浮窗（V0.0.80）。
-    ///
-    /// 用来给「全局吞摸」加一道硬门：一个浮窗都没有的时候，
-    /// 全局通道没有任何理由继续吞触摸 —— Aevon(72) 的「关掉所有浮窗后全屏点不动」
-    /// 最坏的情况就是某个残留状态让 `ownsTouch` 一直为真（AevonAllClosedResetV80）。
-    static var hasAnyWindow: Bool { return !windows.isEmpty }
-
-    /// 同时开着的浮窗数量（保活 / 内存压力观测用）
-    static var openCount: Int { return windows.count }
-
     /// 当前已开窗的 App（按开窗顺序）。
     static var openBundleIDs: [String] {
         return order.filter { windows[$0] != nil }
@@ -40,40 +30,6 @@ enum AevonWindowManager {
         }
     }
 
-    // ── V0.0.89（AevonGuardRelaunchV89）：无 Guard 进程自动重启注入 ──
-    // 归档(10) 证据链：stormbreaker.prod 是 tweak 加载前的老进程，进程里没有 Guard
-    // （SB 侧警告「停靠小窗被轻点时 App 可能收到一次直投点击，只能靠注入解决」）。
-    // 用户手动「彻底退出再重开」能解决 —— 那这里就自动做：kill 旧进程 → 重走拉起
-    // 流程，新进程启动时必然被 substrate 注入。每个 bundle 每会话只自动重启一次，
-    // 重启后再无 Guard 就放行走老路径（不锁死用户功能，只记警告）。
-    private static var guardRelaunchTriedV89: Set<String> = []
-
-    /// 返回 true = 可以继续开窗；false = 已安排自动重启，调用方直接 return。
-    static func ensureGuardAliveV89(bundleID: String,
-                                    slot: AevonSnapSlot,
-                                    completion: ((Bool) -> Void)?) -> Bool {
-        if AevonGuardAliveState(bundleID) > 0 { return true }
-        guard let pid = AevonAppInfo.pid(bundleID: bundleID), pid > 0,
-              AevonAppInfo.isRunning(bundleID: bundleID) else {
-            /* 进程根本没在跑 → 正常拉起路径，新进程启动时必然被注入 */
-            return true
-        }
-        if guardRelaunchTriedV89.contains(bundleID) {
-            AevonLog.warn("[窗口] \(bundleID) 仍无 Guard（本会话已自动重启过一次，不再重启；"
-                + "触摸穿透在它身上仍可能出现）")
-            return true
-        }
-        guardRelaunchTriedV89.insert(bundleID)
-        AevonLog.warn("[窗口] \(bundleID) 进程内无 Guard（tweak 加载前的老进程，触摸零防御）"
-            + "→ 自动终止重启以注入（pid=\(pid)）（AevonGuardRelaunchV89）")
-        kill(pid_t(pid), SIGKILL)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            AevonLog.info("[窗口] 无 Guard 进程已终止，重新拉起 \(bundleID)（AevonGuardRelaunchV89）")
-            launchAndOpen(bundleID: bundleID, slot: slot, completion: completion)
-        }
-        return false
-    }
-
     /// 为指定 App 开窗（带场景就绪等待与全路径守卫，任何失败都静默放弃）。
     static func open(bundleID: String,
                      sceneID: String?,
@@ -89,11 +45,6 @@ enum AevonWindowManager {
             completion?(true)
             return
         }
-
-        // V0.0.89（AevonGuardRelaunchV89）：开窗前确认进程里真的有 Guard。
-        // 归档(10) 16:31:31.988 实锤：tweak 加载前就在跑的老进程没有 Guard，
-        // 对「停靠小窗被轻点 / 浮窗上操作」零防御（日志原文：App 可能收到一次直投点击）。
-        if !ensureGuardAliveV89(bundleID: bundleID, slot: slot, completion: completion) { return }
 
         // V0.0.36（AevonFloatInEntryV36）：浮窗外壳直接挂进唯一入口容器的浮窗层。
         // 旧路：独立宿主窗口 level 9,999,990 —— App 前台时画面在
@@ -151,18 +102,9 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title, slot: slot)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
-            // V0.0.48（AevonFloatAnimV48）：入场动画 —— 从下方 22pt 处浮上来 + 淡入。
-            // 只动位置和透明度、不动尺寸，所以不会触发内容缩放，第一帧不会闪黑。
-            windowView.playEntryAnimation()
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)
-            // V0.0.90：停靠小窗回退最初版本 → 不再有「单主窗自动降级」，
-            // 多窗并存（V0.0.42 行为），用户自己摆位置。
-            // V0.0.56：新窗就位 → 立刻把它的矩形同步给 Guard
-            AevonEntryHost.syncFloatRectToGuard()
-            // 有新窗 → 需要压住系统空闲锁屏（看视频时不能黑屏）
-            AevonIdleGuard.shared.refresh()
 
             // presenter 激活后画面是异步出来的，由承载器自己探测首帧
             sceneHost.startSyncing()
@@ -262,95 +204,19 @@ enum AevonWindowManager {
     static func close(bundleID: String) {
         guard let windowView = windows.removeValue(forKey: bundleID) else { return }
         if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
+        windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
+        AevonSceneHelper.sleep(bundleID)
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         if let pid = AevonAppInfo.pid(bundleID: bundleID) {
             AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
         }
-        // V0.0.48（AevonFloatAnimV48）：先播退场动画，动画结束再休眠场景 + 拆视图。
-        // 顺序不能反 —— 先把场景睡掉，动画中途画面就变黑了。
-        windowView.playDismissAnimation {
-            // V0.0.59（AevonFrontmostCloseV59）：**关的是当前全屏前台的那个 App 自己时，
-            // 绝不能把它睡掉。**
-            //
-            // 用户长期问题：「全屏 App 里打开悬浮窗，双击底边关闭后屏幕无法滑动」。
-            // 根因就在无条件 `sleep()`：它把场景 settings.foreground 写成 false ——
-            // 当浮窗的 App 恰好就是全屏前台的那个 App（用户在 A 里把 A 浮窗化），
-            // 这等于把正在显示的 App 设成了后台：画面停在最后一帧、触摸不再投递，
-            // 屏幕自然滑不动。
-            //
-            // V0.0.61（AevonFrontmostRepreV61）：Aevon(54) 复盘 —— 跳过休眠后仍然
-            // 无法滑动。第二个根因：全屏 App 的画面呈现本来就被浮窗的 presenter
-            // 接管着（presentationView 在我们窗里），teardown 销毁 presenter 后
-            // 场景保持前台、状态没翻转，系统就**永远不会重新呈现全屏** ——
-            // 触摸路由跟着断掉。修法：跳过休眠 + 主动做一次「前台回弹」
-            // （false → 0.35s → true），逼系统把 App 重新呈现回整屏。
-            let mountedNow = AevonEntryHost.mountedInAppScene
-            let frontIdentity = AevonEntryHost.appSceneIdentity
-            let closingFrontmost = mountedNow && frontIdentity != nil
-                && frontIdentity!.contains(bundleID)
-            // 决策输入全量落日志：上一版只在「跳过」时才打，输入是什么永远看不到，
-            // 用户报「依旧无法滑动」时无法判断哪一环没对上。
-            AevonLog.info("[窗口] 关窗收尾决策：容器在App画面=\(mountedNow)"
-                + "，前台场景=\(frontIdentity ?? "无")，浮窗App=\(bundleID)"
-                + "，判定关的是前台自己=\(closingFrontmost)（AevonFrontmostCloseV59）")
-            if closingFrontmost {
-                AevonLog.info("[窗口] 浮窗 App 即当前全屏前台 App：跳过场景休眠、保持前台"
-                    + "（\(bundleID)，V61 追加：销毁 presenter 后做前台回弹、逼系统重新呈现全屏）"
-                    + "（AevonFrontmostCloseV59 AevonFrontmostRepreV61）")
-            } else {
-                AevonSceneHelper.sleep(bundleID)
-            }
-            windowView.teardown()
-            // V0.0.56：视图已拆 → 必须重算主窗矩形重新下发。
-            // 漏掉这一步，Guard 会一直以为那块屏幕还盖着浮窗，把 App 的触摸白白吞掉
-            // （「关掉浮窗后某一块区域点不动」就是这么来的）。
-            AevonEntryHost.syncFloatRectToGuard()
-            /* V0.0.80（AevonAllClosedResetV80）：最后一个浮窗也关掉了 ——
-             * 做一次彻底复位（全局吞摸状态 / Guard 状态位 / 前台场景保活）。
-             * Aevon(72)：「关闭所有悬浮窗后全屏触摸失灵，必须回桌面重开 App」。 */
-            if windows.isEmpty {
-                AevonEntryHost.onAllWindowsClosed()
-            }
-            // 真正拆完视图后再判定（退场动画期间窗还在，计数不能提前减）
-            AevonIdleGuard.shared.refresh()
-            // V0.0.61（AevonFrontmostRepreV61）：前台回弹 —— 关的是前台 App 自己时，
-            // presenter 已销毁而场景状态没翻转，系统不会自己重新呈现全屏。
-            // 先置后台再置回前台，逼系统走一遍完整的「重新呈现」：触摸路由随之恢复。
-            // 代价是约 0.3 秒的画面回弹（黑一下再回全屏），换来彻底摆脱「无法滑动」。
-            if closingFrontmost {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    AevonSceneHelper.sleep(bundleID)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        AevonSceneHelper.wakeUp(bundleID)
-                        AevonLog.info("[窗口] 已触发前台回弹：App 重新呈现全屏"
-                            + "（\(bundleID)，修复关浮窗后无法滑动）（AevonFrontmostRepreV61）")
-                        /* V0.0.80：回弹之后再校验一次 —— 回弹失败（scene 取不到 / 系统不响应）
-                         * 时要能自愈，并且留下证据（AevonFrontHealV80）。 */
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            AevonEntryHost.reassertFrontmost(reason: "关窗回弹后 1 秒")
-                        }
-                    }
-                }
-            }
-        }
-        AevonLog.info("[窗口] \(bundleID) 已关闭（缩放缓出退场）（AevonFloatAnimV48）")
+        AevonLog.info("[窗口] \(bundleID) 已关闭")
     }
 
     static func closeAll() {
         for bundleID in Array(windows.keys) {
             close(bundleID: bundleID)
-        }
-    }
-
-    /// V0.0.79（AevonTouchLiveV79）：设置里改了「浮窗内可直接触摸操作」。
-    ///
-    /// 旧版这个偏好只在开窗那一刻读进 `AevonSceneHost`（还是 `let`），
-    /// 所以改开关对已经开着的浮窗完全无效 —— 用户 Aevon(71) 看到的就是
-    /// 「关掉之后内容彻底点不动，再打开也不恢复」。现在广播 / 轮询都会走到这里。
-    static func refreshContentTouch() {
-        for view in windows.values {
-            view.refreshContentTouch()
         }
     }
 
