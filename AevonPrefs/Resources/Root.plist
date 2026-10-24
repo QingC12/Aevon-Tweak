@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.0.30（arm64e / roothide）。本页只放开关；触发条调整、圆盘 App 编辑等细节都在「细节调整」二级页。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑（或按住约 0.4 秒）呼出圆盘 → 点图标开浮窗，按住圆心 1 秒切旋转。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.1（arm64e / roothide）。本页只放开关；触发条调整、圆盘 App 编辑等细节都在「细节调整」二级页。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑（或按住约 0.4 秒）呼出圆盘 → 点图标开浮窗，按住圆心 1 秒切旋转。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

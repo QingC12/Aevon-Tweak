@@ -142,6 +142,24 @@ jobs:
             || { echo "::error::主插件缺少左右分屏流程（AevonSplitFlow）"; exit 1; }
           echo "分屏校验: 吸附几何 + 左右分屏流程 已编入"
 
+          # V0.1.1（AevonRestoreDefaultV101 / AevonZonePriorityV101）：
+          #   ① 双击换档（小窗/大窗）与「顶部放大」吸附移除 —— 大窗/近全屏后角手柄不可达；
+          #   ② 顶部双击 = 恢复默认大小与位置；
+          #   ③ 圆盘触发热区最高优先级（Stheno EdgeBar 独占触发边同款），SB 侧吞触摸，无 Guard。
+          strings "$DYLIB" | grep -q 'AevonRestoreDefaultV101' \
+            || { echo "::error::顶部双击恢复默认未编入（缺 AevonRestoreDefaultV101）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonZonePriorityV101' \
+            || { echo "::error::热区最高优先级未编入（缺 AevonZonePriorityV101）—— 划圆盘会触发 App 左滑"; exit 1; }
+          if grep -rn 'cycleSize' Sources/ 2>/dev/null | grep -q .; then
+            echo "::error::双击换档函数 cycleSize 残留（V0.1.1 已移除，禁止回退）"
+            exit 1
+          fi
+          if grep -rn '顶部放大\|双击切换尺寸\|双击换档' Sources/ AevonPrefs/ 2>/dev/null | grep -v '^\s*///' | grep -v '// 原\|// V0.1.1\|移除' | grep -q .; then
+            echo "::error::源码仍有换档/顶部放大字样（V0.1.1 已移除，禁止回退）"
+            exit 1
+          fi
+          echo "V0.1.1 校验: 恢复默认双击 + 热区优先级 已编入；换档/顶部放大 无残留"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }

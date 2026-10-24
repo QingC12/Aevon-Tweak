@@ -31,17 +31,17 @@ enum AevonFloatGrab {
 /// V0.0.9：App 场景按整屏尺寸渲染，浮窗只对承载容器做等比缩放。
 /// V0.0.11：内容区宽高比锁定屏幕比例。
 /// V0.0.12：手势期间只改外壳 `layer.transform`，抬手才提交真实 frame。
-/// V0.0.13：窗口大小/位置记忆 + 双击切换大小档。
-/// V0.0.14：拖到屏幕边缘自动吸附（左半屏 / 右半屏 / 顶部放大）。
+/// V0.0.13：窗口大小/位置记忆（V0.1.1 起双击改为「顶部双击恢复默认几何」）。
+/// V0.0.14：拖到屏幕边缘自动吸附（左半屏 / 右半屏；顶部放大已随 V0.1.1 移除）。
 /// V0.0.36：四周 8 向缩放（当时在窗内）。
 /// V0.0.37（AevonSthenoEdgeBarV37）：按 Stheno 逆向证据重做手势体系 ——
 ///   手势区域**只在浮窗边缘外侧**（EdgeBarControlView / GestureIntroduction
 ///   「浮窗手势区域为边缘外侧…」），窗内 100% 留给 App 内容：
 ///     · 拖四条**边条**（外侧）＝ 移动窗口；
 ///     · 拖四个**外角块** ＝ 缩放（对角锚定，比例锁定）；
-///     · 双击任意边条 ＝ 小窗 / 大窗切换；
+///     · **顶部边条双击** ＝ 恢复默认大小与位置（V0.1.1，双击放大/换档已移除）；
 ///     · 右上角悬浮 ✕ ＝ 关闭；
-///     · 拖到屏幕边缘松手仍自动吸附。
+///     · 拖到屏幕左右边缘松手自动吸附半屏。
 ///   顶部标题栏（拖动条 + 关闭钮）整条移除（用户要求）。
 /// V0.0.37（AevonMedusaFrameV37）：几何记忆改用 Stheno 的方案 ——
 ///   全局一份 `MedusaFrameLast`（left/top/width 三个屏幕百分比，对应 Stheno 的
@@ -95,7 +95,7 @@ final class AevonWindowView: UIView {
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
 
-    /// 当前吸附槽位（自由位置 / 左半屏 / 右半屏 / 顶部放大）
+    /// 当前吸附槽位（自由位置 / 左半屏 / 右半屏）
     private(set) var currentSlot: AevonSnapSlot = .free
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String, slot: AevonSnapSlot = .free) {
@@ -166,7 +166,7 @@ final class AevonWindowView: UIView {
         // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（四边条 + 四角块，全部在窗外）
         installOutsideGestureHandles(width: restored.width, height: restored.height)
 
-        // 双击任意手柄 = 小窗 / 大窗切换（原「双击标题栏」的替代出口）
+        // 顶部双击 = 恢复默认大小与位置（V0.1.1 换档已移除，AevonRestoreDefaultV101）
         for handle in subviews.compactMap({ $0 as? AevonEdgeHandleView }) {
             let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleBarDoubleTap(_:)))
             doubleTap.numberOfTapsRequired = 2
@@ -428,26 +428,25 @@ final class AevonWindowView: UIView {
         }
     }
 
-    /// 小窗 / 大窗切换（原「双击边条」，现在也可由全局通道触发）。
-    func cycleSize() {
+    /// 顶部双击 = 恢复默认窗口大小与位置（V0.1.1，AevonRestoreDefaultV101）。
+    ///
+    /// 原「双击换档（小窗/大窗）」整体移除：大窗档 94%×88% 近乎铺满整屏，
+    /// 四角缩放手柄被推到屏幕边缘（与系统手势打架、外扩出屏），窗口放大后
+    /// 用户再也无法缩回 —— V0.1.0 实测问题。恢复默认几何是无损出口：
+    /// 任何尺寸/位置一键回「宽 66% 屏宽、顶边 10% 屏高、水平居中」。
+    func restoreDefaultFrame() {
         guard !isLiveResizing else { return }
-        let screen = UIScreen.main.bounds
-        let aspect = AevonWindowView.contentAspect
-
-        let smallWidth = max(AevonWindowView.minContentWidth,
-                             min(screen.width * 0.62, screen.height * 0.66 * aspect))
-        let bigWidth = min(screen.width * 0.94, screen.height * 0.88 * aspect)
-        let threshold = (smallWidth + bigWidth) / 2.0
-        let target = bounds.width < threshold ? bigWidth : smallWidth
-        let targetHeight = target / aspect
-
-        var newFrame = CGRect(x: 0, y: 0, width: target, height: targetHeight)
-        newFrame.origin.x = max(8, min(frame.midX - target / 2.0, screen.width - target - 8))
-        newFrame.origin.y = max(24, min(frame.midY - targetHeight / 2.0, screen.height - targetHeight - 8))
-        frame = newFrame
-        setNeedsLayout()
-        persistFrame()
-        AevonLog.info("[窗口] 双击切换尺寸 \(Int(target))x\(Int(targetHeight))")
+        let target = AevonWindowView.defaultFrame()
+        guard target.width >= AevonWindowView.minContentWidth, target.height > 0 else { return }
+        currentSlot = .free
+        UIView.animate(withDuration: 0.22,
+                       delay: 0,
+                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
+            self.frame = target
+        } completion: { _ in
+            self.persistFrame()
+        }
+        AevonLog.info("[窗口] 顶部双击 → 恢复默认 \(Int(target.width))x\(Int(target.height)) @(\(Int(target.minX)),\(Int(target.minY)))（AevonRestoreDefaultV101）")
     }
 
     // MARK: - 边条移动
@@ -463,7 +462,7 @@ final class AevonWindowView: UIView {
             applyBarMove(to: point)
         case .ended, .cancelled, .failed:
             applyBarMove(to: point)
-            // 松手时若贴着屏幕边缘，就吸附成左半屏 / 右半屏 / 顶部放大。
+            // 松手时若贴着屏幕左右边缘，就吸附成左半屏 / 右半屏（V0.1.1 起顶部只摆放不放大）。
             if gesture.state == .ended,
                AevonPrefs.bool("SnapEnabled", default: true),
                let slot = AevonSnap.slot(for: frame) {
@@ -608,11 +607,16 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（AevonEdgeResizeV37）")
     }
 
-    // MARK: - 双击边条：小窗 / 大窗 两档
+    // MARK: - 顶部双击：恢复默认大小与位置（V0.1.1）
 
     @objc private func handleBarDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard !isLiveResizing, gesture.state == .ended else { return }
-        cycleSize()
+        // 只认顶部边条：双击放大/换档已移除，其余手柄双击不动作
+        guard let handle = gesture.view as? AevonEdgeHandleView, handle.edges == .top else {
+            AevonLog.info("[窗口] 双击非顶部手柄 → 无动作（换档已移除）（AevonRestoreDefaultV101）")
+            return
+        }
+        restoreDefaultFrame()
     }
 
     // MARK: - 吸附

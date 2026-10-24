@@ -688,38 +688,36 @@ enum AevonEdgeEntry {
                 ring.beginRemoteTracking(at: point, source: "global")
                 return
             }
-            // V0.0.41（AevonFloatGlobalV41）：浮窗手势走全局通道。
-            // Aevon(34) 证据：桌面手势正常、全屏 App 里完全无效 —— 同一个视图层代码，
-            // 差别只在事件来源。全屏 App 时窗外的手柄 pan 根本不会 begun
-            // （`SBDeviceApplicationSceneViewController.view` 的命中黑洞，V0.0.23 已确认），
-            // 而圆盘靠这条全局通道一直活着，所以浮窗也只能从事件总入口拿触摸。
-            if handleFloatGestureBegan(point: point, touchID: touchID) { return }
-            // 只认设置里配置的那块热区（位置 / 宽度 / 高度都可调），
-            // 不再像 V0.0.24 那样「右侧一大片 + 下半屏」都能划出来。
-            guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return }
-            let zone = AevonTriggerZone.rect(in: screen)
-            guard zone.contains(point) else { return }
-            // V0.0.36（AevonFloatInEntryV36）：落点在浮窗上 = 用户在操作浮窗，
-            // 绝不能当成热区触摸接管（浮窗压住右缘热区时，拖浮窗会误呼圆盘）。
-            if AevonEntryHost.pointHitsFloatingWindow(at: point) { return }
-            globalTouchID = touchID
-            globalStart = point
-            globalFired = false
-            lastTouchPoint = point
-            // V0.0.25：App 前台时，这根手指从按下那一刻就归我们 —— App 连 began 都收不到，
-            // 所以不管后面怎么滑动，前台 App 都不会跟着滚。
-            // V0.0.33（AevonTouchOwnV33）：热区按下即完全接管，不再门控 mountedInAppScene。
-            // Aevon(26) 根因：容器在 App 场景 / 入口窗口之间搬家时 mountedInAppScene 瞬间变 false，
-            // began 帧不吞 → App 收到 began + 前几帧 moved → 全屏手势照样触发；
-            // 且 shouldSwallowGlobalTouch 每帧回查 mountedInAppScene，中途搬家就撒手。
-            // 热区是右缘 18~140pt 专属手势条，桌面图标几乎不可能落在里面 —— 接管优先。
-            ownsTouch = true
-            swallowDeadline = CACurrentMediaTime() + pressLimit
-            let now = CACurrentMediaTime()
-            if now - globalLastLogAt > 2.0 {
-                globalLastLogAt = now
-                AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=\(ownsTouch ? "是" : "否")（AevonGlobalTouchV23 AevonTriggerZoneV25）")
+            // V0.1.1（AevonZonePriorityV101）：热区改为**最高优先级**。
+            // Stheno 逆向实锤（第 51 轮报告）：EdgeBarControlView / EBCI「触发边::开启可调节」
+            // —— 触发边是专属手势区，独占边缘，不与浮窗、App 分抢同一块触摸。
+            // 旧顺序（先浮窗手柄、先窗体命中、后热区）有两个漏点，都会把整条滑动漏给
+            // 全屏 App（V0.1.0 实测「划圆盘触发 App 内左滑」）：
+            //   ① 浮窗或其 ±20pt 手柄外扩压住热区 → pointHitsFloatingWindow 先返回
+            //      → 既不接管也不吞 → App 收到整条滑动；
+            //   ② 浮窗外侧手柄压住热区 → handleFloatGestureBegan 先命中 → 变成拖窗。
+            // 现在只要 began 落在热区里，这根手指立刻归圆盘触发（V0.0.25 同款接管：
+            // App 连 began 都收不到，sendEvent 丢弃，纯 SB 侧，无需 Guard）。
+            // 代价：浮窗压住热区的那一小块不能再当拖窗起点（与 Stheno 触发边独占一致）。
+            if AevonPrefs.bool("EdgeGestureEnabled", default: true),
+               AevonTriggerZone.rect(in: screen).contains(point) {
+                globalTouchID = touchID
+                globalStart = point
+                globalFired = false
+                lastTouchPoint = point
+                // V0.0.25/V0.0.33：热区按下即完全接管，吞到 ended / cancelled。
+                ownsTouch = true
+                swallowDeadline = CACurrentMediaTime() + pressLimit
+                let now = CACurrentMediaTime()
+                if now - globalLastLogAt > 2.0 {
+                    globalLastLogAt = now
+                    AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=是（热区最高优先级）（AevonGlobalTouchV23 AevonZonePriorityV101）")
+                }
+                return
             }
+            // 热区外：维持 V41 行为 —— 浮窗手柄手势 / 窗体命中探测。
+            if handleFloatGestureBegan(point: point, touchID: touchID) { return }
+            if AevonEntryHost.pointHitsFloatingWindow(at: point) { return }
 
         case .moved:
             // V0.0.41：正在被全局通道拖动的浮窗 —— 只驱动浮窗，绝不进 App
@@ -803,22 +801,22 @@ enum AevonEdgeEntry {
         }
 
         let now = CACurrentMediaTime()
-        // 双击边条 = 小窗 / 大窗换档。原来是手柄上的 UITapGestureRecognizer，
-        // 全屏 App 里同样收不到，这里用同一套全局通道补上。
-        if case .close = hit.grab {
-            // ✕ 不算双击候选
-        } else if now - floatLastTapAt <= floatDoubleTapGap,
-                  floatLastTapWindow === hit.window,
-                  hypot(point.x - floatLastTapPoint.x,
-                        point.y - floatLastTapPoint.y) <= floatDoubleTapRadius {
+        // V0.1.1（AevonRestoreDefaultV101）：顶部边条双击 = 恢复默认大小与位置。
+        // 原「双击换档（小窗/大窗）」移除 —— 大窗档近乎铺满整屏且角手柄不可达；
+        // 其余手柄双击不再有任何特殊动作，按普通拖动处理（无位移 = 轻点无动作）。
+        if case .bar(.top) = hit.grab,
+           now - floatLastTapAt <= floatDoubleTapGap,
+           floatLastTapWindow === hit.window,
+           hypot(point.x - floatLastTapPoint.x,
+                 point.y - floatLastTapPoint.y) <= floatDoubleTapRadius {
             floatLastTapAt = 0
             floatLastTapWindow = nil
             floatTouchID = touchID
             floatWindow = hit.window
-            floatGrab = nil              // 双击不拖拽，抬手直接收尾
+            floatGrab = nil              // 恢复默认不拖拽，抬手直接收尾
             floatDeadline = now + floatDragLimit
-            hit.window.cycleSize()
-            AevonLog.info("[窗口] 双击换档（全局通道）（AevonFloatGlobalV41）")
+            hit.window.restoreDefaultFrame()
+            AevonLog.info("[窗口] 顶部双击 → 恢复默认大小与位置（全局通道）（AevonRestoreDefaultV101）")
             return true
         }
 
