@@ -1267,7 +1267,9 @@ NSArray *AevonIvarCandidates(id root) {
                 for (unsigned int i = 0; i < count && out.count < 200; i++) {
                     const char *enc = ivar_getTypeEncoding(ivars[i]);
                     if (enc == NULL || enc[0] != '@') { continue; }
-                    id v = object_getIvar(node, ivars[i]);
+                    /* 系统单例的 ivar 可能是弱引用 / 已释放的对象：先过一次校验
+                     * （奇地址、小整数、元类一律丢掉），别拿野指针去 isKindOfClass。 */
+                    id v = AevonVerifiedObject(object_getIvar(node, ivars[i]));
                     if (v == nil) { continue; }
                     NSString *vk = AevonPtrKey(v);
                     if (![seen containsObject:vk]) { [out addObject:v]; }
@@ -1308,7 +1310,7 @@ NSString *AevonIvarDumpReport(id obj, int limit) {
             const char *enc = ivar_getTypeEncoding(iv);
             NSString *val = @"?";
             if (enc != NULL && enc[0] == '@') {
-                id v = object_getIvar(obj, iv);
+                id v = AevonVerifiedObject(object_getIvar(obj, iv));
                 if (v == nil) {
                     val = @"nil";
                 } else if (AevonIsContainerObject(v)) {
