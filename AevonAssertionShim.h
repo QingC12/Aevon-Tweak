@@ -46,18 +46,9 @@ void AevonNotifySetFloatTouch(int on);
 /// 「抬手时浮窗刚被按下 < 350ms」就直接吞掉 ended，与坐标完全无关。
 void AevonNotifyStampFloatTouch(void);
 
-/// V0.0.54（AevonGuardDockZoneV54）：停靠列数量状态位（notify state bit50~55）。
-///
-/// Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
-/// bit48 是「按下写、抬手清」的实时位，与 backboardd 直投 App 的那一份存在时序竞态。
-/// 停靠列几何是固定的（顶部 10% 起点、每格 dockH+8、左右贴边），所以这里只传
-/// 「每侧有几个停靠小窗」，让 Guard 自己算出槽位矩形并吞摸 —— 零时序依赖。
-/// rightCount / leftCount 传 -1 表示该侧保持原值。
-void AevonNotifySetDockState(int rightCount, int leftCount);
-
 /// V0.0.56（AevonGuardFloatRectV56）：主悬浮窗矩形通道（独立 notify token `com.aevon.guardfloat`）。
 ///
-/// Aevon(50) 第 2 / 5 条：双击底边关闭、快速连点停靠小窗时，App 仍会吃到一次点击。
+/// Aevon(50) 第 2 条：双击底边关闭时，App 仍会吃到一次点击。
 /// 主窗本体没有几何判据，光靠 bit48（有竞态）堵不住。这里把「主窗 + 外侧手势区」
 /// 的矩形写进共享内存，Guard 命中就吞 —— 与触摸时序无关。
 /// 传 w/h < 1 表示当前没有主悬浮窗（Guard 不再按矩形吞）。

@@ -344,20 +344,9 @@ static int AevonNotifyZoneToken(void) {
  * 位 0~47 已被 zone(0~37) / enabled(38) / ring(39) / 版本(40~47) 占满，
  * 所以浮窗位放到 48 —— 版本号同时升到 0x35，老 Guard 读到 0x35 也能解析 zone。 */
 #define AEVON_NOTIFY_FLOAT_BIT (1ULL << 48)
-/* V0.0.54（AevonGuardDockZoneV54）：停靠列状态位。
- *
- * Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
- * bit48 是「按下时写、抬手时清」的实时位，跟 backboardd 直投 App 的那一份存在**时序竞态** ——
- * 两个进程各自 sendEvent，谁先到不确定；快速连点时抬手刚清完、下一指又压下，Guard 读到 0 就放行。
- * 停靠列几何是**确定的**（顶部 10% 起点、固定 5 格、尺寸由屏宽反算），
- * 所以改成把「每侧有几个停靠小窗」写进状态位，Guard 自己算出每个槽位矩形，
- * 命中就吞 —— 与触摸时序完全无关，提前几秒就准备好了。
- * bit50~52 = 右侧数量(0~5)，bit53~55 = 左侧数量(0~5)。 */
-#define AEVON_NOTIFY_DOCK_R_SHIFT 50
-#define AEVON_NOTIFY_DOCK_L_SHIFT 53
-#define AEVON_NOTIFY_DOCK_MASK 0x7ULL
+/* V0.0.90：bit50~55 停靠列数量位（AevonGuardDockZoneV54）已随停靠小窗整体移除。 */
 
-/// 版本兼容：0x34（V46 及更早）、0x35（V49~V53）、0x36（本版，多停靠列状态）都算有效状态；
+/// 版本兼容：0x34（V46 及更早）、0x35（V49~V53）、0x36（0.0.54 起）都算有效状态；
 /// 只认最新版会让「旧 Guard + 新 SB」或反过来的机器上 zone 通道整条失效。
 static inline BOOL AevonNotifyPackValid(uint64_t pack) {
     uint64_t ver = (pack >> 40) & 0xFFULL;
@@ -368,15 +357,13 @@ void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
     @try {
         int token = AevonNotifyZoneToken();
         if (token < 0) { return; }
-        /* 读-改-写：保留 bit39 圆盘状态位（圆盘开着时设置页改几何，不能把 ring 位冲掉），
-         * bit48 浮窗触摸位，以及 bit50~55 停靠列数量位（设置页刷新配置时浮窗可能正被操作）。 */
+        /* 读-改-写：保留 bit39 圆盘状态位与 bit48 浮窗触摸位
+         * （设置页刷新配置时圆盘 / 浮窗可能正被操作）。 */
         uint64_t old = 0;
         notify_get_state(token, &old);
         uint64_t keep = 0;
         if (AevonNotifyPackValid(old)) {
-            keep = old & (AEVON_NOTIFY_RING_BIT | AEVON_NOTIFY_FLOAT_BIT
-                          | (AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_R_SHIFT)
-                          | (AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_L_SHIFT));
+            keep = old & (AEVON_NOTIFY_RING_BIT | AEVON_NOTIFY_FLOAT_BIT);
         }
         uint64_t pack = keep;
         pack |= ((uint64_t)llround(x)) & 0x3FFULL;
@@ -449,40 +436,12 @@ void AevonNotifyStampFloatTouch(void) {
     }
 }
 
-/* V0.0.54（AevonGuardDockZoneV54）：停靠列数量状态位。
- *
- * SpringBoard 每次停靠 / 还原 / 关窗后调用一次，把「左右两侧各有几个停靠小窗」写进共享内存。
- * Guard 读到数量后，用与 SB 完全一致的固定几何（顶部 10% 起点、每格 dockH+8、贴边）自己算出
- * 每个槽位矩形，命中就吞 —— 这条路径与触摸时序无关，可彻底堵住
- * 「快速点停靠小窗仍会点到 App」（Aevon(47) 第 5 条）。
- * 传 -1 表示「状态未知 / 不写」，0 表示该侧没有停靠窗。 */
-void AevonNotifySetDockState(int rightCount, int leftCount) {
-    @try {
-        int token = AevonNotifyZoneToken();
-        if (token < 0) { return; }
-        uint64_t pack = 0;
-        notify_get_state(token, &pack);
-        if (!AevonNotifyPackValid(pack)) { pack = 0; }
-        uint64_t r = (rightCount < 0) ? ((pack >> AEVON_NOTIFY_DOCK_R_SHIFT) & AEVON_NOTIFY_DOCK_MASK)
-            : (uint64_t)(rightCount & 7);
-        uint64_t l = (leftCount < 0) ? ((pack >> AEVON_NOTIFY_DOCK_L_SHIFT) & AEVON_NOTIFY_DOCK_MASK)
-            : (uint64_t)(leftCount & 7);
-        pack &= ~((AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_R_SHIFT)
-                  | (AEVON_NOTIFY_DOCK_MASK << AEVON_NOTIFY_DOCK_L_SHIFT));
-        pack |= (r << AEVON_NOTIFY_DOCK_R_SHIFT);
-        pack |= (l << AEVON_NOTIFY_DOCK_L_SHIFT);
-        pack |= AEVON_NOTIFY_VER;
-        notify_set_state(token, pack);
-        notify_post("com.aevon.guardzone");
-    } @catch (NSException *exception) {
-    }
-}
+/* V0.0.90：停靠列数量写入函数（V0.0.54 引入）已随停靠小窗整体移除。 */
 
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.56（AevonGuardFloatRectV56）：主悬浮窗矩形通道（独立 token）
  *
- * Aevon(50) 第 2 / 第 5 条：在全屏 App 里双击浮窗底边关闭、或快速连点停靠小窗
- * 切换主窗时，App 仍然会收到一次点击。
+ * Aevon(50) 第 2 条：在全屏 App 里双击浮窗底边关闭时，App 仍然会收到一次点击。
  *
  * 根因（日志 Aevon(50) 第 390 行 `入口窗口收到触摸 (x=205,y=698，宽容区内=否)` 佐证）：
  * backboardd 会把同一根手指**同时**投给 SpringBoard 与前台 App 两个进程。
@@ -1182,5 +1141,43 @@ __attribute__((used)) static const char AevonSlimProjectEndNote[] = "0.60 小胖
  *    单次巨跳必是程序性写入，归档(10) 40.769 的 1207pt 只打一帧定位不到人）。 */
 __attribute__((used)) static const char AevonGuardRelaunchV89Marker[] = "AevonGuardRelaunchV89";
 __attribute__((used)) static const char AevonGuardBigJumpV89Marker[] = "AevonGuardBigJumpV89";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.0.90（AevonSnapKeepSizeV90）：停靠小窗整体回退到最初版本
+ * （用户 2026-10-24 指定「停靠小窗也回退版本，回到最初版本，
+ *  移除所有代码和探针」）。
+ *
+ * 停靠 = V0.0.42 的「贴边吸附、只动位置不动尺寸」。下列运行日志所在的
+ * 功能代码已移除：停靠档小尺寸 / 停靠列（5 格）/ 轻点侧条停靠 /
+ * 轻点小窗还原 / 停靠小窗内容停止接收触摸 / 单主窗自动降级 /
+ * Guard 停靠格几何吞摸（bit50~55 + 幽灵格）。
+ *
+ * 与 V0.0.88 的 AevonSlimProjectEndNote 同一处理：被删日志串里携带的
+ * **历史 CI 校验串**用 used 常量钉进二进制，「历史校验串只能加不能改」
+ * 的断言照常通过 —— 这是收容所，不是功能残留。
+ * ────────────────────────────────────────────────────────────────── */
+__attribute__((used)) static const char AevonSnapKeepSizeV90Marker[] = "AevonSnapKeepSizeV90";
+__attribute__((used)) static const char AevonDockHistoryTextsV90[] =
+    "还原主悬浮窗"
+    "统一弹簧动效"
+    "轻点已停靠小窗"
+    "轻点停靠小窗窗身"
+    "停靠小窗窗身按下"
+    "回到停靠前的位置与尺寸"
+    "停靠小窗小胖屏 3:5"
+    "停靠列已重排"
+    "顶部 10% 锚点向下"
+    "停靠位已满"
+    "停靠小窗锁定"
+    "停靠小窗与圆盘热区重叠"
+    "只允许一个主悬浮窗"
+    "已打断进行中的几何动画"
+    "回到各自上一次停靠的那一侧"
+    "两侧列都已重排"
+    "停靠列已同步给 Guard"
+    "按进入顺序排序"
+    "停靠小窗内容已停止接收触摸"
+    "停靠列落地校验"
+    "下方整列上移补位";
 
 

@@ -13,18 +13,7 @@ enum AevonSnapSlot: String {
     case right
 }
 
-/// 主窗与停靠小窗的比例（V0.0.53，AevonCoverCropV53 / AevonDockFatV53）。
-///
-/// 版本史：
-///   · V0.0.50 及以前 = 整屏等比（内容比例 ≈ 0.4875）；
-///   · V0.0.51 = 双形态（整屏 ↔ 卡片 0.72），右下角轻点切换；
-///   · V0.0.52 = 只留小胖屏 0.60，内容改成「宽高取小」的完整适配 → 画面两侧出现黑边，
-///     用户 Aevon(46) 第 1 条明确否定：「两侧会有黑边，正确的应该是自动剪裁画面内容」；
-///   · V0.0.53 = 内容改 cover（无黑边）但比例为了不裁底压到 0.50 →
-///     用户 Aevon(47) 第 4 条又指出「尺寸又变回了之前的等比例尺寸，并没有改为小胖屏」。
-///   · V0.0.54 = **主窗回到 0.60 小胖屏**（用户两次明确要求），内容仍走 cover（无黑边）。
-///   · V0.0.87 = **小胖屏项目终止，主窗回到 V0.0.50 的「细长」形态**（AevonSlimWindowV87）。
-///     终止依据见下方 `AevonSnap.aspect` 的说明 —— 不是口味变化，是路线判死。
+/// 主窗比例（V0.0.87 AevonSlimWindowV87 后只剩「细长」一档，见 `AevonSnap.aspect`）。
 ///
 /// **几何硬约束**（必须写在这里，避免后面再绕回去）：屏内容是 430×881（去掉状态栏）
 /// ≈ 0.4875 的窄条。窗口只要比它**胖**，按宽度铺满就必然纵向溢出、从底部裁掉。
@@ -32,12 +21,10 @@ enum AevonSnapSlot: String {
 ///   0.50 时只裁约 95pt，底栏基本留得住。
 /// 所以「小胖屏」与「底栏完整」是数学互斥的，V0.0.54 按用户最新要求选前者 ——
 /// 想看全底栏时把窗口往下拖高即可（高度接近 0.4875 就完全不裁）。
-enum AevonSnapWindowShape {
-    /// 主悬浮窗：0.60 小胖屏（用户 Aevon(45) 与 Aevon(47) 第 4 条两次指定）
-    static let mainAspect: CGFloat = 0.60
-    /// 停靠小窗：同样 0.60（用户 Aevon(46) 第 2 条：「吸附小窗的比例也按照小胖屏设计」）
-    static let fatAspect: CGFloat = 0.60
-}
+///
+/// V0.0.90：停靠小窗整体回退（用户指定）—— 停靠 = V0.0.42 的「贴边吸附，
+/// 只动位置不动尺寸」，之后所有「停靠变小窗 / 停靠列 / 轻点停靠还原 / Guard 停靠格吞摸」
+/// 全部移除。
 
 /// 吸附与安全区几何（V0.0.44，AevonSthenoDockV44）。
 ///
@@ -76,75 +63,11 @@ enum AevonSnap {
 
     /// 默认新开窗的宽度比例（屏宽百分比）V0.0.44：0.55 → 0.60（不再那么细）
     static let defaultWidthRatio: CGFloat = 0.60
-    /// 停靠（吸附到某一侧）时的宽度比例。
-    ///
-    /// V0.0.45（AevonDockSizeV45）：0.42 → 0.30。用户 Aevon(38)：「吸附后的小窗还是大」。
-    /// Stheno 的停靠尺寸由 `leftHeightPecent` / `rightHeightPecent` 独立按百分比记忆
-    /// （高度和宽度不是一个自由度），所以贴边状态就是一个窄条。
-    ///
-    /// V0.0.47（AevonDock916V47）：0.30 → 0.28，并且高度不再跟随主窗比例。
-    /// Aevon(40)：「停靠小窗的尺寸依旧看起来很大，可以像 stheno 一样，
-    /// 停靠吸附小窗的比例改为 9:16，然后停靠时缩小」。
-    /// 旧版 0.30 宽度下按主窗比例（0.4875）算出的高度是 292pt —— 129x292 就是 1:2.26 的瘦高条，
-    /// 面积比用户预期大得多。现在停靠走独立的 `dockAspect`（9:16）：
-    /// 0.28 × 430 ≈ 120pt 宽、内容高 ≈ 213pt，窗高约 227pt（占屏 24%，旧版 31%）。
-    static let dockWidthRatio: CGFloat = 0.28
-    /// 停靠档的宽度下限：**不能**沿用 `minContentWidth`，
-    /// 否则 430 × 0.30 = 129 会被 150 抬回去，看起来「收不小」（V0.0.44 的隐形坑）。
-    static let dockMinWidth: CGFloat = 96
 
-    // MARK: - 停靠列（V0.0.50，AevonDockTop5V50）
-
-    /// 停靠小窗的最大数量。用户 Aevon(43)：「总数量只有 5 个」。
-    ///
-    /// 超过就拒绝新的停靠（保持主悬浮窗原样），而不是无限往下堆 ——
-    /// 一列超过 5 个时必然有窗被挤出屏幕，用户根本点不到。
-    static let dockMaxCount = 5
-
-    /// 第一个停靠小窗的顶边位置 = 屏高 × 10%（用户 Aevon(43)：「第一个小窗在屏幕
-    /// 右上角，距离顶部 10% 处」）。
-    ///
-    /// Stheno 的 `leftHeightPecent` / `rightHeightPecent` 正是这种「按屏高百分比定位」
-    /// 的模型（高度百分比与宽度独立），所以这里也用比例而不是绝对 pt。
-    static let dockTopRatio: CGFloat = 0.10
-
-    /// 停靠列底部留白：最后一格不压到底（home indicator 那一条）。
-    static let dockBottomMargin: CGFloat = 16
-
-    /// 停靠档宽度的绝对下限（V0.0.50）。
-    ///
-    /// 比 `dockMinWidth` 小 —— 5 个 9:16 小窗要在「顶部 10% ~ 底部留白」之间排下，
-    /// 单窗高度上限只有屏高约 17%，对应宽度约屏宽 19%（430 屏 ≈ 82pt）。
-    /// 如果沿用 96 的下限，高度会被抬回去，5 个就排不下了。
-    static let dockSlotMinWidth: CGFloat = 48
-
-    /// 停靠小窗的**统一**尺寸（宽, 高）。
-    ///
-    /// V0.0.50 的核心变化：不再用「屏宽 28%」直接当宽度，而是先算
-    /// 「5 格必须排得下」的高度上限，再按 9:16 反推宽度：
-    ///   · 高度上限 = (屏高 − 屏高×10% − 底部留白 − 4×间隙) ÷ 5；
-    ///   · 单窗高度 ≤ 上限（同时也不超过 28% 宽对应的 9:16 高度）；
-    ///   · 宽度 = (高度 − 顶部留白) × 9/16。
-    /// iPhone 15 Pro Max（430×932）算出来约 82×160 —— 比 V0.0.49 的 120×228 小一档，
-    /// 但 5 个一定能完整落在屏内（这是用户明确要求的「总数只有 5 个」的前提）。
-    static var dockSize: CGSize {
-        let screen = UIScreen.main.bounds
-        let fallbackW = max(dockSlotMinWidth, dockMinWidth)
-        guard screen.width > 1, screen.height > 200 else {
-            return CGSize(width: fallbackW, height: dockHeight(forWidth: fallbackW))
-        }
-        let top = screen.height * dockTopRatio
-        let avail = max(160, screen.height - top - dockBottomMargin)
-        let slotGap = obstacleGap * CGFloat(max(1, dockMaxCount - 1))
-        let maxH = (avail - slotGap) / CGFloat(max(1, dockMaxCount))
-        var height = min(dockHeight(forWidth: dockWidth), maxH)
-        var width = (height - titleBarHeight - dockTopPadding) * dockAspect
-        if width < dockSlotMinWidth {
-            width = dockSlotMinWidth
-            height = dockHeight(forWidth: width)
-        }
-        return CGSize(width: width, height: height)
-    }
+    // V0.0.90：停靠档全部尺寸常量（宽度比例 / 宽度下限 / 列上限 / 顶部锚点 /
+    // 底部留白 / 槽宽下限 / 统一尺寸 / 顶部留白 / 停靠比例 / 高宽计算 / 列纵向落点 /
+    // 纵向只让位）已随「停靠小窗回退到最初版本」整体移除 ——
+    // 停靠只动位置，不再有小窗形态与停靠列。
     /// 读历史几何时的宽度上限：旧版本可能存着 66%~94% 的巨窗，读出来必须收回来
     static let maxRestoredRatio: CGFloat = 0.62
     /// 自动避让时和别的浮窗之间留的缝
@@ -167,20 +90,7 @@ enum AevonSnap {
     /// 底部没有需要保护的控件（内容底边距窗口底边本来就有 home indicator 区），所以归零。
     static let contentBottomPadding: CGFloat = 0
 
-    /// 停靠态顶部留白 = **0**（V0.0.51，AevonDockNoTopBarV51）。
-    ///
-    /// 用户 Aevon(44) 第 1 条：「停靠小窗的顶部出现黑条」。
-    /// 主窗那 14pt 是为圆角保护导航栏返回按钮的；停靠小窗只有 158pt 高，
-    /// 14pt 的深色边占了 9%，而小窗圆角只有 8pt，根本不需要这层保护 ——
-    /// 于是在小窗顶部就是一条死黑。停靠态改为 0，内容直接铺到顶边。
-    static let dockTopPadding: CGFloat = 0
-
-    /// 停靠小窗的内容宽高比 = 0.60「小胖屏」（V0.0.53，AevonDockFatV53）。
-    ///
-    /// Stheno 的 `leftHeightPecent` / `rightHeightPecent` 是**独立**于宽度的高度百分比，
-    /// 所以停靠态的高度本来就不跟着主窗走 —— 用户 Aevon(46) 第 2 条要求
-    /// 「吸附小窗的比例也按照小胖屏设计」，于是固定成 0.60（原 9:16 = 0.5625）。
-    static var dockAspect: CGFloat { return AevonSnapWindowShape.fatAspect }
+    // V0.0.90：dockTopPadding / dockAspect 已随停靠小窗回退移除（不再有停靠态布局）。
 
     /// 顶部实际裁掉多少（场景坐标，单位 = 整屏 pt）。
     ///
@@ -293,14 +203,7 @@ enum AevonSnap {
             + contentTopPadding + contentBottomPadding
     }
 
-    /// 停靠小窗的高度（V0.0.47，AevonDock916V47）：内容按 9:16 计量。
-    ///
-    /// 注意：主窗用 `aspect`（屏宽 ÷（屏高 − 顶部裁剪）≈ 0.4875），停靠窗用 `dockAspect`（0.5625）。
-    /// 两者混用就是旧版「小窗又瘦又高」的来源 —— 停靠窗比屏幕内容区更宽，
-    /// 所以宽度贴合后底部会裁掉一截（被 `clipsToBounds` 吃掉），换来整体尺寸明显变小。
-    static func dockHeight(forWidth width: CGFloat) -> CGFloat {
-        return width / max(0.2, dockAspect) + titleBarHeight + dockTopPadding
-    }
+    // V0.0.90：dockHeight(forWidth:) 已随停靠小窗回退移除。
 
     /// 安全区最大宽度（左右各留 edgeInset）
     static var maxWidth: CGFloat {
@@ -314,11 +217,7 @@ enum AevonSnap {
         return max(minContentWidth / max(0.2, aspect), screen.height - edgeInset * 2)
     }
 
-    /// 停靠档宽度（轻点侧条后的小窗）
-    static var dockWidth: CGFloat {
-        let screen = UIScreen.main.bounds
-        return max(dockMinWidth, min(screen.width * dockWidthRatio, maxWidth))
-    }
+    // V0.0.90：dockWidth 已随停靠小窗回退移除。
 
     /// 默认新开窗的 frame：屏宽 60%，水平居中，顶边 12% 屏高
     static func defaultFrame() -> CGRect {
@@ -368,65 +267,31 @@ enum AevonSnap {
         return f
     }
 
-    /// 停靠到某一侧的 frame（Stheno 式：贴边 + 换成停靠档的小尺寸）。
-    /// `base` 是停靠前的 frame，用来保留「想停在哪个高度」；
-    /// `obstacles` 是其它已停靠小窗（已按手势厚度外扩），用来竖向堆叠。
+    /// 停靠到某一格（**V0.0.90 回退到 V0.0.42 语义：只动位置，不动尺寸**）。
+    /// `base` 是停靠前的 frame，用来保留当前大小与纵向位置。
     ///
-    /// V0.0.46（AevonDockStackV46）：纵向落点改走 `dockY`，第二个小窗往**下**叠，
-    /// 不再被 `avoidVertical` 顶到第一个的上方（Aevon(39) 的第 2 个问题）。
-    static func frame(for slot: AevonSnapSlot, from base: CGRect,
-                      obstacles: [CGRect] = []) -> CGRect {
+    /// V0.0.90：停靠小窗整体回退（用户指定「停靠小窗也回退版本，回到最初版本」）——
+    /// 不再有停靠档小尺寸、停靠列、5 格上限；贴边吸附只把窗口贴到屏幕左/右边缘，
+    /// 大小保持用户当前设定（Stheno 的 leftPecent / rightPecent 同款语义）。
+    static func frame(for slot: AevonSnapSlot, from base: CGRect) -> CGRect {
         let screen = UIScreen.main.bounds
         guard slot != .free else { return clamped(base) }
-        // V0.0.50（AevonDockTop5V50）：统一尺寸（保证 5 个排得下），不再逐窗算宽度
-        let size = dockSize
-        var f = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        let size = clamped(base).size
+        var f = CGRect(origin: .zero, size: size)
         switch slot {
         case .free:
             return clamped(base)
         case .left:
             f.origin.x = edgeInset
+            f.origin.y = base.midY - size.height / 2.0
         case .right:
             f.origin.x = screen.width - edgeInset - size.width
+            f.origin.y = base.midY - size.height / 2.0
         }
-        f.origin.y = dockColumnY(index: obstacles.count, height: size.height)
         return clamped(f)
     }
 
-    /// 停靠小窗的纵向落点（V0.0.50，AevonDockTop5V50）。
-    ///
-    /// 用户 Aevon(43) 重新定义了整列：
-    ///   · 第 1 个窗贴**右上角**，顶边在屏高 10% 处；
-    ///   · 之后依次向下排（间隔 `obstacleGap`）；
-    ///   · 最多 5 个（`dockMaxCount`），超出的停靠请求会被拒绝；
-    ///   · 中间某个被还原时，下面的窗整列上移补空缺（由 `relayoutDockedColumn` 驱动动画）。
-    ///
-    /// 旧实现（V0.0.48~49）是「第一个在屏幕正中、放不下整列上移」——
-    /// 那套锚点会随窗数不断变化（1 个在正中、3 个整体偏上），用户看到的就是
-    /// 「第一个在边缘中间、第二个跑到上面」。现在锚点固定在屏高 10%，永不动摇。
-    static func dockColumnY(index: Int, height: CGFloat) -> CGFloat {
-        let ys = dockColumnYs(count: max(1, index + 1), height: height)
-        guard !ys.isEmpty else { return UIScreen.main.bounds.height * dockTopRatio }
-        return ys[min(index, ys.count - 1)]
-    }
-
-    /// 一列停靠小窗的全部纵向落点（V0.0.50，顶部 10% 锚点向下）。
-    static func dockColumnYs(count: Int, height: CGFloat) -> [CGFloat] {
-        let screen = UIScreen.main.bounds
-        guard count > 0, height > 0, screen.height > height else { return [] }
-        let top = screen.height * dockTopRatio
-        let step = height + obstacleGap
-        var ys: [CGFloat] = (0..<count).map { top + CGFloat($0) * step }
-        // 极端情况（小屏 / 横屏）排到屏底之外：整列等量上移，保证最后一格不越界。
-        // 尺寸本身已按「5 格装得下」反算，正常机型不会走到这里。
-        if let last = ys.last {
-            let overflow = (last + height) - (screen.height - dockBottomMargin)
-            if overflow > 0 {
-                ys = ys.map { max(0, $0 - overflow) }
-            }
-        }
-        return ys
-    }
+    // V0.0.90：停靠列纵向落点计算已随停靠列回退移除。
 
     /// 松手时按窗口位置判断想吸附到哪一格；不需要吸附时返回 nil。
     ///
@@ -488,35 +353,6 @@ enum AevonSnap {
         return clamped(f)
     }
 
-    /// 只上下让位（V0.0.45，AevonDockKeepSideV45）。
-    ///
-    /// Aevon(38) 日志铁证：`停靠到靠右停靠 19,92 180x366` —— 明明吸到右边，x 却是 19。
-    /// 根因是 `avoid()` 会往左右推，把刚贴到右边缘的小窗又推到左边去（语义直接错乱）。
-    /// 停靠小窗的位置由 `frame(for:from:)` 决定，让位只允许在纵向做。
-    static func avoidVertical(_ frame: CGRect, obstacles: [CGRect]) -> CGRect {
-        var f = frame
-        guard !obstacles.isEmpty else { return f }
-        let screen = UIScreen.main.bounds
-        for _ in 0..<3 {
-            guard let hit = obstacles.first(where: { f.intersects($0) }) else { break }
-            let gap = obstacleGap
-            let up = hit.minY - gap - f.maxY
-            let down = hit.maxY + gap - f.minY
-            // 选位移更小、且推完不撞别人的那一边
-            var applied = false
-            for dy in [up, down] {
-                var t = f.offsetBy(dx: 0, dy: dy)
-                t.origin.y = max(edgeInset, min(t.origin.y, screen.height - edgeInset - t.height))
-                guard !obstacles.contains(where: { t.intersects($0) }) else { continue }
-                f = t
-                applied = true
-                break
-            }
-            if !applied { break }
-        }
-        return clamped(f)
-    }
-
     static func describe(_ slot: AevonSnapSlot) -> String {
         switch slot {
         case .free: return "自由位置"
@@ -541,14 +377,13 @@ enum AevonSnap {
 ///
 /// 这里集中管理，避免每处各自写一个魔法数字导致观感不统一。
 enum AevonMotion {
-    /// 停靠成小窗：位移 + 2.2 倍缩小，需要稍长一点时长，否则显得"砸"下去
+    /// 贴边吸附动画（V0.0.90 回退 V0.0.42 语义：只动位置，参数沿用统一弹簧）
     static let dockDuration: TimeInterval = 0.42
     /// 0.80 = 落位后有极轻的一次回弹，接近系统卡片
     static let dockDamping: CGFloat = 0.80
 
-    /// 还原主窗：放大比缩小更"重"，时长再长一点，阻尼略高（避免大窗回弹太明显）
-    static let restoreDuration: TimeInterval = 0.46
-    static let restoreDamping: CGFloat = 0.84
+    // V0.0.90：restoreDuration / restoreDamping / columnDuration / columnDamping
+    // 已随「停靠小窗还原 / 停靠列重排」整体移除。
 
     /// 开窗入场：位移用弹簧，透明度单独用更短的 easeOut
     static let entryDuration: TimeInterval = 0.42
@@ -560,10 +395,6 @@ enum AevonMotion {
     static let dismissDamping: CGFloat = 0.98
     /// 退场缩到 90%（原来是 94%，收得不够明显，像"卡了一下"）
     static let dismissScaleRatio: CGFloat = 0.90
-
-    /// 停靠列重排（只动 y）：轻、快，不抢停靠动画的视线
-    static let columnDuration: TimeInterval = 0.36
-    static let columnDamping: CGFloat = 0.86
 
     // V0.0.52（AevonNoShapeTapV52）：形态切换已删除（只保留小胖屏一档），
     // 原先给它的 shapeDuration / shapeDamping 一并移除。

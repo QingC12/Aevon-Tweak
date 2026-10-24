@@ -18,17 +18,12 @@ final class AevonEdgeHandleView: UIView {
 /// 全局触摸通道拿不到 `UIPanGestureRecognizer`，只能拿到坐标，所以命中结果用这个
 /// 枚举交给浮窗自己决定「这次拖动是移动 / 缩放 / 关闭」。
 enum AevonFloatGrab {
-    /// 左右侧条：拖动 = 移动窗口；轻点 = 停靠到该侧变小窗 / 已停靠则还原主窗
+    /// 左右侧条：拖动 = 移动窗口（贴边松手自动吸附）
     case side(UIRectEdge)
     /// 下方角块 → 从对角缩放
     case corner(UIRectEdge)
     /// 底边条：拖动 = 移动窗口；双击 = 关闭浮窗
     case bottom
-    /// V0.0.46（AevonDockTapRestoreV46）：**停靠小窗的整块窗身**。
-    /// 用户 Aevon(39)：「吸附停靠后的小窗能不能改为点击小窗后还原到主悬浮窗」——
-    /// 小窗只有 30% 屏宽，侧条又只有 20pt，实际很难点准，所以整块窗身都算轻点还原。
-    /// 拖动窗身仍然 = 移动（与侧条同一套位移逻辑）。
-    case body
 }
 
 /// 单个 App 的浮窗外壳：纯内容（无标题栏）+ 右上悬浮 ✕ + 贴窗外边缘的手势区。
@@ -88,20 +83,18 @@ enum AevonFloatGrab {
 ///        每个刷新周期只应用最新目标点；
 ///     ② 每一帧都改 `contentClip.cornerRadius` → 带 mask 的离屏合成每帧重建，
 ///        改成拖动期间圆角固定在起始值、抬手一次对到最终值。
-///     拖动期间的避让计算（`dockedObstacles` 遍历）也挪到抬手时做一次。
-///   · 停靠小窗收到屏宽 30%（原 42%），且不再被 `minContentWidth` 抬回去；
 ///   · 顶部停靠彻底删除（`AevonSnapSlot.top` 已不存在）；
 ///   · 白描边 0.9pt/34% → 0.5pt/26%；
 ///   · 下角块 36 → 48pt，另加 10pt 命中外扩（右下角缩放不好按）。
-/// V0.0.46（AevonResizeSmoothV46 / AevonDockStackV46 / AevonFloatPaddingV46 /
-///          AevonDockTapRestoreV46 / AevonFrameMemoryCleanV46），用户 Aevon(39)：
+/// V0.0.46（AevonResizeSmoothV46 / AevonFloatPaddingV46 / AevonFrameMemoryCleanV46），用户 Aevon(39)：
 ///   · **缩放抖动**：`clampedCornerWidth` 原来用 `abs(dx)>=abs(dy)` 在横/纵两条公式间
 ///     二选一，两值相差近一倍 → 手指没变方向窗口却突然变大变小。改为两向投影取平均。
-///   · **停靠小窗竖向排版**：`AevonSnap.dockY` 先算屏幕中心，撞了优先往下叠。
 ///   · **顶部太窄 + 返回按钮被啃**：内容上下各留 14pt 深色边，窗口圆角不再咬到导航栏；
 ///     顶部裁剪量减少 8pt，保证导航栏那一行完整。
-///   · **轻点停靠小窗 = 还原主窗**：整块窗身成为抓取区（`.body`），轻点还原、拖动移动。
-///   · **几何记忆被小窗污染**：停靠态不再写 `MedusaFrameLast`，读到时也会作废。
+/// V0.0.90（AevonSnapKeepSizeV90）：**停靠小窗整体回退到最初版本（用户指定）**——
+///   停靠回到 V0.0.42 的「贴边吸附、只动位置不动尺寸」；停靠档小尺寸 / 停靠列 /
+///   轻点侧条停靠 / 轻点小窗还原 / 内容停止接收触摸 / 单主窗自动降级 / Guard 停靠格
+///   几何吞摸，全部移除。多窗并存（V0.0.42 行为）。
 final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
@@ -227,16 +220,13 @@ final class AevonWindowView: UIView {
 
     /// 几何动画进行中（V0.0.48，AevonGeomAnimV48）。
     ///
-    /// 停靠 / 还原 / 开关窗的动画由 `animateGeometry` 统一驱动，动画期间
+    /// 停靠 / 开关窗的动画由 `animateGeometry` 统一驱动，动画期间
     /// `layoutSubviews` 必须闭嘴 —— 否则它会把 `contentClip.frame` 与
     /// `sceneHost.container.transform` 立刻写成**最终值**，而窗口 frame 还在动画途中，
     /// 于是内容先缩成一小块、四周露出窗口黑底，再在动画结束的瞬间对齐。
     /// 这正是 Aevon(41) 第 1 条「停靠成小窗时先黑屏再出现画面」的根因。
     private var isAnimatingGeometry = false
 
-    /// 停靠列的重排目标 y（V0.0.50）。
-    /// 缩放动画期间到来的重排请求先存这里，动画结束再补做 —— 否则会被 `isAnimatingGeometry` 丢掉。
-    private var pendingDockY: CGFloat?
     /// 正在播退场动画（关窗），期间不接受任何手势
     private(set) var isDismissing = false
     /// 退场动画开始前已经落盘过几何（teardown 里不要再用缩小后的 frame 覆盖它）
@@ -261,34 +251,9 @@ final class AevonWindowView: UIView {
     /// 本次缩放实际提交了多少帧（日志证据：确认合帧生效）
     private var resizeStepCount = 0
 
-    /// 当前吸附槽位（自由位置 / 靠左 / 靠右 / 靠顶）
+    /// 当前吸附槽位（自由位置 / 靠左 / 靠右）。
+    /// V0.0.90 回退 V0.0.42 语义：贴边吸附**不改尺寸**，槽位只记位置。
     private(set) var currentSlot: AevonSnapSlot = .free
-
-    /// 停靠成小窗之前的几何（V0.0.44）：轻点已停靠的小窗时用它还原主悬浮窗
-    private var preDockFrame: CGRect?
-
-    /// 上一次停靠所在的侧（V0.0.53，AevonDockKeepSideV53）。
-    ///
-    /// 还原后 `currentSlot` 会变回 `.free`，于是「这个窗原本属于哪一列」的信息就丢了。
-    /// 下次它被 `demoteMainWindows` 降级时只能按当前位置猜 —— 落在屏幕中间就默认右侧，
-    /// 用户看到的就是 Aevon(46) 第 4 条的「自动吸附到另一侧、原侧出现缺口」。
-    /// 记住它，降级时回到原列。
-    private(set) var lastDockSide: AevonSnapSlot = .free
-
-    /// 进入停靠列的时间戳（V0.0.54，AevonDockOrderV54）。
-    ///
-    /// Aevon(47) 第 6 条：「快速点击 2、3、4 位置的停靠小窗时，会出现排列的缺口，
-    /// 但 1 秒内会自动补齐」。
-    ///
-    /// 根因：`relayoutDockedColumn` 原来按 `frame.minY` 给这一列排序。可停靠动画要跑 0.42s，
-    /// 快速连点时参与排序的是**动画中间值** —— 一个刚被降到第 4 格的窗此刻还飘在屏幕中间，
-    /// 就被排到队尾，于是每格都对自己错位（缺口）；等动画跑完 `pendingDockY` 再补一次，
-    /// 就是用户说的「1 秒内自动补位」。
-    /// 现在排序只看「谁先进入这一列」（单调时间戳），与画面位置彻底解耦。
-    private(set) var dockSeq: CFTimeInterval = 0
-
-    /// 是否处于停靠状态（被别的浮窗当作「要避让的障碍」）
-    var isDocked: Bool { return currentSlot != .free }
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String, slot: AevonSnapSlot = .free) {
         self.bundleID = bundleID
@@ -367,7 +332,7 @@ final class AevonWindowView: UIView {
         layoutGestureHandles()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏，侧条长按移动/轻点停靠或还原、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
+            + "（无标题栏，侧条长按移动（贴边松手自动吸附）、底边拖动移动/双击关闭、下角拖动缩放（轻点无动作），"
             + "内容模式=完整显示（窗口按屏幕比例，整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切），"
             + "内容比例 \(String(format: "%.3f", aspect))，"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
@@ -430,26 +395,7 @@ final class AevonWindowView: UIView {
     /// `layoutSubviews` 里立刻把 scale 写成最终值，于是中间态是「窗口还是大的、
     /// 内容已经缩成一小块」，四周露出窗口背景 —— 即 Aevon(41) 说的
     /// 「停靠成小窗时先黑屏，然后才出现画面」。
-    /// 立即打断进行中的几何动画，把窗口落到动画终点（V0.0.53，AevonDockForceV53）。
-    ///
-    /// 用于「只允许一个主悬浮窗」：上一个窗的还原动画还没跑完，用户又去点别的小窗，
-    /// 必须先把这个正在动画的窗**当场收成停靠小窗**，否则两个主窗会同时在屏上。
-    /// `removeAllAnimations()` 会让图层直接取 model 值（也就是动画终点），不会跳回起点。
-    private func interruptGeometryAnimation() {
-        guard isAnimatingGeometry else { return }
-        layer.removeAllAnimations()
-        contentClip.layer.removeAllAnimations()
-        sceneHost.container.layer.removeAllAnimations()
-        isAnimatingGeometry = false
-        lastAppliedScale = -1
-        pendingDockY = nil
-        setNeedsLayout()
-        layoutIfNeeded()
-        updateShadowPath()
-        if layer.shadowOpacity < 0.01 { layer.shadowOpacity = AevonWindowView.shadowOpacity }
-        AevonLog.info("[窗口] 已打断进行中的几何动画，立即落到目标几何"
-            + "（避免两个主悬浮窗同时存在，AevonDockForceV53）")
-    }
+    /// V0.0.90：单主窗强制降级已随停靠小窗移除，`interruptGeometryAnimation` 一并删除。
 
     /// V0.0.58（AevonCardVisPanV58）：设置里改了「完整显示内容 / 小胖屏内容位置」后
     /// 立即重排内容 —— 把内容布局的幂等缓存打脏，下个布局周期按新偏好重算。
@@ -469,12 +415,10 @@ final class AevonWindowView: UIView {
         isAnimatingGeometry = true
         // V0.0.57（AevonContentFitV57）：动画中间态与 `applyContentScale` 必须用**同一条**
         // 公式（等比完整适配 + 居中），否则动画期按一套、落位按另一套，结束瞬间会跳一下。
-        // V0.0.51（AevonDockNoTopBarV51）：停靠态顶部留白为 0，内容直接铺到顶边。
-        let topPad = self.isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-        // 停靠小窗是缩略图 → 贴顶铺满；主窗恒整屏等比（fit）。
-        let fill = self.isDocked
-        let layout = AevonSnap.contentLayout(windowSize: target.size, topPad: topPad,
-                                             fill: fill)
+        // V0.0.90：停靠小窗回退后不再有停靠态布局，恒按主窗口径（topPad=14 / fit）。
+        let layout = AevonSnap.contentLayout(windowSize: target.size,
+                                             topPad: AevonSnap.contentTopPadding,
+                                             fill: false)
         let scale = layout.scale
         let offset = layout.offset
         let container = sceneHost.container
@@ -520,11 +464,6 @@ final class AevonWindowView: UIView {
                                options: [.beginFromCurrentState, .allowUserInteraction]) {
                     self.layer.shadowOpacity = savedShadowOpacity
                 }
-            }
-            // 动画期间被挡下的停靠列重排：现在补做（带弹簧，不会瞬移）
-            if let pending = self.pendingDockY {
-                self.pendingDockY = nil
-                self.setDockedY(pending)
             }
             // V0.0.56：几何落定 → 同步主窗矩形给 Guard
             AevonEntryHost.syncFloatRectToGuard()
@@ -673,14 +612,10 @@ final class AevonWindowView: UIView {
         //     而且关窗后会残留小窗口 → 全屏打开大面积黑屏（第 4 条）。
         // 只做「完整适配」，任何情况下都不裁切。
         let source = sceneHost.sourceSize
-        // V0.0.51（AevonDockNoTopBarV51）：停靠小窗顶部不留深色边（那是一条死黑）。
-        let topPad = isDocked ? AevonSnap.dockTopPadding : AevonSnap.contentTopPadding
-        // 停靠小窗是缩略图 → 贴顶铺满（cover）；拖动/动画期间窗口尺寸不变时
-        // scale 与 offset 都不会重算（「拖动时画面冻结」）。
-        let fill = isDocked
-
-        let layout = AevonSnap.contentLayout(windowSize: clipSize, topPad: topPad,
-                                             fill: fill)
+        // V0.0.90：停靠小窗回退后不再有停靠态布局，恒按主窗口径（topPad=14 / fit）。
+        let layout = AevonSnap.contentLayout(windowSize: clipSize,
+                                             topPad: AevonSnap.contentTopPadding,
+                                             fill: false)
         let scale = layout.scale
         let offset = layout.offset
 
@@ -799,16 +734,6 @@ final class AevonWindowView: UIView {
     func grab(at layerPoint: CGPoint) -> AevonFloatGrab? {
         guard let parent = superview else { return nil }
         let local = convert(layerPoint, from: parent)
-        // V0.0.50（AevonDockNoMoveV50）：停靠小窗**不做任何手柄命中**。
-        //
-        // 用户 Aevon(43)：「停靠的小窗无法被手动移动（避免与呼出圆盘手势冲突），
-        // 只能通过点击卡片还原成主悬浮窗」。
-        // 旧实现下停靠小窗贴右边，右侧 20pt 侧条正好压在「边缘左滑呼出圆盘」的热区上，
-        // 于是用户想划出圆盘，结果把小窗拖走了。现在整窗只有一种交互：
-        // 轻点 = 还原主窗（拖动 / 缩放 / 底边双击全部停用）。
-        if isDocked {
-            return bounds.contains(local) ? .body : nil
-        }
         // 命中顺序：角块 → 底边条 → 左右侧条。角块最具体，先判；
         // 侧条帧比底边条长，放最后才不会把底边条整条吃掉。
         let order: [AevonEdgeHandleView] = [bottomLeftCorner, bottomRightCorner,
@@ -831,9 +756,9 @@ final class AevonWindowView: UIView {
         guard let parent = superview else { return }
         activeGrab = grab
         switch grab {
-        case .side, .bottom, .body:
+        case .side, .bottom:
             // 只记基准，不动几何：要「越过阈值」才真正开始移动，
-            // 轻点（侧条=停靠 / 底边=双击关闭 / 窗身=还原）由全局通道判定后回调。
+            // 轻点（底边=双击关闭）由全局通道判定后回调。
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner(let edges):
@@ -864,7 +789,7 @@ final class AevonWindowView: UIView {
     func rebaseGrab(at layerPoint: CGPoint) {
         guard let grab = activeGrab else { return }
         switch grab {
-        case .side, .bottom, .body:
+        case .side, .bottom:
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
         case .corner:
@@ -909,7 +834,7 @@ final class AevonWindowView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         switch grab {
-        case .side, .bottom, .body:
+        case .side, .bottom:
             applyBarMove(to: point)
         case .corner(let edges):
             applyCornerResize(to: point, edges: edges)
@@ -935,7 +860,7 @@ final class AevonWindowView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         switch grab {
-        case .side, .bottom, .body:
+        case .side, .bottom:
             applyBarMove(to: layerPoint)
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
@@ -950,25 +875,16 @@ final class AevonWindowView: UIView {
                 snap(to: slot)
                 return
             }
-            // V0.0.47（AevonNoPushV47）：松手只夹屏幕边界，不再因为「别处有停靠小窗」而跳位置。
-            // Aevon(40)：「自动避让停靠小窗会让主悬浮窗随意挪动位置，很不合理」——
-            // 手指放下的地方就是最终位置，重叠由用户自己摆。
+            // V0.0.47（AevonNoPushV47）：松手只夹屏幕边界，不做跨窗避让。
             if commit {
                 frame = AevonSnap.clamped(frame)
             }
-            persistFrame()
-        case .body:
-            // V0.0.50（AevonDockNoMoveV50）：停靠小窗**不移动、不换边**。
-            // 拖动一律无效（`applyBarMove` 也拦了一道），只有轻点才还原 —— 还原由
-            // 全局通道的「轻点」判定直接调 `restoreMainWindow()`，不走这里。
-            if isDocked { return }
             persistFrame()
         case .corner:
             finishEdgeResize()
         case .bottom:
             // 底边拖动 = 移动（用户 Aevon(37) 的新交互），贴底不再自动吸附
             if commit {
-                // V0.0.47：同上，只夹边界，不做跨窗避让
                 frame = AevonSnap.clamped(frame)
             }
             persistFrame()
@@ -985,7 +901,7 @@ final class AevonWindowView: UIView {
         guard let grab = activeGrab else { return }
         activeGrab = nil
         switch grab {
-        case .side, .bottom, .body:
+        case .side, .bottom:
             frame = moveOriginFrame
         case .corner:
             if isLiveResizing {
@@ -1003,10 +919,6 @@ final class AevonWindowView: UIView {
     /// V0.0.42（AevonSthenoDockV42）：夹边距离从原来的 60pt 改成 `AevonSnap.edgeInset`
     /// —— 拖到屏幕边上时窗口自动停在内侧，四个外角块始终留在屏内可抓。
     private func applyBarMove(to point: CGPoint) {
-        // V0.0.50（AevonDockNoMoveV50）：停靠小窗禁止移动。
-        // 这是「避免与呼出圆盘手势冲突」的落地点 —— 用户在停靠列上左滑本意是呼出圆盘，
-        // 旧版会把这根手指当成拖动，小窗跟着跑。现在几何一格都不动。
-        if isDocked { return }
         let dx = point.x - moveOriginPoint.x
         let dy = point.y - moveOriginPoint.y
         let screen = UIScreen.main.bounds
@@ -1032,8 +944,6 @@ final class AevonWindowView: UIView {
             isLiveMoving = true
             layer.shadowOpacity = 0
         }
-        // V0.0.45：这里不再每帧算避让 —— `AevonEntryHost.dockedObstacles()` 每次都会
-        // 遍历所有窗并构造矩形，120Hz 下是纯浪费；避让改到抬手时做一次。
         layoutGestureHandles()
     }
 
@@ -1131,222 +1041,47 @@ final class AevonWindowView: UIView {
             + " · 拖动合帧已生效 \(resizeStepCount) 帧）（AevonLiveResizeV44 AevonFloatSmoothV45）")
     }
 
-    // MARK: - 停靠 / 吸附
+    // MARK: - 贴边吸附（V0.0.90 回退 V0.0.42 语义）
 
-    /// 停靠到某一侧（V0.0.43：贴边 + 换成停靠档小尺寸）。
+    /// 吸附到某一侧：**只动位置、不动尺寸**（Stheno 的 leftPecent / rightPecent 同款）。
     ///
-    /// 两个入口共用：
-    ///   · 拖侧条贴边松手 → 自动吸附（`grabEnd` 里按 `AevonSnap.slot(for:)` 判定）；
-    ///   · 轻点左右侧条 → 直接停靠到那一侧（用户在 Aevon(36) 指定的新交互）。
-    ///
-    /// V0.0.48（AevonDockColumnV48）：落点改走「同侧一列」模型 ——
-    /// 第一个在屏幕垂直中心、后续向下排、放不下整列上移（Aevon(41) 第 4 条）。
-    func snap(to slot: AevonSnapSlot, force: Bool = false) {
-        // V0.0.53（AevonDockForceV53）：`force` 用于「只允许一个主窗」的强制降级 ——
-        // 上一版这里遇到 `isAnimatingGeometry` 就直接 return，于是正在做还原动画的那个窗
-        // 降级被静默跳过，屏幕上就出现了两个主悬浮窗（Aevon(46) 第 5 条）。
-        if force { interruptGeometryAnimation() }
+    /// V0.0.90：停靠小窗整体回退（用户指定「停靠小窗也回退版本，回到最初版本，
+    /// 移除所有代码和探针」）—— 旧版这里的小窗尺寸收缩 / 停靠列 5 格 / 轻点停靠 /
+    /// 轻点窗身还原 / 内容停止接收触摸 / Guard 停靠格几何吞摸，全部移除。
+    /// 现在贴边吸附后的窗口仍是全尺寸主窗，拖动 / 缩放 / 双击关闭照常可用；
+    /// 触摸穿透防护由「浮窗整窗矩形 + 底边环带 + 主人指纹」（V0.0.83/V0.0.85）承担。
+    func snap(to slot: AevonSnapSlot) {
         guard slot != .free, !isLiveResizing, !isAnimatingGeometry else { return }
-        // 记住这一侧：还原后再被降级时要回到同一列，不能按位置乱猜（Aevon(46) 第 4 条）
-        lastDockSide = slot
-        // V0.0.46（AevonDockTapRestoreV46）：从自由态进停靠时先记住主窗几何，
-        // 之后轻点窗身还原能回到原来那个位置和大小。
-        if !isDocked { preDockFrame = frame }
-        // V0.0.54（AevonDockOrderV54）：记下进入这一列的时刻。
-        // 重排 / 补位按它排序，而不是按动画中的 `frame.minY` —— 后者在快速连点时会算出缺口。
-        if !isDocked { dockSeq = CACurrentMediaTime() }
-        // 同侧已有的小窗（按纵向顺序），它们决定本窗落在这一列的第几格
-        let peers = AevonEntryHost.dockedPeers(side: slot, excluding: self)
-        // V0.0.50（AevonDockTop5V50）：这一侧已经排满 5 个 → 拒绝新的停靠。
-        // 用户 Aevon(43)：「总数量只有 5 个」。不拒绝的话第 6 个会被挤到屏外，
-        // 用户点不到也还原不了，等于丢了一个窗。
-        if !isDocked, peers.count >= AevonSnap.dockMaxCount {
-            persistFrame()
-            AevonLog.info("[窗口] 停靠位已满，这一侧最多 \(AevonSnap.dockMaxCount) 个停靠小窗，"
-                + "本次停靠已取消（保持主悬浮窗原样）（AevonDockTop5V50）")
-            return
-        }
-        let target = AevonSnap.frame(for: slot, from: frame,
-                                     obstacles: peers.map { $0.frame })
+        let target = AevonSnap.frame(for: slot, from: frame)
         guard target.width > 1, target.height > 0 else { return }
+        currentSlot = slot
 
         // 目标与当前几乎一致就不折腾了（拖动松手时已经贴在位置上的情况）
-        if abs(target.minX - frame.minX) < 0.5,
-           abs(target.minY - frame.minY) < 0.5,
-           abs(target.width - frame.width) < 0.5 {
-            currentSlot = slot
-            sceneHost.setContentInteraction(false)
+        if abs(target.minX - frame.minX) < 0.5, abs(target.minY - frame.minY) < 0.5 {
             persistFrame()
-            AevonEntryHost.relayoutDockedColumn(side: slot)
             return
         }
-
-        currentSlot = slot
-        // V0.0.55（AevonDockNoTouchV55）：停靠小窗的内容停止接收触摸 ——
-        // 它的唯一操作是「轻点还原」，绝不能把手指转发进 App（Aevon(48) 第 4 条）。
-        sceneHost.setContentInteraction(false)
-        AevonLog.info("[窗口] 停靠小窗内容已停止接收触摸（轻点只还原主窗，不再转发进 App 合成点击）"
-            + "（AevonDockNoTouchV55）")
-        // V0.0.48：停靠走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
-        // V0.0.49（AevonFineMotionV49）：时长 / 阻尼统一走 AevonMotion（0.42s / 0.80）
+        // 统一几何动画（弹簧 + 内容缩放同步），落定后同步主窗矩形给 Guard
         animateGeometry(to: target,
                         duration: AevonMotion.dockDuration,
                         damping: AevonMotion.dockDamping) { [weak self] in
-            guard let self = self else { return }
-            self.persistFrame()
-            // 整列重排：把这一列的小窗按「中心锚点 + 向下生长」重新对齐
-            AevonEntryHost.relayoutDockedColumn(side: slot)
+            self?.persistFrame()
         }
-        AevonLog.info("[窗口] 停靠到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
+        AevonLog.info("[窗口] 吸附到\(AevonSnap.describe(slot)) \(Int(target.minX)),\(Int(target.minY)) "
             + "\(Int(target.width))x\(Int(target.height))"
-            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 停靠小窗小胖屏 3:5（0.60）· 顶部 10% 锚点向下第 "
-            + "\(peers.count + 1) 格 / 最多 \(AevonSnap.dockMaxCount) 个 · 统一弹簧动效）"
-            + "（AevonSthenoDockV44 AevonDockSizeV45 AevonDockTop5V50 AevonDockNoMoveV50 AevonFineMotionV49 AevonDockFatV53）")
-    }
-
-    /// 把自己挪到停靠列的指定纵向位置（V0.0.48，AevonGrowFromCenterV48）。
-    ///
-    /// 只改 y、不动尺寸 —— 内容缩放不变，所以不会出现停靠黑屏那种问题。
-    func setDockedY(_ y: CGFloat) {
-        guard isDocked, !isDismissing else { return }
-        // V0.0.50（AevonDockFillAnimV50）：自己正在做停靠 / 还原的缩放动画时，
-        // 不能同时改 frame（两段动画会互相覆盖，落点就偏了）。先记下来，动画结束补做。
-        if isAnimatingGeometry {
-            pendingDockY = y
-            return
-        }
-        /* V0.0.57（AevonDockAtomicV57）：尺寸还没缩到停靠档时，不能只改 y。
-         *
-         * 旧实现直接 `t.origin.y = y` 再走 `AevonSnap.clamped(t)`，而 clamped 会按
-         * **当前高度**把 y 夹回屏内：一个还停在 509pt 高的窗（缩放动画被打断后的中间态）
-         * 被夹到 y=423，然后才慢慢变成 158 高 —— 画面上就是「某一格飘在屏幕中间」，
-         * 也就是用户说的断层。这里直接按停靠档尺寸 + 目标 y 重做一次几何动画。 */
-        if abs(frame.height - AevonSnap.dockSize.height) > 1.5 {
-            var t = frame
-            t.size = AevonSnap.dockSize
-            if currentSlot == .left { t.origin.x = AevonSnap.edgeInset }
-            if currentSlot == .right {
-                t.origin.x = UIScreen.main.bounds.width - AevonSnap.edgeInset - t.width
-            }
-            t.origin.y = y
-            animateGeometry(to: t, duration: AevonMotion.columnDuration,
-                            damping: AevonMotion.columnDamping)
-            return
-        }
-        guard abs(frame.minY - y) > 0.5 else { return }
-        var t = frame
-        t.origin.y = y
-        let screen = UIScreen.main.bounds
-        t.origin.y = min(max(t.origin.y, 0), max(0, screen.height - t.height))
-        UIView.animate(withDuration: AevonMotion.columnDuration,
-                       delay: 0,
-                       usingSpringWithDamping: AevonMotion.columnDamping,
-                       initialSpringVelocity: 0.2,
-                       options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.frame = t
-        } completion: { _ in
-            self.setNeedsLayout()
-        }
-    }
-
-    /// 轻点侧条（V0.0.44）。
-    ///
-    /// V0.0.48（AevonDockTapOnlyV48）：**已停靠时的「轻点侧条还原」已移除**。
-    /// Aevon(41) 第 2 条：「既然现在停靠小窗可以直接点击变成主悬浮窗，
-    /// 那么可以移除之前的小窗还原手势」—— 整块窗身轻点就是唯一的还原入口，
-    /// 侧条轻点在小窗态只负责「挪到另一侧」或原地不动，避免两套还原手势打架。
-    func dock(to slot: AevonSnapSlot) {
-        guard slot == .left || slot == .right else { return }
-        snap(to: slot)
+            + "（贴边 \(Int(AevonSnap.edgeInset))pt · 只动位置不动尺寸，无停靠小窗（V0.0.90 回退最初版本））"
+            + "（AevonSthenoDockV42 AevonSnapKeepSizeV90）")
     }
 
     /// 切换主窗形态 —— **V0.0.52 已删除**（AevonNoShapeTapV52）。
     ///
     /// Aevon(45)：「如果可以的话，主悬浮窗默认尺寸改为小胖屏，移除其他的比例
     /// （同时移除右下角点击手势，保留缩放手势）」。
-    /// 现在只存在小胖屏一档（`AevonSnapWindowShape.fatAspect = 0.60`），
-    /// 右下角角块只负责拖动缩放，点击不再有任何动作。
-
-    /// 还原成主悬浮窗：**位置和尺寸都回到停靠前那一块**。
-    ///
-    /// V0.0.47（AevonRestorePosV47）：Aevon(40)「主悬浮窗吸附停靠后，点击还原时
-    /// 不会回到停靠前的主悬浮窗位置」。旧实现有两处把落点改写掉：
-    ///   ① 按当前停靠侧把 `origin.x` 强设成贴边 —— 于是无论停靠前在哪儿，还原后总是贴边；
-    ///   ② 再走一次 `AevonSnap.avoid(...)` 让别人把它推开。
-    /// 现在两处都删掉：`preDockFrame` 原样用，位置/尺寸与停靠前逐点一致。
-    func restoreMainWindow() {
-        // V0.0.50：停靠动画还没结束就再点一下（手指快）时直接忽略，
-        // 否则两段几何动画叠在一起，落点会算错。
-        guard !isAnimatingGeometry, !isDismissing else { return }
-
-        /* V0.0.57（AevonDockAtomicV57）：先把「自己」从停靠列里摘出去，**再**降级其它主窗。
-         *
-         * Aevon(51) 第 3 条：「多个停靠小窗切换时依旧会出现断层，尤其是第一个变成第五个时」。
-         * 旧顺序是 demote → relayout → 自己置 free → relayout：
-         *   ① demote 的时候自己还占着第 1 格，列里算出来是 5 个 → 被降级的那个主窗
-         *      按「第 5 格」落到 y=757（屏幕最下），
-         *   ② 紧接着自己离开这一列 → 列里变 4 个 → 那个刚落到第 5 格的窗又要往上升到 591。
-         * 两段动画方向相反、时间错开，用户看到的就是「先掉到底、再滑上去」的断层。
-         * 现在先摘自己 → 列里从一开始就是 4 个 → 被降级的窗一次落到正确的 591。
-         */
-        currentSlot = .free
-        AevonEntryHost.relayoutAllDockedColumns()
-
-        // V0.0.51（AevonSingleMainV51）：再让其它主悬浮窗自动吸附成停靠小窗，
-        // 街上只留自己这一个主窗 —— 否则几个窗都会回到同一份几何记忆（同一点）上叠起来。
-        AevonEntryHost.demoteMainWindows(except: self)
-
-        var target: CGRect
-        if let previous = preDockFrame,
-           previous.width > AevonSnap.minContentWidth,
-           previous.height > AevonSnap.minContentWidth {
-            // 原样恢复（只做屏幕边界夹取，不做任何避让 / 贴边改写）
-            var p = previous
-            // V0.0.54（AevonFatMainV54）：高度一律按**当前**比例重算。
-            // `preDockFrame` 可能是旧版本（0.50 细长档）存下来的 266×547，
-            // 原样用会把「小胖屏」又还原成细长条 —— 用户 Aevon(47) 第 4 条看到的就是这个。
-            p.size.height = AevonSnap.height(forWidth: p.width)
-            target = AevonSnap.clamped(p)
-        } else {
-            target = AevonWindowView.defaultFrame()
-        }
-
-        preDockFrame = nil
-        // V0.0.49（AevonDockColumnFillV49）：Aevon(42) 第 2 条 ——
-        // 「右侧放了 3 个小窗，把中间那个还原之后，下面的小窗不会主动上移」。
-        // 还原前先记住自己在哪一侧，置成自由态（这样它不会被算进停靠列），
-        // 然后立刻让整列重新按「中心锚点 + 向下生长」对齐 —— 空位当场被补上。
-        currentSlot = .free
-        // V0.0.55（AevonDockNoTouchV55）：还原成主窗 → 内容重新接收触摸
-        sceneHost.setContentInteraction(true)
-        // V0.0.53（AevonDockSlotFitV53）：两侧一起重排 —— 上面的 demote 可能刚把某个窗
-        // 挪到对面那一列，只重排本侧会留下缺口（Aevon(46) 第 4 条）。
-        AevonEntryHost.relayoutAllDockedColumns()
-        // V0.0.48：还原也走统一几何动画（弹簧 + 内容缩放同步），不再裸改 frame
-        animateGeometry(to: target,
-                        duration: AevonMotion.restoreDuration,
-                        damping: AevonMotion.restoreDamping) { [weak self] in
-            self?.persistFrame()
-        }
-        AevonLog.info("[窗口] 轻点已停靠小窗 → 还原主悬浮窗 \(Int(target.minX)),\(Int(target.minY)) "
-            + "\(Int(target.width))x\(Int(target.height))"
-            + "（回到停靠前的位置与尺寸 · 下方整列上移补位（带动画）· 弹簧动画）"
-            + "（AevonDockRestoreV44 AevonRestorePosV47 AevonGeomAnimV48 AevonDockColumnFillV49 AevonDockFillAnimV50）")
-    }
+    /// 现在右下角角块只负责拖动缩放，点击不再有任何动作。
 
     /// 关闭自己（底边条双击时由全局通道调用）。
     func closeSelf() {
         AevonWindowManager.close(bundleID: bundleID)
-    }
-
-    /// V0.0.47（AevonNoPushV47）：跨窗自动避让**整体停用**。
-    ///
-    /// Aevon(40) 第 4 条：「自动避让停靠小窗会让主悬浮窗随意挪动位置，很不合理」。
-    /// 旧链路是「某个窗停靠完成 → `AevonEntryHost.avoidDockedWindow` 挨个通知其它窗
-    /// 重新 `avoid()`」，于是用户什么都没做，别的主窗就自己飘走了 —— 而且飘到的位置
-    /// 还会写进几何记忆，下次开窗继续错位。
-    /// 现在保留空实现只为兼容调用点；真正的位置只由「用户拖动 / 缩放 / 停靠」决定。
-    func avoidDockedWindows() {
     }
 
     /// 把窗口提到最前（面板里的「已开窗口」点名称时用）。
@@ -1366,12 +1101,8 @@ final class AevonWindowView: UIView {
               raw.count >= 3 else { return fallback }
 
         let screen = UIScreen.main.bounds
-        // V0.0.46（AevonFrameMemoryCleanV46）：旧版本会把停靠小窗的 30% 宽写成全局记忆，
-        // 读出来会让「新开的主窗」变成一根窄条。落在停靠档 ±2% 内的一律作废，用默认尺寸。
+        // V0.0.90：旧版「停靠档尺寸记忆作废」逻辑已随停靠小窗移除（不再有停靠尺寸来源）。
         let storedPercent = CGFloat(raw[2])
-        if abs(storedPercent - AevonSnap.dockWidthRatio * 100.0) < 2.0 {
-            return fallback
-        }
         // V0.0.43：旧版本可能存着 66%~94% 的巨窗，读出来按 maxRestoredRatio 收回
         let cap = screen.width * AevonSnap.maxRestoredRatio
         let width = max(minContentWidth,
@@ -1383,10 +1114,8 @@ final class AevonWindowView: UIView {
     }
 
     private func persistFrame() {
-        // V0.0.46（AevonFrameMemoryCleanV46）：**停靠态一律不写几何记忆**。
-        // Aevon(39)：「吸附停靠变成小窗后，再用圆盘打开新应用，主悬浮窗会按小窗尺寸打开」——
-        // 根因就是停靠落盘时把 30% 宽的小窗当成全局记忆（MedusaFrameLast）写进去了。
-        guard currentSlot == .free else { return }
+        // V0.0.90：停靠小窗回退后不再有「停靠态不落盘」（贴边吸附只动位置，
+        // 位置也是用户操作结果，落盘无副作用 —— V0.0.46 防的是小窗尺寸污染记忆，已无来源）。
         guard !isLiveResizing, transform.isIdentity else { return }
         guard let store = UserDefaults(suiteName: AevonWindowView.prefsSuite) else { return }
         let screen = UIScreen.main.bounds

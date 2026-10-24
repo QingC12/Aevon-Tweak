@@ -157,10 +157,9 @@ enum AevonWindowManager {
             windows[bundleID] = windowView
             if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
             order.append(bundleID)
-            // V0.0.51（AevonSingleMainV51）：新窗是"唯一主窗"，旧的主窗自动吸附成停靠小窗。
-            // 圆盘选图标开新窗走的正是这条路径，于是天然满足用户第 2 条要求。
-            AevonEntryHost.demoteMainWindows(except: windowView)
-            // V0.0.56：新窗成为主窗 → 立刻把它的矩形同步给 Guard
+            // V0.0.90：停靠小窗回退最初版本 → 不再有「单主窗自动降级」，
+            // 多窗并存（V0.0.42 行为），用户自己摆位置。
+            // V0.0.56：新窗就位 → 立刻把它的矩形同步给 Guard
             AevonEntryHost.syncFloatRectToGuard()
             // 有新窗 → 需要压住系统空闲锁屏（看视频时不能黑屏）
             AevonIdleGuard.shared.refresh()

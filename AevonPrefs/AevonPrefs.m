@@ -336,7 +336,7 @@ static NSArray *AevonBuildFallback(id target) {
     /* V0.0.30：一级页只放开关 + 细节入口；滑杆 / 圆盘 App 编辑在二级页 */
     id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @NO);
     if (s2 != nil) [result addObject:s2];
-    id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作（关掉=内容不接收触摸；停靠小窗一律不接收）", target, @"TouchEnabled", @YES);
+    id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作（关掉=内容不接收触摸）", target, @"TouchEnabled", @YES);
     if (s2a != nil) [result addObject:s2a];
     id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
     if (s2c != nil) [result addObject:s2c];

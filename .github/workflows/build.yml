@@ -1484,6 +1484,26 @@ jobs:
           # 反回退：开窗入口必须先过 Guard 存活检查
           grep -q 'ensureGuardAliveV89(bundleID: bundleID, slot: slot, completion: completion)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::V0.0.89 回退: open() 又跳过 Guard 存活检查了（无 Guard 老进程会穿透）"; exit 1; }
+
+          # ── V0.0.90（AevonSnapKeepSizeV90）：停靠小窗整体回退到最初版本 ──
+          # 用户 2026-10-24 指定：停靠回到 V0.0.42 的「贴边吸附、只动位置不动尺寸」，
+          # 停靠档小尺寸 / 停靠列 / 轻点停靠 / 轻点还原 / 内容停触摸 / 单主窗降级 /
+          # Guard 停靠格几何吞摸全部移除。历史校验串收容在 AevonAssertionShim.m。
+          python3 - "$DYLIB" <<'PY90'
+          import sys
+          d = open(sys.argv[1], 'rb').read()
+          for s in ["AevonSnapKeepSizeV90", "只动位置不动尺寸，无停靠小窗"]:
+              if s.encode('utf-8') not in d:
+                  print(f"::error::V0.0.90 产物缺串 [{s}]（停靠回退没有编入）")
+                  sys.exit(1)
+          print("V0.0.90 校验: 停靠小窗回退（贴边吸附只动位置）已编入")
+          PY90
+          # 反回退 3（V0.0.90 收紧）：停靠小窗 / 停靠列 / Guard 停靠格不允许再回来
+          if grep -rnE 'isDocked|dockedPeers|dockedObstacles|dockedFrames|avoidDockedWindow|relayoutDockedColumn|relayoutAllDockedColumns|syncDockStateToGuard|demoteMainWindows|setDockedY|restoreMainWindow|floatBodyInZone|floatDockMoveSlop|preDockFrame|lastDockSide|pendingDockY|AevonGuardDockHitTest|AevonGuardDockMetrics|AevonGuardDockCounts|AevonGuardDockGhost|AevonNotifySetDockState|AevonSnapWindowShape|dockMaxCount|dockColumnY|dockSize\b' \
+             "$GITHUB_WORKSPACE/Sources" "$GITHUB_WORKSPACE/AevonAssertionShim.m" "$GITHUB_WORKSPACE/AevonAssertionShim.h" "$GITHUB_WORKSPACE/AevonPrefs" 2>/dev/null; then
+            echo "::error::V0.0.90 回退: 停靠小窗相关代码又出现了（用户已明确要求回退到最初版本）"
+            exit 1
+          fi
           # V0.0.25 新增：触发区域三个滑杆必须在「细节调整」二级页（V0.0.30 起 Root 只放开关）
           for K in RingTriggerY RingTriggerWidth RingTriggerHeight; do
             plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q "$K" \

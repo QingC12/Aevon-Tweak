@@ -106,61 +106,17 @@ enum AevonEntryHost {
     /// V0.0.37（AevonSthenoEdgeBarV37）：手势区伸到浮窗外侧 barThickness pt，
     /// 判定矩形同步外扩，防止拖边条 / 缩放时被当成热区触摸接管。
     ///
-    /// V0.0.50（AevonDockPassThroughV50）：`ignoringDocked = true` 时**跳过停靠小窗**。
-    /// 停靠列贴右边缘，必然压在「呼出圆盘」的热区上；热区判定如果还被它拦住，
-    /// 用户在停靠列覆盖的那一段就永远划不出圆盘（用户 Aevon(43) 说的手势冲突）。
-    static func pointHitsFloatingWindow(at point: CGPoint, ignoringDocked: Bool = false) -> Bool {
+    /// V0.0.90：`ignoringDocked` 参数已随停靠小窗移除（不再有停靠小窗压热区的问题）。
+    static func pointHitsFloatingWindow(at point: CGPoint) -> Bool {
         let margin = AevonWindowView.maxHandleMargin
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return false }
         for win in layer.subviews where !win.isHidden && win.alpha > 0.01 {
-            if ignoringDocked, let w = win as? AevonWindowView, w.isDocked { continue }
             if win.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return true }
         }
         return false
     }
 
-    /// 已停靠小窗的占位矩形（V0.0.44，AevonDockAvoidV44）。
-    ///
-    /// 用户 Aevon(37)：停靠小窗会压在主窗的手势条上，主窗就拖不动了。
-    /// 这里把每个「已停靠」的窗按其 frame 外扩手势厚度后返回，别人改动几何时先避让。
-    static func dockedObstacles(excluding window: AevonWindowView?) -> [CGRect] {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return [] }
-        let margin = AevonWindowView.maxHandleMargin
-        var rects: [CGRect] = []
-        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-            guard let win = view as? AevonWindowView else { continue }
-            if win === window { continue }
-            guard win.isDocked else { continue }
-            rects.append(win.frame.insetBy(dx: -margin, dy: -margin))
-        }
-        return rects
-    }
-
-    /// 同侧已停靠的小窗（V0.0.48，AevonDockColumnV48），按当前纵向位置从上到下。
-    ///
-    /// 停靠列是「同侧一列」的模型：左侧一列、右侧一列，互不干扰。
-    /// 新窗落点 = 这一列的第 `count` 格（见 `AevonSnap.dockColumnY`）。
-    static func dockedPeers(side: AevonSnapSlot,
-                            excluding window: AevonWindowView?) -> [AevonWindowView] {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return [] }
-        var list: [AevonWindowView] = []
-        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-            guard let win = view as? AevonWindowView else { continue }
-            if win === window { continue }
-            guard win.isDocked, win.currentSlot == side else { continue }
-            list.append(win)
-        }
-        // V0.0.54（AevonDockOrderV54）：与重排同口径 —— 按进入列的时间戳，
-        // 不按动画中的坐标（否则新窗的「第几格」会在快速连点时算错）。
-        return list.sorted { lhs, rhs in
-            if abs(lhs.dockSeq - rhs.dockSeq) > 0.000_1 {
-                return lhs.dockSeq < rhs.dockSeq
-            }
-            return lhs.frame.minY < rhs.frame.minY
-        }
-    }
-
-    /// 当前浮窗总数（含停靠小窗）。用于「有浮窗时禁止系统空闲锁屏」。
+    /// 当前浮窗总数。用于「有浮窗时禁止系统空闲锁屏」。
     static var floatingWindowCount: Int {
         guard let layer = floatLayer, !layer.subviews.isEmpty else { return 0 }
         var count = 0
@@ -170,101 +126,15 @@ enum AevonEntryHost {
         return count
     }
 
-    /// 只允许一个主悬浮窗（V0.0.51，AevonSingleMainV51）。
-    ///
-    /// 用户 Aevon(44) 第 2 条：「点击小窗还原成主悬浮窗时，它会依次堆叠在一起，
-    /// 我建议只能有一个主悬浮窗；主悬浮窗打开时，再次点击停靠小窗或者操作圆盘选中图标时，
-    /// 主悬浮窗的应用自动吸附停靠」。
-    ///
-    /// 堆叠的真正原因：所有新窗 / 还原窗都恢复**同一份**全局几何记忆
-    /// （日志里全是 `58,164 266x560`），于是几个主窗逐点重合，视觉上就是"叠在一起"。
-    /// 现在把「除自己之外的所有自由态窗」全部自动吸附成停靠小窗 ——
-    /// 街上永远只有一个主窗，且旧的自动让位，不需要用户手动整理。
-    @discardableResult
-    static func demoteMainWindows(except keep: AevonWindowView?) -> Int {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return 0 }
-        var demoted = 0
-        for view in layer.subviews {
-            guard let win = view as? AevonWindowView else { continue }
-            if win === keep { continue }
-            guard !win.isHidden, win.alpha > 0.01, !win.isDocked else { continue }
-            // V0.0.53（AevonDockKeepSideV53）：**优先回到它上一次停靠的那一列**。
-            // 上一版这里直接用 `slot(for: frame) ?? .right` 按当前位置猜 ——
-            // 一个从右侧列还原出来、被拖到屏幕中部的窗会被判成右侧，而一个停在左边的窗
-            // 会被判成左侧，于是用户看到 Aevon(46) 第 4 条的「自动吸附到另一侧、原侧缺口」。
-            // 只有从未停靠过的新窗，才按离哪边近来猜。
-            let preferred: AevonSnapSlot = (win.lastDockSide != .free)
-                ? win.lastDockSide
-                : (AevonSnap.slot(for: win.frame) ?? .right)
-            // 那一列已满 5 个就换另一侧 —— 否则 `snap` 会拒绝停靠，窗又留在自由态，
-            // 屏幕上就还是两个主窗（Aevon(46) 第 5 条）。
-            var slot = preferred
-            if dockedPeers(side: slot, excluding: win).count >= AevonSnap.dockMaxCount {
-                slot = (slot == .left) ? .right : .left
-            }
-            // force：正在做还原动画的窗也必须当场收掉，否则屏上会有两个主窗（第 5 条）
-            win.snap(to: slot, force: true)
-            demoted += 1
-        }
-        if demoted > 0 {
-            // 两侧都重排：被降级的窗可能落回另一侧，那一列也要把空缺补上
-            relayoutAllDockedColumns()
-            AevonLog.info("[窗口] 只允许一个主悬浮窗：\(demoted) 个旧主窗已自动吸附成停靠小窗"
-                + "（回到各自上一次停靠的那一侧，两侧列都已重排）"
-                + "（AevonSingleMainV51 AevonDockKeepSideV53 AevonDockForceV53）")
-        }
-        return demoted
-    }
-
-    /// 左右两侧的停靠列一起重排（V0.0.53）。
-    ///
-    /// Aevon(46) 第 4 条：「有概率自动吸附到另一侧，同时左/右侧的停靠小窗会有一个缺口」——
-    /// 缺口就是因为只重排了「被还原那一侧」，而 demote 把某个窗挪到了对面，
-    /// 对面那一列既没补位也没对齐。现在任何一次增减都两侧一起重排。
-    static func relayoutAllDockedColumns() {
-        relayoutDockedColumn(side: .left)
-        relayoutDockedColumn(side: .right)
-    }
-
-    /// 把「左右两侧各有几个停靠小窗」同步给 App 侧的 AevonGuard
-    /// （V0.0.54，AevonGuardDockZoneV54）。
-    ///
-    /// Aevon(47) 第 5 条：「快速点击停靠的小窗轮换时，依旧会触发应用内的点击」。
-    /// 只靠 bit48（按下写 / 抬手清）挡不住 —— 它和 backboardd 直投 App 的那份存在时序竞态。
-    /// 停靠列几何是固定的，所以这里只传数量：Guard 自己算出每一格的矩形，
-    /// 手指落上去就吞，与触摸时序彻底无关。
-    private static var lastDockStateRight = -1
-    private static var lastDockStateLeft = -1
-
-    static func syncDockStateToGuard(reason: String) {
-        var left = 0
-        var right = 0
-        if let layer = floatLayer, !layer.subviews.isEmpty {
-            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-                guard let win = view as? AevonWindowView, win.isDocked else { continue }
-                if win.currentSlot == .left { left += 1 }
-                else if win.currentSlot == .right { right += 1 }
-            }
-        }
-        AevonNotifySetDockState(Int32(right), Int32(left))
-        // V0.0.56：停靠列一变，主窗集合也跟着变（还原会多出一个主窗 / 降级会少一个），
-        // 顺手把主窗矩形同步过去（内部有节流）。
-        syncFloatRectToGuard()
-        guard right != lastDockStateRight || left != lastDockStateLeft else { return }
-        lastDockStateRight = right
-        lastDockStateLeft = left
-        AevonLog.info("[窗口] 停靠列已同步给 Guard：右 \(right) 格 / 左 \(left) 格"
-            + "（按固定槽位几何吞摸，快速连点也不会点到 App）（\(reason)）"
-            + "（AevonGuardDockZoneV54）")
-    }
-
     /// 把「主悬浮窗（含外侧手势区）的矩形」同步给 App 侧的 AevonGuard
     /// （V0.0.56，AevonGuardFloatRectV56）。
     ///
-    /// Aevon(50) 第 2 / 5 条：全屏 App 里双击浮窗底边关闭、快速连点停靠小窗切换主窗，
-    /// App 都会吃到一次点击。bit48 只有 350ms 宽（双击间隔 0.36s 正好错过），
-    /// 停靠格几何又不覆盖主窗本体 —— 所以主窗矩形必须单独下发。
+    /// Aevon(50) 第 2 条：全屏 App 里双击浮窗底边关闭，App 会吃到一次点击。
+    /// bit48 只有 350ms 宽（双击间隔 0.36s 正好错过）—— 所以底边环带必须单独下发。
     /// Guard 命中就吞，与触摸时序彻底无关。
+    ///
+    /// V0.0.90：停靠列同步（AevonGuardDockZoneV54 的「每侧几个停靠小窗」）
+    /// 已随停靠小窗移除 —— 不再有停靠格几何，Guard 只用主窗环带 + 整窗矩形。
     private static var lastGuardFloatRect: CGRect = .zero
     /// V0.0.82：上一次标记为「浮窗主人」的 App（用于撤销，避免留着旧主人不还原）
     private static var lastFloatOwners: Set<String> = []
@@ -291,8 +161,8 @@ enum AevonEntryHost {
         var union = CGRect.null
         if let layer = floatLayer, !layer.subviews.isEmpty {
             for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-                // 停靠小窗有独立的槽位几何（Guard 自己算），这里只发主窗
-                guard let win = view as? AevonWindowView, !win.isDocked else { continue }
+                // V0.0.90：不再有停靠小窗的独立槽位几何，这里覆盖所有浮窗
+                guard let win = view as? AevonWindowView else { continue }
                 /* V0.0.56 关键取舍：**只下发「底边手势环带」，不是整个窗口**。
                  *
                  * 一开始想的是把整个窗口矩形都交给 Guard 常驻吞，但浮窗里的内容
@@ -324,7 +194,7 @@ enum AevonEntryHost {
         var owners: Set<String> = []
         if let layer = floatLayer, !layer.subviews.isEmpty {
             for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-                guard let win = view as? AevonWindowView, !win.isDocked else { continue }
+                guard let win = view as? AevonWindowView else { continue }
                 winUnion = winUnion.union(win.frame)
                 owners.insert(win.bundleID)
             }
@@ -442,135 +312,8 @@ enum AevonEntryHost {
 
     private static var lastHealMissLogAt: CFTimeInterval = 0
 
-    /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。    ///
-    /// 用户 Aevon(43)：「第一个小窗在屏幕右上角、距离顶部 10% 处，然后向下依次类推，
-    /// 总数量只有 5 个，当其中一个被还原成主悬浮窗时，下面的自动补空缺（这里需要有动画）」。
-    /// 槽位算法见 `AevonSnap.dockColumnYs`（顶部 10% 锚点、固定 5 格），
-    /// 落位动画走 `setDockedY` —— 只改 y 的短弹簧，**带**过渡，不是瞬移。
-    /// 还原时调用方会先把被还原窗的 `currentSlot` 置回 `.free`，于是它不再进这一列，
-    /// 下面的窗依次上移一格把空缺补上。
-    static func relayoutDockedColumn(side: AevonSnapSlot) {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
-        var column: [AevonWindowView] = []
-        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-            guard let win = view as? AevonWindowView else { continue }
-            guard win.isDocked, win.currentSlot == side else { continue }
-            column.append(win)
-        }
-        // V0.0.49（AevonDockColumnFillV49）：原来这里要求 `count > 1`，
-        // 于是「三个小窗还原中间那个」之后若只剩一个就不重排，它孤零零留在原位。
-        // 现在剩一个也要重排 —— 它会回到第 1 格（顶部 10%）。
-        // 这一侧已经空了：**也要**同步给 Guard —— 否则它会一直以为那几格还停着窗，
-        // 把 App 的触摸白白吞掉（停靠小窗全还原后点不动 App 的经典坑）。
-        guard !column.isEmpty else {
-            syncDockStateToGuard(reason: "该侧已无停靠小窗")
-            return
-        }
-        // V0.0.54（AevonDockOrderV54）：「快速点 2/3/4 位置的停靠小窗会出现缺口，
-        // 1 秒内又自动补齐」（Aevon(47) 第 6 条）。
-        // 原来按 `frame.minY` 排 —— 停靠动画要 0.42s，快速连点时拿到的是**动画中间值**，
-        // 刚被降到第 4 格的窗还飘在屏幕中间就被排到队尾，于是每格错位 = 缺口；
-        // 动画结束 `pendingDockY` 再补一次才对齐，就是那个「1 秒后自己好了」。
-        // 现在按进入这一列的时间戳排，与画面位置彻底解耦，一次就落对。
-        column.sort { lhs, rhs in
-            if abs(lhs.dockSeq - rhs.dockSeq) > 0.000_1 {
-                return lhs.dockSeq < rhs.dockSeq
-            }
-            return lhs.frame.minY < rhs.frame.minY
-        }
-        // V0.0.53（AevonDockSlotFitV53）：槽位高度用**目标尺寸** `dockSize.height`。
-        // 上一版取 `column[0].frame.height` —— 若第一个窗的缩放动画还没跑完，
-        // 拿到的是它在半路的尺寸，于是后面每一格都按错的高度累加，
-        // 排完就出现「中间空一格」的缺口（用户 Aevon(46) 第 4 条）。
-        let height = AevonSnap.dockSize.height
-        let ys = AevonSnap.dockColumnYs(count: column.count, height: height)
-        guard ys.count == column.count else { return }
-        for (index, win) in column.enumerated() {
-            win.setDockedY(ys[index])
-        }
-        AevonLog.info("[窗口] 停靠列已重排：\(column.count) 个小窗，顶部 10% 锚点向下、"
-            + "下方自动补位（\(ys.map { Int($0) })，尺寸 \(Int(AevonSnap.dockSize.width))x\(Int(height))"
-            + "，按进入顺序排序、不再按动画中间坐标（AevonDockTop5V50 AevonDockFillAnimV50 "
-            + "AevonDockSlotFitV53 AevonDockOrderV54）")
-        // 列变化 = 哪几格被停靠小窗占着变了 → 立刻告诉 Guard，它按固定槽位几何吞摸
-        syncDockStateToGuard(reason: "停靠列重排后")
-        scheduleDockSettle()
-    }
-
-    /* MARK: - 停靠列「落地校验」（V0.0.57，AevonDockSettleV57） */
-
-    /// 停靠列的自愈校验：一次切换里会连着触发好几次重排（自己离开列 / 别的窗被降级 /
-    /// 动画结束补做），任何一次被 `isAnimatingGeometry` 挡下、或者系统在动画中间
-    /// 又改了一次 frame，都可能留下「某一格偏了十几 pt」的缺口。
-    /// 用户在 Aevon(51) 第 3 条里看到的断层就是它。
-    ///
-    /// 做法：最后一次重排后 0.62 秒（覆盖 0.42s 缩放 + 0.36s 补位两段动画），
-    /// 对着最终槽位再核一遍，偏了就补一次很短的动画对齐。**幂等**，正常情况什么都不做。
-    private static var dockSettleToken = 0
-
-    private static func scheduleDockSettle() {
-        dockSettleToken += 1
-        let token = dockSettleToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
-            guard token == dockSettleToken else { return }
-            settleDockedColumns()
-        }
-    }
-
-    private static func settleDockedColumns() {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
-        var fixed = 0
-        let height = AevonSnap.dockSize.height
-        for side in [AevonSnapSlot.left, AevonSnapSlot.right] {
-            var column: [AevonWindowView] = []
-            for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-                guard let win = view as? AevonWindowView else { continue }
-                guard win.isDocked, win.currentSlot == side else { continue }
-                column.append(win)
-            }
-            guard !column.isEmpty else { continue }
-            column.sort { lhs, rhs in
-                if abs(lhs.dockSeq - rhs.dockSeq) > 0.000_1 { return lhs.dockSeq < rhs.dockSeq }
-                return lhs.frame.minY < rhs.frame.minY
-            }
-            let ys = AevonSnap.dockColumnYs(count: column.count, height: height)
-            guard ys.count == column.count else { continue }
-            for (index, win) in column.enumerated() where abs(win.frame.minY - ys[index]) > 1.0 {
-                win.setDockedY(ys[index])
-                fixed += 1
-            }
-        }
-        if fixed > 0 {
-            AevonLog.info("[窗口] 停靠列落地校验：\(fixed) 个小窗的槽位有偏差，已对齐到固定格"
-                + "（第一个变第五个 / 快速连点时不再留缺口）（AevonDockSettleV57）")
-        }
-    }
-
-    /// 已停靠小窗的**原始**矩形（不外扩）。
-    ///
-    /// V0.0.46（AevonDockStackV46）：竖向堆叠要用它，不能用外扩版 ——
-    /// 外扩 30pt 之后两个 293pt 高的小窗在 932pt 屏上就摆不下了
-    /// （候选位全被判超界，回退成重叠），而停靠态的侧条本来就在窗内，不需要留这份余量。
-    static func dockedFrames(excluding window: AevonWindowView?) -> [CGRect] {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return [] }
-        var rects: [CGRect] = []
-        for view in layer.subviews where !view.isHidden && view.alpha > 0.01 {
-            guard let win = view as? AevonWindowView else { continue }
-            if win === window { continue }
-            guard win.isDocked else { continue }
-            rects.append(win.frame)
-        }
-        return rects
-    }
-
-    /// 某个窗刚改变停靠状态：通知其它窗重新避让一次（V0.0.44，AevonDockAvoidV44）。
-    static func avoidDockedWindow(_ window: AevonWindowView) {
-        guard let layer = floatLayer, !layer.subviews.isEmpty else { return }
-        for view in layer.subviews {
-            guard let win = view as? AevonWindowView, win !== window else { continue }
-            win.avoidDockedWindows()
-        }
-    }
+    // V0.0.90：停靠列重排 / 落地校验 / 停靠矩形收集 / 停靠避让通知
+    // 已随「停靠小窗回退到最初版本」整体移除 —— 不再有停靠列与停靠小窗。
 
     /// 屏幕点 → 命中的浮窗与抓取目标（V0.0.41，AevonFloatGlobalV41）。
     ///
