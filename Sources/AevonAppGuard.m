@@ -96,6 +96,11 @@ __attribute__((used)) static const char AevonScrollHealV82Marker[] = "AevonScrol
  * CI 用 `strings` 抓 ASCII 标记做回归（注释不进二进制，必须写成 used 常量）。 */
 __attribute__((used)) static const char AevonRectGateV83Marker[] = "AevonRectGateV83";
 __attribute__((used)) static const char AevonFloatOwnerV83Marker[] = "AevonFloatOwnerV83";
+/* V0.0.83：`AevonScrollHealV82` 的历史校验串「放行也还原」必须留着。
+ * 这版把 force 恒置 NO 之后，LLVM 会把那个三元分支优化掉，二进制里就再也
+ * `strings` 不到它 —— CI 的 V0.0.82 断言会误判成「功能被删」。
+ * 历史串只能加不能改，所以用 used 常量把它钉住。 */
+__attribute__((used)) static const char AevonScrollHealV82KeepText[] = "放行也还原";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
