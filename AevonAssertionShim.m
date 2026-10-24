@@ -578,6 +578,46 @@ void AevonNotifySetFloatWindowRect(double x, double y, double w, double h) {
     }
 }
 
+/* V0.0.83（AevonFloatOwnerV83）：浮窗主人 = **全局唯一 bundle 指纹**。
+ *
+ * V0.0.82 用的是 per-bundle token（`com.aevon.floatowner.<bundle>`），实测 Guard 侧
+ * 认成了「非主人」：唯一一条还原日志是 BatteryInfo（它是浮窗里那个 App）自己的滚动
+ * 被拽回去（0,952 → 0,873）。原因大概率在 `win.bundleID` 写入时机 / 空串上。
+ *
+ * 这条通道只存一个值（我们本来就是单主窗）：高 32 位 = bundleID 的 djb2 指纹，
+ * bit0 = 有效位。Guard 每次 sendEvent 比对一次，纯整数运算，不碰字符串。
+ * 指纹碰撞概率可忽略，且错了也只会「少拦一次」，不会锁死内容。 */
+uint32_t AevonBundleFingerprint(NSString *bundleID) {
+    if (bundleID.length == 0) { return 0; }
+    const char *p = bundleID.UTF8String;
+    if (p == NULL) { return 0; }
+    uint32_t h = 5381u;
+    while (*p != '\0') {
+        h = ((h << 5) + h) + (uint32_t)(uint8_t)(*p);
+        p += 1;
+    }
+    return h;
+}
+
+void AevonNotifySetFloatOwnerBundle(NSString *bundleID) {
+    @try {
+        static int token = -1;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            notify_register_check("com.aevon.floatowner.bundle", &token);
+        });
+        if (token < 0) { return; }
+        uint32_t fp = AevonBundleFingerprint(bundleID);
+        uint64_t want = (fp != 0) ? ((((uint64_t)fp) << 32) | 1ULL) : 0ULL;
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        if (old == want) { return; }
+        notify_set_state(token, want);
+        notify_post("com.aevon.floatowner.bundle");
+    } @catch (NSException *exception) {
+    }
+}
+
 /* V0.0.82（AevonScrollHealV82）：浮窗主人标记（每 App 独立 token）。
  *
  * 误滚还原只能作用在「背后那个全屏 App」上。浮窗里显示的那个 App 是主人，

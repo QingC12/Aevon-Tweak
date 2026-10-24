@@ -1230,6 +1230,30 @@ jobs:
           fi
           strings "$GUARD_DYLIB" | grep -q 'AevonNoWinResizeV80' \
             || { echo "::error::V0.0.80 Guard 没有停用「强制放大窗口」（AevonNoWinResizeV80）"; exit 1; }
+          # ── V0.0.83（AevonRectGateV83 / AevonFloatOwnerV83 / AevonEntityLiveV83）──
+          # ①浮窗整窗矩形门：落点在浮窗内的触摸，对「非主人」App 整条丢弃
+          #   —— 修「浮窗里滑一下，背后全屏 App 被滚到底」（旧版只吞底边环带）。
+          # ②主人判定换全局指纹通道（V0.0.82 的 per-bundle token 认错过主人）。
+          # ③P1 第 6 步：先等目标 App 真的在运行，再走实体 init 那条链。
+          python3 - "$DYLIB" <<'PY83'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonRectGateV83","AevonFloatOwnerV83","AevonEntityLiveV83"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.83 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.83 校验: 浮窗整窗矩形通道 + 主人指纹 + P1 就绪门 已编入主 dylib")
+          PY83
+          python3 - "$GUARD_DYLIB" <<'PY83G'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonRectGateV83","浮窗整窗拦下触摸","AevonFloatOwnerV83","com.aevon.floatowner.bundle"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.83 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.83 校验: 浮窗整窗矩形门 + 主人指纹判定 已编入 Guard")
+          PY83G
+          # 反回退：矩形门必须真的进到 hardZone 那条判定链（不在链里 = 没生效）
+          grep -q 'AevonGuardFloatAreaHit(pt, spt)' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
+            || { echo "::error::V0.0.83 回退: 浮窗整窗矩形门没接进 began 判定链"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardNoWidgetV80' \
             || { echo "::error::V0.0.80 Guard 没有排除小组件宿主（AevonGuardNoWidgetV80）"; exit 1; }
           # 反回退：Guard 里绝不能再出现 win.frame = screen / 每秒 layoutIfNeeded

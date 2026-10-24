@@ -280,6 +280,8 @@ enum AevonEntryHost {
     private static var lastGuardFloatRect: CGRect = .zero
     /// V0.0.82：上一次标记为「浮窗主人」的 App（用于撤销，避免留着旧主人不还原）
     private static var lastFloatOwners: Set<String> = []
+    private static var lastOwnerBundle: String = ""
+    private static var lastFloatWinRect: CGRect = .zero
     private static var guardFloatRectAt: CFTimeInterval = 0
     private static var guardFloatRectPending = false
 
@@ -341,17 +343,50 @@ enum AevonEntryHost {
         }
         if winUnion.isNull {
             AevonNotifySetFloatWindowRect(0, 0, 0, 0)
+            if lastFloatWinRect != .zero {
+                lastFloatWinRect = .zero
+                AevonLog.info("[窗口] 浮窗整窗矩形已清空（Guard 侧不再拦「浮窗上的触摸」，恢复全屏 App 输入）"
+                    + "（AevonRectGateV83）")
+            }
         } else {
             AevonNotifySetFloatWindowRect(Double(winUnion.minX), Double(winUnion.minY),
                                           Double(winUnion.width), Double(winUnion.height))
+            /* V0.0.83（AevonRectGateV83）：这条矩形是「背后 App 不许收触摸」的范围。
+             * 值和上一版不同（V0.0.82 只用来做滚动还原，实测帮了倒忙），
+             * 现在 Guard 用它做**源头阻断** —— 落点在窗内的触摸对非主人 App 整条丢弃。 */
+            let snapped = CGRect(x: winUnion.minX.rounded(), y: winUnion.minY.rounded(),
+                                 width: winUnion.width.rounded(), height: winUnion.height.rounded())
+            if snapped != lastFloatWinRect {
+                lastFloatWinRect = snapped
+                AevonLog.info("[窗口] 浮窗整窗矩形已下发给 Guard：\(Int(snapped.width))x\(Int(snapped.height))"
+                    + " 位置 \(Int(snapped.minX)),\(Int(snapped.minY))"
+                    + "（落在浮窗范围内的触摸不再投给背后的全屏 App —— 浮窗里滑动不会把 App 带走）"
+                    + "（AevonRectGateV83）")
+            }
         }
         /* V0.0.82：主人标记 —— 误滚还原要放过「浮窗里那个 App」（它自己滚动是正当的），
          * 只还原背后那个全屏 App。这里把主人集合的增删都补上（含撤销）。 */
         for bid in owners where !lastFloatOwners.contains(bid) {
             AevonNotifySetFloatOwner(bid, 1)
+            /* V0.0.83：主人标记必须写明（V0.0.82 实测 Guard 侧认成了「非主人」，
+             * 于是把浮窗里那个 App 自己的滚动也还原了 —— 日志里 BatteryInfo 0,952 → 0,873）。 */
+            AevonLog.info("[窗口] 浮窗主人标记：\(bid)=是（该 App 在浮窗里，它自己的滚动是正当的，"
+                + "Guard 不拦它的触摸、也不还原它的滚动）（AevonFloatOwnerV83）")
         }
         for bid in lastFloatOwners where !owners.contains(bid) {
             AevonNotifySetFloatOwner(bid, 0)
+            AevonLog.info("[窗口] 浮窗主人标记：\(bid)=否（不再是浮窗内容，恢复按「浮窗整窗矩形」拦触摸）"
+                + "（AevonFloatOwnerV83）")
+        }
+        /* V0.0.83（AevonFloatOwnerV83）：全局指纹通道 —— 我们本来就只有单主窗，
+         * 所以「当前浮窗主人」永远只有一个值；Guard 用整数比对，不依赖 per-bundle token。
+         * 传空串 = 没有主窗，清掉标记（之后 Guard 不再认主人）。 */
+        let ownerBundle = owners.first ?? ""
+        if ownerBundle != lastOwnerBundle {
+            lastOwnerBundle = ownerBundle
+            AevonNotifySetFloatOwnerBundle(ownerBundle)
+            AevonLog.info("[窗口] 浮窗主人指纹已下发：\(ownerBundle.isEmpty ? "（无，清空）" : ownerBundle)"
+                + "（Guard 侧据此放过「浮窗里那个 App」，只拦背后全屏 App 的触摸）（AevonFloatOwnerV83）")
         }
         lastFloatOwners = owners
 

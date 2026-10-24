@@ -55,6 +55,8 @@ final class AevonSceneDriver: NSObject {
 
     private var ranForThisToggle = false
     private var running = false
+    /// V0.0.83：等待目标 App 就绪的次数（每次 2.5 秒，上限 24 次 = 60 秒）
+    private var waitTicks = 0
 
     // MARK: - 崩溃熔断（V0.0.75 / V0.0.76 加固）
 
@@ -133,6 +135,36 @@ final class AevonSceneDriver: NSObject {
 
     private func runExperiment() {
         guard !running else { return }
+        /* V0.0.83（AevonEntityLiveV83）：P1 第 6 步 —— **先等目标 App 真的在运行**。
+         *
+         * 归档(4) 的 ⑥ 探测给出了决定性证据：
+         *   `⑥App 对象（com.apple.Preferences）→ 前台=? 进程状态=0 主场景=无`
+         * 进程状态 0 = 根本没启动，主场景也没有。这种状态下
+         * `SBDeviceApplicationSceneEntity` 的 4 个 init 拿不到任何可复用的进程/场景句柄，
+         * 必然全部返回 nil —— V0.0.81 那句「4 个 init 全 nil」不是 API 选错，是**时机错**。
+         * 所以现在改成：等目标 App 在前台运行（进程状态 ≥ 2）再走这条链，最多等 60 秒。
+         * 等待期间只读 KVC，不创建任何对象。 */
+        if !AevonSceneDriver.targetAppIsRunning() {
+            waitTicks += 1
+            if waitTicks == 1 {
+                AevonLog.info("[场景] P1 等待目标 App 就绪：\(AevonSceneDriver.experimentBundleID) 当前不在运行，"
+                    + "每 2.5 秒复查一次（没有进程/场景时实体 init 必然全 nil）（AevonEntityLiveV83）")
+            }
+            if waitTicks <= 24 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    self?.runExperiment()
+                }
+                return
+            }
+            AevonLog.warn("[场景] P1 放弃本轮：等了 60 秒，\(AevonSceneDriver.experimentBundleID) 仍未在前台运行 —— "
+                + "请先把它打开到前台，再重新开关一次实验开关（AevonEntityLiveV83）")
+            waitTicks = 0
+            return
+        }
+        if waitTicks > 0 {
+            AevonLog.info("[场景] P1 目标 App 已就绪（等了 \(waitTicks) 次 × 2.5 秒），开始第 1 步（AevonEntityLiveV83）")
+            waitTicks = 0
+        }
         running = true
         AevonLog.info("[场景] P1 实验开始：目标画布 \(Int(AevonSceneDriver.canvasSize.width))x\(Int(AevonSceneDriver.canvasSize.height))（AevonSceneDriverP1 AevonSceneSafeObjV76）")
         AevonCrumbWrite("开始")
@@ -141,6 +173,19 @@ final class AevonSceneDriver: NSObject {
          * 走完（无论成败）就撤面包屑 —— 之后异步的取证段只做只读 KVC，不再有风险。 */
         AevonCrumbClear()
         self.running = false
+    }
+
+    /// V0.0.83：目标 App 现在是否真的有进程（0=not running / 1=?, 2=background, 3=suspended, 4=foreground）。
+    static func targetAppIsRunning() -> Bool {
+        guard let ctrl = tryShared(classNamed: "SBApplicationController", selector: "sharedInstance") else { return false }
+        guard let app = AevonSafeCallObject1(ctrl, "applicationWithBundleIdentifier:",
+                                             AevonSceneDriver.experimentBundleID as NSString) else { return false }
+        if let st = AevonRuntime.int(app, Selector(("processState"))) {
+            AevonLog.info("[场景] P1 目标 App 进程状态=\(st)（0=未运行 4=前台）（AevonEntityLiveV83）")
+            return st >= 2
+        }
+        if let front = AevonRuntime.bool(app, key: "isFrontmost") { return front }
+        return false
     }
 
     // MARK: 第 1 步：FBSceneManager 实例

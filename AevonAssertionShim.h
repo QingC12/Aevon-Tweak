@@ -112,6 +112,16 @@ void AevonNotifySetFloatWindowRect(double x, double y, double w, double h);
 /// 需要还原的只是「背后那个全屏 App」—— 它收到的是同一根手指的另一份投递。
 void AevonNotifySetFloatOwner(NSString *bundleID, int isOwner);
 
+/// V0.0.83（AevonFloatOwnerV83）：浮窗主人的**全局指纹**通道（`com.aevon.floatowner.bundle`）。
+///
+/// per-bundle token 那一版实测认错过主人（BatteryInfo 的正当滚动被还原），所以再补
+/// 一条只存一个值的通道：高 32 位 = bundleID 的 djb2 指纹，bit0 = 有效位；空串 = 清。
+/// Guard 侧只做整数比较（`AevonBundleFingerprint` 同名函数在 Guard 里也有一份，必须一致）。
+void AevonNotifySetFloatOwnerBundle(NSString *bundleID);
+
+/// bundleID 的 32 位 djb2 指纹（两侧必须用同一实现；空串返回 0 = 无效）。
+uint32_t AevonBundleFingerprint(NSString *bundleID);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，

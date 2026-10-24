@@ -92,6 +92,10 @@ __attribute__((used)) static const char AevonGuardTapStampV74Marker[] = "AevonGu
 __attribute__((used)) static const char AevonAppGateV81Marker[] = "AevonAppGateV81";
 __attribute__((used)) static const char AevonScrollLeakV81Marker[] = "AevonScrollLeakV81";
 __attribute__((used)) static const char AevonScrollHealV82Marker[] = "AevonScrollHealV82";
+/* V0.0.83（AevonRectGateV83 / AevonFloatOwnerV83）：浮窗整窗矩形门 + 主人指纹判定。
+ * CI 用 `strings` 抓 ASCII 标记做回归（注释不进二进制，必须写成 used 常量）。 */
+__attribute__((used)) static const char AevonRectGateV83Marker[] = "AevonRectGateV83";
+__attribute__((used)) static const char AevonFloatOwnerV83Marker[] = "AevonFloatOwnerV83";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -467,6 +471,44 @@ static CGRect AevonGuardFloatWindowRect(void) {
     CGFloat h = (CGFloat)((pack >> 30) & 0x3FFULL);
     if (w < 1 || h < 1) { return CGRectZero; }
     return CGRectMake(x, y, w, h);
+}
+
+/* V0.0.83（AevonRectGateV83）：浮窗整窗矩形门 —— 本轮真正的修法。
+ *
+ * Aevon(76) 的实测把机制说清楚了：**浮窗里的滑动会被带到背后的全屏 App**。
+ * 归档(4) 日志逐条对得上：用户在 266x458@61,230 的浮窗里滑动，
+ * Guard 在 App 进程收到的落点是 `win=321,630` / `win=288,500` / `win=312,488`
+ * —— 全都在浮窗矩形内，且与 SB 记的坐标完全一致（这次两边没乱跳）。
+ *
+ * 为什么 V0.0.82 的「放行也还原」没生效：那条路只在**抬手**时补偿，
+ * 而且要先在 `began` 落点 hitTest 到一个 UIScrollView 才算 arm。
+ * 实测 `已还原` 只有 1 条，还是把**浮窗里那个 App（主人）自己的滚动**给拽回去了
+ * （BatteryInfo 0,952 → 0,873）—— 既没帮上忙，又撤销了用户的正当操作。
+ *
+ * 所以这一版换成**源头阻断**：落点在浮窗整窗矩形内、而本进程又不是浮窗主人
+ * （即本进程是背后那个全屏 App）→ 这条触摸**整条不投递**。
+ *   · 背后的 App 不会再滚动 / 不会再被点中（用户主诉）；
+ *   · 浮窗里的 App 是主人，完全不受影响（它的内容是用户正当操作）；
+ *   · 不需要事后还原，不会有「先滚一下再弹回去」的抖动。
+ * 这个判据不依赖停靠格 / 主窗矩形 / 热区那套几何，只依赖一条独立的
+ * `com.aevon.floatwin` 整窗矩形通道（与 `com.aevon.guardfloat` 环带分开）。 */
+/* V0.0.83：下面这条函数要用到「主人判定」和「矩形命中」，而它们的实现放在更靠后的段。
+ * C 里必须先声明，否则隐式声明在 Clang 是硬错误。 */
+static BOOL AevonGuardIsFloatOwner(void);
+static BOOL AevonGuardPointInRect(CGRect rect, CGPoint a, CGPoint b);
+
+static BOOL AevonGuardFloatAreaHit(CGPoint a, CGPoint b) {
+    @try {
+        CGRect fw = AevonGuardFloatWindowRect();
+        if (CGRectIsEmpty(fw)) { return NO; }
+        if (!AevonGuardPointInRect(fw, a, b)) { return NO; }
+        /* 主人例外：浮窗里显示的那个 App，用户就是在操作它。
+         * 它收到的这份触摸是浮窗内容的正当输入，绝不能吞。 */
+        if (AevonGuardIsFloatOwner()) { return NO; }
+        return YES;
+    } @catch (NSException *e) {
+        return NO;
+    }
 }
 
 /* V0.0.57（AevonNoWinResizeV57）：App 窗口尺寸 —— **只允许单向还原**。
@@ -962,9 +1004,45 @@ static BOOL gAevonScrollWatchForce = NO;
 /// 抬手阶段要不要做「放行也还原」
 static BOOL AevonGuardScrollForced(void) { return gAevonScrollWatchForce; }
 
+/* V0.0.83（AevonFloatOwnerV83）：本进程 bundleID 的 djb2 指纹（与 SB 侧同名函数必须一致）。 */
+static uint32_t AevonGuardBundleFingerprint(void) {
+    static uint32_t cached = 0;
+    static BOOL tried = NO;
+    if (!tried) {
+        tried = YES;
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        const char *p = bid.UTF8String;
+        uint32_t h = 5381u;
+        while (p != NULL && *p != '\0') {
+            h = ((h << 5) + h) + (uint32_t)(uint8_t)(*p);
+            p += 1;
+        }
+        cached = h;
+    }
+    return cached;
+}
+
 /* V0.0.82：本进程是不是「浮窗里那个 App」（主人）。
- * 主人自己滑动是正当操作，绝不能还原 —— SB 在开窗/关窗时写 `com.aevon.floatowner.<bundle>`。 */
+ * 主人自己滑动是正当操作，绝不能还原 / 更不能拦它的触摸。
+ * V0.0.83：主判据换成全局指纹通道（V82 的 per-bundle token 实测认错过主人）。 */
 static BOOL AevonGuardIsFloatOwner(void) {
+    /* ① V0.0.83 全局指纹：高 32 位 = bundle 指纹，bit0 = 有效位 */
+    static int fpToken = -1;
+    static BOOL fpTried = NO;
+    if (!fpTried) {
+        fpTried = YES;
+        if (notify_register_check("com.aevon.floatowner.bundle", &fpToken) != 0) { fpToken = -1; }
+    }
+    if (fpToken >= 0) {
+        uint64_t pack = 0;
+        if (notify_get_state(fpToken, &pack) == 0 && (pack & 1ULL) != 0) {
+            uint32_t fp = (uint32_t)(pack >> 32);
+            if (fp != 0) {
+                return (fp == AevonGuardBundleFingerprint());
+            }
+        }
+    }
+    /* ② V0.0.82 的 per-bundle token 兜底（指纹通道还没被写过时用） */
     static int token = -1;
     static BOOL tried = NO;
     if (!tried) {
@@ -1169,6 +1247,23 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                     AevonGuardWriteLog(NO, @"停靠小窗区域拦下触摸（累计 %lu 次）",
                                        (unsigned long)dockSwallowCount);
                 }
+            } else if (AevonGuardFloatAreaHit(pt, spt)) {
+                /* V0.0.83（AevonRectGateV83）：落点在悬浮窗整窗矩形内，而本进程
+                 * 不是浮窗主人 → 这条触摸是 backboardd 同时投给「背后全屏 App」的
+                 * 那一份，整条不投递。用户主诉的「浮窗里滑一下，背后 App 被滚到底」
+                 * 就是这条漏的（旧实现只吞底边环带，浮窗主体完全没管）。 */
+                hardZone = YES;
+                static CFTimeInterval lastRectGate = 0;
+                CFTimeInterval rectNow = CACurrentMediaTime();
+                if (rectNow - lastRectGate > 1.0) {
+                    lastRectGate = rectNow;
+                    CGRect fw = AevonGuardFloatWindowRect();
+                    AevonGuardWriteLog(NO, @"浮窗整窗拦下触摸（落点 %.0f,%.0f 在浮窗 %.0f,%.0f %.0fx%.0f 内，"
+                                       @"本进程不是浮窗主人 → 背后 App 不该收到浮窗上的操作，app=%@）（AevonRectGateV83）",
+                                       spt.x, spt.y, fw.origin.x, fw.origin.y,
+                                       fw.size.width, fw.size.height,
+                                       [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+                }
             }
             if (hardZone) {
                 AevonGuardSetTouchOwned(touch, YES);
@@ -1201,15 +1296,35 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                  * backboardd 的同一根手指 —— 它一定会被 App 自己的 UIScrollView
                  * 当真滚动。所以 force=YES：抬手时无条件还原（阈值 20pt）。 */
                 BOOL inFloatWin = NO;
+                CGRect fwRect = CGRectZero;
+                BOOL isOwner = NO;
                 @try {
-                    CGRect fw = AevonGuardFloatWindowRect();
-                    if (!CGRectIsEmpty(fw)) {
-                        inFloatWin = AevonGuardPointInRect(fw, pt, spt);
+                    fwRect = AevonGuardFloatWindowRect();
+                    if (!CGRectIsEmpty(fwRect)) {
+                        inFloatWin = AevonGuardPointInRect(fwRect, pt, spt);
                     }
+                    isOwner = AevonGuardIsFloatOwner();
                 } @catch (NSException *e) { inFloatWin = NO; }
-                /* 主人排除：浮窗里的那个 App 自己的滚动是正当的，不能还原。 */
-                if (inFloatWin && AevonGuardIsFloatOwner()) { inFloatWin = NO; }
-                AevonGuardArmScrollWatch(touch.window, pt, event, inFloatWin);
+                /* V0.0.83（AevonRectGateV83）：**force 还原停用**。
+                 *
+                 * V0.0.82 的「放行也还原」实测帮了倒忙：唯一一条 `已还原` 是把
+                 * 浮窗里那个 App（BatteryInfo，主人）自己的滚动拽回去（0,952 → 0,873），
+                 * 等于撤销用户操作；而背后真正的元凶（全屏 App）根本没被命中。
+                 * 现在改由上面的「浮窗整窗矩形门」在 began 就整条阻断，不需要事后补偿。
+                 * 这里保留 arm（force 恒 NO），继续兜「晚到重判接管」那条老路径。 */
+                AevonGuardArmScrollWatch(touch.window, pt, event, NO);
+                /* V0.0.83 诊断：浮窗整窗矩形到底有没有收到（限频 2s）。
+                 * 下轮日志只要出现 `窗=` 非 0x0 且 `内=1`，就证明通道与判据都通了。 */
+                static CFTimeInterval lastFwProbe = 0;
+                CFTimeInterval fwNow = CACurrentMediaTime();
+                if (fwNow - lastFwProbe > 2.0) {
+                    lastFwProbe = fwNow;
+                    AevonGuardWriteLog(NO, @"浮窗整窗判定（窗=%.0f,%.0f %.0fx%.0f 落点 %.0f,%.0f 内=%d 主人=%d app=%@）（AevonRectGateV83）",
+                                       fwRect.origin.x, fwRect.origin.y,
+                                       fwRect.size.width, fwRect.size.height,
+                                       spt.x, spt.y, inFloatWin ? 1 : 0, isOwner ? 1 : 0,
+                                       [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+                }
                 /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
                  * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。
                  * V0.0.73：同时打两套坐标 + 窗口 frame + Guard 自己算出的槽位几何，
