@@ -392,6 +392,13 @@ final class AevonWindowView: UIView {
             + "内容比例 \(String(format: "%.3f", aspect))（AevonContentFitV57），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoGestureV44 AevonFatWindowV52）")
+
+        // V0.0.87（AevonSlimWindowV87）：形态一句话说清 —— 细长、等比、不裁切。
+        // 真小胖屏项目已终止（P1 自建场景第 4 步实体 5 个 init 全 nil），
+        // 主窗比例恒等于 屏宽 ÷（屏高 − 状态栏空白），即 V0.0.50 的「细长」形态。
+        AevonLog.info("[窗口] 主窗形态=细长（窗 \(Int(restored.width))x\(Int(restored.height))，"
+            + "内容比例 \(String(format: "%.3f", aspect))，整屏等比缩放、不裁切、底部无空白；"
+            + "0.60 小胖屏与真重排项目已终止）（AevonSlimWindowV87）")
     }
 
     required init?(coder: NSCoder) {

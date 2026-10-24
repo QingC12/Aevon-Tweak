@@ -35,6 +35,14 @@ private func initializeAevon() {
      * 放在这里（拿到总开关之后、任何窗口创建之前）执行，保证只跑一次、且早于第一次读值。 */
     AevonPrefs.healTouchEnabledOnce()
 
+    /* V0.0.87（AevonSlimWindowV87）：一次性把主窗切回「细长」形态。
+     *
+     * 小胖屏项目终止（依据见 `AevonSnap.aspect` 注释）。老设备偏好里可能存着
+     * `FullContent=false`（V0.0.58 的默认值），那次写盘会让布局分支走 cover；
+     * 窗口比例虽然已经改成屏幕比、cover/fit 结果相同，但日志与分支口径要一致，
+     * 所以这里一次性写回 true 并落 marker，只跑一次。 */
+    AevonPrefs.healSlimWindowOnce()
+
     /*
      * V0.0.7 的关键改动（针对 V0.0.6「长按桌面图标 → 自动注销」）：
      *

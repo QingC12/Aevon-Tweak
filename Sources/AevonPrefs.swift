@@ -60,6 +60,27 @@ enum AevonPrefs {
         set(marker, true)
     }
 
+    /// V0.0.87（AevonSlimWindowV87）：一次性把「完整显示内容」写回开 + 记一条形态日志。
+    ///
+    /// 小胖屏（0.60）项目终止，主窗恒细长（比例 = 屏宽 ÷（屏高 − 状态栏）≈ 0.488）。
+    /// 老偏好里可能留着 V0.0.58 写下的 `FullContent=false`，这里迁一次：
+    /// 布局分支与日志口径统一到「整屏等比、不裁切」，同时把形态写进日志便于日后判读。
+    static func healSlimWindowOnce() {
+        let marker = "SlimWindowHealV87"
+        if rawValue(marker) != nil { return }
+        let current = bool("FullContent", default: true)
+        if !current {
+            set("FullContent", true)
+            AevonLog.warn("[设置] 主窗形态迁移：`FullContent` 原来是**关**的（0.60 小胖屏口径）"
+                + " → 已一次性改成开；真小胖屏项目已终止，主窗今后恒为细长（屏宽÷(屏高−状态栏)）"
+                + "（AevonSlimWindowV87 SlimWindowHealV87）")
+        } else {
+            AevonLog.info("[设置] 主窗形态=细长（整屏等比缩放、不裁切、底部无空白；"
+                + "0.60 小胖屏与真重排项目已终止）（AevonSlimWindowV87）")
+        }
+        set(marker, true)
+    }
+
     /// 读取整数；键不存在时返回 defaultValue。
     static func int(_ key: String, default defaultValue: Int) -> Int {
         if let value = rawValue(key) as? NSNumber {

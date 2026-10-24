@@ -1164,6 +1164,17 @@ __attribute__((used)) static const char AevonEntityIntV84Marker[] = "AevonEntity
 __attribute__((used)) static const char AevonEntityPidV85Marker[] = "AevonEntityPidV85";
 __attribute__((used)) static const char AevonPrefShieldV84ShimMarker[] = "AevonPrefShieldV84";
 
+/* V0.0.87（AevonSlimWindowV87 / AevonFatProjectEndV87）：形态回退 + 项目终止的钉死串。
+ *
+ * 真小胖屏项目在 V0.0.86 归档(8) 判死（P1 第 4 步实体 5 个 init 全 nil），
+ * 主窗恢复 V0.0.50 的「细长」形态（比例 = 屏宽 ÷（屏高 − 状态栏））。
+ * 这两条串同时承担「CI 断言落点」和「日后别再把 0.60 加回来」的警示作用。 */
+__attribute__((used)) static const char AevonSlimWindowV87Marker[] = "AevonSlimWindowV87";
+__attribute__((used)) static const char AevonFatProjectEndV87Marker[] = "AevonFatProjectEndV87";
+__attribute__((used)) static const char AevonSlimWindowV87Text[] = "主窗形态=细长";
+__attribute__((used)) static const char AevonFatProjectEndV87Text[] = "真小胖屏项目已终止";
+__attribute__((used)) static const char AevonSlimProjectEndNote[] = "0.60 小胖屏与真重排项目已终止";
+
 /* V0.0.84（AevonEntityIntV84）：按真实返回类型读整型/布尔属性。
  *
  * 归档(84) 的实锤：Swift 侧把 `processState`（返回 unsigned int）当成返回 64 位

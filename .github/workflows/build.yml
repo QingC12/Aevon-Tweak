@@ -1356,6 +1356,32 @@ jobs:
           # 反回退：P1 的 processState 必须按真实编码读（按 int32 读会拿到指针低位）
           grep -q "ret == '@'" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::V0.0.86 回退: processState 又按固定整型读了（实测编码是 @，会拿到垃圾）"; exit 1; }
+          # ── V0.0.87（AevonSlimWindowV87 / AevonFatProjectEndV87）──
+          # 归档(8) 终审：P1 第 1/2/3 步全过，第 4 步 SBDeviceApplicationSceneEntity 的
+          # 5 个候选 init **全部返回 nil**（诊断里 app / sceneHandle / displayIdentity 都在）
+          # → 真小胖屏路线终止，主窗恢复 V0.0.50 的「细长」形态
+          # （比例 = 屏宽 ÷（屏高 − 状态栏）≈ 0.488，整屏等比、不裁切、底部无空白）。
+          python3 - "$DYLIB" <<'PY87'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonSlimWindowV87","AevonFatProjectEndV87","主窗形态=细长",
+                    "真小胖屏项目已终止","0.60 小胖屏与真重排项目已终止"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.87 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.87 校验: 主窗细长形态 + 小胖屏项目终止 已编入")
+          PY87
+          # 反回退 1：主窗比例不许再回落到 0.60 常量
+          if grep -n 'return AevonSnapWindowShape.mainAspect' "$GITHUB_WORKSPACE/Sources/AevonSnap.swift"; then
+            echo "::error::V0.0.87 回退: 主窗比例又回到 0.60 小胖屏常量（会被裁掉约 20% 屏高）"
+            exit 1
+          fi
+          # 反回退 2：P1 必须默认不排程（真小胖屏项目已终止）
+          grep -q 'AevonFatProjectReviveV87' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
+            || { echo "::error::V0.0.87 回退: P1 又无条件排程了（项目已终止，不许再跑自建场景实验）"; exit 1; }
+          # 反回退 3：完整显示默认必须为开（旧默认 false = 0.60 裁底口径）
+          grep -q 'FullContent", default: true' "$GITHUB_WORKSPACE/Sources/AevonPrefs.swift" \
+            || grep -q 'FullContent", default: true' "$GITHUB_WORKSPACE/Sources/AevonSnap.swift" \
+            || { echo "::error::V0.0.87 回退: 完整显示默认值又变回关（会退回 0.60 裁底形态）"; exit 1; }
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }

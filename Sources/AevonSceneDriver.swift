@@ -53,6 +53,9 @@ final class AevonSceneDriver: NSObject {
     /// 连崩这么多次就锁定实验（连崩 = 用户开了开关就注销，体验不可接受）
     static let maxCrashesBeforeLock = 2
 
+    /// V0.0.87（AevonFatProjectEndV87）：终止公告只写一次（prefschanged 会反复回调本入口）
+    private static var fatProjectEndLogged = false
+
     private var ranForThisToggle = false
     private var running = false
     /// V0.0.83：等待目标 App 就绪的次数（每次 2.5 秒，上限 24 次 = 60 秒）
@@ -99,6 +102,26 @@ final class AevonSceneDriver: NSObject {
 
     /// prefschanged / 启动自检回调入口：开关从关到开才触发（5s 错峰，给设置页留写盘时间）
     func maybeRunExperiment() {
+        /* V0.0.87（AevonFatProjectEndV87）：**真小胖屏项目已终止**（用户 2026-10-24 决定）。
+         *
+         * 归档(8) 是这条路线的终审证据：P1 第 1/2/3 步全过（FBSceneManager / 主屏 dc /
+         * SBApplication 都拿到了），第 4 步 `SBDeviceApplicationSceneEntity` 的
+         * 5 个候选 init **全部返回 nil**，而诊断里 app / sceneHandle / displayIdentity
+         * 全都在 —— 这个实体在 SpringBoard 的构造链之外立不起来，再怎么补参数也没用。
+         *
+         * 处理方式：代码与全部日志串**一律保留**（历史 CI 校验串只加不能改），
+         * 但默认永不排程。只有手工在偏好里写 `AevonFatProjectReviveV87=true`
+         * 才会复活（设置面板里没有这个开关，正常用户不会碰到）。 */
+        guard AevonPrefs.bool("AevonFatProjectReviveV87", default: false) else {
+            if !AevonSceneDriver.fatProjectEndLogged {
+                AevonSceneDriver.fatProjectEndLogged = true
+                AevonLog.info("[场景] 真小胖屏项目已终止：P1 自建场景路线止步于第 4 步"
+                    + "（实体 5 个 init 全 nil），开关不再生效；主窗已恢复细长形态"
+                    + "（AevonFatProjectEndV87 AevonSlimWindowV87）")
+            }
+            ranForThisToggle = false
+            return
+        }
         guard !AevonSceneDriver.locked else {
             AevonLog.warn("[场景] P1 实验已锁定（累计崩溃 \(Int(AevonP1FuseCount())) 次），本轮不运行；需要重试请先换用新版本（AevonSceneSafeObjV76）")
             return

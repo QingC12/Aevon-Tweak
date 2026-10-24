@@ -339,10 +339,10 @@ static NSArray *AevonBuildFallback(id target) {
     id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作（关掉=内容不接收触摸；停靠小窗一律不接收）", target, @"TouchEnabled", @YES);
     if (s2a != nil) [result addObject:s2a];
     /* V0.0.57（AevonContentFitV57）：完整显示内容。
-     * V0.0.58（AevonPomoDefaultV58）默认**关**：默认形态回到 0.60 小胖屏 +
-     * PullOverMF 同款「可视区铺满卡片」逻辑（AevonPomoCoverV58）。
-     * 开：窗口按屏幕比例、整屏等比缩放，顶栏/底栏/右侧工具栏全在，永不裁切。 */
-    id s2f = AevonNewSwitch(@"完整显示内容（不裁切，窗口按屏幕比例）", target, @"FullContent", @NO);
+     * V0.0.58（AevonPomoDefaultV58）曾默认关（0.60 小胖屏）。
+     * V0.0.87（AevonSlimWindowV87）：真小胖屏项目终止，主窗恒细长 —— 本开关默认开，
+     * 且比例已与屏幕比绑定，关掉也不再有裁底形态。 */
+    id s2f = AevonNewSwitch(@"细长窗口（整屏等比，不裁切；V0.0.87 起恒开）", target, @"FullContent", @YES);
     if (s2f != nil) [result addObject:s2f];
     id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
     if (s2c != nil) [result addObject:s2c];

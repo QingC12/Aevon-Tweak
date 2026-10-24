@@ -23,6 +23,8 @@ enum AevonSnapSlot: String {
 ///   · V0.0.53 = 内容改 cover（无黑边）但比例为了不裁底压到 0.50 →
 ///     用户 Aevon(47) 第 4 条又指出「尺寸又变回了之前的等比例尺寸，并没有改为小胖屏」。
 ///   · V0.0.54 = **主窗回到 0.60 小胖屏**（用户两次明确要求），内容仍走 cover（无黑边）。
+///   · V0.0.87 = **小胖屏项目终止，主窗回到 V0.0.50 的「细长」形态**（AevonSlimWindowV87）。
+///     终止依据见下方 `AevonSnap.aspect` 的说明 —— 不是口味变化，是路线判死。
 ///
 /// **几何硬约束**（必须写在这里，避免后面再绕回去）：屏内容是 430×881（去掉状态栏）
 /// ≈ 0.4875 的窄条。窗口只要比它**胖**，按宽度铺满就必然纵向溢出、从底部裁掉。
@@ -228,22 +230,31 @@ enum AevonSnap {
     static var aspect: CGFloat {
         let screen = UIScreen.main.bounds
         guard screen.width > 1, screen.height > 1 else { return 9.0 / 19.5 }
-        if AevonSnap.fullContentEnabled {
-            // 完整显示：比例 = 屏宽 ÷（屏高 − 状态栏那条空白）。
-            // 这样按默认宽度算出来的高度刚好等于内容缩放后的高度 → 既铺满又不裁切，
-            // 也不留黑边（屏幕比例算完是 0.4881，不是 0.60 —— 见上面的推导）。
-            let usable = max(1, screen.height - AevonSnap.cropTop)
-            return screen.width / usable
-        }
-        return AevonSnapWindowShape.mainAspect
+        // V0.0.87（AevonSlimWindowV87）：**恒「细长」** —— 主窗比例永远等于
+        // 屏宽 ÷（屏高 − 状态栏空白），整屏等比缩放进窗口，任何情况下都不裁切。
+        //
+        // 为什么不再给 0.60 小胖屏留开关：
+        //   1) 0.60 比内容窄条（0.488）胖，按宽度铺满必然纵向溢出 ≈20% 屏高 ——
+        //      「小胖屏」与「内容完整」在「整屏画面缩放」这条路上数学互斥（V0.0.57 已论证）；
+        //   2) 唯一能让 App 真按小窗重排的路是 SB 侧自建场景（TrollOpen/Mango/ScreenCore
+        //      三方实锤），V0.0.68~V0.0.86 共 5 版打这条路，最后一版日志（归档(8)）：
+        //      P1 第 1/2/3 步全过，第 4 步 `SBDeviceApplicationSceneEntity` 的 5 个候选
+        //      init **全部返回 nil**（诊断里 app / sceneHandle / displayIdentity 都在），
+        //      说明这个实体在 SpringBoard 之外的构造链上根本立不起来；
+        //   3) 用户 2026-10-24 决定：本版做不到小胖屏就终止项目、主窗回细长。
+        // 所以这里不再读 `FullContent`（开关保留只为兼容旧偏好与历史日志串）。
+        let usable = max(1, screen.height - AevonSnap.cropTop)
+        return screen.width / usable
     }
 
     /// 是否「完整显示内容」（V0.0.57，AevonContentFitV57）。
-    /// 开：窗口按屏幕比例、整屏等比缩放，永不裁切；
-    /// 关（**V0.0.58 起默认**，AevonPomoDefaultV58）：0.60 小胖屏 +
-    /// PullOverMF 同款「可视区铺满卡片」逻辑（AevonPomoCoverV58）。
+    ///
+    /// V0.0.87（AevonSlimWindowV87）：主窗已**恒**走完整显示（比例就是屏幕比例，
+    /// 见 `aspect`），这里默认值改成 true 只为了让日志/布局分支与真实形态一致 ——
+    /// 即使旧偏好里存着 false，窗口比例已经是 0.488 的细长条，cover 与 fit 算出来相同。
+    /// 历史串（「内容模式=小胖屏铺满」等）仍在代码里，CI 校验不受影响。
     static var fullContentEnabled: Bool {
-        return AevonPrefs.bool("FullContent", default: false)
+        return AevonPrefs.bool("FullContent", default: true)
     }
 
     /// 小胖屏可视区位置（V0.0.58，AevonCardVisPanV58）。
