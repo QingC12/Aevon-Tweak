@@ -1031,7 +1031,11 @@ jobs:
           PY76
           # 源码级硬规矩（防回退）：P1 这条链里绝不允许再出现 Swift 动态转换 ——
           # 历史两次自动注销全部是它引起的。
-          if grep -nE 'as\? |as! |type\(of:|String\(describing:' Sources/AevonSceneDriver.swift; then
+          # 注意：本步骤前面 `cd verify` 过，源码必须用 $GITHUB_WORKSPACE 绝对路径，
+          # 否则 grep 找不到文件 → 检查变成空转（V0.0.76~78 实际一直空转，V0.0.79 修掉）。
+          # 文件头注释里写着「禁止 as?」这类说明，所以先滤掉注释行再判。
+          if grep -nE 'as\? |as! |type\(of:|String\(describing:' "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift" \
+             | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)'; then
             echo "::error::V0.0.76 回退: AevonSceneDriver.swift 出现动态转换（as?/as!/type(of:)，会重新触发 swift_dynamicCast 野指针崩溃）"
             exit 1
           fi
@@ -1061,7 +1065,7 @@ jobs:
                   print(f"::error::V0.0.77 Guard dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.77 校验: Guard 吞摸正向取证 + 部分吞修正 已编入")
           PY77G
-          if grep -n "classesResponding" Sources/AevonSceneDriver.swift; then
+          if grep -n "classesResponding" "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift"; then
             echo "::error::V0.0.77 回退: SceneDriver 又出现 Swift 版 classesResponding（会重新触发 swift_dynamicCast 崩溃）"
             exit 1
           fi
@@ -1114,11 +1118,11 @@ jobs:
                   print(f"::error::V0.0.79 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.79 校验: 内容触摸实时生效 + ivar 候选 + 主屏两参 init + Guard 宽限 已编入")
           PY79
-          if grep -n "let contentInteractiveByPref" Sources/AevonSceneHost.swift; then
+          if grep -n "let contentInteractiveByPref" "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
             echo "::error::V0.0.79 回退: contentInteractiveByPref 又变回 let（开关只读一次，改设置对已开浮窗无效）"
             exit 1
           fi
-          if ! grep -q "AevonIvarCandidates" Sources/AevonSceneDriver.swift; then
+          if ! grep -q "AevonIvarCandidates" "$GITHUB_WORKSPACE/Sources/AevonSceneDriver.swift"; then
             echo "::error::V0.0.79 回退: SceneDriver 没接 ivar 候选（provider 还会是 nil）"
             exit 1
           fi
