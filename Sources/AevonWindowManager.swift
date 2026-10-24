@@ -290,6 +290,11 @@ enum AevonWindowManager {
                         AevonSceneHelper.wakeUp(bundleID)
                         AevonLog.info("[窗口] 已触发前台回弹：App 重新呈现全屏"
                             + "（\(bundleID)，修复关浮窗后无法滑动）（AevonFrontmostRepreV61）")
+                        /* V0.0.80：回弹之后再校验一次 —— 回弹失败（scene 取不到 / 系统不响应）
+                         * 时要能自愈，并且留下证据（AevonFrontHealV80）。 */
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            AevonEntryHost.reassertFrontmost(reason: "关窗回弹后 1 秒")
+                        }
                     }
                 }
             }

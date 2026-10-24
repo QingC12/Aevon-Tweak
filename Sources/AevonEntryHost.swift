@@ -363,13 +363,25 @@ enum AevonEntryHost {
     /// 根因是 `FBScene.settings.foreground == false` —— 场景不呈现、输入不路由。
     static func reassertFrontmost(reason: String) {
         guard let identity = appSceneIdentity, !identity.isEmpty else { return }
-        guard let scene = AevonSceneHelper.scene(for: identity) else { return }
+        guard let scene = AevonSceneHelper.scene(for: identity) else {
+            /* 找不到场景 = 这条自愈路径本身失效（正常情况应该有），
+             * 记一行限频日志，下一轮能看出是不是 `scene(for:)` 在 iOS 17 上取不到。 */
+            let now = CACurrentMediaTime()
+            if now - lastHealMissLogAt > 30 {
+                lastHealMissLogAt = now
+                AevonLog.warn("[自愈] 有前台标识但取不到 scene 对象，无法校验前台状态"
+                    + "（\(identity)，\(reason)，AevonFrontHealV80）")
+            }
+            return
+        }
         guard let foreground = AevonSceneHelper.isForeground(scene) else { return }
         guard foreground == false else { return }
         AevonSceneHelper.setForeground(scene, true)
         AevonLog.warn("[自愈] 全屏前台场景被误判为后台 → 已强制拉回前台"
             + "（\(identity)，\(reason)，AevonFrontHealV80）")
     }
+
+    private static var lastHealMissLogAt: CFTimeInterval = 0
 
     /// 重排某一侧的整列停靠小窗（V0.0.50，AevonDockTop5V50）。    ///
     /// 用户 Aevon(43)：「第一个小窗在屏幕右上角、距离顶部 10% 处，然后向下依次类推，
