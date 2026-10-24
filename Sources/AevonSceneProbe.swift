@@ -163,8 +163,8 @@ enum AevonSceneProbe {
 
         // ② 主屏 displayIdentity
         var idDesc = "取不到"
+        let mainSel = NSSelectorFromString("mainDisplay")
         if let displayManager = NSClassFromString("FBDisplayManager"),
-           let mainSel = NSSelectorFromString("mainDisplay"),
            displayManager.responds(to: mainSel),
            let display = AevonRuntime.send(displayManager, mainSel) {
             let cls = AevonRuntime.className(display) ?? "?"
