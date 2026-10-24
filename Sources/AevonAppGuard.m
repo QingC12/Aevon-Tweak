@@ -99,6 +99,9 @@ __attribute__((used)) static const char AevonScrollSrcV84Marker[] = "AevonScroll
 __attribute__((used)) static const char AevonRectRingV85Marker[] = "AevonRectRingV85";
 __attribute__((used)) static const char AevonScrollSrcV85Marker[] = "AevonScrollSrcV85";
 __attribute__((used)) static const char AevonRingReclaimV85Marker[] = "AevonRingReclaimV85";
+/* V0.0.86（AevonScrollAnchorV86）：滚动锚点守护 —— 主诉「关掉浮窗后全屏 App
+ * 自己滑到底」的兜底与取证。CI 用 strings 抓下面的 ASCII 标记做回归。 */
+__attribute__((used)) static const char AevonScrollAnchorV86Marker[] = "AevonScrollAnchorV86";
 
 /* V0.0.84（AevonScrollSrcV84）：App 最近一次收到触摸的时刻（sendEvent 里刷新）。
  * 声明必须放在 AevonGuardSendEvent 之前 —— C 不允许先用后声明（编译期硬错误）。 */
@@ -557,6 +560,215 @@ static BOOL AevonGuardShouldReclaimScroll(CGPoint startScreen) {
     } @catch (NSException *e) {
         return NO;
     }
+}
+
+/* ===================================================================
+ * V0.0.86（AevonScrollAnchorV86）：**滚动锚点守护** —— 兜底 + 取证。
+ *
+ * 归档(7) 把前面几版的前提推翻了：这一整段日志里，背后那个全屏 App 的
+ * `began 放行` 是 **0 条**、`浮窗整窗拦下触摸` 只有 1 条 —— 也就是说
+ * **触摸根本没有进到背后 App**，可用户看到的「关掉浮窗后内容自己滑到底、
+ * 底部一片空白」照样出现。结论：这条不是触摸引起的。
+ * 而且 V0.84/V0.85 的 `setContentOffset:animated:` 取证也是 0 条 ——
+ * 说明写偏移的人走的不是那条公开路径（拖拽走 bounds 内部写入，
+ * 程序性写入也常常绕过 animated 版本）。
+ *
+ * 所以换一个不依赖「猜是谁写的」的思路：**从结果下手**。
+ * 只要「有浮窗在场」的这段时间里，本进程的滚动视图在没有触摸的情况下
+ * 被挪了位置，就把它挪回去，同时把跳变写进日志（这就是取证）。
+ * 判据全部与坐标、与触摸投递无关：
+ *   · 最近 2.5 秒内还看见过浮窗矩形（com.aevon.floatwin 非空）——
+ *     关窗那一刻 SB 会先把矩形清零，而问题恰好出在清零之后，
+ *     所以必须留一条 2.5 秒的尾巴，不能一看到清零就收工；
+ *   · 本进程不是浮窗主人（主人自己滚动是用户的正当操作）；
+ *   · 触龄 ≥ 0.8 秒且不在拖动 / 减速（否则就是手指在滑）；
+ *   · 竖向跳变 ≥ 8pt。
+ * 命中 → 复位 + 日志。复位有频率与次数上限，绝不会和 App 死磕。
+ * =================================================================== */
+
+@interface AevonScrollProbeV86 : NSObject
+@property (nonatomic, weak) UIScrollView *sv;
+@property (nonatomic, assign) CGPoint anchor;
+@property (nonatomic, assign) CFAbsoluteTime stableAt;
+@property (nonatomic, assign) NSInteger restores;
+@property (nonatomic, assign) CFAbsoluteTime lastRestoreAt;
+@end
+
+@implementation AevonScrollProbeV86
+@end
+
+static NSMutableArray<AevonScrollProbeV86 *> *gAevonProbesV86 = nil;
+static CFAbsoluteTime gAevonLastFloatWinAtV86 = 0;
+static CFAbsoluteTime gAevonLastAnchorLogAtV86 = 0;
+static CFAbsoluteTime gAevonLastPlainLogAtV86 = 0;
+static NSInteger gAevonAnchorRestoredTotalV86 = 0;
+static BOOL gAevonAnchorAnnouncedV86 = NO;
+static dispatch_source_t gAevonAnchorTimerV86 = nil;
+
+/// 只收「真的能滚」的滚动视图（内容比可视区高），最多 8 个。
+static void AevonCollectScrollViewsV86(UIView *view, NSMutableArray<UIScrollView *> *out, int depth) {
+    if (view == nil || depth > 14 || out.count >= 8) { return; }
+    if ([view isKindOfClass:[UIScrollView class]]) {
+        UIScrollView *sv = (UIScrollView *)view;
+        if (sv.bounds.size.height > 40 && sv.contentSize.height > sv.bounds.size.height + 24) {
+            [out addObject:sv];
+        }
+    }
+    NSArray<UIView *> *subs = view.subviews;
+    for (UIView *sub in subs) {
+        if (out.count >= 8) { break; }
+        AevonCollectScrollViewsV86(sub, out, depth + 1);
+    }
+}
+
+/// 已有存活探针就复用（不重建，避免每拍重走一遍视图树）；全死了才重新找。
+static void AevonAnchorRefreshProbesV86(UIWindow *win) {
+    if (gAevonProbesV86 == nil) { gAevonProbesV86 = [NSMutableArray array]; }
+    NSMutableArray<AevonScrollProbeV86 *> *alive = [NSMutableArray array];
+    for (AevonScrollProbeV86 *p in gAevonProbesV86) {
+        if (p.sv != nil) { [alive addObject:p]; }
+    }
+    if (alive.count > 0) {
+        gAevonProbesV86 = alive;
+        return;
+    }
+    NSMutableArray<UIScrollView *> *found = [NSMutableArray array];
+    AevonCollectScrollViewsV86(win, found, 0);
+    if (found.count == 0) { return; }
+    [gAevonProbesV86 removeAllObjects];
+    CFAbsoluteTime now = CACurrentMediaTime();
+    NSInteger n = 0;
+    for (UIScrollView *sv in found) {
+        if (n >= 4) { break; }
+        AevonScrollProbeV86 *p = [AevonScrollProbeV86 new];
+        p.sv = sv;
+        p.anchor = sv.contentOffset;
+        p.stableAt = now;
+        [gAevonProbesV86 addObject:p];
+        n += 1;
+    }
+}
+
+static void AevonAnchorTickV86(void) {
+    @try {
+        CFAbsoluteTime now = CACurrentMediaTime();
+        CGRect fw = AevonGuardFloatWindowRect();
+        if (!CGRectIsEmpty(fw)) { gAevonLastFloatWinAtV86 = now; }
+        /* 没有浮窗在场（且已经超过 2.5 秒尾巴）→ 一点都不碰 App 的滚动。 */
+        if (gAevonLastFloatWinAtV86 <= 0) { return; }
+        if ((now - gAevonLastFloatWinAtV86) > 2.5) { return; }
+        if (AevonGuardIsFloatOwner()) { return; }
+
+        UIWindow *win = nil;
+        @try { win = [UIApplication sharedApplication].keyWindow; } @catch (NSException *e) { win = nil; }
+        if (win == nil) { return; }
+        AevonAnchorRefreshProbesV86(win);
+        if (gAevonProbesV86.count == 0) { return; }
+
+        if (!gAevonAnchorAnnouncedV86) {
+            gAevonAnchorAnnouncedV86 = YES;
+            AevonGuardWriteLog(NO, @"滚动锚点守护已布防（跟踪 %lu 个滚动视图，浮窗 %.0f,%.0f %.0fx%.0f，app=%@）（AevonScrollAnchorV86）",
+                               (unsigned long)gAevonProbesV86.count,
+                               fw.origin.x, fw.origin.y, fw.size.width, fw.size.height,
+                               [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+        }
+
+        BOOL touchRecent = (gAevonLastTouchAt > 0) && ((now - gAevonLastTouchAt) < 0.8);
+        for (AevonScrollProbeV86 *p in gAevonProbesV86) {
+            UIScrollView *sv = p.sv;
+            if (sv == nil) { continue; }
+            CGPoint cur = sv.contentOffset;
+            CGFloat dy = fabs(cur.y - p.anchor.y);
+            BOOL dragging = (sv.isDragging || sv.isTracking || sv.isDecelerating);
+            if (dy < 8.0) {
+                /* 位置没动 / 只是几像素抖动 → 这就是当前锚点 */
+                if (!touchRecent && !dragging) { p.anchor = cur; p.stableAt = now; }
+                continue;
+            }
+            if (touchRecent || dragging) {
+                /* 手指在滑 / 刚滑完：这是用户的操作，锚点跟着走 */
+                p.anchor = cur;
+                p.stableAt = now;
+                continue;
+            }
+            /* —— 没触摸却被挪了 ≥ 8pt：这就是主诉现场 —— */
+            if (now - gAevonLastAnchorLogAtV86 > 0.5) {
+                gAevonLastAnchorLogAtV86 = now;
+                AevonGuardWriteLog(NO, @"滚动被非触摸源挪动：y %.0f → %.0f（跳变 %.0fpt，内容高 %.0f 可视高 %.0f，"
+                                   @"触龄 %.2fs，拖动中=0 减速中=0，app=%@）→ 正在复位（累计 %ld 次）（AevonScrollAnchorV86）",
+                                   p.anchor.y, cur.y, dy, sv.contentSize.height, sv.bounds.size.height,
+                                   (gAevonLastTouchAt > 0) ? (now - gAevonLastTouchAt) : -1.0,
+                                   [[NSBundle mainBundle] bundleIdentifier] ?: @"?",
+                                   (long)(gAevonAnchorRestoredTotalV86 + 1));
+            }
+            if (p.lastRestoreAt > 0 && (now - p.lastRestoreAt) < 0.05) { continue; }
+            p.lastRestoreAt = now;
+            p.restores += 1;
+            gAevonAnchorRestoredTotalV86 += 1;
+            @try {
+                sv.contentOffset = p.anchor;
+            } @catch (NSException *e) {
+            }
+            /* 有的 App 会在布局里疯狂回写 —— 放过它，别变成死循环 */
+            if (p.restores > 40) {
+                p.restores = 0;
+                p.anchor = sv.contentOffset;
+            }
+        }
+    } @catch (NSException *e) {
+    }
+}
+
+static void AevonGuardInstallAnchorTimerV86(void) {
+    if (gAevonAnchorTimerV86 != nil) { return; }
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                     dispatch_get_main_queue());
+    if (timer == nil) { return; }
+    uint64_t interval = (uint64_t)(0.25 * NSEC_PER_SEC);
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)interval),
+                              interval, (uint64_t)(0.05 * NSEC_PER_SEC));
+    dispatch_source_set_event_handler(timer, ^{
+        AevonAnchorTickV86();
+    });
+    gAevonAnchorTimerV86 = timer;
+    dispatch_resume(timer);
+}
+
+/* V0.0.86：`-setContentOffset:`（非动画版）也挂一层观测。
+ * 上一版只挂 `setContentOffset:animated:`，结果归档(7) 里 0 条命中 ——
+ * 说明真正写偏移的人走的是这一条（或者更底层的 bounds 写入，由上面的
+ * 采样兜住）。这里只记录，不改变原行为。 */
+static void (*AevonGuardOrigSetContentOffsetPlain)(id, SEL, CGPoint) = NULL;
+
+static void AevonGuardSetContentOffsetPlain(id target, SEL _cmd, CGPoint offset) {
+    if (AevonGuardOrigSetContentOffsetPlain == NULL) { return; }
+    @try {
+        CFAbsoluteTime now = CACurrentMediaTime();
+        BOOL watched = (gAevonLastFloatWinAtV86 > 0) && ((now - gAevonLastFloatWinAtV86) < 2.5);
+        if (watched) {
+            UIScrollView *sv = (UIScrollView *)target;
+            CGFloat dy = fabs(offset.y - sv.contentOffset.y);
+            if (dy >= 8.0 && (now - gAevonLastPlainLogAtV86) > 0.4) {
+                gAevonLastPlainLogAtV86 = now;
+                NSString *caller = @"?";
+                @try {
+                    NSArray<NSString *> *stack = [NSThread callStackSymbols];
+                    if (stack.count >= 4) {
+                        caller = stack[3];
+                        if (caller.length > 100) { caller = [caller substringToIndex:100]; }
+                    }
+                } @catch (NSException *e) { }
+                AevonGuardWriteLog(NO, @"setContentOffset: 被调用（y %.0f→%.0f 跳变 %.0fpt，触龄 %.2fs，"
+                                   @"拖动中=%d 减速中=%d，app=%@，调用方=%@）（AevonScrollAnchorV86）",
+                                   sv.contentOffset.y, offset.y, dy,
+                                   (gAevonLastTouchAt > 0) ? (now - gAevonLastTouchAt) : -1.0,
+                                   sv.isDragging ? 1 : 0, sv.isDecelerating ? 1 : 0,
+                                   [[NSBundle mainBundle] bundleIdentifier] ?: @"?", caller);
+            }
+        }
+    } @catch (NSException *e) {
+    }
+    AevonGuardOrigSetContentOffsetPlain(target, _cmd, offset);
 }
 
 /* V0.0.57（AevonNoWinResizeV57）：App 窗口尺寸 —— **只允许单向还原**。
@@ -1705,6 +1917,21 @@ static void AevonGuardInstall(void) {
             AevonGuardOrigSetContentOffset =
                 (void (*)(id, SEL, CGPoint, BOOL))method_setImplementation(co, (IMP)AevonGuardSetContentOffset);
         }
+        /* V0.0.86：非动画版也观测一层（真正写偏移的多半是这条）。 */
+        Method coPlain = (scrollClass != Nil)
+            ? class_getInstanceMethod(scrollClass, sel_registerName("setContentOffset:"))
+            : NULL;
+        if (coPlain != NULL && AevonGuardOrigSetContentOffsetPlain == NULL) {
+            AevonGuardOrigSetContentOffsetPlain =
+                (void (*)(id, SEL, CGPoint))method_setImplementation(coPlain, (IMP)AevonGuardSetContentOffsetPlain);
+        }
+    } @catch (NSException *exception) {
+    }
+
+    /* V0.0.86（AevonScrollAnchorV86）：启动滚动锚点采样（0.25 秒一拍，
+     * 没有浮窗在场时只做一次 notify 读取就返回，开销可以忽略）。 */
+    @try {
+        AevonGuardInstallAnchorTimerV86();
     } @catch (NSException *exception) {
     }
 

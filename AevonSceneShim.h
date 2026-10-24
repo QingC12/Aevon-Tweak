@@ -122,6 +122,12 @@ NSObject *AevonSafeObjCall(id obj, NSString *selectorName);
 NSObject *AevonSafeObjCallSel(id obj, SEL sel);
 NSObject *AevonSafeObjCall1(id obj, NSString *selectorName, id arg1);
 NSObject *AevonSafeObjCall2(id obj, NSString *selectorName, id arg1, id arg2);
+
+/// V0.0.86（AevonP1ExcV86）：最近一次被安全调用吞掉的 ObjC 异常（"名字: 原因"）。
+/// 返回 NULL 表示还没吞过异常。缓冲区归实现管理，调用方不要 free。
+/// 用途：P1 第 4 步的 init 全返回 nil 时，区分「真返回 nil」和「抛异常被吞」。
+const char *AevonLastExceptionText(void);
+void AevonClearLastExceptionText(void);
 /// 读对象型 ivar（编码必须是 '@'）。
 NSObject *AevonSafeObjIvar(id obj, const char *ivarName);
 /// `[cls alloc]`（@try 保护 + 返回值过滤）。

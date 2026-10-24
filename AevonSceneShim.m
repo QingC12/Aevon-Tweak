@@ -767,6 +767,43 @@ id AevonSafeCallObjectSel(id obj, SEL sel) {
 __attribute__((used)) static const char AevonSceneSafeObjV76Marker[] = "AevonSceneSafeObjV76";
 __attribute__((used)) static const char AevonSceneProxyObjCV76Marker[] = "AevonP1ProxyObjCV76";
 
+/* V0.0.86（AevonP1ExcV86）：记录「最近一次被安全调用吞掉的 ObjC 异常」。
+ *
+ * P1 第 4 步四个 init 全返回 nil，但一直分不清两种情形：
+ *   · 真的返回 nil（参数/前置条件不满足）；
+ *   · 抛了异常，被我们的 @try 吞掉，对外表现也是 nil。
+ * 后者只要把 reason 打出来就能立刻定位（「must be called on main thread」、
+ * 「attempt to insert nil object」之类一眼就能认出）。所以这里留一个静态缓冲，
+ * 每次 catch 都写一遍，调用方在失败后读一次即可。缓冲区由本函数管理，别 free。 */
+/* V0.0.86（AevonP1ExcV86 / AevonP1Init2V86）：CI 校验串。
+ * 必须是 ObjC `used` 常量 —— Swift 侧的同类常量会被 LLVM 优化掉（已踩过四次）。 */
+__attribute__((used)) static const char AevonP1ExcV86Marker[] = "AevonP1ExcV86";
+__attribute__((used)) static const char AevonP1Init2V86Marker[] = "AevonP1Init2V86";
+
+static char gAevonLastExceptionText[512] = {0};
+
+static void AevonRecordException(NSException *e) {
+    @try {
+        NSString *name = e.name ?: @"?";
+        NSString *reason = e.reason ?: @"?";
+        NSString *text = [NSString stringWithFormat:@"%@: %@", name, reason];
+        const char *utf8 = text.UTF8String;
+        if (utf8 == NULL) { return; }
+        size_t len = strlen(utf8);
+        if (len >= sizeof(gAevonLastExceptionText)) { len = sizeof(gAevonLastExceptionText) - 1; }
+        memcpy(gAevonLastExceptionText, utf8, len);
+        gAevonLastExceptionText[len] = '\0';
+    } @catch (NSException *inner) { }
+}
+
+const char *AevonLastExceptionText(void) {
+    return (gAevonLastExceptionText[0] != '\0') ? gAevonLastExceptionText : NULL;
+}
+
+void AevonClearLastExceptionText(void) {
+    gAevonLastExceptionText[0] = '\0';
+}
+
 /* 指针体检：不是干净对象就返回 nil，绝不把脏指针带进 Swift。
  * 历史两次自动注销的元凶：BOOL 返回值 1（奇地址）被当成对象指针、
  * 结构体返回值被当成对象指针。 */
@@ -804,7 +841,7 @@ NSObject *AevonSafeObjCallSel(id obj, SEL sel) {
         IMP imp = AevonObjectIMP(obj, sel);
         if (imp == NULL) { return nil; }
         return AevonVerifiedObject(((id (*)(id, SEL))imp)(obj, sel));
-    } @catch (NSException *e) { return nil; }
+    } @catch (NSException *e) { AevonRecordException(e); return nil; }
 }
 
 NSObject *AevonSafeObjCall(id obj, NSString *selectorName) {
@@ -819,7 +856,7 @@ NSObject *AevonSafeObjCall1(id obj, NSString *selectorName, id arg1) {
         IMP imp = AevonObjectIMP(obj, sel);
         if (imp == NULL) { return nil; }
         return AevonVerifiedObject(((id (*)(id, SEL, id))imp)(obj, sel, arg1));
-    } @catch (NSException *e) { return nil; }
+    } @catch (NSException *e) { AevonRecordException(e); return nil; }
 }
 
 NSObject *AevonSafeObjCall2(id obj, NSString *selectorName, id arg1, id arg2) {
@@ -829,7 +866,7 @@ NSObject *AevonSafeObjCall2(id obj, NSString *selectorName, id arg1, id arg2) {
         IMP imp = AevonObjectIMP(obj, sel);
         if (imp == NULL) { return nil; }
         return AevonVerifiedObject(((id (*)(id, SEL, id, id))imp)(obj, sel, arg1, arg2));
-    } @catch (NSException *e) { return nil; }
+    } @catch (NSException *e) { AevonRecordException(e); return nil; }
 }
 
 NSObject *AevonSafeObjIvar(id obj, const char *ivarName) {

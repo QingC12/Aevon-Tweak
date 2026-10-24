@@ -608,6 +608,13 @@ final class AevonSceneDriver: NSObject {
             ("initWithApplication:sceneHandleProvider:displayIdentity:", 3),
             ("initWithApplicationForMainDisplay:", 1),
             ("initWithApplication:uniqueIdentifier:targetContentIdentifier:sceneHandleProvider:displayIdentity:", 5),
+            /* V0.0.86（AevonP1Init2V86）：补两个「两参、不要 provider」的候选。
+             * 归档(7) 里四个候选全返回 nil，而 provider / identity / sceneHandle
+             * 三条链都通 —— 说明拦路的不是 provider，是「建第二个场景」这件事本身。
+             * 这两条是 SpringBoard 内部给自己用的「主屏 + 需要时生成主场景」入口，
+             * 语义正好对上「给已有 App 再要一个可显示的场景」，值得先试。 */
+            ("initWithApplicationForMainDisplay:generatingNewPrimarySceneIfRequired:", 2),
+            ("initWithApplication:generatingNewPrimarySceneIfRequired:", 2),
         ]
         var usable: [(String, Int)] = []
         for (selName, argc) in candidates where AevonClassHasInstanceMethod(cls, selName) {
@@ -655,7 +662,8 @@ final class AevonSceneDriver: NSObject {
          * 这条走通就等于拿到「App 在 266x458 画布里重排」的第一手证据。 */
         let effProvider = provider
         var hasMainDisplayInit = false
-        if effProvider == nil, AevonClassHasInstanceMethod(cls, AevonSceneDriver.mainDisplayInitSelector) {
+        if effProvider == nil, AevonClassHasInstanceMethod(cls, AevonSceneDriver.mainDisplayInitSelector)
+            && !usable.contains(where: { $0.0 == AevonSceneDriver.mainDisplayInitSelector }) {
             usable.append((AevonSceneDriver.mainDisplayInitSelector, 2))
             hasMainDisplayInit = true
             diag.items.append("兜底=主屏两参 init（无需 provider，AevonMainDisplayInitV79）")
@@ -703,6 +711,9 @@ final class AevonSceneDriver: NSObject {
                 guard let method = class_getInstanceMethod(cls, sel) else { continue }
                 let imp = method_getImplementation(method)
                 var attempt: NSObject? = nil
+                /* V0.0.86（AevonP1ExcV86）：每次尝试前清空异常缓冲，
+                 * 失败后读一次 —— 区分「真返回 nil」和「抛异常被吞」。 */
+                AevonClearLastExceptionText()
                 /* 每个候选**独立异常隔离 + 各自 fresh alloc**（Aevon(66) 教训：整段共用一个
                  * @try 时，第一个候选抛异常会把后面所有候选一起跳过）。 */
                 self.tryRun("第4步-\(short)") {
@@ -712,7 +723,20 @@ final class AevonSceneDriver: NSObject {
                     case 1:
                         result = unsafeBitCast(imp, to: Init1Main.self)(fresh, sel, app)
                     case 2:
-                        result = unsafeBitCast(imp, to: Init2Main.self)(fresh, sel, app, true)
+                        /* V0.0.86：两参候选的 BOOL 两种取值都试（true / false）。
+                         * 同一个 selector 在不同版本里语义可能相反，试一次成本极低。 */
+                        for flag in [true, false] {
+                            guard let fresh2 = AevonAllocInstance(cls) else { continue }
+                            let r2 = unsafeBitCast(imp, to: Init2Main.self)(fresh2, sel, app, flag)
+                            if let r2 {
+                                let obj2 = r2.takeRetainedValue()
+                                if AevonClassOfObject(obj2) != nil {
+                                    attempt = obj2
+                                    diag.items.append("两参生成主场景=\(flag)")
+                                    break
+                                }
+                            }
+                        }
                     case 4:
                         guard let p = effProvider else { return }
                         result = unsafeBitCast(imp, to: Init4.self)(fresh, sel, app, true, p, displayID)
@@ -737,6 +761,12 @@ final class AevonSceneDriver: NSObject {
                     break
                 }
                 diag.items.append("返回nil=\(selName)")
+                if let exc = AevonLastExceptionText() {
+                    let text = String(cString: exc)
+                    if !text.isEmpty {
+                        diag.items.append("异常=\(text.count > 160 ? String(text.prefix(160)) : text)@\(short)")
+                    }
+                }
             }
         }
         guard let entity else {

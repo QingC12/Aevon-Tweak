@@ -1175,9 +1175,53 @@ int AevonAppProcessState(id app) {
         if (app == nil) { return -1; }
         SEL sel = NSSelectorFromString(@"processState");
         if (sel == NULL || ![app respondsToSelector:sel]) { return -1; }
-        int32_t (*fn)(id, SEL) = (int32_t (*)(id, SEL))[app methodForSelector:sel];
-        if (fn == NULL) { return -1; }
-        return (int)fn(app, sel);
+        IMP imp = [app methodForSelector:sel];
+        if (imp == NULL) { return -1; }
+        /* V0.0.86（AevonPidEncodingV86）：**按方法签名读，不猜**。
+         *
+         * 归档(7) 把编码打出来了：`processState` 的返回类型编码是 `@`（对象），
+         * 签名是 `@16@0:8` —— 它压根不返回整型！所以前两版按 `int32_t` 读
+         * 得到的是**指针的低 32 位**：10750085536 / -2127615328 都是这么来的
+         * （两个值差得离谱、且和「进程在不在」毫无关系，正是指针的特征）。
+         *
+         * 现在的策略：先看真实编码。
+         *   '@' → 当对象调，取 intValue（NSNumber 或枚举包装）；
+         *   'I'/'i'/'S'/'s'/'C'/'c'/'B' → 按 32 位 / 8 位整型读；
+         *   'Q'/'q' → 按 64 位读，但只接受 0…8 这种合理值（否则一律当无效）；
+         * 其它/读不到 → -1（调用方据此走别的判据）。 */
+        const char *enc = NULL;
+        @try {
+            Method m = class_getInstanceMethod(object_getClass(app), sel);
+            if (m != NULL) { enc = method_getTypeEncoding(m); }
+        } @catch (NSException *e) { enc = NULL; }
+        char ret = (enc != NULL) ? enc[0] : '?';
+        if (ret == '@') {
+            id (*fn)(id, SEL) = (id (*)(id, SEL))imp;
+            id value = fn(app, sel);
+            if (value == nil) { return -1; }
+            int iv = -1;
+            @try {
+                if ([value respondsToSelector:@selector(intValue)]) {
+                    iv = (int)[value intValue];
+                }
+            } @catch (NSException *e) { iv = -1; }
+            if (iv >= 0 && iv <= 8) { return iv; }
+            return -1;
+        }
+        if (ret == 'Q' || ret == 'q') {
+            long long (*fn)(id, SEL) = (long long (*)(id, SEL))imp;
+            long long v = fn(app, sel);
+            if (v >= 0 && v <= 8) { return (int)v; }
+            return -1;
+        }
+        if (ret == 'B' || ret == 'c' || ret == 'C') {
+            BOOL (*fn)(id, SEL) = (BOOL (*)(id, SEL))imp;
+            return fn(app, sel) ? 1 : 0;
+        }
+        int32_t (*fn)(id, SEL) = (int32_t (*)(id, SEL))imp;
+        int v32 = (int)fn(app, sel);
+        if (v32 >= 0 && v32 <= 8) { return v32; }
+        return -1;
     } @catch (NSException *exception) {
         return -1;
     }

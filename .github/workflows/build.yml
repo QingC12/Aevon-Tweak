@@ -1324,6 +1324,38 @@ jobs:
             echo "::error::V0.0.80 回退: Guard 又在强行改 App 窗口尺寸（会吃掉整屏触摸 / 每秒强制布局）"
             exit 1
           fi
+          # ── V0.0.86（AevonScrollAnchorV86 / AevonP1ExcV86 / AevonP1Init2V86）──
+          # 归档(7) 关键事实：背后那个全屏 App 的 `began 放行` 是 0 条、
+          # `浮窗整窗拦下触摸` 只有 1 条 → 触摸根本没进到背后 App，可「关掉浮窗后
+          # 内容自己滑到底」照样出现；同时 `setContentOffset:animated:` 取证 0 条。
+          # 所以这一版从「谁写的」转向「结果」：0.25 秒采样偏移，无触摸却被挪 ≥8pt
+          # 就复位 + 记日志；并把非动画版 `setContentOffset:` 也挂上观测。
+          python3 - "$GUARD_DYLIB" <<'PY86'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonScrollAnchorV86","滚动锚点守护已布防","滚动被非触摸源挪动",
+                    "setContentOffset: 被调用"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.86 Guard dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.86 校验: 滚动锚点守护 + 非动画 setContentOffset 观测 已编入 Guard")
+          PY86
+          python3 - "$DYLIB" <<'PY86M'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonP1ExcV86","AevonP1Init2V86","两参生成主场景"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.86 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.86 校验: P1 异常取证 + 两参 init 候选 已编入主 dylib")
+          PY86M
+          # 反回退：锚点采样必须真的被安装（只写函数不装 = 等于没做）
+          grep -q 'AevonGuardInstallAnchorTimerV86()' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
+            || { echo "::error::V0.0.86 回退: 锚点采样定时器没安装"; exit 1; }
+          # 反回退：锚点复位必须严格限定「非浮窗主人 + 非触摸期」
+          grep -q 'AevonGuardIsFloatOwner()' "$GITHUB_WORKSPACE/Sources/AevonAppGuard.m" \
+            || { echo "::error::V0.0.86 回退: 锚点守护丢了浮窗主人豁免"; exit 1; }
+          # 反回退：P1 的 processState 必须按真实编码读（按 int32 读会拿到指针低位）
+          grep -q "ret == '@'" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::V0.0.86 回退: processState 又按固定整型读了（实测编码是 @，会拿到垃圾）"; exit 1; }
           # Guard 侧：幽灵格必须无条件记录（bit48 先命中时也要跑停靠格几何命中）
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardGhostRecordV67' \
             || { echo "::error::V0.0.67 Guard 标记缺失: AevonGuardGhostRecordV67（幽灵格无条件记录）"; exit 1; }
