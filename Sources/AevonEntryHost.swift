@@ -886,6 +886,9 @@ enum AevonEntryHost {
             AevonEdgeEntry.resetGlobalTouchState(reason: "看门狗：当前没有浮窗")
             if tickCount % 2 == 0 { reassertFrontmost(reason: "看门狗周期校验") }
         }
+        /* V0.0.81（AevonAppGateV81）：整窗触摸门的兜底复位 —— 关窗路径万一被打断
+         * （异常 / 崩溃 / 用户连点），残留的「关门」会让那个 App 永远点不动。 */
+        AevonSceneHelper.clearStaleAppGates()
 
         // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
         if tickCount <= 60, tickCount % 10 == 0 {

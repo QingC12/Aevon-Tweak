@@ -570,6 +570,43 @@ void AevonNotifySetWindowSize(double w, double h) {
     }
 }
 
+/* ──────────────────────────────────────────────────────────────────
+ * V0.0.81（AevonAppGateV81）：整窗触摸门
+ *
+ * 为什么需要它（Aevon(73) 真机日志实锤）：
+ *   停靠小窗被轻点时，App 进程收到的那一份触摸，坐标在 App 侧**完全不可信**：
+ *   同一次轻点 SB 记「窗身按下 384,174」，Guard 记「began 放行 win=218,295」；
+ *   下一次 375,186 → 184,476；再下一次 375,189 → 182,484；197,680 → 235,768。
+ *   也就是说 Guard 拿到的点位会乱跳几十到几百点 —— 停靠格几何、主窗矩形、
+ *   热区三条判据全部落在空处，于是「began 放行」→ App 合成一次点击 = 穿透。
+ *   坐标类判据在这个环境里已经没有继续补的意义了。
+ *
+ * 做法：把「这个浮窗当前该不该接收内容触摸」做成**持续状态**写进共享内存，
+ *   Guard 在 `sendEvent:` 第一行读该状态，关门就整条事件丢弃 —— 不碰坐标，
+ *   也不存在「began 那一帧还没读到状态」的竞态（状态在停靠/还原那一刻就变了，
+ *   远早于用户的手指）。
+ *
+ * 默认 0（开门）：notify state 初始就是 0，所以任何没被显式关过的 App、
+ *   任何残留状态，都仍然是正常可点的 —— 绝不会把 App 锁死。
+ * ────────────────────────────────────────────────────────────────── */
+void AevonNotifySetAppGate(NSString *bundleID, int blocked) {
+    @try {
+        if (bundleID.length == 0) { return; }
+        NSString *name = [@"com.aevon.gate." stringByAppendingString:bundleID];
+        int token = -1;
+        if (notify_register_check(name.UTF8String, &token) != 0 || token < 0) { return; }
+        uint64_t want = (blocked != 0) ? 1ULL : 0ULL;
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        if (old != want) {
+            notify_set_state(token, want);
+            notify_post(name.UTF8String);
+        }
+        notify_cancel(token);
+    } @catch (NSException *exception) {
+    }
+}
+
 int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled) {
     @try {
         int token = AevonNotifyZoneToken();

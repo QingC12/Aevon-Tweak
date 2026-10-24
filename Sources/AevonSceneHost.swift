@@ -131,6 +131,16 @@ final class AevonSceneHost {
             container.isUserInteractionEnabled = allow
             flipped += 1
         }
+        /* V0.0.81（AevonAppGateV81）：内容不接收触摸时，顺带把**整窗触摸门**关上 ——
+         * App 进程里那一份 backboardd 直投的触摸也一并丢，停靠小窗被轻点就再也不可能
+         * 在 App 里合成点击（Aevon(73) 报的正是这个）。开门条件是「主窗 + 内容可交互」，
+         * 也正好等于 `allow`，两边永远一致，不会有「内容能点但门还关着」的错位。
+         *
+         * 唯一的例外：这个 App **本身就是当前全屏显示的那个 App**（场景标识对得上）。
+         * 那种情况下屏幕主体还是它，绝不能整窗锁死（否则用户会觉得「手机卡死了」），
+         * 宁可保留原来那一点点穿透风险。 */
+        let isFullscreenApp = (AevonEntryHost.appSceneIdentity?.contains(bundleID) ?? false)
+        AevonSceneHelper.setAppGate(bundleID, blocked: (!allow && !isFullscreenApp), reason: reason)
         // 「设置变更 / 显式切换」两种是用户主动改的，单独记一行，不占强制计数
         if flipped > 0 && reason != "显式切换" && reason != "设置变更" {
             enforcementCount += 1
@@ -609,6 +619,10 @@ final class AevonSceneHost {
          * 关窗之后这个 view 可能还被系统用来全屏显示这个 App —— 留着 false
          * 就是「关掉所有浮窗后全屏点不动」的直接原因。 */
         restoreSystemPresentationInteraction(reason: "关窗")
+
+        /* V0.0.81（AevonAppGateV81）：拆呈现者就把门打开 —— 浮窗没了，
+         * App 必须能正常收触摸。漏掉这一步等于把 App 永久锁死（用户只能重开）。 */
+        AevonSceneHelper.setAppGate(bundleID, blocked: false, reason: "关窗拆呈现者")
 
         // 先摘视图，再 deactivate + invalidate（顺序错了会留下悬挂的呈现者）
         presentationView.removeFromSuperview()

@@ -70,6 +70,23 @@ void AevonNotifySetFloatRect(double x, double y, double w, double h);
 /// App 才会真正按窗口尺寸重排。w/h < 40 表示恢复整屏。
 void AevonNotifySetWindowSize(double w, double h);
 
+/// V0.0.81（AevonAppGateV81）：**整窗触摸门**（每个 App 一个独立 token `com.aevon.gate.<bundle>`）。
+///
+/// Aevon(73) 复盘：停靠小窗被轻点时，App 进程仍会收到那一份**物理触摸**
+/// （backboardd 直投前台 App，不是我们转发进去的）。旧办法是在 Guard 里按
+/// 「停靠格几何 / 主窗矩形 / 按键时间戳」逐条判定要不要吞 —— 全部依赖 App 进程
+/// 里的触摸坐标，而那份坐标一直是错的（日志里同一次轻点 SB 记 384,174、
+/// Guard 记 218,295，甚至 180,103 / 235,768 乱跳），几何判据必然漏。
+///
+/// 这里改成**与坐标完全无关**的「状态门」：只要该浮窗当前不该接收内容触摸
+/// （停靠小窗 / 设置里关掉内容触摸 / 该进程没有 Guard），SB 就把这扇门关上，
+/// Guard 在 `sendEvent:` 最前面直接丢弃整个事件 —— 不需要知道手指在哪。
+/// 门是**持续状态**（不是每条触摸现判），所以不存在「began 竞态漏一条」的问题。
+///
+/// blocked = 1 关门（App 收不到任何触摸），0 开门。默认（从未写过）= 0 = 开门，
+/// 保证任何异常情况下 App 都不会被莫名其妙锁死。
+void AevonNotifySetAppGate(NSString *bundleID, int blocked);
+
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
 /// 返回 YES = 正常完成，NO = 抛了异常。入口窗口创建等启动关键路径用它兜底，

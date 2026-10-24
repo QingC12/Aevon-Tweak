@@ -170,6 +170,47 @@ enum AevonSceneHelper {
         }
     }
 
+    // MARK: - 整窗触摸门（V0.0.81，AevonAppGateV81）
+
+    /// 当前处于「关门」状态的 App（用来在关窗 / 看门狗里确保复位）。
+    private static var gatedBundles: Set<String> = []
+
+    /// 开关某个 App 的整窗触摸门。
+    ///
+    /// 为什么不再按坐标判：Aevon(73) 日志里，同一次轻点 SB 记 384,174、Guard 记
+    /// 218,295，下一次 375,186 → 184,476，再下一次 197,680 → 235,768 —— App 进程
+    /// 拿到的坐标会乱跳，停靠格 / 主窗矩形 / 热区判据必然漏。这里改成一个
+    /// **持续状态**：门关着 = 该 App 进程丢弃所有触摸，与手指在哪无关，
+    /// 也不存在「began 那一帧还没读到状态」的竞态（状态在停靠/还原那一刻就变了）。
+    static func setAppGate(_ bundleID: String, blocked: Bool, reason: String) {
+        guard !bundleID.isEmpty else { return }
+        let changed: Bool
+        if blocked {
+            changed = gatedBundles.insert(bundleID).inserted
+        } else {
+            changed = gatedBundles.remove(bundleID) != nil
+        }
+        AevonNotifySetAppGate(bundleID, blocked ? 1 : 0)
+        if changed {
+            AevonLog.info("[窗口] 整窗触摸门"
+                + (blocked
+                   ? "关闭 —— 该 App 这段时间收不到任何触摸（\(reason)）"
+                   : "打开 —— App 恢复正常触摸（\(reason)）")
+                + "：\(bundleID)（AevonAppGateV81）")
+        }
+    }
+
+    /// 兜底：没有浮窗的 App 不该被关着门（关窗异常 / 崩溃后残留都要能自愈）。
+    static func clearStaleAppGates() {
+        guard !gatedBundles.isEmpty else { return }
+        for bid in Array(gatedBundles) where !AevonWindowManager.isWindowed(bid) {
+            gatedBundles.remove(bid)
+            AevonNotifySetAppGate(bid, 0)
+            AevonLog.warn("[窗口] 整窗触摸门残留已复位：\(bid)（已经没有浮窗了，恢复 App 正常触摸）"
+                + "（AevonAppGateV81）")
+        }
+    }
+
     // MARK: - 真 resize（V0.0.59，AevonTrueResizeV59）
 
     /// 场景标识 → 目标尺寸。由 `AevonSceneHost` 写入，

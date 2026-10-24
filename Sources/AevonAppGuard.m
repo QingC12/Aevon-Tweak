@@ -88,6 +88,9 @@ __attribute__((used)) static const char AevonGuardLateRejudgeV71Marker[] = "Aevo
 __attribute__((used)) static const char AevonGuardGhostAutoV72Marker[] = "AevonGuardGhostAutoV72";
 __attribute__((used)) static const char AevonGuardScreenPtV73Marker[] = "AevonGuardScreenPtV73";
 __attribute__((used)) static const char AevonGuardTapStampV74Marker[] = "AevonGuardTapStampV74";
+/// CI 标记（V0.0.81）：整窗触摸门（坐标无关）+ 浮窗手势误滚还原
+__attribute__((used)) static const char AevonAppGateV81Marker[] = "AevonAppGateV81";
+__attribute__((used)) static const char AevonScrollLeakV81Marker[] = "AevonScrollLeakV81";
 
 static CFStringRef const AevonGuardDomain = CFSTR("com.Aevon");
 static IMP AevonGuardOrigSendEvent = NULL;
@@ -882,8 +885,110 @@ static BOOL AevonGuardLateRejudgeHit(CGPoint winPt, CGPoint scrPt) {
     return NO;
 }
 
+/* V0.0.81（AevonAppGateV81）：整窗触摸门 —— 读 SB 写下的持续状态。
+ *
+ * Aevon(73) 日志实锤：停靠小窗被轻点时，App 侧收到的触摸坐标会乱跳
+ * （同一次轻点 SB 记 384,174、Guard 记 218,295；下一次 375,186 → 184,476；
+ *  再下一次 197,680 → 235,768），停靠格 / 主窗矩形 / 热区三条几何判据全部落空。
+ * 既然坐标不可信，就改用**与坐标无关**的状态门：SB 在「停靠 / 关掉内容触摸 /
+ * 该进程没有 Guard」时把这扇门关上，这里直接丢弃整条事件。
+ *
+ * 默认开门（notify state 初始 0），从没被显式关过的 App 行为完全不变。 */
+static BOOL AevonGuardAppGateBlocked(void) {
+    static int token = -1;
+    static BOOL tried = NO;
+    if (!tried) {
+        tried = YES;
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        if (bid.length > 0) {
+            NSString *name = [@"com.aevon.gate." stringByAppendingString:bid];
+            if (notify_register_check(name.UTF8String, &token) != 0) { token = -1; }
+        }
+    }
+    if (token < 0) { return NO; }
+    uint64_t v = 0;
+    if (notify_get_state(token, &v) != 0) { return NO; }
+    return (v != 0);
+}
+
+/* V0.0.81（AevonScrollLeakV81）：浮窗手势误把 App 滚动的还原。
+ *
+ * Aevon(73)：「全屏打开设置、悬浮窗里开电池数据，双击关掉浮窗后，设置页内容
+ * 自己划到最底部，底部还出现大面积空白」。
+ * 机制：手指压在浮窗上时 App 进程也会收到同一份触摸（backboardd 直投），
+ * began 偶尔赶在 bit48 之前到（V71 说过的竞态）→ 那几帧 moved 被 App 的
+ * UIScrollView 当真，内容被带着滚；而我们随后接管吞掉 ended，
+ * App 的滚动会话就**停在那里**（无 ended = 一直“按着”），表现成「滚到底 + 空白 + 滑不回来」。
+ *
+ * 做法：began 放行时记下命中视图往上最近的 UIScrollView 的 contentOffset；
+ * 一旦之后判定这条触摸属于浮窗（接管），把偏移还原回去，并尝试取消它的滚动会话。
+ * 只在「有浮窗 + 我们接管」时动手，正常 App 内滚动完全不受影响。 */
+static __weak UIScrollView *gAevonScrollWatch = nil;
+static CGPoint gAevonScrollWatchOffset = {0, 0};
+static BOOL gAevonScrollWatchArmed = NO;
+
+static UIScrollView *AevonGuardScrollAncestor(UIView *view) {
+    UIView *cur = view;
+    while (cur != nil) {
+        if ([cur isKindOfClass:[UIScrollView class]]) { return (UIScrollView *)cur; }
+        cur = cur.superview;
+    }
+    return nil;
+}
+
+static void AevonGuardArmScrollWatch(UIWindow *window, CGPoint point, UIEvent *event) {
+    @try {
+        if (window == nil) { gAevonScrollWatchArmed = NO; return; }
+        UIView *hit = [window hitTest:point withEvent:event];
+        UIScrollView *sv = AevonGuardScrollAncestor(hit);
+        gAevonScrollWatch = sv;
+        gAevonScrollWatchOffset = (sv != nil) ? sv.contentOffset : CGPointZero;
+        gAevonScrollWatchArmed = (sv != nil);
+    } @catch (NSException *exception) {
+        gAevonScrollWatchArmed = NO;
+    }
+}
+
+static void AevonGuardRestoreScrollIfLeaked(const char *why) {
+    if (!gAevonScrollWatchArmed) { return; }
+    gAevonScrollWatchArmed = NO;
+    UIScrollView *sv = gAevonScrollWatch;
+    if (sv == nil) { return; }
+    @try {
+        CGPoint now = sv.contentOffset;
+        CGFloat dy = fabs(now.y - gAevonScrollWatchOffset.y);
+        CGFloat dx = fabs(now.x - gAevonScrollWatchOffset.x);
+        if (dy < 1.0 && dx < 1.0) { return; }
+        sv.contentOffset = gAevonScrollWatchOffset;
+        SEL stopSel = NSSelectorFromString(@"_stopScrollingNotify:pinContent:");
+        if ((sv.isDragging || sv.isTracking) && [sv respondsToSelector:stopSel]) {
+            void (*fn)(id, SEL, BOOL, BOOL) = (void *)[sv methodForSelector:stopSel];
+            if (fn) { fn(sv, stopSel, YES, NO); }
+        }
+        AevonGuardWriteLog(NO, @"浮窗手势泄漏把 App 滚动了 %.0fpt → 已还原（%s，app=%@）（AevonScrollLeakV81）",
+                           dy, why, [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+    } @catch (NSException *exception) {
+    }
+}
+
 static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
     if (AevonGuardOrigSendEvent == NULL) {
+        return;
+    }
+    /* V0.0.81（AevonAppGateV81）：整窗触摸门 —— 最前面，先于任何坐标判定。
+     *
+     * 停靠小窗 / 内容触摸被关掉 / 该 App 没有 Guard 的降级态，SB 会把门关上，
+     * 这里整条事件丢弃：App 既收不到点击，也收不到滚动 —— 不依赖任何坐标，
+     * 也就不存在「同一次轻点两边坐标差 90~200pt」这类判据落空的问题。 */
+    if (AevonGuardAppGateBlocked()) {
+        static CFTimeInterval lastGateLog = 0;
+        CFTimeInterval gateNow = CACurrentMediaTime();
+        if (gateNow - lastGateLog > 3.0) {
+            lastGateLog = gateNow;
+            AevonGuardWriteLog(NO, @"整窗触摸门关闭 → 丢弃本条事件（浮窗这段时间不该把触摸给 App；"
+                               @"与坐标无关，app=%@）（AevonAppGateV81）",
+                               [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
+        }
         return;
     }
     // 先判断配置是否过期（构造函数里不读 UIScreen，首次 sendEvent 时才加载）
@@ -1023,6 +1128,10 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                                        [[NSBundle mainBundle] bundleIdentifier] ?: @"?");
                 }
             } else {
+                /* V0.0.81（AevonScrollLeakV81）：这条 began 准备放行 —— 先记下它落点
+                 * 所属滚动视图的偏移。万一之后我们判定它其实属于浮窗（接管），
+                 * 就能把被带着滚走的偏移还原回去（见 AevonGuardRestoreScrollIfLeaked）。 */
+                AevonGuardArmScrollWatch(touch.window, pt, event);
                 /* V0.0.72（AevonGuardPassProbeV72）：began 放行取证 —— 右缘停靠带上的
                  * 放行是穿透的必然前兆，限频 1s 打一条，下一轮日志直接定位漏网判据。
                  * V0.0.73：同时打两套坐标 + 窗口 frame + Guard 自己算出的槽位几何，
@@ -1088,6 +1197,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
                      * 位移还很小（仍是轻点）且此刻任一浮窗判据已成立，立刻接管。 */
                     AevonGuardSetTouchOwned(touch, YES);
                     owned = YES;
+                    AevonGuardRestoreScrollIfLeaked("moved");
                     /* V0.0.72：取证（限频 1s）——确认晚到重判真的在工作 */
                     static CFTimeInterval lastRejudgeMoved = 0;
                     CFTimeInterval now3 = CACurrentMediaTime();
@@ -1119,6 +1229,7 @@ static void AevonGuardSendEvent(id self, SEL _cmd, UIEvent *event) {
             if (stampHit || (dist < 25.0 && AevonGuardLateRejudgeHit(now, snow))) {
                 AevonGuardSetTouchOwned(touch, YES);
                 owned = YES;
+                AevonGuardRestoreScrollIfLeaked("ended");
                 /* V0.0.72：取证（限频 1s）——ended 闸生效证据
                  * V0.0.74：stamp=1 表示「浮窗刚被按下」时间戳命中（不依赖坐标） */
                 static CFTimeInterval lastRejudgeEnded = 0;

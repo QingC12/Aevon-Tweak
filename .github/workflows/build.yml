@@ -307,7 +307,14 @@ jobs:
           [ -n "$GUARD_DYLIB" ] || { echo "::error::缺少 AevonGuard.dylib（App 侧手势拦截，缺了 App 左滑照样触发）"; exit 1; }
           GUARD_ARCHS="$(lipo -archs "$GUARD_DYLIB")"
           echo "AevonGuard lipo -archs: $GUARD_ARCHS"
-          [ "$GUARD_ARCHS" = "arm64e" ] || { echo "::error::AevonGuard 必须是纯 arm64e，实际: $GUARD_ARCHS"; exit 1; }
+          # V0.0.81（AevonGuardFat81）：从「必须是纯 arm64e」改成「必须含 arm64」。
+          # App Store 的 App（GitHub 等）主二进制只有 arm64，arm64e-only 的 dylib
+          # 会被 dyld 判为架构不兼容而**静默跳过** —— 那个进程里就等于没有 Guard，
+          # 停靠小窗一被点就穿透（Aevon(73)：GitHub 零注入日志、无 alive 文件）。
+          case " $GUARD_ARCHS " in
+            *" arm64 "*) echo "AevonGuard 含 arm64 切片（可注入 App Store App）" ;;
+            *) echo "::error::AevonGuard 缺少 arm64 切片（实际: $GUARD_ARCHS）—— App Store App 里不会有 Guard，穿透照旧"; exit 1 ;;
+          esac
           strings "$GUARD_DYLIB" | grep -q 'AevonAppGuardV27' \
             || { echo "::error::AevonGuard 没有编入热区拦截逻辑（缺 AevonAppGuardV27）"; exit 1; }
           strings "$GUARD_DYLIB" | grep -q 'AevonGuardRingZoneV29' \
@@ -1138,6 +1145,54 @@ jobs:
                   print(f"::error::V0.0.80 主 dylib 缺串: {s}"); sys.exit(1)
           print("V0.0.80 校验: 关窗全复位 + 前台自愈 + provider 链探测 + 系统视图门控移除 已编入")
           PY80
+          # ── V0.0.81（AevonAppGateV81 / AevonScrollLeakV81 / AevonGuardFat81）──
+          # ①整窗触摸门：停靠小窗 / 内容触摸关闭 / 无 Guard 降级时，SB 写一个持续状态，
+          #   Guard 在 sendEvent 最前面整条丢弃 —— 与 App 侧坐标无关（那份坐标一直不可信）。
+          # ②浮窗手势误滚还原：接管一条漏进来的触摸时，把它带偏的 UIScrollView 偏移还原。
+          # ③Guard 双架构：App Store 的 App 是 arm64，arm64e-only 的 dylib 会被 dyld 静默跳过。
+          python3 - "$DYLIB" <<'PY81'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          for s in ["AevonAppGateV81","整窗触摸门"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.81 主 dylib 缺串: {s}"); sys.exit(1)
+          print("V0.0.81 校验: 整窗触摸门 已编入主 dylib")
+          PY81
+          if ! grep -q 'AevonSceneHelper.setAppGate' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
+            echo "::error::V0.0.81 回退: SceneHost 没有接整窗触摸门（停靠小窗被点会继续穿透）"
+            exit 1
+          fi
+          python3 - "$GUARD_DYLIB" <<'PY81G'
+          import sys, struct
+          path = sys.argv[1]
+          data = open(path,'rb').read()
+          for s in ["AevonAppGateV81","AevonScrollLeakV81","整窗触摸门关闭","浮窗手势泄漏把 App 滚动了"]:
+              if s.encode('utf-8') not in data and s.encode('utf-16-le') not in data:
+                  print(f"::error::V0.0.81 Guard dylib 缺串: {s}"); sys.exit(1)
+          magic = struct.unpack('>I', data[:4])[0]
+          fat = magic in (0xcafebabe, 0xcafebabf)
+          slices = []
+          if fat:
+              n = struct.unpack('>I', data[4:8])[0]
+              for i in range(n):
+                  cputype, cpusub = struct.unpack('>ii', data[8+i*20: 8+i*20+8])
+                  slices.append((cputype, cpusub & 0x00FFFFFF))
+          print("Guard 切片:", slices if fat else f"thin magic=0x{magic:08x}")
+          # arm64 = (0x0100000C, 0)；arm64e = (0x0100000C, 2)
+          has_arm64 = (0x0100000C, 0) in slices
+          has_arm64e = (0x0100000C, 2) in slices
+          if not (has_arm64 and has_arm64e):
+              print("::error::V0.0.81 Guard 必须是 arm64 + arm64e 双切片（App Store App 是 arm64，"
+                    "arm64e-only 的 dylib 会被 dyld 静默跳过 → 那个 App 里没有 Guard → 穿透）")
+              sys.exit(1)
+          print("V0.0.81 校验: 整窗触摸门 + 误滚还原 + Guard 双架构（arm64/arm64e）已编入")
+          PY81G
+          # 反回退：门必须挂在「内容交互状态」这条唯一出口上
+          if grep -n 'isUserInteractionEnabled = allow' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+             | grep -q 'presentationView'; then
+            echo "::error::V0.0.81 回退: 又在压系统呈现视图的交互（会让 App 全屏点不动）"
+            exit 1
+          fi
           if grep -n 'presentationView.isUserInteractionEnabled = allow' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
             echo "::error::V0.0.80 回退: 又在把系统呈现视图的交互压成 false（会让 App 全屏点不动）"
             exit 1

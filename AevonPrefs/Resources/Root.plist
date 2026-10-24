@@ -70,7 +70,7 @@
 			<key>key</key>
 			<string>TouchEnabled</string>
 			<key>label</key>
-			<string>浮窗内可直接触摸操作（关掉后内容不再接收触摸，不会转发进 App；窗口拖动 / 停靠 / 关闭 / 缩放照常，改动立即生效）</string>
+			<string>浮窗内可直接触摸操作（关掉=内容不接收触摸；停靠成小窗时一律不接收，防止点穿到下面的 App。窗口拖动 / 停靠 / 关闭 / 缩放照常，改动立即生效）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
