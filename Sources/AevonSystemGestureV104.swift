@@ -42,12 +42,12 @@ final class AevonGestureBandView: UIView {
     /// 右缘带宽度（pt）。宁可窄：带越宽，带内点不到的东西越多。
     static let bandWidth: CGFloat = 20
 
-    override func pointInside(_ point: CGPoint, withEvent event: UIEvent?) -> Bool {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         return AevonSystemGestureV105.shared.acceptsTouch(at: point)
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        return pointInside(point, withEvent: event) ? self : nil
+        return point(inside: point, with: event) ? self : nil
     }
 }
 
