@@ -555,9 +555,12 @@ jobs:
             echo "::error::Root.plist 仍残留 BubbleEnabled（悬浮球已移除）"
             exit 1
           fi
-          # V0.0.14 新增：吸附开关必须在 Root.plist 里
-          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'SnapEnabled' \
-            || { echo "::error::Root.plist 缺少 SnapEnabled（边缘吸附）开关"; exit 1; }
+          # V0.1.5（AevonNoSnapV105）：吸附开关已随吸附功能删除 —— 反过来要求它绝不出现；
+          # 「窗口保活」「强制前台保持」两个无效开关也一并删除（保活改为单窗恒开）。
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -qE 'SnapEnabled|>KeepAlive<|ForceForeground|SystemGestureEdge'; then
+            echo "::error::Root.plist 仍有已删除的开关项（SnapEnabled / KeepAlive / ForceForeground / SystemGestureEdge）"
+            exit 1
+          fi
           # V0.0.15 新增：边缘手势主入口开关必须在
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'EdgeGestureEnabled' \
             || { echo "::error::Root.plist 缺少 EdgeGestureEnabled（边缘圆盘入口）开关"; exit 1; }
