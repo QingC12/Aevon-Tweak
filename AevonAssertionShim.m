@@ -648,17 +648,13 @@ __attribute__((used)) static const char AevonLaunchProbeV106Marker[] = "AevonLau
  *   AevonShieldV107       = ObjC @try 兜底（Swift 的 do/catch 捕不到的选择子异常）
  *   AevonObjCProbeV107    = 类表 / 方法名 / ivar 扫描搬进 ObjC（避开 Swift 动态转换）
  *   AevonSafeIvarV107     = ivar 读取改 object_getIvar，不再裸 load 野指针
- * 另外四个是 0.1.6 的历史标记：0.1.6 的探针文件已删（它把 SpringBoard 打死了），
- * 但「历史校验串只加不能改」—— 所以用 used 常量把它们留在二进制里。 */
+ * 0.1.6 的探针文件已删（它把 SpringBoard 打死了）。那四个 V106 标记原本就在上面
+ * 更早的收容块里，本块不再重复定义（重复定义会直接编译失败）。 */
 __attribute__((used)) static const char AevonProbeV107Marker[] = "AevonProbeV107";
 __attribute__((used)) static const char AevonMultiProbeV107Marker[] = "AevonMultiProbeV107";
 __attribute__((used)) static const char AevonShieldV107Marker[] = "AevonShieldV107";
 __attribute__((used)) static const char AevonObjCProbeV107Marker[] = "AevonObjCProbeV107";
 __attribute__((used)) static const char AevonSafeIvarV107Marker[] = "AevonSafeIvarV107";
-__attribute__((used)) static const char AevonProbeV106Marker[] = "AevonProbeV106";
-__attribute__((used)) static const char AevonWinDumpFullV106Marker[] = "AevonWinDumpFullV106";
-__attribute__((used)) static const char AevonSystemGestureV106Marker[] = "AevonSystemGestureV106";
-__attribute__((used)) static const char AevonLaunchProbeV106Marker[] = "AevonLaunchProbeV106";
 /* 探针组标记（每组一行日志都带，CI 逐组断言，缺组即红） */
 __attribute__((used)) static const char AevonProbeP1V107Marker[] = "AevonProbeP1V107";
 __attribute__((used)) static const char AevonProbeP2V107Marker[] = "AevonProbeP2V107";
