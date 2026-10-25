@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.1.3（arm64e / roothide）。本页只放开关；触发条调整、圆盘 App 编辑等细节都在「细节调整」二级页。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑或轻点呼出圆盘 → 点图标开浮窗，按住圆心 1 秒切旋转。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.4（arm64e / roothide）。本页只放开关；触发条调整、圆盘 App 编辑等细节都在「细节调整」二级页。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑或轻点呼出圆盘 → 点图标开浮窗，按住圆心 1 秒切旋转。全屏 App 内从右边缘向左滑由系统手势接管（App 不会跟着动）。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -35,6 +35,18 @@
 			<string>EdgeGestureEnabled</string>
 			<key>label</key>
 			<string>右侧边缘左滑呼出圆盘（主入口）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>SystemGestureEdge</string>
+			<key>label</key>
+			<string>全屏 App 内由系统手势接管右缘（App 不会跟手）</string>
 		</dict>
 		<dict>
 			<key>cell</key>

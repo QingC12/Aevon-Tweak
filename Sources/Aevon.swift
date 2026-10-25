@@ -91,4 +91,43 @@ private func installExperimentalHooks() {
                          replacementClass: AevonSceneLayerManagerHooks.self,
                          replacement: #selector(AevonSceneLayerManagerHooks.sk_fbslm_setLayers(_:)))
     AevonLog.info("[启动] 已安装窗口化场景保障 hook（无停用门控，AevonGateRemovedV103）")
+
+    /*
+     * ⑥ V0.1.4（AevonIconLaunchV104）：桌面图标启动 → 先把浮窗交还系统。
+     *    「浮窗开着设置 → 回桌面点设置图标 → 自动注销」在 0.1.1/0.1.2/0.1.3 三版都没治好，
+     *    因为前面几版都在改「拦截停用原因 / 包异常保护」，而真正撞车的是**同一个场景
+     *    正被 FrontBoard 全屏拉起时我们还握着它**。这一版改成在系统接手之前先松手。
+     */
+    var iconLaunchHooked = AevonSwizzle.install(
+        targetClassName: "SBIconController",
+        original: Selector(("iconManager:launchIconForIconView:withActions:")),
+        replacementClass: AevonIconLaunchHooks.self,
+        replacement: #selector(AevonIconLaunchHooks.sk_sbic_launchIcon(_:forIconView:withActions:)))
+    if !iconLaunchHooked {
+        // 兜底：不同 iOS 版本这条启动委托可能落在别的类上（只试确定存在的几个，
+        // 全部失败就放弃，绝不对未知类做泛洪 hook）
+        for className in ["SBHomeScreenController", "SBIconView"] {
+            if AevonSwizzle.install(
+                targetClassName: className,
+                original: Selector(("iconManager:launchIconForIconView:withActions:")),
+                replacementClass: AevonIconLaunchHooks.self,
+                replacement: #selector(AevonIconLaunchHooks.sk_sbic_launchIcon(_:forIconView:withActions:))) {
+                iconLaunchHooked = true
+                break
+            }
+        }
+    }
+    if iconLaunchHooked {
+        AevonLog.info("[启动] 已安装桌面图标启动 hook（先释放浮窗，再让系统全屏拉起）（AevonIconLaunchV104）")
+    } else {
+        AevonLog.warn("[启动] 桌面图标启动 hook 未安装（找不到启动委托），本次只靠 FBScene 透传保护（AevonIconLaunchV104）")
+    }
+
+    /*
+     * ⑦ V0.1.4（AevonSystemGestureV104）：全屏 App 内的右缘改由系统手势窗口接管。
+     *    原因见 AevonSystemGestureV104 头注释：App 的触摸由 backboardd 直投，
+     *    SpringBoard 侧丢事件不影响 App，只有「从触摸落下那一刻就归 SpringBoard」
+     *    才能让抖音既不翻页也不拖进度条。
+     */
+    AevonSystemGestureV104.shared.install()
 }

@@ -57,10 +57,24 @@ import UIKit
         var finalSettings: Any = settings
         let identifier = AevonFBSceneHooks.sceneIdentifier(of: self)
 
-        if AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
-           let mutable = settings as? NSObject,
-           AevonRuntime.setBool(mutable, key: "foreground", true) {
-            finalSettings = mutable
+        /*
+         * V0.1.4（AevonIconLaunchV104）：这里原来无条件「把 settings 换成自己的
+         * mutableCopy 再写 foreground=true」。归档(12)/(13) 与 Aevon(72) 的崩溃栈
+         * 指向的就是这一步：FrontBoard 调进来 → 我们的 hook → Foundation（KVC 写属性）
+         * → FrontBoardServices 内部断言（SIGTRAP，@try 兜不住）。
+         *
+         * 现在的三条约束，任何一条不满足就**原样透传原始对象**：
+         *   ① 交接期（用户点了桌面图标要把这个 App 全屏拉起）一律不碰；
+         *   ② 系统这次本来就给的是 foreground=true —— 我们没有任何要改的，不换对象；
+         *   ③ 只有「登记在册 + 当前是 false」才补一次 true。
+         * 换成别的对象交给 FrontBoard 本身就有风险（它可能按对象身份/内部 diff 判状态），
+         * 能不换就不换。
+         */
+        if let settingsObject = settings as? NSObject,
+           AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
+           AevonRuntime.bool(settingsObject, key: "foreground") != true,
+           AevonRuntime.setBool(settingsObject, key: "foreground", true) {
+            finalSettings = settingsObject
         }
 
         AevonRuntime.sendVoid(self,
@@ -131,5 +145,59 @@ import UIKit
            let bundleID = AevonRuntime.send(self, Selector(("bundleIdentifier"))) as? String {
             AevonWindowManager.close(bundleID: bundleID)
         }
+    }
+}
+
+// MARK: - 桌面图标启动：先把浮窗交还给系统（V0.1.4，AevonIconLaunchV104）
+//
+// 归档(12)(13) + Aevon(72) 三次实锤的现场：「浮窗里开着设置 → 回桌面点设置图标 →
+// 自动注销（SIGTRAP）」。崩溃栈是 FrontBoard → 我们的 FBScene hook → Foundation(KVC)
+// → FrontBoardServices 断言 —— 也就是**同一个场景**正被 FrontBoard 全屏拉起时，
+// 我们还握着它的 presenter 并往里写 foreground。
+//
+// 唯一稳的解法是「在系统接手之前先松手」：图标被点的那一刻把同 bundle 的浮窗释放掉
+// （摘 presenter、停前台保持、登记 5 秒交接期，期间连 foreground 都不再写），
+// 之后全屏启动完全是系统自己的路径，我们零参与。
+//
+// Stheno 逆向里同样有 `iconManager:launchIconForIconView:withActions:` 这个选择子
+// （见 Stheno.dylib 的 objc 选择子表），说明这条路在 iOS 17 上是通的。
+@objc final class AevonIconLaunchHooks: NSObject {
+    @objc func sk_sbic_launchIcon(_ manager: Any?,
+                                  forIconView iconView: Any?,
+                                  withActions actions: Any?) {
+        if let bundleID = AevonIconLaunchHooks.bundleID(fromIconView: iconView),
+           AevonWindowManager.isWindowed(bundleID) {
+            AevonWindowManager.releaseForFullscreenLaunch(bundleID: bundleID)
+        }
+        AevonRuntime.sendVoid(self,
+                              Selector(("sk_sbic_launchIcon:forIconView:withActions:")),
+                              manager, iconView, actions)
+    }
+
+    /// 从 SBIconView 上取 bundleID（多条兜底链路，任一命中即返回）。
+    static func bundleID(fromIconView iconView: Any?) -> String? {
+        guard let view = iconView as? NSObject else { return nil }
+        var nodes: [NSObject] = [view]
+        for key in ["icon", "node"] {
+            if let child = AevonRuntime.send(view, Selector(key)) as? NSObject {
+                nodes.append(child)
+            }
+        }
+        for node in nodes {
+            for key in ["applicationBundleIdentifier", "bundleIdentifier"] {
+                if let value = AevonRuntime.send(node, Selector(key)) as? String, !value.isEmpty {
+                    return value
+                }
+            }
+            if let inner = AevonRuntime.send(node, Selector("node")) as? NSObject,
+               inner !== node {
+                for key in ["applicationBundleIdentifier", "bundleIdentifier"] {
+                    if let value = AevonRuntime.send(inner, Selector(key)) as? String, !value.isEmpty {
+                        return value
+                    }
+                }
+            }
+        }
+        return nil
     }
 }

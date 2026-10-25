@@ -187,6 +187,26 @@ jobs:
           fi
           echo "V0.1.3 校验: 停用门控已移除 + 右缘全高接管带（延迟接管）已编入"
 
+          # V0.1.4（归档(12)(13) + Aevon(72) 修复）：
+          # ①桌面图标启动 hook —— 「浮窗开着设置 → 回桌面点设置图标 → 注销」改成
+          #   在系统接手之前先释放浮窗（AevonIconLaunchV104）；
+          # ②全屏 App 内右缘改由系统手势窗口接管（AevonSystemGestureV104），
+          #   App 从触摸落下那一刻就收不到这条 touch，抖音不再翻页/拖进度条。
+          for s in AevonIconLaunchV104 AevonSystemGestureV104 SystemGestureEdge; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.4 标记 $s 未编入"; exit 1; }
+          done
+          strings "$DYLIB" | grep -q 'iconManager:launchIconForIconView:withActions:' \
+            || { echo "::error::桌面图标启动委托选择子未编入（AevonIconLaunchV104）"; exit 1; }
+          strings "$DYLIB" | grep -q 'UIScreenEdgePanGestureRecognizer' \
+            || { echo "::error::系统手势通道未编入（缺 UIScreenEdgePanGestureRecognizer）"; exit 1; }
+          # 反回退：FBScene 拦截必须保留「先看 foreground 再决定动不动」的透传闸，
+          # 否则会重新变成「无条件替换 settings 对象」—— 那正是 SIGTRAP 的来源。
+          grep -n 'sk_fbscene_updateSettings' -A 24 Sources/Hooks.swift \
+            | grep -q 'shouldKeepForeground' \
+            || { echo "::error::FBScene 拦截丢了透传闸（会重演安全模式崩溃）"; exit 1; }
+          echo "V0.1.4 校验: 图标启动先释放浮窗 + 系统手势右缘接管 + FBScene 透传闸 已编入"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }

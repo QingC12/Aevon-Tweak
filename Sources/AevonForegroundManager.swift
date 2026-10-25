@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 /// 前台保活管理：登记用户主动窗口化的 App / 场景。
 /// 只有登记在册的场景才会被 hook 强制前台或拦截停用；
@@ -10,6 +11,35 @@ final class AevonForegroundManager {
     private let lock = NSLock()
     private var bundleIDs = Set<String>()
     private var sceneIDs = Set<String>()
+
+    /// V0.1.4（AevonIconLaunchV104）：转正交接期。
+    ///
+    /// 场景：浮窗里开着某个 App，用户回到桌面点了它的图标 → 系统要把同一个场景
+    /// 全屏拉起。这一小段时间里如果还继续替这个场景写 `foreground=true`，
+    /// 就是在跟 FrontBoard 的激活状态机抢同一份 settings（归档(12)/(13) 的
+    /// SIGTRAP 就是这类冲突）。所以「图标被点」那一刻先登记交接，交接期内
+    /// 一律不再替它写前台标记；窗口本身也已经在这一刻释放掉了。
+    private var handoff: [String: CFTimeInterval] = [:]
+    private static let handoffWindow: CFTimeInterval = 5.0
+
+    func beginFullscreenHandoff(bundleID: String) {
+        guard !bundleID.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        handoff[bundleID] = CACurrentMediaTime() + AevonForegroundManager.handoffWindow
+    }
+
+    private func handoffActiveLocked(_ identifier: String) -> Bool {
+        guard !handoff.isEmpty else { return false }
+        let now = CACurrentMediaTime()
+        let expired = handoff.filter { now > $0.value }.map { $0.key }
+        for key in expired {
+            handoff.removeValue(forKey: key)
+        }
+        for (bid, _) in handoff where identifier.contains(bid) {
+            return true
+        }
+        return false
+    }
 
     func add(bundleID: String?, sceneID: String?) {
         lock.lock(); defer { lock.unlock() }
@@ -38,6 +68,10 @@ final class AevonForegroundManager {
     func shouldKeepForeground(identifier: String) -> Bool {
         guard !identifier.isEmpty else { return false }
         lock.lock(); defer { lock.unlock() }
+        // V0.1.4（AevonIconLaunchV104）：正在被全屏拉起的场景一律不碰 —— 这一小段
+        // 时间由 FrontBoard 自己接管状态，我们任何一次 foreground 写入都可能撞上
+        // 它的激活断言（安全模式）。
+        if handoffActiveLocked(identifier) { return false }
         if sceneIDs.contains(identifier) { return true }
         for bid in bundleIDs where identifier.contains(bid) { return true }
         return false

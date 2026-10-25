@@ -462,6 +462,16 @@ enum AevonEdgeEntry {
         presentRing(source: source)
     }
 
+    /// V0.1.4（AevonSystemGestureV104）：系统手势通道识别成功后的入口。
+    ///
+    /// 走这条路的触摸从落下那一刻就归 SpringBoard 的系统手势窗口 —— 前台 App 手里
+    /// 没有这条 touch（这正是「抖音进度条不再跟着拖」的根本原因），所以这里不需要
+    /// 任何「吞事件 / 事后补偿」，只要把起点交给圆盘、后续跟着喂位置就行。
+    static func triggerFromSystemGesture(point: CGPoint) {
+        lastTouchPoint = point
+        attemptTrigger("系统手势右缘左扫", source: "systemgesture")
+    }
+
     /// 边缘手势条的触摸流：唤出圆盘后那根手指还没松手，交给圆盘做「跟手旋转 / 逆时针选定」。
     private static func handleStripTouch(_ point: CGPoint, _ phase: UITouch.Phase) {
         lastTouchPoint = point
@@ -758,6 +768,13 @@ enum AevonEdgeEntry {
             // 判定用绝对值占优（|dx| ≥ |dy|×1.2）保证斜着划也能中；纵向滚动 / 向右扫立刻放手，
             // 让抖音右侧按钮的轻点、信息流的上下翻页完全不受影响。
             if touchID == bandTouchID {
+                // V0.1.4（AevonSystemGestureV104）：这根手指已经归系统手势窗口 ——
+                // App 那边没有它，我们也不必再「接管 / 吞事件」，直接让路。
+                if AevonSystemGestureV104.isHandling(touchID: touchID) {
+                    bandTouchID = 0
+                    bandStart = .zero
+                    return
+                }
                 let dx = point.x - bandStart.x
                 let dy = point.y - bandStart.y
                 if dx <= -6, abs(dx) >= abs(dy) * 1.2 {

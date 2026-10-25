@@ -201,17 +201,37 @@ enum AevonWindowManager {
     }
 
     /// 关窗并清理全部相关状态。
-    static func close(bundleID: String) {
+    ///
+    /// `releaseOnly = true`（V0.1.4，AevonIconLaunchV104）：只释放浮窗与前台保持，
+    /// **不写场景的 foreground 标记**。用于「用户点桌面图标要把这个 App 全屏拉起」——
+    /// 那一刻 FrontBoard 正在自己接管这个场景，我们再往里写一次 settings 就是抢
+    /// 同一份状态机（归档(12)/(13) 的 SIGTRAP 来源），所以这一步只放手、不置位。
+    static func close(bundleID: String, releaseOnly: Bool = false) {
         guard let windowView = windows.removeValue(forKey: bundleID) else { return }
         if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
         windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
-        AevonSceneHelper.sleep(bundleID)
+        if !releaseOnly {
+            AevonSceneHelper.sleep(bundleID)
+        }
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         if let pid = AevonAppInfo.pid(bundleID: bundleID) {
             AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
         }
-        AevonLog.info("[窗口] \(bundleID) 已关闭")
+        AevonLog.info("[窗口] \(bundleID) 已关闭\(releaseOnly ? "（交接给系统全屏拉起，未写场景前台标记）" : "")")
+    }
+
+    /// V0.1.4（AevonIconLaunchV104）：桌面图标被点、要把这个 App 全屏拉起时调用。
+    ///
+    /// 「浮窗开着设置 → 回桌面点设置图标 → 自动注销」的唯一稳定解法是**先松手**：
+    /// 释放 presenter、摘掉浮窗、停前台保持，再登记 5 秒交接期（期间 hook 一律不替
+    /// 这个场景写 foreground）。系统的全屏启动走它自己的路径，我们完全不参与。
+    static func releaseForFullscreenLaunch(bundleID: String) {
+        guard !bundleID.isEmpty else { return }
+        AevonForegroundManager.shared.beginFullscreenHandoff(bundleID: bundleID)
+        let wasWindowed = isWindowed(bundleID)
+        close(bundleID: bundleID, releaseOnly: true)
+        AevonLog.info("[窗口] \(bundleID) 即将全屏拉起 → 已释放浮窗与前台保持（\(wasWindowed ? "原浮窗已关" : "本来没开窗")，交接期 5 秒内不写场景前台标记）（AevonIconLaunchV104）")
     }
 
     static func closeAll() {
