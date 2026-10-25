@@ -273,10 +273,15 @@ enum AevonProbeV107 {
 
     /// 一眼看全当前开关，省掉「你开了吗」这类来回确认。
     private static func groupConfig() {
-        let keys = ["Enabled", "EdgeGestureEnabled", "TouchEnabled", "SwitcherLongPress",
-                    "CrashGuard", "LogEnabled", "ProbeV107"]
-        let snapshot = keys.map { key in "\(key)=\(AevonPrefs.bool(key, default: false) ? 1 : 0)" }
-        AevonLog.info("[探针P6] 开关：\(snapshot.joined(separator: " "))（AevonProbeP6V107）")
+        // V0.1.11（AevonProbeDefaultV111）：每个开关按**自己的**默认值打印。
+        // Aevon(78) 的 P6 打出 `EdgeGestureEnabled=0`，而当时右缘通道明明是装着的 ——
+        // 因为这里一律用 default:false 读，键未落盘时就会把「默认开」的开关报成 0。
+        // 探针报错一个数字，就能让人错判一整个版本。
+        let keys: [(String, Bool)] = [("Enabled", false), ("EdgeGestureEnabled", true),
+                                      ("TouchEnabled", true), ("SwitcherLongPress", false),
+                                      ("CrashGuard", false), ("LogEnabled", true), ("ProbeV107", false)]
+        let snapshot = keys.map { pair in "\(pair.0)=\(AevonPrefs.bool(pair.0, default: pair.1) ? 1 : 0)" }
+        AevonLog.info("[探针P6] 开关：\(snapshot.joined(separator: " "))（AevonProbeP6V107 AevonProbeDefaultV111）")
 
         let zone = AevonTriggerZone.rect(in: UIScreen.main.bounds)
         let bottom = AevonPrefs.double("RingTriggerY", default: AevonTriggerZone.defaultBottomRatio)

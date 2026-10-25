@@ -701,7 +701,14 @@ enum AevonEdgeEntry {
             // x 距右缘只有 31~34pt，y 却远在热区之外，于是既不接管也不拦，整条滑动进了抖音
             // （抖音顶部标签栏就是横向翻页的）。只加宽不铺高，永远漏竖向。
             // 所以这里把纵向铺满整屏，横向至少 36pt（取热区宽度与 36 的较大者）。
-            let bandWidth = max(zone.width, 36)
+            // V0.1.11（AevonBandWidenV111）：接管带横向由「max(热区宽,36)」改成对齐系统手势通道的起手窗。
+            //
+            // Aevon(78) 日志：起手窗内落点在距右缘 39~45pt，通道「接收」了却一次都没 began；
+            // 而更靠里的 45pt 落点连接受都没有。结论是**缝外那段没人兜底**：
+            // 管线只在外侧 20pt 真的管事，20~46pt 又整条让路给管线 → 触摸两头落空，直接进 App。
+            // 老通道是 sendEvent 观察者，**落指时不抢**（只在看清「向左 + 横向占优」后才吞），
+            // 所以把它铺到 46pt 不吃点击、不吃滚动 —— 这段交给它是对的。
+            let bandWidth = max(zone.width, AevonGestureBandView.beginSlack)
             let band = CGRect(x: screen.width - bandWidth, y: 0,
                               width: bandWidth, height: screen.height)
             let edgeEnabled = AevonPrefs.bool("EdgeGestureEnabled", default: true)
@@ -715,7 +722,11 @@ enum AevonEdgeEntry {
             // V0.1.5（AevonSystemGestureV105）：系统手势管线已接管右缘时，这条带上的触摸
             // 从落下那一刻就归 SpringBoard 的识别器，全局通道不再登记候选 —— 否则同一根
             // 手指会被算两次（管线呼一次、延迟接管再呼一次）。
+            //
+            // V0.1.11：让路范围收窄到**接管缝 20pt**（管线在这段有实证能力），
+            // 缝外 20~46pt 交回老通道延迟接管。判据不再是「布了就让」，而是「这段它真管得住才让」。
             let bandOwnedByPipeline = appForeground && AevonSystemGestureV105.ownsBand
+                && point.x >= screen.width - AevonGestureBandView.bandWidth
             // 桌面只认原热区（接管优先，V0.0.33 同款）；App 前台才启用整条右缘接管带。
             if edgeEnabled, inZone || (appForeground && band.contains(point) && !bandOwnedByPipeline) {
                 if inZone {
@@ -753,10 +764,13 @@ enum AevonEdgeEntry {
                     return
                 }
             }
-            // V0.1.3：接管带外但仍在右缘 44pt 内的 began 记一条（bandWidth 之外的极端起点）。
-            if forensicCount < 40, appForeground, point.x >= screen.width - 44 {
+            // V0.1.3：接管带外但仍在右缘 46pt 内的 began 记一条（bandWidth 之外的极端起点）。
+            // V0.1.11：把「为什么没接管」写清楚 —— 让路给管线 / 起手太靠里，两件事不能混着叫「接管带外」。
+            if forensicCount < 40, appForeground, point.x >= screen.width - AevonGestureBandView.beginSlack {
                 forensicCount += 1
-                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（接管带外，App前台=\(appForeground)，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102）")
+                let gap = Int(screen.width - point.x)
+                let why = bandOwnedByPipeline ? "接管带外·让路给系统手势管线" : "接管带外·起手太靠里"
+                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（\(why)，距右缘 \(gap)pt，App前台=\(appForeground)，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102 AevonBandWidenV111）")
             }
             // 热区外：维持 V41 行为 —— 浮窗手柄手势 / 窗体命中探测。
             if handleFloatGestureBegan(point: point, touchID: touchID) { return }

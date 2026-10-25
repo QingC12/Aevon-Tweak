@@ -345,6 +345,29 @@ jobs:
             || { echo "::error::V0.1.10 判向/began 取证文案被删"; exit 1; }
           echo "V0.1.10 校验: 起手窗 44pt（命中仍 20pt）+ 判向看落点"
 
+          # V0.1.11（Aevon(78) 日志）：
+          # 起手窗接收了一根手指（距右缘 41pt），却既没有判向也没有 began —— 全篇仅此一例。
+          # 同时 20~46pt 那段因为「管线一登记就整条让路」而无人兜底：管线只在 20pt 缝内真的管事。
+          # 本版两件事：①让路范围收窄到接管缝，缝外交回老通道延迟接管（它在落指时不抢，零点击代价）；
+          # ②加 0.3s 跟踪采样，一次性判定「没跟踪」还是「跟了但放弃」。
+          strings "$DYLIB" | grep -q 'AevonBandTrackV111' \
+            || { echo "::error::V0.1.11 标记 AevonBandTrackV111 未编入"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonBandWidenV111' \
+            || { echo "::error::V0.1.11 标记 AevonBandWidenV111 未编入"; exit 1; }
+          grep -q 'AevonBandTrackV111' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::跟踪采样被删（起手窗失灵时又只能靠猜）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'scheduleTrackSample(inset:' \
+            || { echo "::error::跟踪采样调用点被删"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'max(zone.width, AevonGestureBandView.beginSlack)' \
+            || { echo "::error::老通道接管带被改窄 —— 20~46pt 会重新变成没人兜底的缝"; exit 1; }
+          # 让路必须限定在接管缝内（否则缝外又整条让路 = 回到 V0.1.10 的坑）
+          grep -A 2 'let bandOwnedByPipeline' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'screen.width - AevonGestureBandView.bandWidth' \
+            || { echo "::error::让路范围没有限定在接管缝内（缝外会让 App 整条吃掉）"; exit 1; }
+          echo "V0.1.11 校验: 让路收窄到接管缝 + 老通道铺到起手窗 + 跟踪采样"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }

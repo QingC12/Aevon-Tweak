@@ -86,6 +86,12 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     /// 不看 began 那一刻的位置 —— 因为那时手指已经滑进来 6~8pt 了，拿它判会把贴边起步的算成带外。
     private var pendingStart: CGPoint = .zero
     private var hasPendingStart = false
+    /// V0.1.11（AevonBandTrackV111）：跟踪采样令牌 + 放弃计数。
+    /// Aevon(78) 里「起手窗接收了一根手指、却既没判向也没 began」是唯一的异常样本，
+    /// 光看日志分不清是「用户只是点了一下」还是「识别器根本没在跟踪这根手指」。
+    /// 所以每次接收后 0.3s 回采一次 `recognizer.state`：still `possible` = 没跟；`failed` = 跟了但放弃。
+    private var trackToken = 0
+    private var abandonedInWindow = 0
 
     /// 通道是否在生效（带视图已挂上 + 开关打开）。
     static var isInstalled: Bool {
@@ -346,7 +352,19 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
             if nearRightEdge {
                 let zone = AevonTriggerZone.rect(in: UIScreen.main.bounds).contains(point)
                 let floating = AevonEntryHost.pointHitsFloatingWindow(at: point)
-                AevonLog.warn("[手势] 右缘触摸被拒 (x=\(Int(point.x)), y=\(Int(point.y))，距右缘 \(Int(UIScreen.main.bounds.width - point.x))pt 起手窗外，App前台=\(AevonEntryHost.mountedInAppScene)，热区=\(zone)，浮窗=\(floating)，圆盘=\(AevonRingMenu.presented != nil))（AevonSystemGestureV110）")
+                let ringOpen = AevonRingMenu.presented != nil
+                // V0.1.11：把真正的那一条原因列出来。
+                // Aevon(78) 里 8 条「距右缘 8pt 起手窗外」其实是被**热区**挡的（热区优先级更高），
+                // 文案写错了，等于自己给自己制造了一个假线索。
+                var why: [String] = []
+                if !AevonPrefs.bool("Enabled", default: false) { why.append("插件未启用") }
+                if !AevonPrefs.bool("EdgeGestureEnabled", default: true) { why.append("右缘呼出已关") }
+                if !AevonEntryHost.mountedInAppScene { why.append("App 非前台") }
+                if ringOpen { why.append("圆盘开着") }
+                if zone { why.append("落在热区（老入口优先）") }
+                if floating { why.append("浮窗压住") }
+                if point.x < UIScreen.main.bounds.width - AevonGestureBandView.beginSlack { why.append("起手窗外") }
+                AevonLog.warn("[手势] 右缘触摸被拒 (x=\(Int(point.x)), y=\(Int(point.y))，距右缘 \(Int(UIScreen.main.bounds.width - point.x))pt，原因=\(why.isEmpty ? "未知" : why.joined(separator: "+"))，热区=\(zone)，浮窗=\(floating)，圆盘=\(ringOpen))（AevonSystemGestureV110 AevonBandTrackV111）")
             } else if now - rejectLogAt > 2.0 {
                 rejectLogAt = now
                 AevonLog.info("[手势] 识别器已收到触摸但判据拒收 (x=\(Int(point.x)), y=\(Int(point.y))，App前台=\(AevonEntryHost.mountedInAppScene)，圆盘开着=\(AevonRingMenu.presented != nil))（AevonSystemGestureV108）")
@@ -365,7 +383,35 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         let inset = Int(UIScreen.main.bounds.width - point.x)
         let tier = inset <= Int(AevonGestureBandView.bandWidth) ? "接管缝" : "起手窗"
         AevonLog.info("[手势] 系统手势管线拿到右缘触摸 (x=\(Int(point.x)), y=\(Int(point.y))，距右缘 \(inset)pt，落在\(tier))（AevonSystemGestureV105 AevonSystemGestureV110）")
+        scheduleTrackSample(inset: CGFloat(inset), tier: tier)
         return true
+    }
+
+    /// V0.1.11：0.3 秒后回采识别器状态，用来分辨「没跟踪」与「跟了但放弃」。
+    ///
+    /// 判读方法（AevonBandTrackV111）：
+    ///   · `possible` —— 手指还在屏上、识别器一直没到起手阈值 → **它没在跟这根手指**
+    ///     （说明登记进管线只让它「被问要不要」，真正跟踪仍要求视图命中）；
+    ///   · `failed` —— 跟了、但判据放弃（方向不符 / 轻点）→ 管线是好的，问题只在几何窗口；
+    ///   · `began` / `changed` —— 正常接管。
+    private func scheduleTrackSample(inset: CGFloat, tier: String) {
+        trackToken &+= 1
+        let token = trackToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
+            guard let self = self, self.trackToken == token, let pan = self.recognizer else { return }
+            let state: String
+            switch pan.state {
+            case .possible: state = "possible（在跟，未到起手阈值）"
+            case .began: state = "began（已接管）"
+            case .changed: state = "changed（已接管）"
+            case .failed: state = "failed（跟了但放弃）"
+            case .ended: state = "ended（已结束）"
+            case .cancelled: state = "cancelled"
+            @unknown default: state = "unknown"
+            }
+            if pan.state == .failed { self.abandonedInWindow += 1 }
+            AevonLog.info("[手势跟踪] 0.30s 采样：识别器状态=\(state)，起手距右缘 \(Int(inset))pt，落在\(tier)，管线已登记=\(self.pipelineRegistered)，累计放弃 \(self.abandonedInWindow) 次（AevonBandTrackV111）")
+        }
     }
 
     /// 只认从右缘起手的向左横扫：上下滑（刷抖音信息流）与轻点都在这一步直接失败。
