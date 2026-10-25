@@ -414,9 +414,9 @@ jobs:
             || { echo "::error::V0.1.13 标记 AevonPipelineStandDownV113 未编入"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonBandTakeoverBeganV113' \
             || { echo "::error::V0.1.13 标记 AevonBandTakeoverBeganV113 未编入"; exit 1; }
-          # 识别器必须停手：pipelineAllowed 恒 false，且 shouldReceiveTouch 首行就查它
+          # 识别器必须停手：pipelineAllowed 恒 false（读诊断键，默认 false），且 shouldReceiveTouch 首行就查它
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
-            | grep -q 'static let pipelineAllowed = false' \
+            | grep -q 'AevonPrefs.bool("PipelineTakeoverEnabled", default: false)' \
             || { echo "::error::识别器又允许接收触摸了 —— 它会扣住 App 的 began 再整段补投（Aevon(80) 根因）"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
             | grep -q 'guard AevonSystemGestureV105.pipelineAllowed else { return false }' \

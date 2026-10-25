@@ -662,3 +662,18 @@ __attribute__((used)) static const char AevonProbeP3V107Marker[] = "AevonProbeP3
 __attribute__((used)) static const char AevonProbeP4V107Marker[] = "AevonProbeP4V107";
 __attribute__((used)) static const char AevonProbeP5V107Marker[] = "AevonProbeP5V107";
 __attribute__((used)) static const char AevonProbeP6V107Marker[] = "AevonProbeP6V107";
+
+/* ── V0.1.13（AevonPipelineStandDownV113 / AevonBandTakeoverBeganV113）：本版标记 ──
+ * 背景：识别器整条停手（不再接收任何触摸），起手窗两态化（默认整段交回 App / 开关按下即接管）。
+ *
+ *   AevonPipelineStandDownV113 = 识别器停手（断掉「扣住 App 的 began 再整段补投」那条链）
+ *   AevonBandTakeoverBeganV113 = 起手窗两态开关 BandTakeoverFromBegan
+ *
+ * 同时收容两条**已经不在任何运行期日志里**的历史串：
+ *   AevonBandTrackV111 = 0.1.11 的 0.30s 跟踪采样（采样调用点随识别器停手一起作废）
+ *   AevonBandWidenV111 = 0.1.11 的「老通道铺到起手窗 46pt」（本版起手窗已不干预）
+ * 它们仍被 V0.1.11 的 CI 块断言，所以只能用 used 钉住，不许从二进制里消失。 */
+__attribute__((used)) static const char AevonPipelineStandDownV113Marker[] = "AevonPipelineStandDownV113";
+__attribute__((used)) static const char AevonBandTakeoverBeganV113Marker[] = "AevonBandTakeoverBeganV113";
+__attribute__((used)) static const char AevonBandTrackV111Marker[] = "AevonBandTrackV111";
+__attribute__((used)) static const char AevonBandWidenV111Marker[] = "AevonBandWidenV111";

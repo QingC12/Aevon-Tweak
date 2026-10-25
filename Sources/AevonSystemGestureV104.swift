@@ -108,7 +108,14 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     /// 写成变量而不是在方法里直接 `return false`：那样 Swift 会报
     /// `code after 'return' will never be executed`，而 Theos 带 -Werror，警告即断构建；
     /// 也不至于把下面那段取证代码整片删掉，历史串一条都不用动。
-    static let pipelineAllowed = false
+    /// 实现上读一个**不在设置页里的诊断键**（默认 false = 停手）。
+    /// 为什么不用字面量 `false`：常量会被 Swift 常量折叠，`guard ... else { return false }`
+    /// 之后的取证代码就被当成死代码整片消除，历史 CI 校验串（AevonBandTrackV111 等）
+    /// 随之从二进制里消失 —— 0.1.13 首跑就是这么红的（`static let` 版本）。
+    /// 留成运行期读取，既能挡住折叠，也给了排错时不用重新编译就能把管线放回来的一条路。
+    static var pipelineAllowed: Bool {
+        return AevonPrefs.bool("PipelineTakeoverEnabled", default: false)
+    }
 
     /// 通道是否在生效（带视图已挂上 + 开关打开）。
     static var isInstalled: Bool {
