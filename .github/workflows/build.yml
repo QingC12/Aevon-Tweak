@@ -309,9 +309,12 @@ jobs:
           # delaysTouchesBegan / cancelsTouchesInView 都设成了 false：
           # UIPan 要位移才 began，在它 began 之前 App 已经拿到 began 和位移，抖音横滑手势就成立了。
           # 本版两个开关翻成 true、判向阈值提前到 8pt，并把右缘取证改成每次必记。
-          for s in AevonSystemGestureV109 "右缘触摸被拒" "判向 dx="; do
-            strings "$DYLIB" | grep -q "$s" \
-              || { echo "::error::V0.1.9 标记/文案 $s 未编入"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSystemGestureV109' \
+            || { echo "::error::V0.1.9 标记 AevonSystemGestureV109 未编入"; exit 1; }
+          # 中文取证明细在 Swift 二进制里是分段常量、strings 查不到，改查源码（与历史做法一致）。
+          for s in "右缘触摸被拒" "判向 dx="; do
+            grep -q "$s" "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+              || { echo "::error::V0.1.9 取证文案 $s 被删"; exit 1; }
           done
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
             | grep -q 'delaysTouchesBegan = true' \
