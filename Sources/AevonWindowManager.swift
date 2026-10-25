@@ -17,6 +17,9 @@ enum AevonWindowManager {
     private static var currentView: AevonWindowView?
     private static var currentBundleID: String?
 
+    /// 当前浮窗承载的 App（没有浮窗时为 nil）。只读，供探针 / 日志取证用。
+    static var openBundleID: String? { return currentBundleID }
+
     /// 最近一次成功开窗的时间（`CACurrentMediaTime`）。
     ///
     /// V0.1.6（AevonFullscreenCloseV106）：开浮窗这个动作本身也会让 SpringBoard

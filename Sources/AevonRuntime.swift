@@ -6,19 +6,29 @@ enum AevonRuntime {
     // MARK: - 实例变量
 
     /// 读取对象类型（@ 编码）实例变量；非对象类型 / 不存在时返回 nil。
+    ///
+    /// V0.1.7（AevonSafeIvarV107）：改成用 `object_getIvar` 取。
+    /// 以前是「按 ivar 偏移自己 load 一个 AnyObject?」—— 那是把内存里的位子直接
+    /// 当成对象指针交出去：只要那个槽是 weak / 未初始化 / 已经不是对象，
+    /// 拿到的就是野指针，后续任何一次 `as?` 都会让进程在
+    /// swift_dynamicCast → 消息转发 上直接死（归档(13) 两次自动注销的形态）。
+    /// `object_getIvar` 是官方接口，会按 ARC 布局正确取值，不安全就返回 nil。
     static func ivarObject(_ object: AnyObject, _ name: String) -> AnyObject? {
         guard let cls = object_getClass(object),
               let ivar = class_getInstanceVariable(cls, name) else { return nil }
-        guard let encoding = ivar_getTypeEncoding(ivar) else { return nil }
-        guard String(cString: encoding).hasPrefix("@") else { return nil }
-        let offset = ivar_getOffset(ivar)
-        let pointer = Unmanaged.passUnretained(object).toOpaque()
-        return UnsafeRawPointer(pointer).advanced(by: offset).load(as: AnyObject?.self)
+        guard let encoding = ivar_getTypeEncoding(ivar),
+              String(cString: encoding).hasPrefix("@") else { return nil }
+        return object_getIvar(object, ivar)
     }
 
     /// 读取字符串实例变量。
+    ///
+    /// 先确认值真的是字符串类，再做桥接 —— **绝不对来源不明的对象直接 `as? String`**。
+    /// 类名判断走 ObjC 的 `AevonSafeClassName`（只查类名，不向对象发消息）。
     static func ivarString(_ object: AnyObject, _ name: String) -> String? {
-        return ivarObject(object, name) as? String
+        guard let value = ivarObject(object, name) else { return nil }
+        guard let className = AevonSafeClassName(value), className.contains("String") else { return nil }
+        return value as? String
     }
 
     /// 对象真实类名（用于日志诊断，取不到时返回 nil）。

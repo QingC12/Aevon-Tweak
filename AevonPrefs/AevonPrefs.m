@@ -347,6 +347,10 @@ static NSArray *AevonBuildFallback(id target) {
     if (s3 != nil) [result addObject:s3];
     id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
     if (s4 != nil) [result addObject:s4];
+    /* V0.1.7（AevonProbeV107）：六组运行时探针。默认开，每次 SpringBoard 启动跑一轮，
+       全部从 ObjC @try 里过 —— 探针只会「没结果」，不会再把 SpringBoard 带崩。*/
+    id s5 = AevonNewSwitch(@"运行时探针（排错用，每次启动跑一轮六组）", target, @"ProbeV107", @YES);
+    if (s5 != nil) [result addObject:s5];
 
     id groupDetail = AevonNewGroup(@"细节调整",
                                    @"触发条位置 / 宽度 / 高度、圆盘 App 编辑等都在二级页（AevonDetailPageV30）。");

@@ -14,6 +14,7 @@ TWEAK_NAME = Aevon
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
     Sources/AevonSceneHook.m \
+    Sources/AevonProbeSupport.m \
     Sources/AevonTouchHook.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
@@ -24,7 +25,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonEntryHost.swift \
     Sources/AevonEdgeEntry.swift \
     Sources/AevonSystemGestureV104.swift \
-    Sources/AevonProbeV106.swift \
+    Sources/AevonProbeV107.swift \
     Sources/AevonRingMenu.swift \
     Sources/AevonRingStore.swift \
     Sources/AevonAppList.swift \

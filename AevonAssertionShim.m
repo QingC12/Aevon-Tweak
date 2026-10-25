@@ -640,3 +640,29 @@ __attribute__((used)) static const char AevonFullscreenCloseV106Marker[] = "Aevo
 __attribute__((used)) static const char AevonWinDumpFullV106Marker[] = "AevonWinDumpFullV106";
 __attribute__((used)) static const char AevonSystemGestureV106Marker[] = "AevonSystemGestureV106";
 __attribute__((used)) static const char AevonLaunchProbeV106Marker[] = "AevonLaunchProbeV106";
+
+/* ── V0.1.7（AevonProbeV107 / AevonShieldV107 / AevonSafeIvarV107）：本版标记 ──
+ * 这些串在运行期日志里本来就会出现；这里再用 used 常量钉一遍，避免以后改文案把 CI 断言弄假红。
+ *   AevonProbeV107        = 六组探针一次部署（P1~P6）
+ *   AevonMultiProbeV107   = 「多组探针一次收齐」这件事本身的标记
+ *   AevonShieldV107       = ObjC @try 兜底（Swift 的 do/catch 捕不到的选择子异常）
+ *   AevonObjCProbeV107    = 类表 / 方法名 / ivar 扫描搬进 ObjC（避开 Swift 动态转换）
+ *   AevonSafeIvarV107     = ivar 读取改 object_getIvar，不再裸 load 野指针
+ * 另外四个是 0.1.6 的历史标记：0.1.6 的探针文件已删（它把 SpringBoard 打死了），
+ * 但「历史校验串只加不能改」—— 所以用 used 常量把它们留在二进制里。 */
+__attribute__((used)) static const char AevonProbeV107Marker[] = "AevonProbeV107";
+__attribute__((used)) static const char AevonMultiProbeV107Marker[] = "AevonMultiProbeV107";
+__attribute__((used)) static const char AevonShieldV107Marker[] = "AevonShieldV107";
+__attribute__((used)) static const char AevonObjCProbeV107Marker[] = "AevonObjCProbeV107";
+__attribute__((used)) static const char AevonSafeIvarV107Marker[] = "AevonSafeIvarV107";
+__attribute__((used)) static const char AevonProbeV106Marker[] = "AevonProbeV106";
+__attribute__((used)) static const char AevonWinDumpFullV106Marker[] = "AevonWinDumpFullV106";
+__attribute__((used)) static const char AevonSystemGestureV106Marker[] = "AevonSystemGestureV106";
+__attribute__((used)) static const char AevonLaunchProbeV106Marker[] = "AevonLaunchProbeV106";
+/* 探针组标记（每组一行日志都带，CI 逐组断言，缺组即红） */
+__attribute__((used)) static const char AevonProbeP1V107Marker[] = "AevonProbeP1V107";
+__attribute__((used)) static const char AevonProbeP2V107Marker[] = "AevonProbeP2V107";
+__attribute__((used)) static const char AevonProbeP3V107Marker[] = "AevonProbeP3V107";
+__attribute__((used)) static const char AevonProbeP4V107Marker[] = "AevonProbeP4V107";
+__attribute__((used)) static const char AevonProbeP5V107Marker[] = "AevonProbeP5V107";
+__attribute__((used)) static const char AevonProbeP6V107Marker[] = "AevonProbeP6V107";

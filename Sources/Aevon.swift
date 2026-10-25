@@ -127,10 +127,14 @@ private func installExperimentalHooks() {
     AevonSystemGestureV105.shared.install()
 
     /*
-     * ⑧ V0.1.6（AevonProbeV106）：运行时探针。启动稳定后跑一次，把
-     *    ① 全部窗口（不截断）② 名字带手势管理的类及其方法 ③ 桌面图标启动链方法
-     *    写进日志。目的很明确：不再凭记忆里的类名断言「系统里没有这东西」——
-     *    系统手势在真机上一直可用，就说明管线活着，只是我们没找对入口。
+     * ⑧ V0.1.7（AevonProbeV107）：运行时探针。六组一次装齐，8 秒后开始、组间隔 0.8 秒：
+     *    P1 系统手势管线 / P2 识别器宿主 / P3 桌面图标启动链 /
+     *    P4 事件路由延迟层 / P5 场景与浮窗 / P6 配置快照。
+     *
+     * V0.1.6 的探针自己把 SpringBoard 打死了（归档(13)：崩溃栈落在
+     * swift_dynamicCast → _CF_forwarding_prep_0，位置就在「遍历全进程类表」那一步）。
+     * 这一版把类表扫描整块搬进 ObjC，并且每组都从 ObjC 的 @try 里过 ——
+     * 探针再出问题最多是「这一组没结果」，绝不再是「手机自动注销」。
      */
-    AevonProbeV106.runOnce()
+    AevonProbeV107.runAll()
 }

@@ -245,6 +245,44 @@ jobs:
             && { echo "::error::窗口诊断又变成截断输出 —— 证据不完整就会重演「系统里没有」的误判"; exit 1; } || true
           echo "V0.1.6 校验: 全屏自动关浮窗 + 窗口全量诊断 + 手势管理器运行时探针"
 
+          # V0.1.7（归档(13)/Aevon(74) 修复）：
+          # ①探针自己把 SpringBoard 打死过两次。崩溃栈是
+          #   swift_dynamicCast → swift_getObjectType → _CF_forwarding_prep_0 → SIGTRAP，
+          #   反汇编定位在「遍历全进程类表」那个函数里的动态转换指令上。
+          #   本版把类表 / 方法名 / ivar 扫描整块搬进 ObjC（AevonObjCProbeV107），
+          #   六组探针一次部署（P1~P6），每组都从 ObjC 的 @try 里过（AevonShieldV107）。
+          # ②ivar 读取改 object_getIvar（AevonSafeIvarV107），不再裸 load 野指针。
+          for s in AevonProbeV107 AevonMultiProbeV107 AevonShieldV107 AevonObjCProbeV107 AevonSafeIvarV107 \
+                   AevonProbeP1V107 AevonProbeP2V107 AevonProbeP3V107 AevonProbeP4V107 AevonProbeP5V107 AevonProbeP6V107; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.7 标记 $s 未编入"; exit 1; }
+          done
+          # ObjC 安全带必须真的进构建：@try 兜底 + 类表扫描都在这个文件里。
+          # 注意这里查源码而不是查二进制 —— C 函数名会被 strip 掉，strings 查不到会误判。
+          for s in AevonShieldRun AevonAllClassNames AevonMethodNamesForClass AevonObjectResponds AevonClassFactoryObject; do
+            grep -q "$s" "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
+              || { echo "::error::探针安全带函数 $s 被删（探针会再次裸跑）"; exit 1; }
+          done
+          grep -q 'Sources/AevonProbeSupport.m' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::探针安全带文件没进 Makefile（等于没编进去）"; exit 1; }
+          # 反回退：Swift 侧不许再出现全进程类表扫描（那条路要经过 Swift 动态转换，
+          # 正是崩溃点）。注释里说明这件事是允许的，所以先滤掉行首注释。
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
+               | grep -q 'objc_copyClassList'; then
+            echo "::error::类表扫描又回到 Swift 侧了 —— 会重演 swift_dynamicCast 崩溃"
+            exit 1
+          fi
+          # 反回退：ivar 不许再用裸 load 把内存槽位当对象交出去。
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonRuntime.swift" \
+               | grep -q 'load(as: AnyObject'; then
+            echo "::error::ivar 又用裸 load 取对象了 —— 野指针会让动态转换直接崩"
+            exit 1
+          fi
+          # 探针文件必须存在且确实在做六组调度（每组的独立延迟调度是关键隔离手段）。
+          grep -q 'groupPipeline' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
+            || { echo "::error::探针 P1 组被删（系统手势管线取证断了）"; exit 1; }
+          echo "V0.1.7 校验: 探针六组 + ObjC @try 兜底 + 类表扫描在 ObjC + ivar 安全读取"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
