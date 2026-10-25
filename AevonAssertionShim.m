@@ -749,3 +749,16 @@ __attribute__((used)) static const char AevonNoBandDrawV117Marker[] = "AevonNoBa
 __attribute__((used)) static const char AevonBandHintV117Marker[] = "AevonBandHintV117";
 __attribute__((used)) static const char AevonDeadManV117Marker[] = "AevonDeadManV117";
 __attribute__((used)) static const char AevonPanicThreeFingerV117Marker[] = "AevonPanicThreeFingerV117";
+
+/* V0.1.18（Aevon(85) 四次落点全部在带外）：
+ *
+ *   AevonRightEdgeDefaultV118 = 右缘带默认宽度 28 → 46pt、下限 8 → 24pt
+ *   AevonRightEdgeMissHintV118 = 带外落点自述原因（宽度差 / 高度差 + 需要多大），抬手补一行结论
+ *   AevonRightEdgeWidenV118    = 把被旧默认值坑住的带宽（≤28pt）一次性抬到 46
+ *
+ * 依据：Aevon(85) 四次右缘落点距右缘 12 / 19 / 25 / 42pt，宽度被拖到 17pt 后 0 次进带
+ * （(411,744) 只差 1pt）。覆盖率：17pt×60% = 0/4、28pt×60% = 1/4、46pt×60% = 3/4。
+ * 结论：可调宽度但允许调到「必然落空」的区间 = 把「猜自己落点」的成本转给用户，必须改默认值 + 抬下限。 */
+__attribute__((used)) static const char AevonRightEdgeDefaultV118Marker[] = "AevonRightEdgeDefaultV118";
+__attribute__((used)) static const char AevonRightEdgeMissHintV118Marker[] = "AevonRightEdgeMissHintV118";
+__attribute__((used)) static const char AevonRightEdgeWidenV118Marker[] = "AevonRightEdgeWidenV118";

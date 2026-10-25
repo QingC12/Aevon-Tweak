@@ -494,14 +494,18 @@ jobs:
             || { echo "::error::RightEdgeTakeover 必须默认关（出过全屏卡死事故）"; exit 1; }
           grep -q 'RightEdgeTakeover' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
             || { echo "::error::Root.plist 缺 RightEdgeTakeover 开关"; exit 1; }
-          # 带宽/带高必须可调（默认 28pt × 下半 60%，用户能自己缩小牺牲面）
+          # 带宽/带高必须可调。V0.1.18 改默认值：Aevon(85) 四次落点 0 次进带（17pt 时），
+          # 46pt×60% 能盖住 3/4 → 默认直接给上限，下限抬到 24（不许再出现「设了也没用」的区间）。
           grep -q 'RightEdgeWidth' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
             || { echo "::error::Detail.plist 缺 RightEdgeWidth 滑条"; exit 1; }
           grep -q 'RightEdgeHeight' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
             || { echo "::error::Detail.plist 缺 RightEdgeHeight 滑条"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            | grep -q 'static let defaultWidth: Double = 28' \
-            || { echo "::error::右缘默认宽度不是 28pt"; exit 1; }
+            | grep -q 'static let defaultWidth: Double = 46' \
+            || { echo "::error::右缘默认宽度不是 46pt（Aevon(85) 实测 28pt 只覆盖 1/4 落点）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'static let minWidth: Double = 24' \
+            || { echo "::error::右缘最小宽度不是 24pt（8pt 属于必然落空区间）"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'static let defaultHeightPercent: Double = 60' \
             || { echo "::error::右缘默认高度占比不是 60%（应当只覆盖下半屏）"; exit 1; }
@@ -599,6 +603,36 @@ jobs:
           grep -q 'show(duration: 0.35)' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
             || { echo "::error::提示条接管闪示被删"; exit 1; }
           echo "V0.1.17 校验: 全屏自绘已删（1×1 隐藏占位）+ 按需提示条 + 死手开关 + 三指急救"
+
+          # V0.1.18（Aevon(85) 四次落点全部在带外 → 命中率修复，触摸逻辑一行没动）
+          #
+          # 实测：四次右缘落点距右缘 12 / 19 / 25 / 42pt，用户把宽度拖到 17pt 后 0 次进带，
+          # (411,744) 只差 1pt。覆盖率 17pt×60% = 0/4、28pt×60% = 1/4、46pt×60% = 3/4。
+          # 结论：宽度可调但允许调到「必然落空」= 把「猜自己落点」的成本转给用户，本版改默认值 + 抬下限。
+          for s in AevonRightEdgeDefaultV118 AevonRightEdgeMissHintV118 AevonRightEdgeWidenV118; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.18 标记 $s 未编入"; exit 1; }
+          done
+          # 滑条下限必须是 24：8~23 属于「设了也必然落空」的区间，不许再出现在面板上
+          grep -q '<integer>24</integer>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 右缘宽度下限不是 24"; exit 1; }
+          # 带外落点必须自己说清原因（宽度差 / 高度差 + 需要多大），不能再是一句「本版不干预」
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q '带外·宽度' \
+            || { echo "::error::带外落点原因说明被删（落空时日志无法指出需要多宽）"; exit 1; }
+          # 抬手必须补一行结论：本可命中 / 未误伤
+          grep -q '本可命中' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::带外落点抬手结论被删（用户仍要靠反推自己的落点）"; exit 1; }
+          # 老用户迁移：偏好里的带宽不会被改代码默认值影响，必须写盘抬到 46
+          grep -q 'AevonPrefs.set("RightEdgeWidth", AevonRightEdge.defaultWidth)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::带宽一次性迁移被删（升级上来的设备仍是 17pt，等于白改）"; exit 1; }
+          test "$(grep -c 'widenRightEdgeOnceV118()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
+            || { echo "::error::带宽迁移没接进 startTriggerZoneWatch"; exit 1; }
+          # ★ 本版不许碰触摸决策：接管判据必须还是同一句，热区/右缘的 ownsTouch 生命周期不许改
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'AevonRightEdge.band(in: screen).contains(point)' \
+            || { echo "::error::右缘接管判据被改 —— 本版只改命中率，不许动触摸逻辑"; exit 1; }
+          echo "V0.1.18 校验: 默认 46pt / 下限 24 / 带外落点自述原因 / 抬手结论 / 老用户带宽迁移（触摸逻辑未动）"
 
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \

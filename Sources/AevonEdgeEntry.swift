@@ -103,9 +103,22 @@ enum AevonTriggerZone {
 /// 因此带宽默认 28pt（抖音右侧按钮中心距边一般 ≥30pt），
 /// 带高默认只覆盖**下半 60%**，上半屏右侧完全不受影响。
 enum AevonRightEdge {
-    static let defaultWidth: Double = 28
+    // V0.1.18（AevonRightEdgeDefaultV118）：默认宽度 28 → **46**，下限 8 → **24**。
+    //
+    // 依据 Aevon(85) 的四次真实落点（距右缘 12 / 19 / 25 / 42pt）：
+    //   · 用户把宽度拖到 17pt 后，四次右缘操作 **0 次进带**，其中 (411,744) 只差 1pt；
+    //   · 按真实落点算覆盖率：17pt×60% = 0/4、28pt×60% = 1/4、
+    //     46pt×60% = 3/4（只缺 y=80 那次高度外）、46pt×全高 = 4/4。
+    // 结论：**把宽度做成可调、且允许调到「落在带外」的区间，等于把「猜自己落点」的成本
+    // 转给用户** —— 一调小功能就静默归零，日志里还只有一行看起来像我们主动放弃的记录。
+    // 所以默认直接给到上限 46（Stheno 的 `_edgeWidth` 也是固定值，不是滑条），
+    // 下限抬到 24，让「设了也没用」的区间根本选不出来。
+    //
+    // 代价必须写明：46pt 会压到抖音右侧按钮（中心一般距边 30pt 开外），
+    // 想保住按钮就把宽度调回 24~32，或者把带高缩到 40%。
+    static let defaultWidth: Double = 46
     static let defaultHeightPercent: Double = 60
-    static let minWidth: Double = 8
+    static let minWidth: Double = 24
     static let maxWidth: Double = 46
     static let minHeightPercent: Double = 40
     static let maxHeightPercent: Double = 100
@@ -152,6 +165,35 @@ enum AevonRightEdge {
     static func summary(in bounds: CGRect) -> String {
         let r = band(in: bounds)
         return "宽 \(Int(r.width))pt · 高占比 \(Int(heightPercent))%（带 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
+    }
+
+    /// V0.1.18（AevonRightEdgeMissHintV118）：落点**为什么**没进带、要多大才进。
+    ///
+    /// Aevon(85) 的四次落点里没有一次进带，但日志原文只有「归口=起手窗·本版不干预」——
+    /// 读起来像我们主动放弃，实际是「宽度差 1pt / 高度差 90pt」这种纯几何原因。
+    /// 这个函数把原因和所需值算成一句话，让每一行日志自己说清结论，
+    /// 不用再去比对屏幕尺寸反推。
+    ///
+    /// 返回空串 = 落点确实在带内（调用方只在带外时用它）。
+    static func missReason(for point: CGPoint, in bounds: CGRect) -> String {
+        let r = band(in: bounds)
+        let gap = Int((bounds.maxX - point.x).rounded())
+        let needWidth = gap                      // contains 要求 point.x >= r.minX，即 gap <= 带宽
+        let needPercent = Int(((bounds.maxY - point.y) / bounds.height * 100).rounded()) + 1
+        // 开关关着时「带内」也进不来 —— 必须先单独判，否则会把它误报成「高度差」
+        // （band 的几何是照样算的，widthShort/heightShort 都为 false，会掉进最后一个分支）。
+        guard enabled else {
+            return "带外·开关未打开（落点距右缘 \(gap)pt，本可在带内；到设置里打开「右缘接管带」即可）"
+        }
+        let widthShort = point.x < r.minX
+        let heightShort = point.y < r.minY
+        if widthShort, heightShort {
+            return "带外·宽度和高度都差（距边 \(gap)pt 需 ≥\(needWidth)pt，y=\(Int(point.y)) 需带高 ≥\(needPercent)%；当前 \(Int(width))pt×\(heightPercent)%）"
+        }
+        if widthShort {
+            return "带外·宽度差（距边 \(gap)pt，需带宽 ≥\(needWidth)pt，当前 \(Int(width))pt）"
+        }
+        return "带外·高度差（y=\(Int(point.y)) 在带顶 y=\(Int(r.minY)) 之上，需带高 ≥\(needPercent)%，当前 \(Int(heightPercent))%）"
     }
 
     static func signature() -> String {
@@ -452,6 +494,7 @@ enum AevonEdgeEntry {
     static func startTriggerZoneWatch() {
         migrateLegacyBrokenZoneIfNeeded()
         disableRiskyTakeoverOnceV117()
+        widenRightEdgeOnceV118()
         if zoneSignature.isEmpty { zoneSignature = AevonTriggerZone.signature() }
         if !prefsObserverInstalled {
             prefsObserverInstalled = true
@@ -530,6 +573,32 @@ enum AevonEdgeEntry {
         AevonPrefs.set("BandTakeoverFromBegan", false)
         AevonPrefs.synchronize()
         AevonLog.warn("[安全] 0.1.17 首次启动：已把「右缘接管带 / 显示右缘接管带 / 右缘全域接管」三个开关写回关闭（0.1.16 卡死整屏的事故）。要用请回设置里手动打开（AevonNoBandDrawV117）")
+    }
+
+    // V0.1.18（AevonRightEdgeWidenV118）：把**被旧默认值坑住**的带宽一次性抬到 46。
+    //
+    // 为什么必须做迁移而不是只改默认值：`RightEdgeWidth` 是 CFPreferences 里的持久键，
+    // 改代码里的 default 只影响「从没写过这个键」的设备。Aevon(85) 的设备上它已经被写成 17，
+    // 只改默认值的话，用户装完这一版**仍然是 17pt**，等于白改。
+    //
+    // 判定阈值取 28（旧默认值）：<= 28 的值不可能来自「我想更容易呼出」（那应该往大调），
+    // 只可能来自旧默认或跟着旧默认往下拖 —— 都是我们给的坑。用户主动调大过的一律保留。
+    // 标记只生效一次，用户此后在设置里怎么调都永久保留。
+    private static var migratedWideV118 = false
+
+    private static func widenRightEdgeOnceV118() {
+        guard !migratedWideV118 else { return }
+        migratedWideV118 = true
+        guard !AevonPrefs.bool("AevonRightEdgeWidenV118", default: false) else { return }
+        AevonPrefs.set("AevonRightEdgeWidenV118", true)
+        let previous = AevonPrefs.rawValue("RightEdgeWidth") as? NSNumber
+        guard let raw = previous?.doubleValue, raw <= 28 else {
+            AevonPrefs.synchronize()
+            return
+        }
+        AevonPrefs.set("RightEdgeWidth", AevonRightEdge.defaultWidth)
+        AevonPrefs.synchronize()
+        AevonLog.warn("[右缘] 0.1.18 首次启动：带宽从 \(Int(raw))pt 抬到 \(Int(AevonRightEdge.defaultWidth))pt（旧默认值让它一直落在带外；想改回去请到「细节调整」里调，下限 \(Int(AevonRightEdge.minWidth))pt）（AevonRightEdgeWidenV118）")
     }
 
     /// 指纹变了就重排触发条（幂等；没变什么都不做）
@@ -722,6 +791,17 @@ enum AevonEdgeEntry {
     /// 右缘呼出计数器（日志里看「这一版到底用了几次右缘」）
     private static var rightEdgeCount = 0
 
+    // V0.1.18（AevonRightEdgeMissHintV118）：**带外落点候选**（只记录，绝不接管）。
+    //
+    // 起手落在「右缘 46pt 内、但不在接管带里」（宽度外 / 高度外 / 开关没开）时记在这里。
+    // 抬手时用它回答一个问题：这一次到底是「他想呼出但落空了」，还是「他就是在用 App」。
+    // 判据只看位移方向 —— 左扫成立 = 他想呼出，我们欠他一个更大的带；
+    // 其余方向 = 正常 App 操作，说明没误伤（这半句同样重要）。
+    // 它不参与任何吞摸决策，只是把取证做完。
+    private static var rightEdgeMissTouchID: UInt = 0
+    private static var rightEdgeMissStart: CGPoint = .zero
+    private static var rightEdgeMissReason = ""
+
     // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
 
     /// 当前被全局通道接管的那根手指（0 = 没接管浮窗）
@@ -806,6 +886,9 @@ enum AevonEdgeEntry {
         rightEdgeTouchID = 0
         rightEdgeStart = .zero
         rightEdgeDirLogged = false
+        rightEdgeMissTouchID = 0
+        rightEdgeMissStart = .zero
+        rightEdgeMissReason = ""
         bandTouchID = 0
         bandStart = .zero
         bandHoldTouchID = 0
@@ -1025,6 +1108,10 @@ enum AevonEdgeEntry {
                         bandHoldDeadline = 0
                         bandTouchID = 0
                         bandStart = .zero
+                        // 上一根手指的带外候选也一并清（touchID 是 UITouch 指针，会被复用）
+                        rightEdgeMissTouchID = 0
+                        rightEdgeMissStart = .zero
+                        rightEdgeMissReason = ""
                         globalTouchID = touchID
                         globalStart = point
                         globalFired = false
@@ -1034,7 +1121,7 @@ enum AevonEdgeEntry {
                         rightEdgeCount += 1
                         // V0.1.16：接管成功闪一下带（开关关着时是空操作）
                         AevonSystemGestureV105.flashBandIndicator()
-                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·按下即接管（App 连 began 都收不到；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113 AevonRightEdgeShowBandV116）")
+                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·在带内·按下即接管（App 连 began 都收不到；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113 AevonRightEdgeShowBandV116 AevonRightEdgeDefaultV118）")
                         return
                     }
                     // V0.1.13（AevonBandTakeoverBeganV113）：起手窗改成**两态**，中间态全部作废。
@@ -1066,10 +1153,20 @@ enum AevonEdgeEntry {
                     // ② 默认：只留一行证据，**不登记、不扣帧、不吞**，整段交回 App。
                     //    这是本版唯一诚实的选择：既然我们无法在不吞 began 的前提下阻止 App 拿到位移，
                     //    那就别碰 —— 呼不出圆盘只是少一个入口，绝不能变成「抖音被带起来」。
+                    //
+                    // V0.1.18（AevonRightEdgeMissHintV118）：这一行必须**自己说出原因**。
+                    // Aevon(85) 四次落点全落在这里，日志却是同一句话，看上去像我们主动放弃；
+                    // 实际是「宽度差 1pt」「y 在带顶之上 292pt」这种纯几何问题。
+                    // 现在把「带外原因 + 需要多大才进」直接写出来，并登记为「落点候选」，
+                    // 抬手时再补一行「本可命中 / 本次是 App 操作」。
                     let now = CACurrentMediaTime()
+                    let miss = AevonRightEdge.missReason(for: point, in: screen)
+                    rightEdgeMissTouchID = touchID
+                    rightEdgeMissStart = point
+                    rightEdgeMissReason = miss
                     if now - bandPassLogAt > 1.0 {
                         bandPassLogAt = now
-                        AevonLog.info("[右缘] 落点 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=起手窗·本版不干预（整段交回 App；要在这一段呼出请打开设置里的「右缘全域接管」）（AevonBandTakeoverBeganV113）")
+                        AevonLog.info("[右缘] 落点 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=起手窗·本版不干预（整段交回 App；\(miss)）（AevonBandTakeoverBeganV113 AevonRightEdgeMissHintV118）")
                     }
                     return
                 }
@@ -1154,7 +1251,7 @@ enum AevonEdgeEntry {
                     let dir = (rdx <= -8 && abs(rdx) >= abs(rdy) * 1.2)
                         ? "左扫"
                         : (abs(rdy) > abs(rdx) ? "纵向" : "向右")
-                    AevonLog.info("[右缘] 判向 dx=\(Int(rdx)) dy=\(Int(rdy)) → \(dir)（已吞，不还 App）（AevonRightEdgeTakeoverV115）")
+                    AevonLog.info("[右缘] 判向 dx=\(Int(rdx)) dy=\(Int(rdy)) → \(dir)（在带内·已吞，不还 App）（AevonRightEdgeTakeoverV115）")
                 }
             }
             // 圆盘已展开：这根手指继续驱动它（旋转 / 选定 / 松手开窗）
@@ -1198,6 +1295,29 @@ enum AevonEdgeEntry {
             if touchID == bandHoldTouchID {
                 bandHoldTouchID = 0
                 bandHoldDeadline = 0
+            }
+            // V0.1.18（AevonRightEdgeMissHintV118）：带外落点抬手 → 补一行结论。
+            //
+            // 这一行把「落空」和「正常操作」分开：
+            //   · 左扫成立 → 他本来要呼出，是我们欠他一个更大的带（给出所需宽度）；
+            //   · 其它方向 → 他就是在用 App，说明没误伤（这半句同样要留证）。
+            // 不 return：miss 候选本来就没被接管，后面的 guard 会自然放行。
+            if touchID == rightEdgeMissTouchID {
+                let mdx = point.x - rightEdgeMissStart.x
+                let mdy = point.y - rightEdgeMissStart.y
+                let sweep = mdx <= -AevonEdgeStripView.swipeDistance && abs(mdx) >= abs(mdy) * 1.2
+                let start = rightEdgeMissStart
+                let reason = rightEdgeMissReason
+                rightEdgeMissTouchID = 0
+                rightEdgeMissStart = .zero
+                rightEdgeMissReason = ""
+                let gap = Int((UIScreen.main.bounds.width - start.x).rounded())
+                if sweep {
+                    AevonLog.info("[右缘] 本可命中：起手 (\(Int(start.x)),\(Int(start.y))) 距右缘 \(gap)pt，\(reason)；这次左扫 dx=\(Int(mdx)) dy=\(Int(mdy)) 已经进了 App → 把「右缘带宽度」调到 ≥\(gap)pt（或带高调到能让 y=\(Int(start.y)) 进带）就能在这里呼出（AevonRightEdgeMissHintV118）")
+                } else {
+                    let dir = abs(mdy) > abs(mdx) ? "纵向" : "向右"
+                    AevonLog.info("[右缘] 带外落点结束：起手 (\(Int(start.x)),\(Int(start.y))) 距右缘 \(gap)pt，\(reason)；位移 dx=\(Int(mdx)) dy=\(Int(mdy)) → \(dir)不是左扫 → 本次是 App 自己的操作，未误伤（AevonRightEdgeMissHintV118）")
+                }
             }
             // V0.0.41：浮窗拖拽抬手 —— 提交几何 / 命中 ✕ 才关窗 / 记录双击候选
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: false) { return }
@@ -1244,6 +1364,12 @@ enum AevonEdgeEntry {
             if touchID == bandHoldTouchID {
                 bandHoldTouchID = 0
                 bandHoldDeadline = 0
+            }
+            // V0.1.18：带外落点候选被系统取消 —— 只清状态，不出结论（落点已被打断，没有意义）
+            if touchID == rightEdgeMissTouchID {
+                rightEdgeMissTouchID = 0
+                rightEdgeMissStart = .zero
+                rightEdgeMissReason = ""
             }
             // V0.0.41：浮窗拖拽被系统打断 —— 缩放退回原几何，移动不落盘
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: true) { return }

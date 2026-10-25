@@ -289,9 +289,9 @@ enum AevonProbeV107 {
         let width = AevonPrefs.double("RingTriggerWidth", default: AevonTriggerZone.defaultWidth)
         let height = AevonPrefs.double("RingTriggerHeight", default: AevonTriggerZone.defaultHeight)
         let bandMode = AevonRightEdge.enabled
-            ? "右缘接管带·按下即接管（\(AevonRightEdge.summary(in: UIScreen.main.bounds))）"
+            ? "右缘接管带·按下即接管（\(AevonRightEdge.summary(in: UIScreen.main.bounds))；带内起手需距右缘 ≤\(Int(AevonRightEdge.width))pt）"
             : "已关（整段交回 App）"
-        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；右缘归口=\(bandMode)，可视化=\(AevonRightEdge.showBand ? "开（按需提示条：开关变化 3 秒 / 接管成功 0.35 秒后自动消失）" : "关（想看范围请打开「显示右缘接管带」）")；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")·本版停手不接收触摸（AevonSystemGestureV110 AevonBandHoldMovedV112 AevonBandTakeoverBeganV113 AevonPipelineStandDownV113 AevonRightEdgeTakeoverV115 AevonRightEdgeShowBandV116 AevonNoBandDrawV117 AevonBandHintV117）")
+        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；右缘归口=\(bandMode)，可视化=\(AevonRightEdge.showBand ? "开（按需提示条：开关变化 3 秒 / 接管成功 0.35 秒后自动消失）" : "关（想看范围请打开「显示右缘接管带」）")；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")·本版停手不接收触摸（AevonSystemGestureV110 AevonBandHoldMovedV112 AevonBandTakeoverBeganV113 AevonPipelineStandDownV113 AevonRightEdgeTakeoverV115 AevonRightEdgeShowBandV116 AevonNoBandDrawV117 AevonBandHintV117 AevonRightEdgeDefaultV118 AevonRightEdgeMissHintV118）")
     }
 
     // MARK: - 供手势通道复用（AevonSystemGestureV105 的兜底路径）
