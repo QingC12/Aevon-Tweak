@@ -619,9 +619,14 @@ enum AevonEdgeEntry {
     /// 他接着做了 40 秒无效尝试，最后只能得出「这一版还是没修好」。
     /// 所以每次 SpringBoard 启动后都再提醒一次（仅当开关是关的、且标记确实来自急救）。
     /// 用户重新打开开关时 `checkTriggerZoneChange()` 会清标记，之后不再提示。
+    private static var panicHintOnceV202 = false
     private static func explainPanicDisabledOnceV119() {
+        // V0.2.2（AevonPanicHintOnceV202）：Aevon(88) 里「已提示一次」连打两遍 ——
+        // startTriggerZoneWatch 会在启动路径上跑两次，幂等标记拦住第二遍。
+        guard !panicHintOnceV202 else { return }
         guard !AevonPrefs.bool("RightEdgeTakeover", default: false),
               AevonPrefs.bool("RightEdgePanicOffV119", default: false) else { return }
+        panicHintOnceV202 = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
             guard !AevonPrefs.bool("RightEdgeTakeover", default: false),
                   AevonPrefs.bool("RightEdgePanicOffV119", default: false) else { return }

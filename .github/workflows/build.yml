@@ -1089,8 +1089,10 @@ jobs:
           done
           strings "$APP_DYLIB" | grep -q 'com.aevon.rightedgetrigger' \
             || { echo "::error::AevonApp.dylib 缺少回传通知名 com.aevon.rightedgetrigger（判向成立后 SB 呼不出圆盘）"; exit 1; }
-          grep -q 'dx <= -30.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::App 侧判向阈值不是 30pt（必须与 SB 侧成熟版一致）"; exit 1; }
+          # V0.2.2：判向阈值已提前到 8pt（见下方 V0.2.2 块），30pt 断言随之反转 ——
+          # 留 8pt 断言，防止有人把阈值调回 30pt 重蹈 Aevon(88) 覆辙。
+          grep -q 'dx <= -8.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧判向阈值不是 8pt（30pt 会被滚动容器 pan 抢先打断，Aevon(88) 根因）"; exit 1; }
           grep -q 'fabs(dx) >= fabs(dy) \* 1.2' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧判向缺少横向占优判据（|dx| ≥ |dy|×1.2，否则吃掉纵向滚动）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonAppTriggerBridgeV201' \
@@ -1098,6 +1100,23 @@ jobs:
           strings "$DYLIB" | grep -q 'com.aevon.rightedgetrigger' \
             || { echo "::error::主插件缺少回传通知监听名 com.aevon.rightedgetrigger"; exit 1; }
           echo "V0.2.1 校验: App 侧真接管（delays+cancels / 30pt 判向 / 三指急救）+ Darwin 回传桥 已就位"
+
+          # V0.2.2（AevonAppEarlyJudgeV202）：Aevon(88) 根因 —— 30pt 判向太慢，
+          # App 内滚动容器的 pan ~10pt（不分方向）Began 抢先，横向呼盘手指全部在
+          # App 侧被 touchesCancelled 静默打断。判向成功阈值提前到 8pt（SB 侧
+          # 0.1.9 同款先例），touchesCancelled 补取证。
+          for s in AevonAppEarlyJudgeV202; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::AevonApp.dylib 缺少 0.2.2 标记 $s"; exit 1; }
+          done
+          grep -q 'dx <= -8.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧判向阈值不是 8pt —— 30pt 会被滚动容器 pan ~10pt 抢先打断（Aevon(88) 根因）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q '序列被取消' \
+            || { echo "::error::touchesCancelled 取证被删 —— 竞争断裂又会隐形（Aevon(88) 教训）"; exit 1; }
+          grep -q 'AevonPanicHintOnceV202' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::急救启动提示幂等标记被删（Aevon(88) 连打两遍）"; exit 1; }
+          echo "V0.2.2 校验: 判向 8pt 提前 + cancelled 取证 + 急救提示幂等 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

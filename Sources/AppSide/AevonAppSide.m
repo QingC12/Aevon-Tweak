@@ -40,8 +40,18 @@
  *     点击 / 滚动 / 键盘只晚几帧，零伪造对象、零野指针 —— 这正是 0.1.19 方案书里
  *     「暂存 60ms 再按序补投」想做的事，由 UIKit 官方机制完成。
  *
- * 判向参数与 SpringBoard 侧成熟版完全一致：向左 30pt 且 |dx| ≥ |dy|×1.2。
- * 判向成立 → 取消 App 触摸 + Darwin 通知 com.aevon.rightedgetrigger 让 SB 呼圆盘。
+ * 判向参数（V0.2.2 提前，AevonAppEarlyJudgeV202）
+ * ------------------------------------------------
+ * Aevon(88) 日志根因：7 根「带内·began 已扣住」的横向呼盘手指**全部在 App 侧
+ * 序列断裂**（无 moved 判定、无抬手、无任何下文），唯一幸存的一根是纵向
+ * （dy=-84，8pt 纵向失败判据先触发，主动 Failed → 补投正常）。
+ * 结论：30pt 判向太慢 —— App 内滚动容器（UITableView 等）的 pan 识别器约
+ * 10pt（不分方向）就 Began 抢先赢得竞争，我们被打成 Failed 并收到
+ * touchesCancelled（当时这一分支静默无日志，断裂真相由 0.2.2 取证补上）。
+ *
+ * 修复 = 判向成功阈值 30pt → 8pt（横向占优 |dx|≥|dy|×1.2 不变），在滚动 pan
+ * 之前赢。SB 侧 0.1.9 有同款 8pt 判向先例。纵向失败（8pt 占优）与向右失败
+ * （8pt）不变；touchesCancelled 补取证日志，若 8pt 后仍有断裂，下版对症。
  *
  * 三指急救（AevonAppPanicCrossV201，App 侧形态）：三根手指同时按下 → 识别器
  * 立刻 Failed（扣住的 began 全部补投），绝不持有任何触摸。App 沙盒写不了
@@ -72,6 +82,8 @@ __attribute__((used)) static const char AevonAppTakeoverV201Marker[] = "AevonApp
 __attribute__((used)) static const char AevonAppDirectionV201Marker[] = "AevonAppDirectionV201";
 __attribute__((used)) static const char AevonAppNotifySBV201Marker[] = "AevonAppNotifySBV201";
 __attribute__((used)) static const char AevonAppPanicCrossV201Marker[] = "AevonAppPanicCrossV201";
+/* V0.2.2 判向提前标记（Aevon(88) 日志根因） */
+__attribute__((used)) static const char AevonAppEarlyJudgeV202Marker[] = "AevonAppEarlyJudgeV202";
 
 #pragma mark - 日志
 
@@ -340,7 +352,7 @@ shouldReceiveTouch:(UITouch *)touch {
     self.startPoint = [touch locationInView:self.view];
     self.claimed = YES;
     double gap = self.screenSize.width - self.startPoint.x;
-    AevonAppLog(@"右缘起手 (%.0f,%.0f) 距右缘 %.0fpt → 带内·began 已扣住（判向中，30pt 横向占优则接管）（AevonAppTakeoverV201）",
+    AevonAppLog(@"右缘起手 (%.0f,%.0f) 距右缘 %.0fpt → 带内·began 已扣住（判向中，8pt 横向占优则接管）（AevonAppTakeoverV201）",
                 self.startPoint.x, self.startPoint.y, gap);
 }
 
@@ -354,10 +366,12 @@ shouldReceiveTouch:(UITouch *)touch {
     double dx = now.x - self.startPoint.x;
     double dy = now.y - self.startPoint.y;
 
-    /* 判向参数与 SpringBoard 侧成熟版一致：向左 30pt 且横向绝对占优 */
-    if (dx <= -30.0 && fabs(dx) >= fabs(dy) * 1.2) {
+    /* 判向（V0.2.2 提前到 8pt，AevonAppEarlyJudgeV202）：
+     * 30pt 太慢 —— Aevon(88) 证明 App 内滚动容器的 pan 约 10pt 就 Began 抢先，
+     * 我们还没判就被打成 Failed。横向占优 |dx|≥|dy|×1.2 的几何不变。 */
+    if (dx <= -8.0 && fabs(dx) >= fabs(dy) * 1.2) {
         self.decided = YES;
-        AevonAppLog(@"判向成立：dx=%.0f dy=%.0f → 取消 App 触摸（合法 touchesCancelled）+ 通知 SB 呼圆盘（AevonAppDirectionV201 AevonAppNotifySBV201）",
+        AevonAppLog(@"判向成立：dx=%.0f dy=%.0f（8pt 提前判）→ 取消 App 触摸（合法 touchesCancelled）+ 通知 SB 呼圆盘（AevonAppDirectionV201 AevonAppNotifySBV201 AevonAppEarlyJudgeV202）",
                     dx, dy);
         AevonAppPostRightEdgeTrigger();
         self.state = UIGestureRecognizerStateBegan;
@@ -386,16 +400,20 @@ shouldReceiveTouch:(UITouch *)touch {
     UITouch *touch = touches.anyObject;
     CGPoint point = (touch != nil && self.view != nil) ? [touch locationInView:self.view] : CGPointZero;
     self.decided = YES;
-    /* 没判出横向 30pt：轻点或短划。Failed → UIKit 把 began+moved+ended 整段补投，
+    /* 没判出横向 8pt：轻点或短划。Failed → UIKit 把 began+moved+ended 整段补投，
      * 轻点在抬手时生效（带内轻点的已知代价），App 不会丢事件。 */
-    AevonAppLog(@"抬手 (%.0f,%.0f)：未满 30pt 横向 → 整段补投（轻点延迟到抬手生效，App 不丢事件）",
+    AevonAppLog(@"抬手 (%.0f,%.0f)：未满 8pt 横向 → 整段补投（轻点延迟到抬手生效，App 不丢事件）",
                 point.x, point.y);
     self.state = UIGestureRecognizerStateFailed;
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesCancelled:touches withEvent:event];
+    /* V0.2.2 取证（AevonAppEarlyJudgeV202）：Aevon(88) 里横向呼盘手指在这一分支
+     * 静默消失 —— 谁取消的（滚动容器 pan 抢先 Began / 系统）写清楚，断裂不再隐形 */
+    if (self.decided) { return; }
     self.decided = YES;
+    AevonAppLog(@"序列被取消：App 内其他手势抢先（最可能是滚动容器 pan ~10pt Began）→ 本指放行（AevonAppEarlyJudgeV202）");
 }
 
 @end
