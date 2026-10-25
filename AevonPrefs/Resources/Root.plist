@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.1.7（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。全屏 App 内从右边缘向左滑呼出圆盘。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.13（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.1.13 起：全屏 App 内呼出只认「右下角热区里向左滑」，右缘 20~46pt 那一段整段交回 App，不再拦截（绝不会带起 App 自己的手势）；若你要在右缘中部也能呼出，打开下面的「右缘全域接管」。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -35,6 +35,18 @@
 			<string>EdgeGestureEnabled</string>
 			<key>label</key>
 			<string>边缘左滑呼出圆盘（热区 + 全屏 App 右缘）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>BandTakeoverFromBegan</string>
+			<key>label</key>
+			<string>右缘全域接管（0.1.13 新增，默认关）：打开后全屏 App 右缘 20~46pt 任意高度按下即接管，圆盘能在右缘中部呼出；代价是这一段里 App 自己的按钮（抖音点赞 / 评论 / 收藏）点不到。关着时这一段整段交回 App，呼不出圆盘但绝不会带起 App 手势</string>
 		</dict>
 		<dict>
 			<key>cell</key>

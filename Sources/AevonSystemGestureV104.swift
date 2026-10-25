@@ -93,6 +93,23 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     private var trackToken = 0
     private var abandonedInWindow = 0
 
+    /// V0.1.13（AevonPipelineStandDownV113）：识别器是否允许接收触摸。**恒 false。**
+    ///
+    /// 为什么停手（Aevon(80) 复盘，机制链条完整闭合）：
+    ///   ① 本类把 `delaysTouchesBegan` 设成 true（0.1.9 为了让 App 别在识别器 began 前先动手）；
+    ///   ② 于是它一旦 `shouldReceiveTouch` 返回 true，App 的 began 就被**扣在 UIKit 手势环境里**；
+    ///   ③ 而 `gestureRecognizerShouldBegin` 在「老通道正持有这根手指」时直接返回 false（防双呼）；
+    ///   ④ 识别器必然 failed → UIKit 把被扣住的 began 连同**其后的全部移动**一次性补投给 App；
+    ///   ⑤ 这次补投发生在手势环境内部，`UIApplication -sendEvent:` 根本看不到，吞不掉。
+    /// 于是「圆盘出来了、抖音进度条也动」。热区之所以一直干净（20/20），正因为它在
+    /// shouldReceiveTouch 就被拒（日志：「原因=落在热区」），从未进过这条延迟缓冲。
+    /// 它 0.1.8~0.1.12 五版接管次数为 0，留着只剩第 ④ 条副作用 —— 整条停手。
+    ///
+    /// 写成变量而不是在方法里直接 `return false`：那样 Swift 会报
+    /// `code after 'return' will never be executed`，而 Theos 带 -Werror，警告即断构建；
+    /// 也不至于把下面那段取证代码整片删掉，历史串一条都不用动。
+    static let pipelineAllowed = false
+
     /// 通道是否在生效（带视图已挂上 + 开关打开）。
     static var isInstalled: Bool {
         let channel = shared
@@ -170,7 +187,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         if installedLogged { return }
         installedLogged = true
         if pipelineRegistered {
-            AevonLog.info("[手势] 已登记进系统手势管线（接管缝=右缘 \(Int(AevonGestureBandView.bandWidth))pt / 起手窗=右缘 \(Int(AevonGestureBandView.beginSlack))pt × 全屏高，只认向左横扫；起手窗内左扫可接管，带内轻点仍按原缝宽保护）（AevonSystemGestureV105 AevonSystemGestureV106 AevonSystemGestureV110）")
+            AevonLog.info("[手势] 已登记进系统手势管线，但本版**停手不接收任何触摸**（避免它扣住 App 的 began 再整段补投；右缘统一由全局通道负责）（AevonSystemGestureV105 AevonSystemGestureV106 AevonSystemGestureV110 AevonPipelineStandDownV113）")
         } else {
             AevonLog.warn("[手势] 系统手势管线登记失败（已知类名与工厂名都不匹配，不代表管线不存在；真实类名见下方 [探针] 行），右缘继续走 0.1.3 延迟接管老通道（AevonSystemGestureV105 AevonSystemGestureV106 AevonBandDeferV103）")
         }
@@ -339,6 +356,11 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldReceive touch: UITouch) -> Bool {
+        // V0.1.13（AevonPipelineStandDownV113）：**一律不接**。
+        // 详见 `pipelineAllowed` 的长注释 —— 它接了就会扣押 App 的 began，
+        // 而它自己又必然被 shouldBegin 否决 → UIKit 把整段移动补投给 App。
+        // 不接 = 不进延迟缓冲 = 没有第 ④ 条。管线登记与全部取证串保留，只是不再参与触摸流。
+        guard AevonSystemGestureV105.pipelineAllowed else { return false }
         // V0.1.8：先计数再判条件 —— 我们要的证据是「识别器有没有进触摸流」，
         // 而不是「这一次它有没有同意接收」。两个问题不能混为一个。
         pipelineTouchCount += 1
@@ -456,6 +478,9 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     /// 宁可回到旧行为（圆盘照常呼出、抖音仍会跟动），也不能让右缘呼出变成哑巴。
     /// 这条判据只在「识别器一次都没被问过」时成立，所以系统手势真生效时不会误降级。
     func noteBandTouchSeenByGlobalChannel(at point: CGPoint) {
+        // V0.1.13（AevonPipelineStandDownV113）：识别器已停手，它本来就不再接收触摸，
+        // 「登记成功却拿不到触摸」这条反证失去意义 —— 留在这里会把下一份日志搅浑。
+        guard AevonSystemGestureV105.pipelineAllowed else { return }
         guard pipelineRegistered, pipelineTouchCount == 0 else { return }
         pipelineMissCount += 1
         if pipelineMissCount == 1 || pipelineMissCount % 5 == 0 {

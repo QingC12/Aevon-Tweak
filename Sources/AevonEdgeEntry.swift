@@ -580,6 +580,9 @@ enum AevonEdgeEntry {
     // 横滑手势立不起来；看清是纵向 / 向右就立刻放行（App 拿到后续移动帧照样滚，只晚一两帧）。
     private static var bandHoldTouchID: UInt = 0
     private static var bandHoldDeadline: CFTimeInterval = 0
+    /// V0.1.13（AevonBandTakeoverBeganV113）：起手窗「不干预」证据的限频时间戳。
+    /// 这一段默认整段交回 App，只有这一行日志能证明「我们看过了、但没碰」。
+    private static var bandPassLogAt: CFTimeInterval = 0
     /// 判定期上限（秒）：超时还没定向就整根放行。
     /// 宁可漏一次，也绝不让右缘变成「划不动」—— 这是本机制唯一可能伤到用户的地方。
     private static let bandHoldLimit: CFTimeInterval = 0.6
@@ -767,21 +770,41 @@ enum AevonEdgeEntry {
                 // 带内、热区外：浮窗（含手柄 ±20pt 外扩）优先，否则整条右缘被接管后
                 // 浮窗贴右边缘时手柄就拖不动了。
                 if !AevonEntryHost.pointHitsFloatingWindow(at: point) {
-                    // V0.1.12（AevonBandHoldMovedV112）：登记候选，并**从第一帧移动起就扣住**。
-                    //
-                    // 与 0.1.3 的区别只有一处：以前只登记、移动帧照给 App（判定期内 App 拿到 ≤6pt 位移）；
-                    // 现在 began 照给 App（轻点 / 长按照常可用），但移动帧在定向之前不投递 ——
-                    // App 累计横向位移恒为 0，它自己的横滑手势立不起来，抖音进度条就不会跟着动。
-                    // 看清方向立刻分流：纵向滚动 / 向右扫 → 放行（App 拿到后续移动帧照样滚，只晚一两帧）；
-                    // 向左横扫 → 整根收归圆盘。抬手帧一律放行，绝不给 App 留孤儿触摸。
-                    bandTouchID = touchID
-                    bandStart = point
-                    bandHoldTouchID = touchID
-                    bandHoldDeadline = CACurrentMediaTime() + bandHoldLimit
-                    forensicCount += 1
                     let gap = Int(screen.width - point.x)
-                    let tier = gap <= Int(AevonGestureBandView.bandWidth) ? "接管缝" : "起手窗"
-                    AevonLog.info("[右缘] 落点 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=\(tier)，接管方式=扣移动帧（began 已给 App，横向位移对 App 恒为 0），第 \(forensicCount) 次（AevonBandHoldMovedV112 AevonBandDeferV103 AevonForensicBandV102 AevonBandWidenV111）")
+                    // V0.1.13（AevonBandTakeoverBeganV113）：起手窗改成**两态**，中间态全部作废。
+                    //
+                    // Aevon(80) 复盘把 0.1.12 的「began 给 App、只扣移动帧」判死：
+                    // App 拿到 began，就拿到了这根 touch 的起点；我们又放行 ended，
+                    // 而 ended 的落点就是抬起位置 —— UITouch 的坐标每帧都在更新，
+                    // 我们只是没把中间帧投递过去，最终位置照样躺在 ended 里。
+                    // 所以「扣移动帧」挡不住横滑，只会让右缘变迟钝（微信式滑动会卡一两帧）。
+                    // 结论：要么连 began 一起吞（App 完全看不到，100% 干净），要么整段不碰。
+                    if AevonPrefs.bool("BandTakeoverFromBegan", default: false) {
+                        // ① 按下即接管：与热区同语义，App 连 began 都收不到。
+                        //    代价明说：这条带（右缘 20~46pt × 全屏高）里 App 的轻点也收不到，
+                        //    抖音那排点赞 / 评论 / 收藏会点不动 —— 所以默认关，由用户自己开。
+                        bandTouchID = touchID
+                        bandStart = point
+                        bandHoldTouchID = 0
+                        bandHoldDeadline = 0
+                        globalTouchID = touchID
+                        globalStart = point
+                        globalFired = false
+                        lastTouchPoint = point
+                        ownsTouch = true
+                        swallowDeadline = CACurrentMediaTime() + pressLimit
+                        forensicCount += 1
+                        AevonLog.info("[右缘] 落点 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘全域接管·按下即接管（App 连 began 都收不到），第 \(forensicCount) 次（AevonBandTakeoverBeganV113 AevonBandHoldMovedV112）")
+                        return
+                    }
+                    // ② 默认：只留一行证据，**不登记、不扣帧、不吞**，整段交回 App。
+                    //    这是本版唯一诚实的选择：既然我们无法在不吞 began 的前提下阻止 App 拿到位移，
+                    //    那就别碰 —— 呼不出圆盘只是少一个入口，绝不能变成「抖音被带起来」。
+                    let now = CACurrentMediaTime()
+                    if now - bandPassLogAt > 1.0 {
+                        bandPassLogAt = now
+                        AevonLog.info("[右缘] 落点 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=起手窗·本版不干预（整段交回 App；要在这一段呼出请打开设置里的「右缘全域接管」）（AevonBandTakeoverBeganV113）")
+                    }
                     return
                 }
             }
@@ -833,13 +856,21 @@ enum AevonEdgeEntry {
                     // 整条滑动后半段会漏回 App（那等于把刚补上的洞重新挖开）。
                     bandHoldDeadline = CACurrentMediaTime() + swallowLimit
                     AevonLog.info("[边缘] 接管带确认左扫 → 收归圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(bandStart.x)),\(Int(bandStart.y))）（AevonBandDeferV103 AevonBandHoldMovedV112）")
-                } else if let reason = bandReleaseReason(dx: dx, dy: dy) {
+                } else if bandHoldTouchID == touchID,
+                          let reason = bandReleaseReason(dx: dx, dy: dy) {
+                    // 只有「扣移动帧」模式才谈得上放手；按下即接管模式（V0.1.13）一旦吞了 began，
+                    // 中途撒手也没用 —— App 没有 began 就拿不住这根 touch，放出去只是白放。
                     // V0.1.12：看清不是左扫就**立刻放行**。扣移动帧是为了不让 App 立起横滑手势，
                     // 不是为了拦它滚动 —— 放行后 App 拿到后续移动帧照常生效（只晚一两帧）。
                     bandTouchID = 0
                     bandStart = .zero
                     bandHoldTouchID = 0
                     bandHoldDeadline = 0
+                    if touchID == globalTouchID {
+                        globalTouchID = 0
+                        globalFired = false
+                        ownsTouch = false
+                    }
                     AevonLog.info("[穿透取证] 放手→App（dx=\(Int(dx)) dy=\(Int(dy))，原因=\(reason)）（AevonBandHoldMovedV112 AevonBandDeferV103）")
                 }
             }
@@ -878,9 +909,17 @@ enum AevonEdgeEntry {
                 return
             }
             // V0.1.3：接管带候选抬手（始终没成左扫）—— 只清状态，事件本就归 App
+            // V0.1.13：按下即接管模式下这根手指同时挂在 globalTouchID 上，
+            // 只清 bandTouchID 会留下一个指向已释放 UITouch 的 globalTouchID（指针会被复用），
+            // 所以两套状态一起清。
             if touchID == bandTouchID {
                 bandTouchID = 0
                 bandStart = .zero
+                if touchID == globalTouchID {
+                    globalFired = false
+                    ownsTouch = false
+                    globalTouchID = 0
+                }
                 return
             }
             guard touchID == globalTouchID else { return }
@@ -909,9 +948,15 @@ enum AevonEdgeEntry {
                 return
             }
             // V0.1.3：接管带候选被系统取消 —— 只清状态
+            // V0.1.13：同 ended，两套状态一起清
             if touchID == bandTouchID {
                 bandTouchID = 0
                 bandStart = .zero
+                if touchID == globalTouchID {
+                    globalFired = false
+                    ownsTouch = false
+                    globalTouchID = 0
+                }
                 return
             }
             guard touchID == globalTouchID else { return }

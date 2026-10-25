@@ -397,6 +397,41 @@ jobs:
             || { echo "::error::Swift 侧判据签名与 hook 不一致"; exit 1; }
           echo "V0.1.12 校验: 右缘只扣移动帧 + 抬手必放行 + 纵向立刻放行 + 判定期 0.6s"
 
+          # V0.1.13（Aevon(80) 日志）：
+          # 这份日志 20 次右缘呼出**全部落在右下角热区**、全部干净，起手窗只落进 1 次（x=394）
+          # 且那根手指 0.3 秒内几乎没动 —— 没抓到故障现场。但复盘出一个机制漏洞：
+          # 识别器一旦 shouldReceiveTouch 返回 true，因为 delaysTouchesBegan=true，
+          # App 的 began 就被扣在 UIKit 手势环境里；而 shouldBegin 在「老通道持有这根手指」时
+          # 直接 false → 识别器必然 failed → UIKit 把被扣住的 began 连同其后全部移动一次性补投给 App。
+          # 这次补投发生在手势环境内部，UIApplication -sendEvent: 看不见，吞不掉 ——
+          # 热区（识别器在 shouldReceiveTouch 就拒，20 条「原因=落在热区」）因此一直干净，
+          # 起手窗（识别器接了）才会「圆盘出来了、抖音也跟动」。
+          # 本版：①识别器整条停手（不再接收任何触摸，补投链断掉）；
+          #       ②起手窗两态化 —— 默认整段交回 App（0.1.12 的「扣移动帧」判死：
+          #         began 与 ended 都给了 App，ended 的落点就是抬起位置，位移照样算得出来）；
+          #         打开「右缘全域接管」则按下即吞（App 连 began 都收不到）。
+          strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
+            || { echo "::error::V0.1.13 标记 AevonPipelineStandDownV113 未编入"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonBandTakeoverBeganV113' \
+            || { echo "::error::V0.1.13 标记 AevonBandTakeoverBeganV113 未编入"; exit 1; }
+          # 识别器必须停手：pipelineAllowed 恒 false，且 shouldReceiveTouch 首行就查它
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'static let pipelineAllowed = false' \
+            || { echo "::error::识别器又允许接收触摸了 —— 它会扣住 App 的 began 再整段补投（Aevon(80) 根因）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'guard AevonSystemGestureV105.pipelineAllowed else { return false }' \
+            || { echo "::error::shouldReceiveTouch 没查 pipelineAllowed（停手护闸被拆）"; exit 1; }
+          # 起手窗两态：默认不干预，开关打开才按下即接管
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'AevonPrefs.bool("BandTakeoverFromBegan", default: false)' \
+            || { echo "::error::起手窗两态开关被删（会退回 0.1.12 那种挡不住 ended 位移的中间态）"; exit 1; }
+          grep -q 'BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::Root.plist 缺 BandTakeoverFromBegan 开关（用户无处开启全域接管）"; exit 1; }
+          # 抬手清状态必须连 globalTouchID 一起清（按下即接管模式下两套状态共用一根手指）
+          test "$(grep -c 'if touchID == globalTouchID {' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
+            || { echo "::error::带内抬手/取消只清 bandTouchID —— 会留下指向已释放 UITouch 的 globalTouchID"; exit 1; }
+          echo "V0.1.13 校验: 识别器停手（断延迟补投）+ 起手窗两态（默认不干预 / 开关按下即接管）"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
