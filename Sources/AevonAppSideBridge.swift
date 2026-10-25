@@ -15,6 +15,11 @@ import Foundation
 enum AevonAppSideBridge {
     /// 只有这两个域会有人写（与 AevonApp.plist 的 Filter 一致）
     private static let watchedDomains = ["com.apple.mobilesafari", "com.apple.Preferences"]
+    /// V0.2.5（AevonAppProbeWideV205）：0.2.4 起 App 侧注入全部 App，沙盒 App
+    /// 写不了 /var/mobile/Aevon.log，只会写**自己 bundleID 的域** —— 桥必须跟着
+    /// 扩容，否则第三方 App 的 App 侧行为全程不可见（Aevon(91) 实证：威锋 / Turrit
+    /// 开了浮窗却一条日志都没有）。域来源 = SB 场景钩子解析出的前台 bundleID。
+    private static var extraDomains: Set<String> = []
     private static var lastSeq: [String: Int] = [:]
     private static var lastLineCount: [String: Int] = [:]
     private static var started = false
@@ -27,14 +32,24 @@ enum AevonAppSideBridge {
             drain()
         }
         RunLoop.main.add(timer, forMode: .common)
-        AevonLog.info("[App侧桥接] 已启动：每 2 秒读一次 \(watchedDomains.joined(separator: " / ")) 的 AevonAppProbe（AevonAppSideBridgeV200）")
+        AevonLog.info("[App侧桥接] 已启动：每 2 秒读一次 \(watchedDomains.joined(separator: " / ")) 的 AevonAppProbe（AevonAppSideBridgeV200 AevonAppProbeWideV205）")
+    }
+
+    /// SB 场景钩子解析出的前台 App bundleID → 加入监听（幂等）
+    static func noteDomain(_ domain: String) {
+        guard !domain.isEmpty,
+              domain != "com.apple.springboard",
+              !watchedDomains.contains(domain),
+              extraDomains.insert(domain).inserted else { return }
+        AevonLog.info("[App侧桥接] 监听域 +\(domain)（AevonAppProbeWideV205）")
     }
 
     private static func drain() {
         // 开关关着就零开销：连偏好都不读，直接返回（V0.2.1 起默认开 —— 真接管是本体）
         guard AevonPrefs.bool("AppSideEnabled", default: true) else { return }
 
-        for domain in watchedDomains {
+        let domains = watchedDomains + extraDomains.sorted()
+        for domain in domains {
             guard let text = probeText(domain: domain) else { continue }
             let seq = probeSeq(domain: domain)
             guard seq > (lastSeq[domain] ?? 0) else { continue }

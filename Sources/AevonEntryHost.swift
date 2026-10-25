@@ -371,6 +371,12 @@ enum AevonEntryHost {
         guard coversScreen(view) else { return }
         if let identifier = sceneIdentifier {
             AevonWindowManager.handleFullscreenSceneAppeared(sceneIdentifier: identifier)
+            // V0.2.5（AevonAppProbeWideV205）：sceneIdentifier 形如
+            // "<bundleID>-<UUID>"。解析出 bundleID 交给日志桥做动态监听 ——
+            // 沙盒 App 写不了 /var/mobile/Aevon.log，只会写自己 bundleID 的域。
+            if let bundleID = extractBundleID(from: identifier) {
+                AevonAppSideBridge.noteDomain(bundleID)
+            }
         }
         appSceneView = view
         attach(to: view, reason: reason)
@@ -379,6 +385,19 @@ enum AevonEntryHost {
             guard appSceneView === view, coversScreen(view) else { return }
             attach(to: view, reason: "\(reason)（延后重顶）")
         }
+    }
+
+    /// V0.2.5（AevonAppProbeWideV205）：从场景标识 "<bundleID>-<UUID>" 里解析 bundleID。
+    /// 场景标识必然以完整 UUID（8-4-4-4-12 十六进制）结尾，非贪婪匹配到第一段
+    /// 8-4-4-4-12 即为分隔点；解析失败返回 nil（不影响主流程）。
+    static func extractBundleID(from sceneIdentifier: String) -> String? {
+        guard let match = sceneIdentifier.range(of:
+            "^(.+?)-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+            options: .regularExpression) else { return nil }
+        let full = sceneIdentifier[match]
+        // 去掉尾部 "-<UUID>"（48 个字符：1 个连字符 + 36 位 UUID）
+        guard full.count > 37 else { return nil }
+        return String(full.dropLast(37))
     }
 
     /// 宿主是否真的铺满整屏并且正在显示（用于区分 App 画面容器与切换器卡片 / 后台场景）。

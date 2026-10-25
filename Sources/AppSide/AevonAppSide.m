@@ -53,6 +53,17 @@
  * 之前赢。SB 侧 0.1.9 有同款 8pt 判向先例。纵向失败（8pt 占优）与向右失败
  * （8pt）不变；touchesCancelled 补取证日志，若 8pt 后仍有断裂，下版对症。
  *
+ * V0.2.5 权威判向 + 两帧确认（Aevon(91) 判读，AevonAppWinAuthV205 /
+ * AevonAppTwoFrameV205）
+ * ------------------------------------------------
+ * Aevon(91)：链路（扣住→判向成立→呼盘 13 次）全程在跑，用户仍报「App 跟着动」。
+ * 两个新认识：①「我们先 Began」≠「滚动 pan 没动」—— 滚动 pan 阈值（~10pt）与
+ * 我们同帧且挂得更深，取消落地前页面已开始动；②首帧判向有误触发反例 ——
+ * 20:31:13 用户纵向滚动（总位移 dy=-102），首帧 dx≈-11 被误判为左滑，圆盘在
+ * 滚动中弹出。修复 = ①失败要求（failure requirement）：带内平移/轻扫识别器
+ * 必须等我们 Failed 才允许 Began —— 我们成功则 App 物理上无法滚动；
+ * ②成功判向改两帧确认（|dx|≥14 快划豁免 + 抬手快判兜底）。
+ *
  * 三指急救（AevonAppPanicCrossV201，App 侧形态）：三根手指同时按下 → 识别器
  * 立刻 Failed（扣住的 began 全部补投），绝不持有任何触摸。App 沙盒写不了
  * com.Aevon 域，关开关的事仍由 SB 侧的急救负责；App 侧只保证**自己零持有**。
@@ -90,6 +101,9 @@ __attribute__((used)) static const char AevonAppYieldNotifyV203Marker[] = "Aevon
 /* V0.2.4 全 App 白名单 + 排除表 */
 __attribute__((used)) static const char AevonAppAllAppsV204Marker[] = "AevonAppAllAppsV204";
 __attribute__((used)) static const char AevonAppExcludeV204Marker[] = "AevonAppExcludeV204";
+/* V0.2.5 权威判向 + 两帧确认（Aevon(91) 判读：用户报「问题依旧」） */
+__attribute__((used)) static const char AevonAppWinAuthV205Marker[] = "AevonAppWinAuthV205";
+__attribute__((used)) static const char AevonAppTwoFrameV205Marker[] = "AevonAppTwoFrameV205";
 
 #pragma mark - 日志
 
@@ -301,6 +315,7 @@ static void AevonAppPostRightEdgeBegan(void) {
 @property (nonatomic, assign) BOOL decided;         /* 本条触摸序列已判完（成/败） */
 @property (nonatomic, assign) BOOL claimed;         /* 是否真的扣过 began（日志用） */
 @property (nonatomic, assign) BOOL sawMoved;        /* 是否收到过首帧移动（V0.2.3 取证） */
+@property (nonatomic, assign) int moveFrames;       /* 收到过几帧移动（V0.2.5 两帧确认） */
 @end
 
 @implementation AevonAppTakeoverGesture
@@ -352,11 +367,50 @@ shouldReceiveTouch:(UITouch *)touch {
     return NO;
 }
 
+/* V0.2.5 权威判向（AevonAppWinAuthV205）—— 路线 B 的最后一道闸。
+ *
+ * Aevon(91) 判读：链路（扣住→判向成立→呼盘）已全程在跑，但用户仍报「App 跟着动」。
+ * 原因：「我们先 Began」不等于「滚动 pan 没动」—— 滚动容器（UITableView 等）的 pan
+ * 起步阈值（约 10pt）与我们在同一帧达到，而它挂在更深的视图上、每帧先处理；
+ * 我们 cancel 落地前页面已经开始动，部分场景它 Began 后还会继续跟完。
+ *
+ * 修复 = UIKit 官方的「失败要求」机制：对本识别器的委托实现
+ * gestureRecognizer:shouldBeRequiredToFailByGestureRecognizer:，对带内的平移/轻扫
+ * 识别器返回 YES —— 含义是「它们必须等我们 Failed 才允许 Began」：
+ *   · 我们成功（横向呼盘）→ 我们永不 Failed → 它们物理上无法开始 → App 无法滚动；
+ *   · 我们失败（纵向/轻点/抬手）→ 它们照常开始，只晚我们判定的那一两帧。
+ * 只压带内（±6pt 容差）且只在开关打开时设置 —— 带外一切交互原样。 */
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    if (self.view == nil) { return NO; }
+    /* 开关每帧现读（恒假开关纪律）：关了绝不设失败要求，App 手感原样 */
+    if (!AevonAppPrefBool(@"AppSideEnabled", YES) ||
+        !AevonAppPrefBool(@"EdgeGestureEnabled", YES)) { return NO; }
+    /* 只压平移/轻扫类；点按/长按不压（按钮、键盘、菜单不受影响） */
+    if (![otherGestureRecognizer isKindOfClass:[UIPanGestureRecognizer class]] &&
+        ![otherGestureRecognizer isKindOfClass:[UISwipeGestureRecognizer class]]) { return NO; }
+    /* 只压带内（+6pt 容差）的识别器 —— 用对方识别器的当前落点判定 */
+    CGPoint point = [otherGestureRecognizer locationInView:self.view];
+    CGSize screen = self.screenSize;
+    if (screen.width < 1.0 || screen.height < 1.0) { return NO; }
+    double gap = screen.width - point.x;
+    double bandTop = screen.height * (1.0 - self.heightPercent / 100.0);
+    BOOL inBand = (gap >= -6.0 && gap <= self.bandWidth + 6.0 && point.y >= bandTop - 6.0);
+    if (!inBand) { return NO; }
+    static BOOL loggedOnce = NO;
+    if (!loggedOnce) {
+        loggedOnce = YES;
+        AevonAppLog(@"失败要求已建立：带内平移/轻扫识别器必须等本识别器判完才开始（判向成立=App 无法滚动；判向失败=照常，只晚一两帧）（AevonAppWinAuthV205）");
+    }
+    return YES;
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
     self.decided = NO;
     self.claimed = NO;
     self.sawMoved = NO;
+    self.moveFrames = 0;
 
     /* 三指急救（App 侧形态，AevonAppPanicCrossV201）：三根手指同时按下 →
      * 立刻 Failed。Failed 会让 UIKit 把所有被扣住的 began 连同后续帧整段补投，
@@ -412,14 +466,23 @@ shouldReceiveTouch:(UITouch *)touch {
         self.sawMoved = YES;
         AevonAppLog(@"首帧移动：dx=%.1f dy=%.1f（序列仍在投递，判向进行中）", dx, dy);
     }
+    self.moveFrames += 1;
 
     /* 判向（V0.2.2 提前到 8pt，AevonAppEarlyJudgeV202）：
      * 30pt 太慢 —— Aevon(88) 证明 App 内滚动容器的 pan 约 10pt 就 Began 抢先，
      * 我们还没判就被打成 Failed。横向占优 |dx|≥|dy|×1.2 的几何不变。 */
-    if (dx <= -8.0 && fabs(dx) >= fabs(dy) * 1.2) {
+    BOOL horizontal = (dx <= -8.0 && fabs(dx) >= fabs(dy) * 1.2);
+
+    /* V0.2.5 两帧确认（AevonAppTwoFrameV205）防误触：Aevon(91) 20:31:13 用户在
+     * 纵向滚动（总位移 dy=-102），首帧恰好 dx≈-11 dy≈3 横向占优 → 圆盘在滚动中
+     * 弹出打断操作。第一帧不再直接宣布成功：
+     *   · |dx|≥14 的大力横向首帧仍立即成立（快划不牺牲响应）；
+     *   · 否则等第二帧，确认**总位移**仍横向占优才成立；随后变纵向会走下面的失败分支。
+     * 有了失败要求（AevonAppWinAuthV205）滚动 pan 本来就在等我们，多这一帧无代价。 */
+    if (horizontal && (self.moveFrames >= 2 || dx <= -14.0)) {
         self.decided = YES;
-        AevonAppLog(@"判向成立：dx=%.0f dy=%.0f（8pt 提前判）→ 取消 App 触摸（合法 touchesCancelled）+ 通知 SB 呼圆盘（AevonAppDirectionV201 AevonAppNotifySBV201 AevonAppEarlyJudgeV202）",
-                    dx, dy);
+        AevonAppLog(@"判向成立：dx=%.0f dy=%.0f（第 %d 帧确认）→ 取消 App 触摸（合法 touchesCancelled）+ 通知 SB 呼圆盘（AevonAppDirectionV201 AevonAppNotifySBV201 AevonAppEarlyJudgeV202 AevonAppTwoFrameV205）",
+                    dx, dy, self.moveFrames);
         AevonAppPostRightEdgeTrigger();
         self.state = UIGestureRecognizerStateBegan;
         self.state = UIGestureRecognizerStateEnded;
@@ -446,6 +509,23 @@ shouldReceiveTouch:(UITouch *)touch {
     if (self.decided || !self.claimed) { return; }
     UITouch *touch = touches.anyObject;
     CGPoint point = (touch != nil && self.view != nil) ? [touch locationInView:self.view] : CGPointZero;
+
+    /* V0.2.5 抬手快判（AevonAppTwoFrameV205）：快速短划可能整段落在两帧之间，
+     * 一次 moved 都没等到就抬手 —— 只要总位移横向占优（8pt 同判据）仍判成立。 */
+    if (touch != nil && self.view != nil) {
+        double dx = point.x - self.startPoint.x;
+        double dy = point.y - self.startPoint.y;
+        if (dx <= -8.0 && fabs(dx) >= fabs(dy) * 1.2) {
+            self.decided = YES;
+            AevonAppLog(@"判向成立：抬手快判 dx=%.0f dy=%.0f（快速短划在帧间结束）→ 取消 App 触摸 + 通知 SB 呼圆盘（AevonAppTwoFrameV205）",
+                        dx, dy);
+            AevonAppPostRightEdgeTrigger();
+            self.state = UIGestureRecognizerStateBegan;
+            self.state = UIGestureRecognizerStateEnded;
+            return;
+        }
+    }
+
     self.decided = YES;
     /* 没判出横向 8pt：轻点或短划。Failed → UIKit 把 began+moved+ended 整段补投，
      * 轻点在抬手时生效（带内轻点的已知代价），App 不会丢事件。 */

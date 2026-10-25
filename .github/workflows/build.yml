@@ -1155,6 +1155,29 @@ jobs:
             || { echo "::error::排除表缺金融前缀兜底（com.chinamworld）"; exit 1; }
           echo "V0.2.4 校验: 全 App 白名单（Classes=[UIApplication]）+ SB 让位 + 排除表 已就位"
 
+          # V0.2.5（AevonAppWinAuthV205 / AevonAppTwoFrameV205）：权威判向 + 两帧确认。
+          #   Aevon(91) 判读：链路在跑但用户仍报「App 跟着动」——
+          #   ① 失败要求（带内 pan/swipe 必须等本识别器 Failed）必须在（权威判向）；
+          #   ② 两帧确认 + 14pt 快划豁免 + 抬手快判必须在（防首帧误触发）；
+          #   ③ 桥接动态域（AevonAppProbeWideV205）必须在（第三方 App 日志可见）。
+          for s in AevonAppWinAuthV205 AevonAppTwoFrameV205; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::AevonApp.dylib 缺少 0.2.5 标记 $s"; exit 1; }
+          done
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'shouldBeRequiredToFailByGestureRecognizer' \
+            || { echo "::error::失败要求委托方法被删 —— 滚动 pan 将重新与我们同帧抢跑"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'moveFrames >= 2' \
+            || { echo "::error::两帧确认被删 —— 首帧误触发（Aevon(91) dy=-102 反例）会复发"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q '抬手快判' \
+            || { echo "::error::抬手快判被删 —— 快速短划将漏判"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonAppSideBridge.swift" \
+            | grep -q 'AevonAppProbeWideV205' \
+            || { echo "::error::桥接动态域被删 —— 第三方 App 的 App 侧日志将不可见"; exit 1; }
+          echo "V0.2.5 校验: 权威判向（失败要求）+ 两帧确认 + 抬手快判 + 桥接动态域 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4
