@@ -84,6 +84,9 @@ __attribute__((used)) static const char AevonAppNotifySBV201Marker[] = "AevonApp
 __attribute__((used)) static const char AevonAppPanicCrossV201Marker[] = "AevonAppPanicCrossV201";
 /* V0.2.2 判向提前标记（Aevon(88) 日志根因） */
 __attribute__((used)) static const char AevonAppEarlyJudgeV202Marker[] = "AevonAppEarlyJudgeV202";
+/* V0.2.3 让路通道 + 卡死自愈（Aevon(89) 日志根因） */
+__attribute__((used)) static const char AevonAppStuckGuardV203Marker[] = "AevonAppStuckGuardV203";
+__attribute__((used)) static const char AevonAppYieldNotifyV203Marker[] = "AevonAppYieldNotifyV203";
 
 #pragma mark - 日志
 
@@ -258,6 +261,19 @@ static void AevonAppPostRightEdgeTrigger(void) {
                                          NULL, NULL, true);
 }
 
+/* V0.2.3（AevonAppYieldNotifyV203）：带内 began 即刻广播「App 侧已扣住本指」。
+ *
+ * Aevon(89) 实证：SB 全局热区通道与 App 侧识别器在同一根手指上竞速，
+ * 4 根「began 已扣住」的手指在 App 进程内整段断流（无 moved / 无取消 / 无抬手），
+ * 且全部发生在 SB 热区同时接管时。让路通知让 SB 在收到后立刻停吞本指
+ * （保留观察与兜底触发）—— 如果 SB 吞是死因，序列被救活；如果不是，行为不变。
+ * 非注入 App 不发本通知，SB 行为完全不变。 */
+static void AevonAppPostRightEdgeBegan(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.aevon.rightedgebegan"),
+                                         NULL, NULL, true);
+}
+
 /*
  * 真接管识别器（AevonAppTakeoverV201）。
  *
@@ -281,6 +297,7 @@ static void AevonAppPostRightEdgeTrigger(void) {
 @property (nonatomic, assign) CGPoint startPoint;   /* touchesBegan 时的起点 */
 @property (nonatomic, assign) BOOL decided;         /* 本条触摸序列已判完（成/败） */
 @property (nonatomic, assign) BOOL claimed;         /* 是否真的扣过 began（日志用） */
+@property (nonatomic, assign) BOOL sawMoved;        /* 是否收到过首帧移动（V0.2.3 取证） */
 @end
 
 @implementation AevonAppTakeoverGesture
@@ -336,6 +353,7 @@ shouldReceiveTouch:(UITouch *)touch {
     [super touchesBegan:touches withEvent:event];
     self.decided = NO;
     self.claimed = NO;
+    self.sawMoved = NO;
 
     /* 三指急救（App 侧形态，AevonAppPanicCrossV201）：三根手指同时按下 →
      * 立刻 Failed。Failed 会让 UIKit 把所有被扣住的 began 连同后续帧整段补投，
@@ -354,6 +372,23 @@ shouldReceiveTouch:(UITouch *)touch {
     double gap = self.screenSize.width - self.startPoint.x;
     AevonAppLog(@"右缘起手 (%.0f,%.0f) 距右缘 %.0fpt → 带内·began 已扣住（判向中，8pt 横向占优则接管）（AevonAppTakeoverV201）",
                 self.startPoint.x, self.startPoint.y, gap);
+    /* V0.2.3（AevonAppYieldNotifyV203）：即刻通知 SB「本指已被 App 侧扣住」→
+     * SB 全局通道停吞让路（保留兜底触发）。若 Aevon(89) 的序列断流真凶是
+     * SB 侧吞，这一步在首帧 moved（约 30ms 后）之前就把它解除了。 */
+    AevonAppPostRightEdgeBegan();
+    /* V0.2.3（AevonAppStuckGuardV203）卡死自愈：Aevon(89) 里 4 根手指 began 扣住后
+     * 连 moved / cancelled / ended 全都没有（序列疑似在系统层被断流）。
+     * 1.5s 未判定就主动 Failed —— 手势不再持有任何东西，App 侧零残留；
+     * 若序列其实活着（用户慢启动），Failed 会整段补投，轻点/长按只晚 1.5s。 */
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf.decided || !strongSelf.claimed) { return; }
+        strongSelf.decided = YES;
+        AevonAppLog(@"卡死自愈：began 扣住 1.5s 未判定（无移动帧也无取消，序列疑似在系统层中断）→ 主动 Failed 整段放行（AevonAppStuckGuardV203）");
+        strongSelf.state = UIGestureRecognizerStateFailed;
+    });
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -365,6 +400,15 @@ shouldReceiveTouch:(UITouch *)touch {
     CGPoint now = [touch locationInView:self.view];
     double dx = now.x - self.startPoint.x;
     double dy = now.y - self.startPoint.y;
+
+    /* V0.2.3 取证（Aevon(89) 根因排查）：Aevon(89) 里 4 根手指 began 之后连 moved
+     * 都没到过 —— 但「没日志」既可能是「没收到」也可能是「收到没写」。
+     * 首帧移动无条件记一行：下版日志若「有起手、无首帧移动」，就是投递层断流；
+     * 若「有首帧移动、无判定」，才是判向/日志层的问题。每条序列只记一次。 */
+    if (!self.sawMoved) {
+        self.sawMoved = YES;
+        AevonAppLog(@"首帧移动：dx=%.1f dy=%.1f（序列仍在投递，判向进行中）", dx, dy);
+    }
 
     /* 判向（V0.2.2 提前到 8pt，AevonAppEarlyJudgeV202）：
      * 30pt 太慢 —— Aevon(88) 证明 App 内滚动容器的 pan 约 10pt 就 Began 抢先，

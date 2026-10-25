@@ -1118,6 +1118,25 @@ jobs:
             || { echo "::error::急救启动提示幂等标记被删（Aevon(88) 连打两遍）"; exit 1; }
           echo "V0.2.2 校验: 判向 8pt 提前 + cancelled 取证 + 急救提示幂等 已就位"
 
+          # V0.2.3（AevonAppStuckGuardV203 / AevonAppYieldV203 / AevonAppYieldNotifyV203）：
+          # Aevon(89) 根因 —— 4 根手指「began 已扣住」后在 App 进程内整段断流
+          # （无 moved / 无取消 / 无抬手），全部伴随 SB 热区同时接管。
+          # 三道防线：① App 侧带内 began 即广播 rightedgebegan，SB 停吞让路；
+          # ② App 侧 1.5s 未判定主动 Failed 自愈；③ 首帧移动取证行。
+          for s in AevonAppStuckGuardV203 AevonAppYieldNotifyV203; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::AevonApp.dylib 缺少 0.2.3 标记 $s"; exit 1; }
+          done
+          grep -q 'AevonAppYieldV203' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::SB 侧让路标记被删 —— 热区与 App 侧竞速无人让路（Aevon(89) 根因）"; exit 1; }
+          grep -q 'com.aevon.rightedgebegan' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && grep -q 'com.aevon.rightedgebegan' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::rightedgebegan 通知名两端不一致"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q '首帧移动' \
+            || { echo "::error::首帧移动取证被删 —— 断流是「没收到」还是「没写」又会不可判"; exit 1; }
+          echo "V0.2.3 校验: SB 让路通道 + App 侧卡死自愈 + 首帧移动取证 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

@@ -522,6 +522,18 @@ enum AevonEdgeEntry {
                                            "com.aevon.rightedgetrigger" as CFString,
                                            nil,
                                            .deliverImmediately)
+            // V0.2.3（AevonAppYieldV203）：App 侧带内 began → SB 全局通道让路。
+            // Aevon(89) 实证：热区与 App 侧识别器竞速时，4 根手指在 App 进程内整段断流
+            // （began 之后无 moved / 无取消 / 无抬手），全部发生在 SB 同时接管时。
+            // 收到本通知立刻停吞本指（ownsTouch=false，保留 globalTouchID 观察 +
+            // global 兜底触发）—— 若 SB 吞是断流真凶，这一步在首帧移动前解除；
+            // 若不是，global 兜底照旧，行为不变。非注入 App 不发通知，完全不受影响。
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonAppEdgeBeganHandler,
+                                           "com.aevon.rightedgebegan" as CFString,
+                                           nil,
+                                           .deliverImmediately)
             AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26 AevonGuardCleanupV102）")
             AevonLog.info("[边缘] 已监听 App 侧右缘判向通知（rightedgetrigger）（AevonAppTriggerBridgeV201）")
         }
@@ -695,6 +707,21 @@ enum AevonEdgeEntry {
         AevonBandHint.hideNow()
         ringOpenedAt = now
         presentRing(source: source)
+    }
+
+    /// V0.2.3（AevonAppYieldV203）：App 侧已在带内扣住本指 → 全局通道停吞让路。
+    ///
+    /// Aevon(89) 铁证：热区与 App 侧识别器同抢一根手指时，4 根手指在 App 进程内
+    /// began 之后整段断流（无 moved / 无取消 / 无抬手），全部伴随 SB 热区接管。
+    /// 静态分析确认 ownsTouch 只吞 SB 份（sendEvent 钩子层），App 份断流真凶
+    /// 未钉死 —— 但让路是零风险试探：停吞后保留 globalTouchID 观察，
+    /// global 兜底触发照旧（App 侧若没判出来，-33pt 左滑照样呼盘）；
+    /// 非注入 App 不发通知，此函数根本不会被调。
+    static func yieldGlobalChannelToAppSide() {
+        guard !AevonRingMenu.isPresented else { return }
+        guard ownsTouch, globalTouchID != 0 else { return }
+        ownsTouch = false
+        AevonLog.info("[右缘] App 侧已在带内起手 → 全局通道让路（停吞本指，保留观察与 global 兜底触发）（AevonAppYieldV203）")
     }
 
     /// V0.1.4/V0.1.5（AevonSystemGestureV104 / AevonSystemGestureV105）：系统手势管线识别成功后的入口。
@@ -1846,6 +1873,17 @@ private func aevonAppTriggerHandler(_ center: CFNotificationCenter?,
                                     _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
         AevonEdgeEntry.attemptTrigger("App 侧右缘判向成立（App 触摸已被合法取消）", source: "appedge")
+    }
+}
+
+/// V0.2.3（AevonAppYieldV203）：App 侧带内 began 的通知回调 → 全局通道让路。
+private func aevonAppEdgeBeganHandler(_ center: CFNotificationCenter?,
+                                      _ observer: UnsafeMutableRawPointer?,
+                                      _ name: CFNotificationName?,
+                                      _ object: UnsafeRawPointer?,
+                                      _ userInfo: CFDictionary?) {
+    DispatchQueue.main.async {
+        AevonEdgeEntry.yieldGlobalChannelToAppSide()
     }
 }
 
