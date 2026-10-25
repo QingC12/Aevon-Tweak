@@ -301,7 +301,8 @@ enum AevonProbeV107 {
         for name in candidates {
             for factory in ["sharedInstance", "_sharedInstance", "sharedManager",
                             "defaultManager", "mainDisplayManager"] {
-                guard let object = AevonClassFactoryObject(name, factory) else { continue }
+                guard let raw = AevonClassFactoryObject(name, factory) else { continue }
+                let object = raw as AnyObject
                 if !result.contains(where: { $0 === object }) { result.append(object) }
                 break
             }
