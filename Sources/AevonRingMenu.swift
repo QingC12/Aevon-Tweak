@@ -496,6 +496,10 @@ final class AevonRingMenu: UIView {
     private func dismiss() {
         guard AevonRingMenu.current === self, !isDismissing else { return }
         isDismissing = true
+        // V0.2.8（AevonRingDismissNoTouchV208）：收起决定一做出就立刻断触摸 ——
+        // 0.18 秒淡出动画期间这个全屏视图不再截住任何点击（Aevon(94) 用户
+        // 「桌面无法操作」的最坏情况兜底：动画 completion 万一没跑，触摸通道也已还清）。
+        isUserInteractionEnabled = false
         cancelCenterHold()
         clearPointer()
         stopDamping()
@@ -851,6 +855,9 @@ final class AevonRingMenu: UIView {
         let bundleID = icon.bundleID
         AevonLog.info("[圆盘] 选中 \(icon.displayName) (\(bundleID))，打开浮窗并收起圆盘")
         icon.transform = CGAffineTransform(scaleX: 1.12, y: 1.12)
+        // V0.2.8（AevonSelectionCoolV208）：选中后 1.5 秒内 global 兜底不呼盘 ——
+        // Aevon(94) 21:53:45 实证：选中开窗后 0.65 秒同一根手指的移动又呼了一次盘。
+        AevonEdgeEntry.noteSelectionCooldown()
         dismiss()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             AevonWindowManager.launchAndOpen(bundleID: bundleID)

@@ -720,6 +720,13 @@ enum AevonEdgeEntry {
             AevonLog.info("[右缘] App 侧已判失败（纵向/向右）→ 全局兜底不触发（AevonEdgeFailGateV206）")
             return
         }
+        // V0.2.8（AevonSelectionCoolV208）：刚选中开窗（1.5 秒内）→ global 兜底闭嘴。
+        // Aevon(94) 21:53:45 实证：选中威锋 0.65 秒后同一根手指的移动又呼了一次盘，
+        // 圆盘盖在正在打开的浮窗上。appedge 主通道不受影响。
+        if source == "global", now < selectionCoolUntil {
+            AevonLog.info("[右缘] 刚选中开窗（1.5s 冷静期）→ 全局兜底不触发（AevonSelectionCoolV208）")
+            return
+        }
         guard now - lastTriggerAt > 0.6 else { return }
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
@@ -735,6 +742,12 @@ enum AevonEdgeEntry {
         AevonBandHint.hideNow()
         ringOpenedAt = now
         presentRing(source: source)
+    }
+
+    /// V0.2.8（AevonSelectionCoolV208）：圆盘选中开窗 → 记 1.5 秒冷静期，
+    /// 期间 global 兜底不再呼盘（圆盘别盖在正在打开的浮窗上）。由 AevonRingMenu.activate 调。
+    static func noteSelectionCooldown() {
+        selectionCoolUntil = CACurrentMediaTime() + 1.5
     }
 
     /// V0.2.3（AevonAppYieldV203）：App 侧已在带内扣住本指 → 全局通道停吞让路。
@@ -939,6 +952,27 @@ enum AevonEdgeEntry {
     /// global 兜底触发时若远超此时刻（且前台有 App），说明 App 侧没收到起手 —— 打诊断行。
     private static var lastYieldAt: CFTimeInterval = 0
 
+    /// V0.2.8（AevonDeskZoneObserveV208）：桌面热区观察候选（**只观察，不吞**）。
+    ///
+    /// Aevon(94) 用户实证：桌面右下角 18×260 热区「按下即吞」导致「桌面左右滑、点击失灵」
+    /// —— 翻页起手位与 dock 右端正好被盖住，手指一落下去桌面连 began 都收不到。
+    /// 桌面（非 App 前台）改为只登记观察：轻点 / 纵向滑动整段放行；
+    /// 看清向左横扫 ≥30pt 才呼盘（呼盘后由收养路径喂盘，桌面页面会跟走约 30pt，
+    /// 用户 2026-10-25 拍板接受）。App 前台热区维持按下即接管（12/12 已验证路径，不动）。
+    private static var deskZoneTouchID: UInt = 0
+    private static var deskZoneStart: CGPoint = .zero
+    private static var deskZoneFired = false
+    /// V0.2.8（AevonDeskZoneObserveV208）：桌面呼盘后被收养的那根手指 ——
+    /// **吞摸豁免**。began 与前几帧移动已经给了桌面（翻页 pan 已持住这根 touch），
+    /// 后续帧绝不能再吞，否则桌面翻页卡在半路（began 后断流同款）。
+    /// 只观察喂盘，不拦截；抬手/取消/圆盘收起时清零。
+    private static var deskZoneAdoptedTouchID: UInt = 0
+
+    /// V0.2.8（AevonSelectionCoolV208）：选中开窗后的冷静期。
+    /// Aevon(94) 21:53:45 实证：选中威锋开浮窗后 0.65 秒，同一根手指的后续移动
+    /// 又被 global 兜底呼了一次盘，圆盘盖在正在打开的浮窗上。
+    private static var selectionCoolUntil: CFTimeInterval = 0
+
     /// 热区接管（V0.0.25）：在热区里按下的那根手指，**从 began 起**就完全归我们。
     ///
     /// Aevon(18) 的问题是：触发那一刻 App 已经收到了 began 和前几帧移动，
@@ -1030,6 +1064,10 @@ enum AevonEdgeEntry {
         ringExtraDeadline = 0
         ringSource = ""
         appEdgePointerAdopted = false
+        deskZoneTouchID = 0
+        deskZoneStart = .zero
+        deskZoneAdoptedTouchID = 0
+        deskZoneFired = false
         if hadState {
             AevonLog.warn("[急救] 已释放接管状态（\(reason)）（AevonDeadManV117）")
         }
@@ -1239,6 +1277,22 @@ enum AevonEdgeEntry {
             // 桌面只认原热区（接管优先，V0.0.33 同款）；App 前台才启用整条右缘接管带。
             if edgeEnabled, inZone || (appForeground && band.contains(point)) {
                 if inZone {
+                    // V0.2.8（AevonDeskZoneObserveV208）：桌面（非 App 前台）热区改为
+                    // 「观察 + 延迟呼盘」—— Aevon(94) 实证桌面右下角按下即吞导致
+                    // 「桌面左右滑、点击失灵」。只登记不吞：轻点/纵向整段放行，
+                    // 左扫 ≥30pt 才呼盘（moved 里判向）。App 前台维持按下即接管。
+                    if !appForeground {
+                        deskZoneTouchID = touchID
+                        deskZoneStart = point
+                        deskZoneFired = false
+                        lastTouchPoint = point
+                        let nowObserve = CACurrentMediaTime()
+                        if nowObserve - globalLastLogAt > 2.0 {
+                            globalLastLogAt = nowObserve
+                            AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=否（桌面·观察中，左扫≥30pt 才呼盘，轻点/纵向全放行）（AevonGlobalTouchV23 AevonZonePriorityV101 AevonTakeoverBandV103 AevonDeskZoneObserveV208）")
+                        }
+                        return
+                    }
                     // 原热区：老规矩，按下即完全接管（App 连 began 都收不到）。
                     // 热区这条路「began 就吞」，所以没有孤儿触摸问题，扣帧状态要顺手清掉。
                     bandHoldTouchID = 0
@@ -1299,7 +1353,7 @@ enum AevonEdgeEntry {
                         rightEdgeCount += 1
                         // V0.1.16：接管成功闪一下带（开关关着时是空操作）
                         AevonSystemGestureV105.flashBandIndicator()
-                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·在带内·按下即接管（App 连 began 都收不到；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113 AevonRightEdgeShowBandV116 AevonRightEdgeDefaultV118）")
+                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·在带内·按下即接管（App 连 began 都收不到；App前台=\(appForeground)；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113 AevonRightEdgeShowBandV116 AevonRightEdgeDefaultV118）")
                         return
                     }
                     // V0.1.13（AevonBandTakeoverBeganV113）：起手窗改成**两态**，中间态全部作废。
@@ -1415,6 +1469,21 @@ enum AevonEdgeEntry {
                     AevonLog.info("[穿透取证] 放手→App（dx=\(Int(dx)) dy=\(Int(dy))，原因=\(reason)）（AevonBandHoldMovedV112 AevonBandDeferV103）")
                 }
             }
+            // V0.2.8（AevonDeskZoneObserveV208）：桌面热区观察候选的判向。
+            // 左扫成立 → 呼盘后**不 return**，落到下面的收养块把这根手指喂给圆盘
+            // （呼盘那一刻圆盘刚展开，收养块在本事件内即可接管驱动）。
+            // 未成立 → 继续往下走；各 guard 会自然放行（我们没登记 globalTouchID）。
+            if touchID == deskZoneTouchID {
+                let zdx = point.x - deskZoneStart.x
+                let zdy = point.y - deskZoneStart.y
+                if !deskZoneFired, zdx <= -AevonEdgeStripView.swipeDistance, abs(zdx) >= abs(zdy) * 0.7 {
+                    deskZoneFired = true
+                    deskZoneAdoptedTouchID = touchID   // 吞摸豁免：后续帧照常给桌面（AevonDeskZoneObserveV208）
+                    lastTouchPoint = point
+                    AevonLog.info("[右缘] 桌面热区左扫成立 dx=\(Int(zdx)) dy=\(Int(zdy)) → 呼出圆盘（桌面整段放行，页面会跟走约30pt）（AevonDeskZoneObserveV208）")
+                    attemptTrigger("桌面热区左滑 \(Int(zdx))pt", source: "global")
+                }
+            }
             // V0.2.7（AevonEdgeAdoptV207）：圆盘展开但这根手指 SB 侧没登记过（起手在
             // App 侧 46pt 带内、不在 18pt 热区，且 SB 接管带开关关闭时正是如此）——
             // 呼盘后它的 moved/ended 全被下面的 guard 挡掉，圆盘收不到任何事件 =
@@ -1472,6 +1541,23 @@ enum AevonEdgeEntry {
             }
 
         case .ended:
+            // V0.2.8（AevonDeskZoneObserveV208）：桌面热区观察候选抬手 —— 只清状态。
+            // 未呼盘（轻点/纵向）→ 整段已放行给桌面，打一行收尾日志后 return；
+            // 已呼盘（左扫成立且被收养）→ 绝不 return，让下面的 globalTouchID 清理
+            // 照常把 remoteEnded 送达圆盘（否则「松手收起」永远不来）。
+            if touchID == deskZoneTouchID {
+                let fired = deskZoneFired
+                if !fired {
+                    let zdx = point.x - deskZoneStart.x
+                    let zdy = point.y - deskZoneStart.y
+                    AevonLog.info("[边缘] 桌面热区抬手：位移 dx=\(Int(zdx)) dy=\(Int(zdy)) 未达左扫 → 整段放行桌面（AevonDeskZoneObserveV208）")
+                }
+                deskZoneTouchID = 0
+                deskZoneStart = .zero
+                deskZoneAdoptedTouchID = 0
+                deskZoneFired = false
+                if !fired { return }
+            }
             // V0.1.15：右缘接管带抬手 —— 只清本带状态，**绝不 return**，
             // 让下面的 globalTouchID 清理照常跑到；否则会留下一个指向已释放 UITouch 的
             // globalTouchID（指针会被复用，下一根手指可能莫名被吞）。
@@ -1564,6 +1650,15 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            // V0.2.8（AevonDeskZoneObserveV208）：同 ended，桌面热区观察候选只清状态；
+            // 已呼盘被收养的照常落到下面 remoteCancelled。
+            if touchID == deskZoneTouchID {
+                deskZoneTouchID = 0
+                deskZoneStart = .zero
+                deskZoneAdoptedTouchID = 0
+                if !deskZoneFired { return }
+                deskZoneFired = false
+            }
             // V0.1.15：同 ended，右缘接管带只清本带状态，不提前 return
             if touchID == rightEdgeTouchID {
                 rightEdgeTouchID = 0
@@ -1772,6 +1867,8 @@ enum AevonEdgeEntry {
         ownsTouch = false
         ringExtraTouchID = 0
         ringExtraDeadline = 0
+        // V0.2.8（AevonDeskZoneObserveV208）：桌面呼盘收养指的豁免随收起一并清掉
+        deskZoneAdoptedTouchID = 0
         // V0.1.3：顺手清掉接管带候选，避免圆盘收起后残留一根「疑似归我」的手指
         bandTouchID = 0
         bandStart = .zero
@@ -1815,6 +1912,10 @@ enum AevonEdgeEntry {
     static func shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int) -> Bool {
         guard AevonPrefs.bool("Enabled", default: false) else { return false }
         guard touchID != 0 else { return false }
+        // V0.2.8（AevonDeskZoneObserveV208）：桌面热区呼盘的收养指 —— 吞摸豁免。
+        // 这根手指 began 就给了桌面，后续帧（含 ended）必须照常投递，
+        // 否则桌面翻页卡半路；圆盘只靠观察喂盘，不靠吞。
+        if touchID == deskZoneAdoptedTouchID { return false }
         // A. 右缘起手窗：只扣移动帧（V0.1.12）
         //
         //   · began 一律放行 —— 轻点 / 长按 / App 自己的按钮必须照常可用；

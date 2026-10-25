@@ -1219,6 +1219,26 @@ jobs:
             || { echo "::error::前台 bundleID 记录被删 —— 诊断行没有主语"; exit 1; }
           echo "V0.2.7 校验: appedge 收养喂盘 + ringSource 统一 + 挂载重试 40 次 + 盲区诊断 已就位"
 
+          # ---- V0.2.8（Aevon(94) 判读）：桌面热区只观察不吞 + 收起即断触摸 + 选中冷静期 ----
+          grep -q 'AevonDeskZoneObserveV208' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::桌面热区观察标记被删 —— 桌面 dock/翻页会回到「按下即吞」（用户主诉复发）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'deskZoneTouchID' \
+            || { echo "::error::桌面热区观察候选被删 —— 轻点/纵向放行失效"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'if !appForeground {' \
+            || { echo "::error::桌面热区分支缺 !appForeground 判定 —— App 前台 12/12 已验证路径会被误改"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q '接管=是（热区最高优先级）' \
+            || { echo "::error::App 前台热区「按下即接管」日志被删 —— 已验证主路径回退"; exit 1; }
+          grep -q 'AevonSelectionCoolV208' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::选中冷静期标记被删 —— 选中开窗后 0.65s 双呼圆盘会复发"; exit 1; }
+          grep -q 'AevonRingDismissNoTouchV208' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::圆盘收起断触摸被删 —— 动画期残留会挡住桌面触摸"; exit 1; }
+          grep -q 'deskZoneAdoptedTouchID' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::桌面呼盘收养指的吞摸豁免被删 —— 桌面翻页会卡在半路（began 后断流同款）"; exit 1; }
+          echo "V0.2.8 校验: 桌面热区观察放行 + 收养指吞摸豁免 + 收起即断触摸 + 选中 1.5s 冷静期 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4
