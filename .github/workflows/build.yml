@@ -1006,6 +1006,56 @@ jobs:
           done
           echo "图标: icon.png / icon@2x.png / icon@3x.png 均存在"
 
+
+          # V0.2.0（AevonAppSideV200）：路 B 第一版 —— 把判定点搬进 App 进程。
+          #   ① 必须多出第二个 dylib（AevonApp.dylib），主插件内容不许混进去；
+          #   ② 它的 filter 只允许「设置 / Safari」，绝不许含 springboard；
+          #   ③ 必须纯 arm64e 且体积受控（只做只读探针，超过 200KB 说明混了东西）；
+          #   ④ 0.2.0 不许改触摸时序：源码里不能出现两个开关被置 YES。
+          APP_DYLIB="$(find . -name 'AevonApp.dylib' | head -n1)"
+          echo "app dylib: $APP_DYLIB"
+          [ -n "$APP_DYLIB" ] || { echo "::error::缺少 AevonApp.dylib（App 侧 dylib 没打进包里，路 B 无从验证）"; exit 1; }
+          APP_ARCHS="$(lipo -archs "$APP_DYLIB")"
+          echo "app lipo -archs: $APP_ARCHS"
+          [ "$APP_ARCHS" = "arm64e" ] || { echo "::error::AevonApp.dylib 必须是纯 arm64e，实际: $APP_ARCHS"; exit 1; }
+          APP_SIZE="$(wc -c < "$APP_DYLIB" | tr -d ' ')"
+          echo "app dylib 大小: $APP_SIZE 字节"
+          [ "$APP_SIZE" -lt 204800 ] || { echo "::error::AevonApp.dylib 超过 200KB（$APP_SIZE）—— App 侧必须极小，主插件逻辑混进来了"; exit 1; }
+          for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::AevonApp.dylib 缺少标记 $s"; exit 1; }
+          done
+          for s in AevonRingMenu AevonEntryHost AevonSceneHost AevonProbeV107; do
+            if strings "$APP_DYLIB" | grep -q "$s"; then
+              echo "::error::AevonApp.dylib 里出现了主插件符号 $s（App 侧必须只做只读探针）"
+              exit 1
+            fi
+          done
+          APP_PLIST="$(find . -name 'AevonApp.plist' | head -n1)"
+          [ -n "$APP_PLIST" ] || { echo "::error::缺少 AevonApp.plist（App 侧 dylib 不会被注入）"; exit 1; }
+          plutil -convert xml1 -o - "$APP_PLIST" | grep -q 'com.apple.mobilesafari' \
+            || { echo "::error::AevonApp.plist 没列出 Safari"; exit 1; }
+          plutil -convert xml1 -o - "$APP_PLIST" | grep -q 'com.apple.Preferences' \
+            || { echo "::error::AevonApp.plist 没列出设置"; exit 1; }
+          if plutil -convert xml1 -o - "$APP_PLIST" | grep -q 'com.apple.springboard'; then
+            echo "::error::AevonApp.plist 里出现了 com.apple.springboard（会和主插件抢同一份逻辑）"
+            exit 1
+          fi
+          APP_BUNDLE_COUNT="$(plutil -convert xml1 -o - "$APP_PLIST" | grep -c '<string>com\.apple\.' || true)"
+          echo "App 侧注入名单: $APP_BUNDLE_COUNT 个"
+          [ "$APP_BUNDLE_COUNT" -eq 2 ] || { echo "::error::0.2.0 的 App 侧注入名单必须正好 2 个（设置 + Safari），实际 $APP_BUNDLE_COUNT"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonAppSideBridgeV200' \
+            || { echo "::error::主插件缺少 App 侧日志桥（AevonAppSideBridgeV200）"; exit 1; }
+          if strings "$DYLIB" | grep -q 'AevonAppObserverGesture'; then
+            echo "::error::主插件里混进了 App 侧识别器（AevonAppObserverGesture）"
+            exit 1
+          fi
+          if grep -rnE 'delaysTouchesBegan[[:space:]]*=[[:space:]]*YES|cancelsTouchesInView[[:space:]]*=[[:space:]]*YES' "$GITHUB_WORKSPACE/Sources/AppSide" 2>/dev/null | grep -q .; then
+            echo "::error::App 侧把 delaysTouchesBegan / cancelsTouchesInView 设成了 YES —— 0.2.0 只许只读，改时序属 0.2.1"
+            exit 1
+          fi
+          echo "V0.2.0 校验: AevonApp.dylib（arm64e / 只读探针 / 2 个 App）+ 日志桥 已就位；触摸时序未改动"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

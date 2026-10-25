@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Filter</key>
+	<dict>
+		<!--
+		  V0.2.0（AevonAppWhitelistV200）：**故意只列两个 App**。
+
+		  路 B 的最终形态是「所有 App 都注入」（Classes=[UIApplication]），
+		  但那样第一次装上就把 dylib 塞进了银行、游戏、微信这类带越狱检测的进程，
+		  一旦出问题用户看到的是「某个 App 闪退」，很难归因，而且不可挽回。
+		  所以第一版只在「设置」和「Safari」上验证四件事：
+		    Q1 dylib 能不能在 App 进程里加载；
+		    Q2 能不能读到 com.Aevon 域的配置；
+		    Q3 能不能拿到 keyWindow 挂上识别器；
+		    Q4 右缘触摸的落点坐标是不是和 SpringBoard 侧看到的一致。
+		  这四条全为真，0.2.1 再放开到 Classes=[UIApplication] + 运行时白名单。
+		  这四条任一为假，路 B 就地终止 —— 不会走到改时序那一步。
+		-->
+		<key>Bundles</key>
+		<array>
+			<string>com.apple.Preferences</string>
+			<string>com.apple.mobilesafari</string>
+		</array>
+	</dict>
+</dict>
+</plist>

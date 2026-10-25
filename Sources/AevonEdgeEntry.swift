@@ -495,6 +495,7 @@ enum AevonEdgeEntry {
         migrateLegacyBrokenZoneIfNeeded()
         disableRiskyTakeoverOnceV117()
         widenRightEdgeOnceV118()
+        explainPanicDisabledOnceV119()
         if zoneSignature.isEmpty { zoneSignature = AevonTriggerZone.signature() }
         if !prefsObserverInstalled {
             prefsObserverInstalled = true
@@ -601,6 +602,23 @@ enum AevonEdgeEntry {
         AevonLog.warn("[右缘] 0.1.18 首次启动：带宽从 \(Int(raw))pt 抬到 \(Int(AevonRightEdge.defaultWidth))pt（旧默认值让它一直落在带外；想改回去请到「细节调整」里调，下限 \(Int(AevonRightEdge.minWidth))pt）（AevonRightEdgeWidenV118）")
     }
 
+    /// V0.1.19（AevonPanicHintV119）：把「上次被三指急救关掉」这件事说清楚。
+    ///
+    /// 为什么 4 秒提示还不够：Aevon(86) 里用户在 17:51:51 触发急救，当时屏幕上没有反馈，
+    /// 他接着做了 40 秒无效尝试，最后只能得出「这一版还是没修好」。
+    /// 所以每次 SpringBoard 启动后都再提醒一次（仅当开关是关的、且标记确实来自急救）。
+    /// 用户重新打开开关时 `checkTriggerZoneChange()` 会清标记，之后不再提示。
+    private static func explainPanicDisabledOnceV119() {
+        guard !AevonPrefs.bool("RightEdgeTakeover", default: false),
+              AevonPrefs.bool("RightEdgePanicOffV119", default: false) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+            guard !AevonPrefs.bool("RightEdgeTakeover", default: false),
+                  AevonPrefs.bool("RightEdgePanicOffV119", default: false) else { return }
+            AevonPanicHint.show("「右缘接管带」当前是关闭状态。\n上次由三指急救关闭，可在设置里重新打开。", duration: 5.0)
+            AevonLog.info("[急救] 启动检查：右缘接管带仍处于「被急救关闭」状态，已提示一次（AevonPanicHintV119）")
+        }
+    }
+
     /// 指纹变了就重排触发条（幂等；没变什么都不做）
     static func checkTriggerZoneChange() {
         let signature = AevonTriggerZone.signature()
@@ -620,6 +638,14 @@ enum AevonEdgeEntry {
             if !isFirst {
                 AevonLog.info("[右缘] 配置已更新：\(AevonRightEdge.summary(in: UIScreen.main.bounds))，可视化=\(AevonRightEdge.showBand ? "开" : "关")（AevonBandIndicatorV116）")
             }
+        }
+        // V0.1.19（AevonPanicHintV119）：用户重新打开「右缘接管带」→ 清掉「被急救关掉」的标记，
+        // 之后不再在启动时提示。
+        if AevonPrefs.bool("RightEdgeTakeover", default: false),
+           AevonPrefs.bool("RightEdgePanicOffV119", default: false) {
+            AevonPrefs.set("RightEdgePanicOffV119", false)
+            AevonPrefs.synchronize()
+            AevonLog.info("[急救] 「右缘接管带」已被重新打开 → 清除急救关闭标记（AevonPanicHintV119）")
         }
     }
 
@@ -859,15 +885,40 @@ enum AevonEdgeEntry {
     // 任何一条的状态机漏掉一次 ended，用户就会面对一块点不动的屏幕，且**没法自己救**。
     //
     // 所以这一版补两道闸：
-    //   ① 死手开关：0.5 秒巡检一次，接管状态一旦超过自己的期限还没被清除，强制清空；
+    //   ① 死手开关：0.2 秒巡检一次，接管状态一旦超过自己的期限还没被清除，强制清空；
     //      圆盘展开超过 20 秒强制收起。最坏情况从「只能卸载」变成「最多 4 秒自动恢复」。
-    //   ② 三指急救：任何位置三根手指同时按下 → 立刻释放全部接管 + 把右缘接管两个开关写盘关掉。
+    //   ② 三指急救：任何位置三根手指同时按下 → 立刻释放全部接管。
     //      这条不依赖任何视图、任何开关，只要 hook 在就有效，是真正的逃生门。
+    //
+    // V0.1.19（AevonPanicHoldV119）：第 ② 条拆成两档 —— 三指只释放、按住 2 秒才关开关。
+    // 起因见 Aevon(86)：一次普通三指操作就把「右缘接管带」静默关掉，用户全程没有可见反馈。
 
     /// 正在屏幕上的手指数（按 UITouch 指针计）。只用于三指急救判定。
     private static var activeTouches = Set<UInt>()
     /// 急救限频（3 秒内只执行一次，避免三指按住不放时反复写盘）
     private static var panicAt: CFTimeInterval = 0
+    /// V0.1.19（AevonPanicHoldV119）：三指「开始同时按下」的时刻，0 表示当前不足三指。
+    ///
+    /// 为什么要有它：旧版只要屏幕上同时有 3 个触点，三指急救就立刻把
+    /// 「右缘接管带 / 右缘全域接管」写盘关掉。Aevon(86) 的日志里，用户在 17:51:51
+    /// 做了一次三指操作（iOS 的三指轻点撤销 / 三指捏合复制都会命中），开关被静默关闭，
+    /// 之后 40 秒里两次右缘尝试全部落空（一次距右缘 36pt、一次只有 9pt），
+    /// 而屏幕上没有任何提示 —— 用户唯一的感受就是「这一版还是没修好」。
+    ///
+    /// 现在分两档：
+    ///   · 三指成形 → **立即**释放全部接管（不写盘、不关开关，松手即恢复）；
+    ///   · 按住 0.6 秒 → 弹提示条，告诉用户还能继续按住；
+    ///   · 按住 2.0 秒 → 才写盘关闭右缘两个开关（附提示条）。
+    private static var panicHoldSince: CFTimeInterval = 0
+    /// 本次三指按住是否已经执行过「释放」档，避免 0.2 秒轮询重复释放 / 重复提示
+    private static var panicHoldReleased = false
+    /// 三指按住多少秒弹提示条
+    private static let panicHoldHintAfter: CFTimeInterval = 0.6
+    /// 三指按住多少秒才真正关闭右缘两个开关
+    private static let panicHoldDisableAfter: CFTimeInterval = 2.0
+    /// V0.1.19：急救释放后的冷却期。这段时间里不再接管任何新落点 ——
+    /// 否则三指操作里落在右缘的那根手指会被「刚释放完又立刻接管」，等于白释放。
+    private static var panicCooldownUntil: CFTimeInterval = 0
     /// 接管状态宽限（秒）：超过自己的 deadline 再加这个余量还没被清 → 判定为泄漏
     private static let deadManGrace: CFTimeInterval = 1.0
     /// 圆盘展开硬上限（秒）：超过就强制收起（正常一次选择不会超过 20 秒）
@@ -901,22 +952,31 @@ enum AevonEdgeEntry {
         }
     }
 
-    /// 三指急救：不用卸载的逃生门。
-    private static func panicRelease() {
-        let now = CACurrentMediaTime()
-        guard now - panicAt > 3.0 else { return }
-        panicAt = now
-        releaseAllTakeover("三指同时按下")
+    /// 三指急救（V0.1.19 AevonPanicHoldV119 起改成两档）。
+    ///
+    /// **第一档（三指一成形就执行）**：只把手指还给系统，不写任何偏好 ——
+    /// 松手以后一切照旧，误触的代价只有「这一次接管被打断」。
+    /// 这一档放在 began 里直接调用，不依赖 0.2 秒轮询，所以插件开关关着也有效。
+    static func panicReleaseNow(_ reason: String) {
+        releaseAllTakeover(reason)
         AevonRingMenu.dismissCurrent()
-        // 写盘关掉两个「整指吞」的开关：用户下一次触碰就是正常 App 行为，
-        // 想再试的时候回设置里打开即可（不用重装、不用注销）。
-        AevonPrefs.set("RightEdgeTakeover", false)
-        AevonPrefs.set("BandTakeoverFromBegan", false)
-        AevonPrefs.synchronize()
-        AevonLog.warn("[急救] 三指同时按下 → 已关闭「右缘接管带 / 右缘全域接管」并释放全部接管；不用卸载，回设置里可再打开（AevonPanicThreeFingerV117 AevonDeadManV117）")
+        panicCooldownUntil = CACurrentMediaTime() + 0.8
     }
 
-    /// 死手开关：0.5 秒一次，只在「状态明显泄漏」时动手。
+    /// **第二档（三指按住 2 秒）**：写盘关掉两个「整指吞」的开关。
+    /// 这是真正的逃生门，代价是功能消失 —— 所以必须有可见提示，不能让用户以为插件坏了。
+    private static func panicDisableRightEdge() {
+        AevonPrefs.set("RightEdgeTakeover", false)
+        AevonPrefs.set("BandTakeoverFromBegan", false)
+        // V0.1.19：留一个标记，好让每次 SpringBoard 启动后还能提醒用户「这是被急救关的」。
+        // 用户重新打开开关时由 checkTriggerZoneChange() 清除。
+        AevonPrefs.set("RightEdgePanicOffV119", true)
+        AevonPrefs.synchronize()
+        AevonPanicHint.show("三指急救：已关闭「右缘接管带」。\n回设置「细节调整」里可以再打开。", duration: 4.0)
+        AevonLog.warn("[急救] 三指按住 2 秒 → 已关闭「右缘接管带 / 右缘全域接管」并释放全部接管；不用卸载，回设置里可再打开（AevonPanicThreeFingerV117 AevonPanicHoldV119 AevonPanicHintV119）")
+    }
+
+    /// 死手开关：0.2 秒一次，只在「状态明显泄漏」时动手。
     static func enforceDeadManSwitch() {
         let now = CACurrentMediaTime()
         if ownsTouch, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
@@ -930,6 +990,22 @@ enum AevonEdgeEntry {
             AevonLog.warn("[急救] 圆盘展开超过 \(Int(ringOpenLimit)) 秒 → 强制收起（AevonDeadManV117）")
             AevonRingMenu.dismissCurrent()
             releaseAllTakeover("圆盘超期")
+        }
+        // V0.1.19（AevonPanicHoldV119）：三指按住的第二、三档升级。
+        // 第一档（释放接管）已经在 began 里当场做了，这里只负责「超时升级」。
+        if panicHoldSince > 0 {
+            let held = now - panicHoldSince
+            if held >= panicHoldHintAfter, !panicHoldReleased {
+                panicHoldReleased = true
+                AevonPanicHint.show("已释放接管。继续按住 2 秒可关闭「右缘接管带」。", duration: 2.5)
+                AevonLog.warn("[急救] 三指按住 0.6 秒 → 已释放全部接管（未关闭任何开关）（AevonPanicHoldV119 AevonPanicHintV119）")
+            }
+            if held >= panicHoldDisableAfter, now - panicAt > 3.0 {
+                panicAt = now
+                panicHoldSince = 0
+                panicHoldReleased = false
+                panicDisableRightEdge()
+            }
         }
     }
 
@@ -964,13 +1040,32 @@ enum AevonEdgeEntry {
         case .began:
             activeTouches.insert(touchID)
             if activeTouches.count > 6 { activeTouches.removeAll() }
-            if activeTouches.count >= 3 { panicRelease() }
+            if activeTouches.count >= 3 {
+                // V0.1.19（AevonPanicHoldV119）：三指成形 → **立即**释放接管，
+                // 但**不再**在这里写盘关开关。旧版就是这一步把功能静默关掉的（Aevon(86) 17:51:51）。
+                // 关开关要按住 2 秒，由 enforceDeadManSwitch 的轮询升级。
+                if panicHoldSince == 0 {
+                    panicHoldSince = CACurrentMediaTime()
+                    panicHoldReleased = false
+                    panicReleaseNow("三指同时按下")
+                }
+            } else {
+                panicHoldSince = 0
+                panicHoldReleased = false
+            }
         case .ended, .cancelled:
             activeTouches.remove(touchID)
+            if activeTouches.count < 3 {
+                panicHoldSince = 0
+                panicHoldReleased = false
+            }
         default:
             break
         }
         guard AevonPrefs.bool("Enabled", default: false) else { return }
+        // V0.1.19（AevonPanicHoldV119）：急救释放后的 0.8 秒冷却期内，新落点一律不接管。
+        // 三指操作里常有一指落在右缘带内，不挡的话会出现「刚释放完又立刻接管」。
+        if phase == .began, CACurrentMediaTime() < panicCooldownUntil { return }
         let screen = UIScreen.main.bounds
         switch phase {
         case .began:
@@ -1313,7 +1408,14 @@ enum AevonEdgeEntry {
                 rightEdgeMissReason = ""
                 let gap = Int((UIScreen.main.bounds.width - start.x).rounded())
                 if sweep {
-                    AevonLog.info("[右缘] 本可命中：起手 (\(Int(start.x)),\(Int(start.y))) 距右缘 \(gap)pt，\(reason)；这次左扫 dx=\(Int(mdx)) dy=\(Int(mdy)) 已经进了 App → 把「右缘带宽度」调到 ≥\(gap)pt（或带高调到能让 y=\(Int(start.y)) 进带）就能在这里呼出（AevonRightEdgeMissHintV118）")
+                    // V0.1.19（AevonPanicHintV119）：开关关着时，原来的「把宽度调到 ≥Npt」是错的建议 ——
+                    // Aevon(86) 17:52:31 那次距右缘只有 9pt、带宽早已是 46pt，日志却还在让他调宽度。
+                    // 开关没开就先把这件事说清楚。
+                    if AevonRightEdge.enabled {
+                        AevonLog.info("[右缘] 本可命中：起手 (\(Int(start.x)),\(Int(start.y))) 距右缘 \(gap)pt，\(reason)；这次左扫 dx=\(Int(mdx)) dy=\(Int(mdy)) 已经进了 App → 把「右缘带宽度」调到 ≥\(gap)pt（或带高调到能让 y=\(Int(start.y)) 进带）就能在这里呼出（AevonRightEdgeMissHintV118）")
+                    } else {
+                        AevonLog.info("[右缘] 本可命中：起手 (\(Int(start.x)),\(Int(start.y))) 距右缘 \(gap)pt，\(reason)；这次左扫 dx=\(Int(mdx)) dy=\(Int(mdy)) 已经进了 App → 宽度本身够（当前 \(Int(AevonRightEdge.width))pt），是开关关着；到设置里打开「右缘接管带」就能在这里呼出（AevonRightEdgeMissHintV118 AevonPanicHintV119）")
+                    }
                 } else {
                     let dir = abs(mdy) > abs(mdx) ? "纵向" : "向右"
                     AevonLog.info("[右缘] 带外落点结束：起手 (\(Int(start.x)),\(Int(start.y))) 距右缘 \(gap)pt，\(reason)；位移 dx=\(Int(mdx)) dy=\(Int(mdy)) → \(dir)不是左扫 → 本次是 App 自己的操作，未误伤（AevonRightEdgeMissHintV118）")

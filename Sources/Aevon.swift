@@ -43,6 +43,14 @@ private func initializeAevon() {
      */
     AevonBootstrap.start()
 
+    /*
+     * V0.2.0（AevonAppSideBridgeV200）：App 侧探针日志桥。
+     * 路 B（把吞摸点搬进 App 进程）的第一版，只读、不改任何触摸行为。
+     * App 进程把日志写进自己的偏好域，这里每 2 秒读一次转写进 Aevon.log；
+     * App 侧总开关关着时这里连偏好都不读（零开销）。
+     */
+    AevonAppSideBridge.start()
+
     // 4) 实验性 hook 一律延迟 10 秒，且必须用户显式打开对应开关
     let delay: TimeInterval = 10
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

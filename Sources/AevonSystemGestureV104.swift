@@ -151,6 +151,71 @@ enum AevonBandHint {
     }
 }
 
+/// 急救 / 状态提示条（V0.1.19 / AevonPanicHintV119）。
+///
+/// 为什么非有不可：Aevon(86) 日志里三指急救在 17:51:51 静默关掉了「右缘接管带」，
+/// 屏幕上没有任何反馈；用户之后 40 秒里的两次右缘尝试全部落空（其中一次距右缘只有 9pt），
+/// 只会得出「这一版还是没修好」。状态变了就必须让人看见。
+///
+/// 纪律与 `AevonBandHint` 完全一致，避免重演 0.1.16 的整屏卡死：
+///   · 一个容器 + 一个 `UILabel`，没有 `draw` 重写、没有逐帧 `setNeedsDisplay`；
+///   · `isUserInteractionEnabled = false`，绝不接触摸；
+///   · 只出现几秒，到点 `isHidden = true`，不常驻、不加动画。
+enum AevonPanicHint {
+    private static weak var panel: UIView?
+    private static weak var label: UILabel?
+    private static var hideToken = 0
+
+    /// 在屏幕上部显示一行提示，`duration` 秒后自动隐藏。重复调用只换文字、重置计时。
+    static func show(_ text: String, duration: CFTimeInterval = 3.0) {
+        guard let root = AevonEntryHost.activeRoot, root.bounds.width > 1 else { return }
+        let width = min(root.bounds.width - 36, 420)
+        let height: CGFloat = 46
+        let origin = CGPoint(x: (root.bounds.width - width) / 2, y: root.bounds.height * 0.14)
+
+        let container: UIView
+        let textLabel: UILabel
+        if let existing = panel, existing.superview === root, let existingLabel = label {
+            container = existing
+            textLabel = existingLabel
+        } else {
+            panel?.removeFromSuperview()
+            container = UIView()
+            container.isUserInteractionEnabled = false
+            container.backgroundColor = UIColor(white: 0.06, alpha: 0.82)
+            container.layer.cornerRadius = 12
+            container.layer.masksToBounds = true
+            textLabel = UILabel()
+            textLabel.isUserInteractionEnabled = false
+            textLabel.textColor = UIColor.white
+            textLabel.font = UIFont.systemFont(ofSize: 13, weight: .medium)
+            textLabel.textAlignment = .center
+            textLabel.numberOfLines = 2
+            container.addSubview(textLabel)
+            root.addSubview(container)
+            panel = container
+            label = textLabel
+        }
+        container.frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
+        textLabel.frame = CGRect(x: 12, y: 0, width: width - 24, height: height)
+        textLabel.text = text
+        container.isHidden = false
+
+        hideToken += 1
+        let token = hideToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard token == hideToken else { return }
+            panel?.isHidden = true
+        }
+    }
+
+    /// 圆盘起来 / 容器搬家时收掉，避免和圆盘叠在一起。
+    static func hideNow() {
+        hideToken += 1
+        panel?.isHidden = true
+    }
+}
+
 final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     static let shared = AevonSystemGestureV105()
 

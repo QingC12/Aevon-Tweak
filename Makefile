@@ -9,7 +9,7 @@ THEOS_PACKAGE_SCHEME = roothide
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = Aevon
+TWEAK_NAME = Aevon AevonApp
 
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
@@ -43,10 +43,28 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonWindowView.swift \
     Sources/AevonWindowManager.swift \
     Sources/AevonGestureHandler.swift \
+    Sources/AevonAppSideBridge.swift \
     Sources/Hooks.swift
 
 Aevon_CFLAGS = -fobjc-arc
 Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
+
+# ---------------------------------------------------------------------------
+# 第二个 dylib：AevonApp
+#
+# 只有它会被注入第三方 App 进程（filter 见 AevonApp.plist，V0.2.0 只列
+# 设置 / Safari 两个）。把它独立成一个 tweak 而不是并进 Aevon，是为了保证
+# 主插件那 600KB（窗口、场景、圆盘、探针）永远不会进别人的 App 进程 ——
+# App 侧只有「读配置 + 挂一个只读识别器 + 写自己的偏好域」这一件事。
+#
+# 用 ObjC 而不是 Swift：App 侧要碰 `UIApplication.sharedApplication`、
+# 遍历 `connectedScenes`、读 CFPreferences 跨域，这些正是 Swift 在
+# `swift_dynamicCast` 上出现 SIGTRAP 的历史位置（归档(13) 的探针事故）。
+# 200 行以内用 ObjC 写，异常可以 @try 兜住，也是主插件一直采用的「垫片」形态。
+# ---------------------------------------------------------------------------
+AevonApp_FILES = Sources/AppSide/AevonAppSide.m
+AevonApp_CFLAGS = -fobjc-arc
+AevonApp_FRAMEWORKS = UIKit Foundation CoreFoundation
 
 SUBPROJECTS += AevonPrefs
 
