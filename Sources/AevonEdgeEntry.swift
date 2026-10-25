@@ -462,7 +462,7 @@ enum AevonEdgeEntry {
         presentRing(source: source)
     }
 
-    /// V0.1.4（AevonSystemGestureV104）：系统手势通道识别成功后的入口。
+    /// V0.1.4/V0.1.5（AevonSystemGestureV104 / AevonSystemGestureV105）：系统手势管线识别成功后的入口。
     ///
     /// 走这条路的触摸从落下那一刻就归 SpringBoard 的系统手势窗口 —— 前台 App 手里
     /// 没有这条 touch（这正是「抖音进度条不再跟着拖」的根本原因），所以这里不需要
@@ -565,7 +565,6 @@ enum AevonEdgeEntry {
     private static var globalFired = false
     private static var globalLastLogAt: CFTimeInterval = 0
     // V0.1.2（AevonTapSummonV102 / AevonForensicBandV102）
-    private static var globalBeganAt: CFTimeInterval = 0
     private static var forensicCount = 0
     // V0.1.3（AevonTakeoverBandV103 / AevonBandDeferV103）：右缘接管带「延迟接管」候选。
     // 只登记，不吞：等看清是向左横扫才把这根手指收归圆盘（轻点 / 上下滑 / 向右扫仍归 App）。
@@ -707,13 +706,16 @@ enum AevonEdgeEntry {
                               width: bandWidth, height: screen.height)
             let edgeEnabled = AevonPrefs.bool("EdgeGestureEnabled", default: true)
             let inZone = zone.contains(point)
+            // V0.1.5（AevonSystemGestureV105）：系统手势管线已接管右缘时，这条带上的触摸
+            // 从落下那一刻就归 SpringBoard 的识别器，全局通道不再登记候选 —— 否则同一根
+            // 手指会被算两次（管线呼一次、延迟接管再呼一次）。
+            let bandOwnedByPipeline = appForeground && AevonSystemGestureV105.ownsBand
             // 桌面只认原热区（接管优先，V0.0.33 同款）；App 前台才启用整条右缘接管带。
-            if edgeEnabled, inZone || (appForeground && band.contains(point)) {
+            if edgeEnabled, inZone || (appForeground && band.contains(point) && !bandOwnedByPipeline) {
                 if inZone {
                     // 原热区：老规矩，按下即完全接管（App 连 began 都收不到）。
                     globalTouchID = touchID
                     globalStart = point
-                    globalBeganAt = CACurrentMediaTime()
                     globalFired = false
                     lastTouchPoint = point
                     ownsTouch = true
@@ -770,7 +772,7 @@ enum AevonEdgeEntry {
             if touchID == bandTouchID {
                 // V0.1.4（AevonSystemGestureV104）：这根手指已经归系统手势窗口 ——
                 // App 那边没有它，我们也不必再「接管 / 吞事件」，直接让路。
-                if AevonSystemGestureV104.isHandling(touchID: touchID) {
+                if AevonSystemGestureV105.isHandling(touchID: touchID) {
                     bandTouchID = 0
                     bandStart = .zero
                     return
@@ -781,7 +783,6 @@ enum AevonEdgeEntry {
                     bandTouchID = 0
                     globalTouchID = touchID
                     globalStart = bandStart
-                    globalBeganAt = CACurrentMediaTime()
                     globalFired = false
                     lastTouchPoint = point
                     ownsTouch = true
@@ -831,18 +832,10 @@ enum AevonEdgeEntry {
             if let ring = AevonRingMenu.presented {
                 ring.remoteEnded(at: point, source: "global")
             }
-            // V0.1.2（AevonTapSummonV102）：轻点热区 = 呼出圆盘。
-            // 快按快抬（≤0.45s）且位移 ≤10pt 时触发 —— 无位移手势不可能带动
-            // 抖音翻页 / 侧滑返回；且这根手指从 began 就被接管，App 连轻点都收不到，
-            // 连带修掉「轻点右缘触发抖音暂停」的可能。
-            if !globalFired, globalBeganAt > 0 {
-                let elapsed = CACurrentMediaTime() - globalBeganAt
-                let moved = hypot(point.x - globalStart.x, point.y - globalStart.y)
-                if elapsed <= 0.45, moved <= 10.0 {
-                    attemptTrigger("轻点呼出（按 \(Int(elapsed * 1000))ms 位移 \(Int(moved))pt）（AevonTapSummonV102）", source: "global")
-                }
-            }
-            globalBeganAt = 0
+            // V0.1.5（AevonNoTapSummonV105）：**轻点热区呼出圆盘已删除**。
+            // 归档(14) 用户反馈：热区就在右下角，日常操作（返回、发消息、刷到屏幕边缘）
+            // 动不动就误触，圆盘莫名弹出来。现在只保留「热区里向左滑」这一种呼出手势，
+            // 轻点一律什么都不做（这根手指仍被接管，所以也不会漏给 App）。
             globalTouchID = 0
             globalFired = false
             ownsTouch = false
@@ -865,7 +858,6 @@ enum AevonEdgeEntry {
             AevonRingMenu.presented?.remoteCancelled(source: "global")
             globalTouchID = 0
             globalFired = false
-            globalBeganAt = 0
             ownsTouch = false
 
         default:

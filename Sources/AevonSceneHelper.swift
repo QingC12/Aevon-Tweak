@@ -131,19 +131,30 @@ enum AevonSceneHelper {
         setForeground(scene, false)
     }
 
-    // MARK: - 保活定时器（只在前台状态掉了时才补一次）
+    // MARK: - 保活定时器（V0.1.5：有限次，只补开窗后的头几秒）
 
     private static var keepAliveTimers: [String: DispatchSourceTimer] = [:]
 
+    /// 开窗后补前台。
+    ///
+    /// V0.1.5（AevonSoftKeepAliveV105）：以前是**每秒一次、永远不停**地检查并补写
+    /// `updateSettings(foreground=true)` —— 那是持续往 FrontBoard 的场景状态机里写东西，
+    /// 归档(14) 的 SIGTRAP 就出在这条写入链上。现在只补开窗后的头 8 次（约 6 秒），
+    /// 够撑过 presenter 激活那段；之后进程存活交给 RBSAssertion 保活，不再碰场景设置。
     static func startKeepAlive(_ bundleID: String) {
         stopKeepAlive(bundleID)
+        var remaining = 8
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.5, repeating: 1.0)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.8)
         timer.setEventHandler {
+            guard remaining > 0 else {
+                self.stopKeepAlive(bundleID)
+                AevonLog.info("[保活] \(bundleID) 前台补偿结束（共 8 次，之后不再写场景设置）（AevonSoftKeepAliveV105）")
+                return
+            }
+            remaining -= 1
             guard let scene = self.scene(for: bundleID) else { return }
             // 先看场景当前的前台标记：已经是前台就什么都不做。
-            // 以前每秒无条件 setForeground 一次，等于每秒一次跨进程状态写入，
-            // 在缩放这种主线程密集的场景里是白花掉的开销。
             let settings = AevonRuntime.send(scene, Selector(("settings")))
             if let foreground = settings.flatMap({ AevonRuntime.bool($0, key: "foreground") }),
                foreground {
@@ -153,7 +164,7 @@ enum AevonSceneHelper {
         }
         timer.resume()
         keepAliveTimers[bundleID] = timer
-        AevonLog.info("[保活] 已为 \(bundleID) 启动前台保持定时器")
+        AevonLog.info("[保活] 已为 \(bundleID) 启动前台补偿定时器（最多 8 次）（AevonSoftKeepAliveV105）")
     }
 
     static func stopKeepAlive(_ bundleID: String) {

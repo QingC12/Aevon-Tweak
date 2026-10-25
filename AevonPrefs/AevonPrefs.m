@@ -325,29 +325,28 @@ static NSArray *AevonBuildFallback(id target) {
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
                               @"所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：打开「启用插件」→ 注销 → 在屏幕右边缘的触发区向左滑，或在该处按住 0.4 秒 → 弹出圆盘 → 点图标开窗。"
+                              @"用法：打开「启用插件」→ 注销 → 在屏幕右边缘的触发区向左滑 → 弹出圆盘 → 点图标开窗。"
+                              @"桌面上只会有一个浮窗，再点别的 App 会直接换成它（AevonSingleWindowV105）。"
+                              @"全屏 App 内从右边缘向左滑同样可呼出（系统手势管线，App 不跟手）。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
     if (s1 != nil) [result addObject:s1];
-    id s1a = AevonNewSwitch(@"右侧边缘左滑呼出圆盘（主入口）", target, @"EdgeGestureEnabled", @YES);
+    id s1a = AevonNewSwitch(@"边缘左滑呼出圆盘（热区 + 全屏 App 右缘）", target, @"EdgeGestureEnabled", @YES);
     if (s1a != nil) [result addObject:s1a];
 
     /* V0.0.30：一级页只放开关 + 细节入口；滑杆 / 圆盘 App 编辑在二级页 */
-    id s2 = AevonNewSwitch(@"窗口保活（保持前台）", target, @"KeepAlive", @NO);
-    if (s2 != nil) [result addObject:s2];
+    /* V0.1.5（AevonNoSnapV105）：左右吸附开关已随吸附功能一起删除；
+       「窗口保活」「强制前台保持」两个无实际作用的开关也删除
+       （进程保活改为单窗恒开，走 RBSAssertion，不再让用户选）。*/
     id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作（关掉=内容不接收触摸）", target, @"TouchEnabled", @YES);
     if (s2a != nil) [result addObject:s2a];
-    id s2c = AevonNewSwitch(@"拖到屏幕边缘自动吸附（左右半屏）", target, @"SnapEnabled", @YES);
-    if (s2c != nil) [result addObject:s2c];
     id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
     if (s2b != nil) [result addObject:s2b];
     id s3 = AevonNewSwitch(@"开机崩溃保护", target, @"CrashGuard", @YES);
     if (s3 != nil) [result addObject:s3];
     id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
     if (s4 != nil) [result addObject:s4];
-    id s5 = AevonNewSwitch(@"强制前台保持（实验）", target, @"ForceForeground", @NO);
-    if (s5 != nil) [result addObject:s5];
 
     id groupDetail = AevonNewGroup(@"细节调整",
                                    @"触发条位置 / 宽度 / 高度、圆盘 App 编辑等都在二级页（AevonDetailPageV30）。");

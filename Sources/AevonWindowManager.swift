@@ -1,49 +1,68 @@
 import Foundation
 import UIKit
 
-/// 浮窗管理：开窗 / 关窗 / 已开窗集合 / 图层更新。
+/// 浮窗管理（V0.1.5，AevonSingleWindowV105）：**全局只允许一个浮窗**。
+///
+/// 历史：0.1.0~0.1.4 支持多窗并存（`windows` 字典 + 开窗顺序数组），结果是
+/// 「桌面上同时飘着好几个窗」，互相遮挡、拖拽抢手指、几何记忆互相覆盖。
+/// 用户明确要求（归档(14)）只保留一个主浮窗：再通过圆盘打开另一个 App 时，
+/// **直接切换主窗内的 App**，桌面上永远只有一个窗。
+///
+/// 单窗之后整套状态简单到只有两个变量（`currentView` + `currentBundleID`），
+/// 多窗相关的排序、置顶、批量刷新全部消失。
+///
+/// 左右吸附（AevonSnap）也一并移除：单窗不需要并排，吸附只会把窗突然变形状。
 enum AevonWindowManager {
-    private static var windows: [String: AevonWindowView] = [:]
-    /// 开窗顺序（后开的在后面，也就是更靠上层）。面板里的「已开窗口」按这个顺序展示。
-    private static var order: [String] = []
+    private static var currentView: AevonWindowView?
+    private static var currentBundleID: String?
 
+    /// 这个 App 是否正装在这个唯一浮窗里。
     static func isWindowed(_ bundleID: String) -> Bool {
-        return windows[bundleID] != nil
+        return currentView != nil && currentBundleID == bundleID
     }
 
-    /// 当前已开窗的 App（按开窗顺序）。
+    /// 当前浮窗里装的 App（没有浮窗时返回 nil）。
+    static var openBundleID: String? {
+        return currentView != nil ? currentBundleID : nil
+    }
+
+    /// 面板里的「已开窗口」列表 —— 单窗模式下最多一个元素。
     static var openBundleIDs: [String] {
-        return order.filter { windows[$0] != nil }
+        if let identifier = openBundleID { return [identifier] }
+        return []
     }
 
     static func title(for bundleID: String) -> String {
         return AevonAppInfo.displayName(bundleID: bundleID) ?? bundleID
     }
 
-    /// 把已开窗口提到最前。
+    /// 把浮窗提到最前（单窗其实恒在最前，保留这个入口只为面板调用不改）。
     static func bringToFront(bundleID: String) {
-        guard let windowView = windows[bundleID] else { return }
-        windowView.bringToFront()
-        if let index = order.firstIndex(of: bundleID) {
-            order.remove(at: index)
-            order.append(bundleID)
-        }
+        guard isWindowed(bundleID) else { return }
+        currentView?.bringToFront()
     }
 
     /// 为指定 App 开窗（带场景就绪等待与全路径守卫，任何失败都静默放弃）。
+    ///
+    /// 单窗语义：已经有窗且装的是别的 App → 先关掉旧窗再开新窗；装的是同一个 App
+    /// → 直接置顶，不重复开。
     static func open(bundleID: String,
                      sceneID: String?,
-                     slot: AevonSnapSlot = .free,
                      completion: ((Bool) -> Void)? = nil) {
         guard AevonPrefs.bool("Enabled", default: false) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
             completion?(false)
             return
         }
-        guard !isWindowed(bundleID) else {
-            AevonLog.info("[窗口] \(bundleID) 已处于窗口化状态")
-            completion?(true)
-            return
+        if let existingID = openBundleID {
+            if existingID == bundleID {
+                AevonLog.info("[窗口] \(bundleID) 已在浮窗里，直接置顶（单窗模式）（AevonSingleWindowV105）")
+                currentView?.bringToFront()
+                completion?(true)
+                return
+            }
+            AevonLog.info("[窗口] 单窗模式：先关掉 \(existingID)，再把 \(bundleID) 装进同一个窗（AevonSingleWindowV105）")
+            close(bundleID: existingID)
         }
 
         // V0.0.36（AevonFloatInEntryV36）：浮窗外壳直接挂进唯一入口容器的浮窗层。
@@ -99,32 +118,31 @@ enum AevonWindowManager {
             }
 
             let title = AevonWindowManager.title(for: bundleID)
-            let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title, slot: slot)
+            let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
-            windows[bundleID] = windowView
-            if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
-            order.append(bundleID)
+            currentView = windowView
+            currentBundleID = bundleID
 
             // presenter 激活后画面是异步出来的，由承载器自己探测首帧
             sceneHost.startSyncing()
             AevonSceneHelper.startKeepAlive(bundleID)
-            if AevonPrefs.bool("KeepAlive", default: false),
-               let pid = AevonAppInfo.pid(bundleID: bundleID) {
+            // V0.1.5：进程保活不再是开关项 —— 它是「单窗里那个 App 别被系统挂起」的必需品，
+            // 而且它走 RBSAssertion（不动 FrontBoard 的场景状态机），比写 FBScene 设置安全。
+            if let pid = AevonAppInfo.pid(bundleID: bundleID) {
                 AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
             }
-            AevonLog.info("[窗口] \(bundleID) 窗口化成功")
+            AevonLog.info("[窗口] \(bundleID) 窗口化成功（单窗模式）（AevonSingleWindowV105）")
             completion?(true)
         }
     }
 
-    /// 悬浮球入口：必要时先把目标 App 的场景拉起来，再开窗。
+    /// 悬浮球 / 圆盘入口：必要时先把目标 App 的场景拉起来，再开窗。
     ///
     /// `launchApplicationWithIdentifier:suspended:` 只在 SpringBoard 里存在，
     /// 拉起的是「挂起态」，不会整屏盖住桌面；随后由 AevonSceneHelper 把场景推前台
     /// 并挂到我们的浮窗上。全程任何一步失败都只记日志，不做强制解包。
     static func launchAndOpen(bundleID: String,
-                              slot: AevonSnapSlot = .free,
                               completion: ((Bool) -> Void)? = nil) {
         guard AevonPrefs.bool("Enabled", default: false) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
@@ -132,8 +150,7 @@ enum AevonWindowManager {
             return
         }
         if isWindowed(bundleID) {
-            AevonLog.info("[窗口] \(bundleID) 已在窗口中，改为吸附并置顶")
-            windows[bundleID]?.snap(to: slot)
+            AevonLog.info("[窗口] \(bundleID) 已在浮窗里，置顶（单窗模式）")
             bringToFront(bundleID: bundleID)
             completion?(true)
             return
@@ -141,7 +158,7 @@ enum AevonWindowManager {
 
         if AevonSceneHelper.scene(for: bundleID) != nil {
             AevonLog.info("[窗口] \(bundleID) 已有场景，直接开窗")
-            open(bundleID: bundleID, sceneID: nil, slot: slot, completion: completion)
+            open(bundleID: bundleID, sceneID: nil, completion: completion)
             return
         }
 
@@ -167,48 +184,22 @@ enum AevonWindowManager {
             if AevonSceneHelper.scene(for: bundleID) != nil {
                 timer.invalidate()
                 AevonLog.info("[窗口] \(bundleID) 场景已就绪（等待 \(attempts) 次）")
-                open(bundleID: bundleID, sceneID: nil, slot: slot, completion: completion)
+                open(bundleID: bundleID, sceneID: nil, completion: completion)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    /// 左右分屏：先开左边，成功后再开右边并吸附。
-    ///
-    /// 两个 App 依次拉起而不是并行，是因为 `launchApplicationWithIdentifier:suspended:`
-    /// 在同一个 tick 里连发两次时，第二个的进程恢复经常赶不上场景创建，容易只有一个窗。
-    static func openSplit(left: String, right: String) {
-        guard left != right else {
-            AevonLog.warn("[分屏] 两侧选了同一个 App，忽略")
-            return
-        }
-        AevonLog.info("[分屏] 左右分屏：\(left) ｜ \(right)（AevonSplitFlow）")
-        launchAndOpen(bundleID: left, slot: .left) { ok in
-            guard ok else {
-                AevonLog.warn("[分屏] 左侧 \(left) 开窗失败，放弃本次分屏")
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                launchAndOpen(bundleID: right, slot: .right) { rightOK in
-                    if rightOK {
-                        AevonLog.info("[分屏] 左右分屏已完成")
-                    } else {
-                        AevonLog.warn("[分屏] 右侧 \(right) 开窗失败，左侧保留")
-                    }
-                }
-            }
-        }
-    }
-
     /// 关窗并清理全部相关状态。
     ///
-    /// `releaseOnly = true`（V0.1.4，AevonIconLaunchV104）：只释放浮窗与前台保持，
+    /// `releaseOnly = true`（AevonIconLaunchV104）：只释放浮窗与前台保持，
     /// **不写场景的 foreground 标记**。用于「用户点桌面图标要把这个 App 全屏拉起」——
     /// 那一刻 FrontBoard 正在自己接管这个场景，我们再往里写一次 settings 就是抢
     /// 同一份状态机（归档(12)/(13) 的 SIGTRAP 来源），所以这一步只放手、不置位。
     static func close(bundleID: String, releaseOnly: Bool = false) {
-        guard let windowView = windows.removeValue(forKey: bundleID) else { return }
-        if let index = order.firstIndex(of: bundleID) { order.remove(at: index) }
+        guard let windowView = currentView, currentBundleID == bundleID else { return }
+        currentView = nil
+        currentBundleID = nil
         windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
         if !releaseOnly {
@@ -224,8 +215,7 @@ enum AevonWindowManager {
     /// V0.1.4（AevonIconLaunchV104）：桌面图标被点、要把这个 App 全屏拉起时调用。
     ///
     /// 「浮窗开着设置 → 回桌面点设置图标 → 自动注销」的唯一稳定解法是**先松手**：
-    /// 释放 presenter、摘掉浮窗、停前台保持，再登记 5 秒交接期（期间 hook 一律不替
-    /// 这个场景写 foreground）。系统的全屏启动走它自己的路径，我们完全不参与。
+    /// 释放 presenter、摘掉浮窗、停前台保持，再登记 5 秒交接期。
     static func releaseForFullscreenLaunch(bundleID: String) {
         guard !bundleID.isEmpty else { return }
         AevonForegroundManager.shared.beginFullscreenHandoff(bundleID: bundleID)
@@ -235,8 +225,8 @@ enum AevonWindowManager {
     }
 
     static func closeAll() {
-        for bundleID in Array(windows.keys) {
-            close(bundleID: bundleID)
+        if let identifier = openBundleID {
+            close(bundleID: identifier)
         }
     }
 
@@ -251,8 +241,6 @@ enum AevonWindowManager {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastLayerRefresh >= 0.3 else { return }
         lastLayerRefresh = now
-        for (_, windowView) in windows {
-            windowView.setNeedsLayout()
-        }
+        currentView?.setNeedsLayout()
     }
 }

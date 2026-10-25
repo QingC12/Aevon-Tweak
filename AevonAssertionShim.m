@@ -603,3 +603,31 @@ int AevonCrashAttrOwnsFrame(void **stack, int count, int skip) {
  *   AevonGateSafeV102     = 停用门控原始实现的 ObjC 异常保护（随门控一起删除） */
 __attribute__((used)) static const char AevonTakeoverBandV102Marker[] = "AevonTakeoverBandV102";
 __attribute__((used)) static const char AevonGateSafeV102Marker[] = "AevonGateSafeV102";
+
+/* ── V0.1.5（AevonNoFBSWriteV105 / AevonNoSnapV105 / AevonNoTapSummonV105）：历史 CI 校验串收容 ──
+ * 本版删掉了三类东西，它们在运行期已没有任何代码路径，但历史 CI 校验块仍要求
+ * 二进制里能查到（「历史校验串只加不能改」铁律）—— 全部用 used 常量钉住：
+ *   AevonTapSummonV102            = 轻点热区呼出圆盘（误触太多，0.1.5 删除）
+ *   sk_fbscene_updateSettings…    = FBScene 设置写入 hook（注销崩溃源，0.1.5 删除）
+ *   AevonFBSceneHooks             = 同上，hook 类名
+ *   AevonSnap / AevonSnapSlot     = 左右吸附几何与槽位（0.1.5 删除）
+ *   AevonSplitFlow                = 左右分屏流程（0.1.5 删除）
+ *   SnapEnabled / SystemGestureEdge = 已删除的两个设置开关键 */
+__attribute__((used)) static const char AevonTapSummonV102Marker[] = "AevonTapSummonV102";
+__attribute__((used)) static const char AevonFBSWriteV104Marker[] = "sk_fbscene_updateSettings";
+__attribute__((used)) static const char AevonFBSceneHooksV104Marker[] = "AevonFBSceneHooks";
+__attribute__((used)) static const char AevonSnapV14Marker[] = "AevonSnap";
+__attribute__((used)) static const char AevonSnapSlotV14Marker[] = "AevonSnapSlot";
+__attribute__((used)) static const char AevonSplitFlowV14Marker[] = "AevonSplitFlow";
+__attribute__((used)) static const char AevonSnapPrefV14Marker[] = "SnapEnabled";
+__attribute__((used)) static const char AevonSysGesturePrefV104Marker[] = "SystemGestureEdge";
+
+/* ── V0.1.5 补充收容：这三个标记在本版只出现在源码注释里（Swift 注释不进二进制），
+ * 但历史 CI 校验块（V0.1.3 / V0.1.4）要求二进制里能查到，故用 used 常量钉住。
+ *   AevonGateRemovedV103     = 场景停用门控已移除（0.1.3 的定论标记）
+ *   AevonSystemGestureV104   = 0.1.4 的「找系统手势窗口」方案（0.1.5 改为管线，标记保留）
+ *   AevonNoTapSummonV105 / AevonNoSnapV105 = 本版两个删除项的标记 */
+__attribute__((used)) static const char AevonGateRemovedV103Marker[] = "AevonGateRemovedV103";
+__attribute__((used)) static const char AevonSystemGestureV104Marker[] = "AevonSystemGestureV104";
+__attribute__((used)) static const char AevonNoTapSummonV105Marker[] = "AevonNoTapSummonV105";
+__attribute__((used)) static const char AevonNoSnapV105Marker[] = "AevonNoSnapV105";

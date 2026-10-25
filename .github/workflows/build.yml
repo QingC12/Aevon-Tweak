@@ -134,13 +134,18 @@ jobs:
 
           # V0.0.14：真分屏 —— 吸附几何、左右分屏流程必须都在
           # 注意：只能查 ASCII 符号名。中文日志字面量是 UTF-8，`strings` 只输出可打印 ASCII，查不到。
-          strings "$DYLIB" | grep -q 'AevonSnap' \
-            || { echo "::error::主插件缺少吸附几何（AevonSnap）"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonSnapSlot' \
-            || { echo "::error::主插件缺少吸附槽位类型（AevonSnapSlot）"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonSplitFlow' \
-            || { echo "::error::主插件缺少左右分屏流程（AevonSplitFlow）"; exit 1; }
-          echo "分屏校验: 吸附几何 + 左右分屏流程 已编入"
+          # V0.1.5（AevonNoSnapV105）：左右吸附 + 左右分屏已整体删除（单窗模式下不存在并排），
+          # 这三条历史串只由 AevonAssertionShim.m 的 used 常量收容，二进制里仍可查到，
+          # 但源码里必须一条都不剩 —— 下面的反回退检查逐条盯住。
+          for s in AevonSnap AevonSnapSlot AevonSplitFlow; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::历史收容串 $s 丢了（AevonAssertionShim.m used 常量被删？）"; exit 1; }
+          done
+          if grep -rn 'AevonSnapSlot\|openSplit\|SnapEnabled' "$GITHUB_WORKSPACE/Sources" "$GITHUB_WORKSPACE/AevonPrefs" 2>/dev/null | grep -q .; then
+            echo "::error::吸附/分屏代码回退（V0.1.5 已删除：单窗不再需要并排吸附）"
+            exit 1
+          fi
+          echo "单窗校验: 吸附/分屏代码 无残留（历史串仅由 used 常量收容）"
 
           # V0.1.1（AevonRestoreDefaultV101 / AevonZonePriorityV101）：
           #   ① 双击换档（小窗/大窗）与「顶部放大」吸附移除 —— 大窗/近全屏后角手柄不可达；
@@ -198,15 +203,28 @@ jobs:
           done
           strings "$DYLIB" | grep -q 'iconManager:launchIconForIconView:withActions:' \
             || { echo "::error::桌面图标启动委托选择子未编入（AevonIconLaunchV104）"; exit 1; }
-          strings "$DYLIB" | grep -q 'UIScreenEdgePanGestureRecognizer' \
-            || { echo "::error::系统手势通道未编入（缺 UIScreenEdgePanGestureRecognizer）"; exit 1; }
-          # 反回退：FBScene 拦截必须保留「先看 foreground 再决定动不动」的透传闸，
-          # 否则会重新变成「无条件替换 settings 对象」—— 那正是 SIGTRAP 的来源。
-          # 注意：校验步在 verify/ 目录里跑，源码要用 $GITHUB_WORKSPACE 绝对路径。
-          grep -n 'sk_fbscene_updateSettings' -A 26 "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
-            | grep -q 'shouldKeepForeground' \
-            || { echo "::error::FBScene 拦截丢了透传闸（会重演安全模式崩溃）"; exit 1; }
-          echo "V0.1.4 校验: 图标启动先释放浮窗 + 系统手势右缘接管 + FBScene 透传闸 已编入"
+          # V0.1.5：FBScene 设置写入 hook 已整体删除（归档(14) 崩溃栈钉死在我方那次 KVC 写入）。
+          # 反回退只盯「安装点」这一处特征串，注释里提到旧类名不算回退。
+          if grep -rn 'replacementClass: AevonFBSceneHooks' "$GITHUB_WORKSPACE/Sources" 2>/dev/null | grep -q .; then
+            echo "::error::FBScene 写入 hook 被装回去了（V0.1.5 已删除：它是注销/SIGTRAP 的崩溃源）"
+            exit 1
+          fi
+          echo "V0.1.4/V0.1.5 校验: 图标启动先释放浮窗 + 系统手势管线 + FBScene 写入已彻底移除"
+
+          # V0.1.5（归档(14) 修复）：
+          # ①注销根治 —— 不再向 FBScene 写任何 settings（AevonNoFBSWriteV105），
+          #   前台补偿改为有限 8 次（AevonSoftKeepAliveV105）；
+          # ②抖音跟手 —— 右缘改走 SpringBoard 系统手势管线
+          #   （addGestureRecognizer:toDisplayWithIdentity: + AevonGestureBandView）；
+          # ③单浮窗（AevonSingleWindowV105）＋ 轻点呼出删除（AevonNoTapSummonV105）
+          #   ＋ 左右吸附删除（AevonNoSnapV105）。
+          for s in AevonNoFBSWriteV105 AevonSoftKeepAliveV105 AevonSystemGestureV105 AevonGestureBandView AevonSingleWindowV105 AevonNoTapSummonV105 AevonNoSnapV105; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.5 标记 $s 未编入"; exit 1; }
+          done
+          strings "$DYLIB" | grep -q 'addGestureRecognizer:toDisplayWithIdentity:' \
+            || { echo "::error::系统手势管线登记选择子未编入（AevonSystemGestureV105）"; exit 1; }
+          echo "V0.1.5 校验: 不写场景设置 + 有限前台补偿 + 系统手势管线 + 单浮窗 + 轻点呼出/吸附已删"
 
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \

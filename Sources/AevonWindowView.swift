@@ -95,28 +95,17 @@ final class AevonWindowView: UIView {
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
 
-    /// 当前吸附槽位（自由位置 / 左半屏 / 右半屏）
-    private(set) var currentSlot: AevonSnapSlot = .free
-
-    init(sceneHost: AevonSceneHost, bundleID: String, title: String, slot: AevonSnapSlot = .free) {
+    init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
         self.sceneHost = sceneHost
         super.init(frame: CGRect.zero)
 
-        let screen = UIScreen.main.bounds
-        let aspect = AevonWindowView.contentAspect
-
-        // 分屏时用吸附槽位算位置；否则恢复 Stheno 式全局记忆（medusaFrameLast 方案）
+        // V0.1.5（AevonNoSnapV105）：左右吸附与左右分屏一起移除 ——
+        // 单窗模式下不存在并排，吸附只会让窗在松手瞬间突然变形。
+        // 几何一律走 Stheno 式全局记忆（medusaFrameLast 方案）。
         var sizeSource = "默认尺寸"
-        let restored: CGRect
-        if slot != .free {
-            restored = AevonSnap.frame(for: slot)
-            currentSlot = slot
-            sizeSource = "吸附\(AevonSnap.describe(slot))"
-        } else {
-            restored = AevonWindowView.rememberedFrame(fallback: AevonWindowView.defaultFrame())
-            if restored != AevonWindowView.defaultFrame() { sizeSource = "已恢复上次几何（全局记忆）" }
-        }
+        let restored = AevonWindowView.rememberedFrame(fallback: AevonWindowView.defaultFrame())
+        if restored != AevonWindowView.defaultFrame() { sizeSource = "已恢复上次几何（全局记忆）" }
 
         frame = CGRect(x: restored.minX, y: restored.minY,
                        width: restored.width, height: restored.height)
@@ -174,7 +163,7 @@ final class AevonWindowView: UIView {
         }
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏 + 外侧手势区，比例锁定屏幕 \(String(format: "%.3f", aspect))，"
+            + "（无标题栏 + 外侧手势区，比例锁定屏幕 \(String(format: "%.3f", AevonWindowView.contentAspect))，"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
@@ -387,11 +376,7 @@ final class AevonWindowView: UIView {
         switch grab {
         case .bar:
             applyBarMove(to: layerPoint)
-            if commit, AevonPrefs.bool("SnapEnabled", default: true),
-               let slot = AevonSnap.slot(for: frame) {
-                snap(to: slot)
-                return
-            }
+            // V0.1.5（AevonNoSnapV105）：贴边吸附已移除，松手就是松手，几何原样落盘。
             persistFrame()
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
@@ -438,7 +423,6 @@ final class AevonWindowView: UIView {
         guard !isLiveResizing else { return }
         let target = AevonWindowView.defaultFrame()
         guard target.width >= AevonWindowView.minContentWidth, target.height > 0 else { return }
-        currentSlot = .free
         UIView.animate(withDuration: 0.22,
                        delay: 0,
                        options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
@@ -462,13 +446,7 @@ final class AevonWindowView: UIView {
             applyBarMove(to: point)
         case .ended, .cancelled, .failed:
             applyBarMove(to: point)
-            // 松手时若贴着屏幕左右边缘，就吸附成左半屏 / 右半屏（V0.1.1 起顶部只摆放不放大）。
-            if gesture.state == .ended,
-               AevonPrefs.bool("SnapEnabled", default: true),
-               let slot = AevonSnap.slot(for: frame) {
-                snap(to: slot)
-                return
-            }
+            // V0.1.5（AevonNoSnapV105）：左右吸附移除 —— 松手就停在手指放下的位置。
             persistFrame()
         default:
             break
@@ -619,34 +597,7 @@ final class AevonWindowView: UIView {
         restoreDefaultFrame()
     }
 
-    // MARK: - 吸附
-
-    /// 吸附到指定槽位。分屏流程（选两个 App 自动并排）和拖动吸附都走这里。
-    func snap(to slot: AevonSnapSlot) {
-        guard slot != .free, !isLiveResizing else { return }
-        let target = AevonSnap.frame(for: slot)
-        guard target.width >= AevonSnap.minContentWidth, target.height > 0 else { return }
-
-        // 目标与当前几乎一致就不折腾了（拖动松手时已经贴在位置上的情况）
-        if abs(target.minX - frame.minX) < 0.5,
-           abs(target.minY - frame.minY) < 0.5,
-           abs(target.width - frame.width) < 0.5 {
-            currentSlot = slot
-            persistFrame()
-            return
-        }
-
-        currentSlot = slot
-        UIView.animate(withDuration: 0.22,
-                       delay: 0,
-                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
-            self.frame = target
-        } completion: { _ in
-            self.setNeedsLayout()
-            self.persistFrame()
-        }
-        AevonLog.info("[窗口] 吸附到\(AevonSnap.describe(slot)) \(Int(target.width))x\(Int(target.height))")
-    }
+    // MARK: - 顶层置顶
 
     /// 把窗口提到最前（面板里的「已开窗口」点名称时用）。
     func bringToFront() {

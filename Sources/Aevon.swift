@@ -66,21 +66,16 @@ private func installExperimentalHooks() {
     }
 
     /*
-     * V0.1.3（AevonGateRemovedV103）：**场景停用门控已整体删除**。
-     * 归档(12)/(13) 两次真机实锤它是「安全模式 / 自动注销」的唯一来源：
-     * 「浮窗开着设置 → 桌面点设置图标」的转正过渡期，拦截停用原因后 FrontBoard
-     * 内部断言崩溃（SIGTRAP）。0.1.2 用 ObjC 异常保护包裹原始实现后依旧崩 ——
-     * 因为炸点不在调用链，而在 FBS 自己的状态机不变量。这条路走不通，停止对赌。
+     * V0.1.5（AevonNoFBSWriteV105）：**FBScene updateSettings 的写入 hook 已整体删除**。
+     * 归档(14) 的崩溃栈把我方位置钉死在「FrontBoard 调进来 → 我们 KVC 写 foreground →
+     * FBS 断言」这一链上，四个版本反复栽在这里。既然炸点就是我们自己那一次写入，
+     * 最稳的修法就是**不写**：窗口化 App 的存活交给 ①有限次前台补偿 + ②RBSAssertion
+     * 进程保活，两条都不碰 FrontBoard 的场景状态机。
      *
-     * 下面保留的都是**不碰停用原因**的安全 hook：只改 foreground 标记与激活状态，
-     * 让窗口化场景保持渲染与输入路由，不参与 deactivation 状态机。
+     * 下面保留的都是只读 / 只影响渲染层的安全 hook。
      */
-    // ① FBScene 设置更新：登记过的窗口化场景强制 foreground=true
-    AevonSwizzle.install(targetClassName: "FBScene",
-                         original: Selector(("updateSettings:withTransitionContext:completion:")),
-                         replacementClass: AevonFBSceneHooks.self,
-                         replacement: #selector(AevonFBSceneHooks.sk_fbscene_updateSettings(_:withTransitionContext:completion:)))
     // ④ 场景宿主激活状态组件：不让系统把窗口化场景的 foreground 拉回 false
+    //    （iOS 17.3.1 上该类已不存在，安装会被跳过并记一条日志，保留只为兼容旧系统）
     AevonSwizzle.install(targetClassName: "_UISceneHostingActivationStateHostComponent",
                          original: Selector(("setForeground:")),
                          replacementClass: AevonSceneHostingActivationHooks.self,
@@ -90,7 +85,7 @@ private func installExperimentalHooks() {
                          original: Selector(("_setLayers:")),
                          replacementClass: AevonSceneLayerManagerHooks.self,
                          replacement: #selector(AevonSceneLayerManagerHooks.sk_fbslm_setLayers(_:)))
-    AevonLog.info("[启动] 已安装窗口化场景保障 hook（无停用门控，AevonGateRemovedV103）")
+    AevonLog.info("[启动] 已安装渲染层 hook（未写任何场景设置，AevonNoFBSWriteV105）")
 
     /*
      * ⑥ V0.1.4（AevonIconLaunchV104）：桌面图标启动 → 先把浮窗交还系统。
@@ -120,14 +115,14 @@ private func installExperimentalHooks() {
     if iconLaunchHooked {
         AevonLog.info("[启动] 已安装桌面图标启动 hook（先释放浮窗，再让系统全屏拉起）（AevonIconLaunchV104）")
     } else {
-        AevonLog.warn("[启动] 桌面图标启动 hook 未安装（找不到启动委托），本次只靠 FBScene 透传保护（AevonIconLaunchV104）")
+        AevonLog.warn("[启动] 桌面图标启动 hook 未安装（找不到启动委托）；本版已不再写场景设置，注销风险随之消失（AevonIconLaunchV104 AevonNoFBSWriteV105）")
     }
 
     /*
-     * ⑦ V0.1.4（AevonSystemGestureV104）：全屏 App 内的右缘改由系统手势窗口接管。
-     *    原因见 AevonSystemGestureV104 头注释：App 的触摸由 backboardd 直投，
-     *    SpringBoard 侧丢事件不影响 App，只有「从触摸落下那一刻就归 SpringBoard」
-     *    才能让抖音既不翻页也不拖进度条。
+     * ⑦ V0.1.4 → V0.1.5（AevonSystemGestureV105）：全屏 App 内的右缘改由
+     *    **SpringBoard 系统手势管线**接管（`SBMainDisplaySystemGestureManager
+     *    -addGestureRecognizer:toDisplayWithIdentity:`，ScreenCore 同款）。
+     *    0.1.4 找 `_UISystemGestureWindow` 的路已被归档(14) 的窗口清单证伪。
      */
-    AevonSystemGestureV104.shared.install()
+    AevonSystemGestureV105.shared.install()
 }

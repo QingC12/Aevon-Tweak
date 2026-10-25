@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.1.4（arm64e / roothide）。本页只放开关；触发条调整、圆盘 App 编辑等细节都在「细节调整」二级页。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑或轻点呼出圆盘 → 点图标开浮窗，按住圆心 1 秒切旋转。全屏 App 内从右边缘向左滑由系统手势接管（App 不会跟着动）。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.5（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。全屏 App 内从右边缘向左滑呼出圆盘（走系统手势管线，App 不会跟着动）。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -34,31 +34,7 @@
 			<key>key</key>
 			<string>EdgeGestureEnabled</string>
 			<key>label</key>
-			<string>右侧边缘左滑呼出圆盘（主入口）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>SystemGestureEdge</string>
-			<key>label</key>
-			<string>全屏 App 内由系统手势接管右缘（App 不会跟手）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>KeepAlive</string>
-			<key>label</key>
-			<string>窗口保活（保持前台）</string>
+			<string>边缘左滑呼出圆盘（热区 + 全屏 App 右缘）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -70,19 +46,7 @@
 			<key>key</key>
 			<string>TouchEnabled</string>
 			<key>label</key>
-			<string>浮窗内可直接触摸操作（关掉=内容不接收触摸，防止点穿到下面的 App。窗口拖动 / 吸附 / 关闭 / 缩放照常，改动立即生效）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>SnapEnabled</string>
-			<key>label</key>
-			<string>拖到屏幕边缘自动吸附（左右半屏）</string>
+			<string>浮窗内可直接触摸操作（关掉=内容不接收触摸，防止点穿到下面的 App。窗口拖动 / 关闭 / 缩放照常，改动立即生效）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -119,18 +83,6 @@
 			<string>LogEnabled</string>
 			<key>label</key>
 			<string>写日志文件（/var/mobile/Aevon.log）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>ForceForeground</string>
-			<key>label</key>
-			<string>强制前台保持（实验）</string>
 		</dict>
 		<dict>
 			<key>cell</key>

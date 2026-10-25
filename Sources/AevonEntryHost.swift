@@ -92,6 +92,19 @@ enum AevonEntryHost {
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
 
+    /// V0.1.5（AevonSystemGestureV105）：把「右缘接管带」挂到入口容器最上层。
+    ///
+    /// 挂在**容器**里而不是窗口：容器会搬进 App 画面容器
+    /// （`SBDeviceApplicationSceneViewController.view`），带子跟着走，全屏 App 上一样在。
+    /// 容器还没创建时返回 false，调用方自己重试。
+    static func attachOverlay(_ view: UIView) -> Bool {
+        guard let container = container else { return false }
+        view.frame = container.bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(view)
+        return true
+    }
+
     /// 该点是否落在某个已开浮窗上（V0.0.36 引入，V0.0.37 扩展到外侧手势区）。
     /// 入口探针据此区分「摸浮窗」与「摸边缘热区」：浮窗和入口共用一个窗口之后，
     /// 不加这道判断，浮窗压住热区时拖浮窗就会误呼圆盘。

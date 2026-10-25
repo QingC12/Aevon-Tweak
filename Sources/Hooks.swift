@@ -47,48 +47,30 @@ import UIKit
 // 历史 CI 校验串（AevonDeactivationGateV37）由 AevonAssertionShim.m 的 used 常量收容，
 // 二进制里仍能查到，但运行期已无任何代码路径。
 
-// MARK: - FBScene：已窗口化场景强制前台
-
-@objc final class AevonFBSceneHooks: NSObject {
-    @objc func sk_fbscene_updateSettings(_ settings: Any,
-                                         withTransitionContext ctx: Any?,
-                                         completion: Any?) {
-        AevonTrace.once("fbscene.update", "FBScene updateSettings 首次调用")
-        var finalSettings: Any = settings
-        let identifier = AevonFBSceneHooks.sceneIdentifier(of: self)
-
-        /*
-         * V0.1.4（AevonIconLaunchV104）：这里原来无条件「把 settings 换成自己的
-         * mutableCopy 再写 foreground=true」。归档(12)/(13) 与 Aevon(72) 的崩溃栈
-         * 指向的就是这一步：FrontBoard 调进来 → 我们的 hook → Foundation（KVC 写属性）
-         * → FrontBoardServices 内部断言（SIGTRAP，@try 兜不住）。
-         *
-         * 现在的三条约束，任何一条不满足就**原样透传原始对象**：
-         *   ① 交接期（用户点了桌面图标要把这个 App 全屏拉起）一律不碰；
-         *   ② 系统这次本来就给的是 foreground=true —— 我们没有任何要改的，不换对象；
-         *   ③ 只有「登记在册 + 当前是 false」才补一次 true。
-         * 换成别的对象交给 FrontBoard 本身就有风险（它可能按对象身份/内部 diff 判状态），
-         * 能不换就不换。
-         */
-        if let settingsObject = settings as? NSObject,
-           AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
-           AevonRuntime.bool(settingsObject, key: "foreground") != true,
-           AevonRuntime.setBool(settingsObject, key: "foreground", true) {
-            finalSettings = settingsObject
-        }
-
-        AevonRuntime.sendVoid(self,
-                           Selector(("sk_fbscene_updateSettings:withTransitionContext:completion:")),
-                           finalSettings, ctx, completion)
-    }
-
-    static func sceneIdentifier(of scene: AnyObject) -> String {
-        if let identifier = AevonRuntime.send(scene, Selector(("identifier"))) as? String {
-            return identifier
-        }
-        return AevonRuntime.ivarString(scene, "_identifier") ?? ""
-    }
-}
+// MARK: - FBScene 设置写入：V0.1.5 整体移除（AevonNoFBSWriteV105）
+//
+// 四版（0.1.1 / 0.1.2 / 0.1.3 / 0.1.4）都在这里栽同一个跟头，归档(14) 的崩溃栈终于把
+// 归属钉死在我方：
+//
+//     0  AevonBacktrace
+//     1  Aevon 崩溃捕获
+//     3  FrontBoardServices          ← 断言
+//     5  Foundation（KVC 写属性）
+//     6  Aevon  ← 「写 foreground」这一步
+//     7  Aevon
+//     8  Aevon
+//     9  FrontBoard（FBScene updateSettings 调用进来）
+//
+// 也就是说：不是「我们拦系统」拦坏的，是**我们自己在 FrontBoard 处理场景设置的过程中
+// 改了它传进来的对象**。0.1.4 已经努力做到「本来前台就原样透传」，但只要那条路径上
+// 还有一次 `setValue:forKey:`，转正过渡期就仍有机会撞 FBS 的不变量（SIGTRAP，@trace 兜不住）。
+//
+// 结论：这条路彻底放弃。窗口化 App 的存活改由两条**不碰场景状态机**的手段承担：
+//   ① `AevonSceneHelper.startKeepAlive`：开窗后有限次（8 次）补前台，之后不再写；
+//   ② `AevonAssertionShim.acquireKeepAlive`：RBSAssertion 进程保活（单窗恒开）。
+//
+// 历史校验串（sk_fbscene_updateSettings / AevonFBSceneHooks）由 AevonAssertionShim.m 的
+// used 常量收容，二进制里仍能查到，但运行期已无任何代码路径。
 
 // MARK: - UIMutableApplicationSceneSettings：旧路径停用拦截（V0.1.3 移除）
 //
