@@ -41,6 +41,16 @@ import QuartzCore
 final class AevonGestureBandView: UIView {
     /// 右缘带宽度（pt）。宁可窄：带越宽，带内点不到的东西越多。
     static let bandWidth: CGFloat = 20
+    /// 起手窗（pt，V0.1.10 / AevonSystemGestureV110）。
+    ///
+    /// Aevon(77) 日志把「偶尔触发抖音」的坐标抓到了：真正想呼圆盘的那几次，手指落点是
+    /// **x=386 / 391 / 397 / 402**（距右缘 28~44pt），而 0.1.9 的接管窗口只有外侧 20pt（x≥410），
+    /// 于是这些触摸既没被热区接（热区 x≥412）、也没被系统手势带接 → 整条交给抖音，抖音就动了。
+    /// 所以「观察 / 起手」的横向窗口放到 44pt，但**视图命中仍只 20pt**：
+    /// 命中决定系统把哪些触摸判给本条带（关系到带内轻点能不能传给 App），
+    /// 而识别器早已在整屏触摸流里（日志 15 条任意坐标的「判据拒收」即证），
+    /// 放宽观察窗不会多抢一个点击，只会让「落点偏了 20pt」的左扫也能被我们接住。
+    static let beginSlack: CGFloat = 44
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         return AevonSystemGestureV105.shared.acceptsTouch(at: point)
@@ -72,6 +82,10 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     private var pipelineMissCount = 0
     /// V0.1.8：被「判据」拒收时的限频日志时间戳（区分「没进触摸流」与「进了但被我们拒」）。
     private var rejectLogAt: CFTimeInterval = 0
+    /// V0.1.10：这一根手指的落点。判向只看「落点是否在起手窗内」，
+    /// 不看 began 那一刻的位置 —— 因为那时手指已经滑进来 6~8pt 了，拿它判会把贴边起步的算成带外。
+    private var pendingStart: CGPoint = .zero
+    private var hasPendingStart = false
 
     /// 通道是否在生效（带视图已挂上 + 开关打开）。
     static var isInstalled: Bool {
@@ -150,7 +164,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         if installedLogged { return }
         installedLogged = true
         if pipelineRegistered {
-            AevonLog.info("[手势] 已登记进系统手势管线（带=右缘 \(Int(AevonGestureBandView.bandWidth))pt × 全屏高，只认向左横扫；App 收不到这条触摸）（AevonSystemGestureV105 AevonSystemGestureV106）")
+            AevonLog.info("[手势] 已登记进系统手势管线（接管缝=右缘 \(Int(AevonGestureBandView.bandWidth))pt / 起手窗=右缘 \(Int(AevonGestureBandView.beginSlack))pt × 全屏高，只认向左横扫；起手窗内左扫可接管，带内轻点仍按原缝宽保护）（AevonSystemGestureV105 AevonSystemGestureV106 AevonSystemGestureV110）")
         } else {
             AevonLog.warn("[手势] 系统手势管线登记失败（已知类名与工厂名都不匹配，不代表管线不存在；真实类名见下方 [探针] 行），右缘继续走 0.1.3 延迟接管老通道（AevonSystemGestureV105 AevonSystemGestureV106 AevonBandDeferV103）")
         }
@@ -276,18 +290,43 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
     /// 带视图的 `pointInside` 判据：只有这一小块参与命中测试，其余全屏放行。
     func acceptsTouch(at point: CGPoint) -> Bool {
+        return commonGatesOK() && insideHardBand(point)
+    }
+
+    /// V0.1.10：观察/起手窗的判据 —— 与命中判据共用前置闸门，只是横向窗口更宽。
+    /// 说明：命中（point(inside:)）仍走 `acceptsTouch` 的 20pt，避免把带内轻点让给本条带；
+    /// 这里宽出来的部分只用于「愿不愿意看这根触摸」。
+    func observesTouch(at point: CGPoint) -> Bool {
+        return commonGatesOK() && insideStartWindow(point)
+    }
+
+    /// 前置闸门（命中与观察共用）：开关、App 前台、圆盘未开、避开热区与浮窗。
+    private func commonGatesOK() -> Bool {
         guard AevonPrefs.bool("Enabled", default: false),
               AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
         // 只在全屏 App 前台时接管：桌面有自己的热区语义，不能被这条带盖住右侧图标
         guard AevonEntryHost.mountedInAppScene else { return false }
         // 圆盘已经开着：后续触摸归圆盘自己的通道
         guard AevonRingMenu.presented == nil else { return false }
+        return true
+    }
 
+    /// 外侧 20pt：系统判归属于本条带的那一缝（带内轻点不传 App，故收窄）。
+    private func insideHardBand(_ point: CGPoint) -> Bool {
         let screen = UIScreen.main.bounds
         guard point.x >= screen.width - AevonGestureBandView.bandWidth else { return false }
         // 底部热区是老入口，优先级更高（按住即接管 + 左滑呼出都在那儿）
         guard !AevonTriggerZone.rect(in: screen).contains(point) else { return false }
         // 浮窗（含外侧手柄）压住的地方交给浮窗，否则贴边浮窗拖不动
+        guard !AevonEntryHost.pointHitsFloatingWindow(at: point) else { return false }
+        return true
+    }
+
+    /// 外侧 44pt：可接管的落点范围（V0.1.10）。真机实测落点散布 28~44pt，20pt 的窗口漏掉一半。
+    private func insideStartWindow(_ point: CGPoint) -> Bool {
+        let screen = UIScreen.main.bounds
+        guard point.x >= screen.width - AevonGestureBandView.beginSlack else { return false }
+        guard !AevonTriggerZone.rect(in: screen).contains(point) else { return false }
         guard !AevonEntryHost.pointHitsFloatingWindow(at: point) else { return false }
         return true
     }
@@ -300,44 +339,56 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         let point = touch.location(in: nil)
         // V0.1.9：右缘附近的触摸无论收不收都必须留证据 —— 「右缘到底有没有进识别器」
         // 是这条通道存亡的唯一判据，上一版就是因为只记拒收总数、看不出坐标分布才绕了一圈。
-        let nearRightEdge = point.x >= UIScreen.main.bounds.width - AevonGestureBandView.bandWidth - 8
-        guard acceptsTouch(at: point) else {
+        let nearRightEdge = point.x >= UIScreen.main.bounds.width - AevonGestureBandView.beginSlack - 8
+        // V0.1.10：判向看落点，落点在这里记。
+        guard observesTouch(at: point) else {
             let now = CACurrentMediaTime()
             if nearRightEdge {
                 let zone = AevonTriggerZone.rect(in: UIScreen.main.bounds).contains(point)
                 let floating = AevonEntryHost.pointHitsFloatingWindow(at: point)
-                AevonLog.warn("[手势] 右缘触摸被拒 (x=\(Int(point.x)), y=\(Int(point.y))，App前台=\(AevonEntryHost.mountedInAppScene)，热区=\(zone)，浮窗=\(floating)，圆盘=\(AevonRingMenu.presented != nil))（AevonSystemGestureV109）")
+                AevonLog.warn("[手势] 右缘触摸被拒 (x=\(Int(point.x)), y=\(Int(point.y))，距右缘 \(Int(UIScreen.main.bounds.width - point.x))pt 起手窗外，App前台=\(AevonEntryHost.mountedInAppScene)，热区=\(zone)，浮窗=\(floating)，圆盘=\(AevonRingMenu.presented != nil))（AevonSystemGestureV110）")
             } else if now - rejectLogAt > 2.0 {
                 rejectLogAt = now
                 AevonLog.info("[手势] 识别器已收到触摸但判据拒收 (x=\(Int(point.x)), y=\(Int(point.y))，App前台=\(AevonEntryHost.mountedInAppScene)，圆盘开着=\(AevonRingMenu.presented != nil))（AevonSystemGestureV108）")
             }
             return false
         }
+        pendingStart = point
+        hasPendingStart = true
         touchPointer = 0
         pendingPointer = UInt(bitPattern: Unmanaged.passUnretained(touch).toOpaque())
         pointerDeadline = CACurrentMediaTime() + 12
         // V0.1.9：右缘命中**每次必记**，不再限频。
         // 上一版用 1.5 秒窗限频，结果最关键的那几次右缘触摸被自己的日志窗口藏掉了 ——
         // 取证纪律：事件发生时必记，宁可多几行，也不许让证据消失。
-        AevonLog.info("[手势] 系统手势管线拿到右缘触摸 (x=\(Int(point.x)), y=\(Int(point.y)))（AevonSystemGestureV105 AevonSystemGestureV109）")
+        // V0.1.10：连带记「距右缘多少 pt」，20pt 内是接管缝、20~44pt 是新增的起手窗。
+        let inset = Int(UIScreen.main.bounds.width - point.x)
+        let tier = inset <= Int(AevonGestureBandView.bandWidth) ? "接管缝" : "起手窗"
+        AevonLog.info("[手势] 系统手势管线拿到右缘触摸 (x=\(Int(point.x)), y=\(Int(point.y))，距右缘 \(inset)pt，落在\(tier))（AevonSystemGestureV105 AevonSystemGestureV110）")
         return true
     }
 
-    /// 只认向左横扫：上下滑（刷抖音信息流）与轻点都在这一步直接失败。
+    /// 只认从右缘起手的向左横扫：上下滑（刷抖音信息流）与轻点都在这一步直接失败。
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         // 没进系统手势管线时这条带只做「视图层观察」，不参与呼出 ——
         // 否则会和 0.1.3 的延迟接管老通道各呼一次圆盘。
         guard pipelineRegistered else { return false }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
         let translation = pan.translation(in: nil)
-        // V0.1.9：判据从「只要向左」收紧并提前到 8pt —— began 越早，App 的 began 被扣得越干净，
-        // 抖音那套横滑手势就越没有机会成立。1.2 倍纵横比是为了不把斜着刷信息流算成左扫。
-        let allowed = translation.x <= -8 && abs(translation.x) >= abs(translation.y) * 1.2
+        // V0.1.10：必须从右缘起手（落点在 44pt 内）。不看这一刻的位置 ——
+        // 手指滑进来以后 x 必然变小，拿它判会把「贴边起手」误判成带外。
+        let inset = hasPendingStart ? UIScreen.main.bounds.width - pendingStart.x : 999
+        let fromEdge = inset <= AevonGestureBandView.beginSlack
+        // 判据：向左、位移 ≥6pt、横纵比 ≥1.2（斜着刷信息流不算）。阈值从 8 收到 6，
+        // 是为了比 App 自己的横滑手势（一般 10pt 起）更早 began，把拦截点往前挪。
+        let directionOK = translation.x <= -6 && abs(translation.x) >= abs(translation.y) * 1.2
+        let allowed = fromEdge && directionOK
         let now = CACurrentMediaTime()
         if now - beginLogAt > 0.4 {
             beginLogAt = now
-            AevonLog.info("[手势] 判向 dx=\(Int(translation.x)) dy=\(Int(translation.y)) → \(allowed ? "收归圆盘" : "还给 App")（AevonSystemGestureV109）")
+            AevonLog.info("[手势] 判向 dx=\(Int(translation.x)) dy=\(Int(translation.y)) 起手距右缘 \(Int(inset))pt → \(allowed ? "收归圆盘" : (fromEdge ? "还给 App（方向不符）" : "还给 App（起手在带外）"))（AevonSystemGestureV110）")
         }
+        if !allowed { hasPendingStart = false }
         return allowed
     }
 
@@ -375,7 +426,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         case .began:
             touchPointer = pendingPointer
             pointerDeadline = CACurrentMediaTime() + 12
-            AevonLog.info("[手势] 识别器 began (x=\(Int(point.x)), y=\(Int(point.y))) → 呼出圆盘（AevonSystemGestureV109）")
+            AevonLog.info("[手势] 识别器 began (x=\(Int(point.x)), y=\(Int(point.y)), 起手距右缘 \(hasPendingStart ? Int(UIScreen.main.bounds.width - pendingStart.x) : -1)pt) → 呼出圆盘（AevonSystemGestureV109 AevonSystemGestureV110）")
             AevonEdgeEntry.triggerFromSystemGesture(point: point)
         case .changed:
             AevonRingMenu.presented?.remoteMoved(to: point, source: "systemgesture")
@@ -383,10 +434,12 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
             AevonRingMenu.presented?.remoteEnded(at: point, source: "systemgesture")
             touchPointer = 0
             pendingPointer = 0
+            hasPendingStart = false
         case .cancelled, .failed:
             AevonRingMenu.presented?.remoteCancelled(source: "systemgesture")
             touchPointer = 0
             pendingPointer = 0
+            hasPendingStart = false
         default:
             break
         }

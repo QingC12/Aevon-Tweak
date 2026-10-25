@@ -324,6 +324,27 @@ jobs:
             || { echo "::error::cancelsTouchesInView 又关掉了 —— 收下之后不会取消 App 那条触摸"; exit 1; }
           echo "V0.1.9 校验: 延迟/取消 App 触摸 + 判向提前 + 右缘取证每次必记"
 
+          # V0.1.10（Aevon(77) 日志）：
+          # 「偶尔触发抖音」的落点被抓到了：真正想呼盘的那几次在 x=386/391/397/402（距右缘 28~44pt）。
+          # 而 0.1.8 起系统手势管线一旦登记成功，0.1.3 老通道就整条让路（bandOwnedByPipeline），
+          # 老通道的接管带是 36pt、管线的窗口只有 20pt —— 20~36pt 中间成了一条**谁都不管的缝**，
+          # 36~44pt 更是彻底没人看。所以本版把管线的「起手窗」放到 44pt，
+          # 但视图命中仍只认 20pt（带内轻点照旧保护），判向改看落点而非 began 时的位置。
+          strings "$DYLIB" | grep -q 'AevonSystemGestureV110' \
+            || { echo "::error::V0.1.10 标记 AevonSystemGestureV110 未编入"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'static let beginSlack: CGFloat = 44' \
+            || { echo "::error::起手窗被删或改窄 —— 20~36pt 会重新变成谁都不管的缝（Aevon(77) 根因）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'func observesTouch' \
+            || { echo "::error::观察窗判据 observesTouch 被删（起手窗形同虚设）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'let fromEdge = inset <= AevonGestureBandView.beginSlack' \
+            || { echo "::error::判向不再校验落点（贴边起手会被当成带外）"; exit 1; }
+          grep -q '起手距右缘' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::V0.1.10 判向/began 取证文案被删"; exit 1; }
+          echo "V0.1.10 校验: 起手窗 44pt（命中仍 20pt）+ 判向看落点"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
