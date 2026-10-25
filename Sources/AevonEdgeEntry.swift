@@ -706,6 +706,12 @@ enum AevonEdgeEntry {
                               width: bandWidth, height: screen.height)
             let edgeEnabled = AevonPrefs.bool("EdgeGestureEnabled", default: true)
             let inZone = zone.contains(point)
+            // V0.1.8（AevonSystemGestureV108）：把「右缘真的来了触摸」这件事回报给系统手势通道，
+            // 让通道自己判断登记是否真的生效（它只在「识别器一次都没被问过」时才降级）。
+            // 必须放在 bandOwnedByPipeline 求值之前 —— 降级要能在这一次触摸就恢复老通道。
+            if appForeground, !inZone, band.contains(point) {
+                AevonSystemGestureV105.shared.noteBandTouchSeenByGlobalChannel(at: point)
+            }
             // V0.1.5（AevonSystemGestureV105）：系统手势管线已接管右缘时，这条带上的触摸
             // 从落下那一刻就归 SpringBoard 的识别器，全局通道不再登记候选 —— 否则同一根
             // 手指会被算两次（管线呼一次、延迟接管再呼一次）。

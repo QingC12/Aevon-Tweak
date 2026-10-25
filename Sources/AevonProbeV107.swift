@@ -282,7 +282,7 @@ enum AevonProbeV107 {
         let bottom = AevonPrefs.double("RingTriggerY", default: AevonTriggerZone.defaultBottomRatio)
         let width = AevonPrefs.double("RingTriggerWidth", default: AevonTriggerZone.defaultWidth)
         let height = AevonPrefs.double("RingTriggerHeight", default: AevonTriggerZone.defaultHeight)
-        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")")
+        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")\(AevonSystemGestureV105.ownsBand ? "·管线已接管" : "·管线未接管")")
     }
 
     // MARK: - 供手势通道复用（AevonSystemGestureV105 的兜底路径）

@@ -64,6 +64,13 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     private var pointerDeadline: CFTimeInterval = 0
     private var lastLogAt: CFTimeInterval = 0
     private var installedLogged = false
+    /// V0.1.8：识别器在触摸流里被问过多少次（`shouldReceiveTouch` 次数）。
+    /// 只要它真的挂进了系统手势环境，右缘落下时这里必然 > 0。
+    private var pipelineTouchCount = 0
+    /// V0.1.8：反证计数 —— 全局通道在右缘看到触摸，但识别器一次都没被问过。
+    private var pipelineMissCount = 0
+    /// V0.1.8：被「判据」拒收时的限频日志时间戳（区分「没进触摸流」与「进了但被我们拒」）。
+    private var rejectLogAt: CFTimeInterval = 0
 
     /// 通道是否在生效（带视图已挂上 + 开关打开）。
     static var isInstalled: Bool {
@@ -136,19 +143,32 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
     /// 把识别器登记进 SpringBoard 的系统手势管线。
     ///
-    /// 依据（同仓库 ScreenCore 逆向资料，真机可用）：
-    ///   `SBMainDisplaySystemGestureManager -addGestureRecognizer:toDisplayWithIdentity:`
-    ///   displayIdentity 取 `FBDisplayManager.sharedInstance.mainConfiguration.identity`。
+    /// V0.1.8（AevonSystemGestureV108）—— 真名由真机探针给出，不再靠猜：
+    ///   Aevon(75) 日志 P1 行把三个管理器一次列清：
+    ///     _UISystemGestureManager.sharedInstance          → [two:1 one:0 acq:0]
+    ///     SBMainDisplaySystemGestureManager.sharedInstance→ [two:0 one:0 acq:1]
+    ///     SBSystemGestureManager.mainDisplayManager       → [two:0 one:0 acq:1]
+    ///   也就是：**SpringBoard 自己那两个管理器都不支持两参登记**，唯一支持
+    ///   `addGestureRecognizer:toDisplayWithIdentity:` 的是 UIKit 私有的
+    ///   `_UISystemGestureManager`。0.1.5~0.1.7 三版都在 SB 的那两个类上找方法，
+    ///   所以每版都稳稳地打「登记失败」—— 不是管线不存在，是敲错了门。
+    ///   Stheno（ScreenCore）用的正是这个类：strings 里
+    ///   `_UISystemGestureManager` / `displayIdentity` /
+    ///   `addGestureRecognizer:toDisplayWithIdentity:` /
+    ///   `removeGestureRecognizer:fromDisplayWithIdentity:` 四条紧挨在一起。
+    ///
+    /// displayIdentity 首选 `FBDisplayManager.mainConfiguration.identity`，
+    /// 取不到再退到 `UIWindowScene.displayIdentity`（ScreenCore 走的就是窗口场景这条路）。
     /// 全部按「存在性检查 → 调用 → 失败静默」处理，取不到就返回 false，绝不硬赌。
     private static func registerWithSystemGesturePipeline(_ recognizer: UIGestureRecognizer) -> Bool {
         let identity = mainDisplayIdentity()
         if identity == nil {
             AevonLog.warn("[手势] 取不到主屏 displayIdentity（FBDisplayManager.mainConfiguration 路径不通），只能试单参重载（AevonSystemGestureV106）")
         }
-        // 不同系统版本上取管理器的类方法名不一样（sharedInstance / mainDisplayManager / …），
-        // 逐个试，全部取不到才放弃。
+        // 顺序即优先级：`_UISystemGestureManager` 实测支持两参登记（two:1），排第一；
+        // SB 的两个管理器留在后面只作兜底（它们可能支持 acquire 系列的别的登记口）。
         var managers: [AnyObject] = []
-        for className in ["SBMainDisplaySystemGestureManager", "SBSystemGestureManager"] {
+        for className in ["_UISystemGestureManager", "SBMainDisplaySystemGestureManager", "SBSystemGestureManager"] {
             for factory in ["sharedInstance", "mainDisplayManager", "sharedManager"] {
                 if let manager = AevonRuntime.sendClass(className, Selector((factory))),
                    !managers.contains(where: { $0 === manager }) {
@@ -169,6 +189,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
             if let identity = identity, manager.responds(to: twoArg) {
                 callVoid(manager, twoArg, first: recognizer, second: identity)
                 AevonLog.info("[手势] 已向 \(AevonRuntime.className(manager) ?? "?") 登记识别器（带 displayIdentity）（AevonSystemGestureV106）")
+                AevonLog.info("[手势] 系统手势管线登记成功：\(AevonRuntime.className(manager) ?? "?") × \(AevonRuntime.className(identity) ?? "?")（AevonSystemGestureV108）")
                 return true
             }
             let oneArg = Selector(("addGestureRecognizer:"))
@@ -204,15 +225,36 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    /// 主屏 displayIdentity（`FBDisplayManager.mainConfiguration.identity`）。
+    /// 主屏 displayIdentity。
+    ///
+    /// 首选 FrontBoard 的 `FBDisplayManager.sharedInstance.mainConfiguration.identity`
+    /// （Aevon(75) 日志里这条没报「取不到」，说明 17.3.1 上通）；
+    /// 取不到再按 ScreenCore 的路子退到窗口场景的 `displayIdentity`，
+    /// 最后退到 `UIScreen._displayIdentity`。三条都是对象 getter，可安全用 perform。
     private static func mainDisplayIdentity() -> AnyObject? {
-        guard let manager = AevonRuntime.sendClass("FBDisplayManager", Selector(("sharedInstance"))) else {
-            return nil
+        if let manager = AevonRuntime.sendClass("FBDisplayManager", Selector(("sharedInstance"))),
+           let configuration = AevonRuntime.send(manager, Selector(("mainConfiguration"))),
+           let identity = AevonRuntime.send(configuration, Selector(("identity"))) {
+            return identity
         }
-        guard let configuration = AevonRuntime.send(manager, Selector(("mainConfiguration"))) else {
-            return nil
+        // 兜底一：ScreenCore 用的就是窗口场景上的 displayIdentity
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for name in ["displayIdentity", "_displayIdentity"] {
+                if let identity = AevonRuntime.send(windowScene, Selector((name))) {
+                    return identity
+                }
+            }
+            if let screen = AevonRuntime.send(windowScene, Selector(("screen"))),
+               let identity = AevonRuntime.send(screen, Selector(("_displayIdentity"))) {
+                return identity
+            }
         }
-        return AevonRuntime.send(configuration, Selector(("identity")))
+        // 兜底二：主屏自己的私有 identity
+        if let identity = AevonRuntime.send(UIScreen.main, Selector(("_displayIdentity"))) {
+            return identity
+        }
+        return nil
     }
 
     // MARK: - 命中条件
@@ -237,8 +279,20 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldReceive touch: UITouch) -> Bool {
+        // V0.1.8：先计数再判条件 —— 我们要的证据是「识别器有没有进触摸流」，
+        // 而不是「这一次它有没有同意接收」。两个问题不能混为一个。
+        pipelineTouchCount += 1
         let point = touch.location(in: nil)
-        guard acceptsTouch(at: point) else { return false }
+        guard acceptsTouch(at: point) else {
+            // 进了触摸流却被我们自己的判据拒 —— 与「根本没进触摸流」是两件事，
+            // 日志里必须能分开，否则下一轮又只能猜。
+            let now = CACurrentMediaTime()
+            if now - rejectLogAt > 2.0 {
+                rejectLogAt = now
+                AevonLog.info("[手势] 识别器已收到触摸但判据拒收 (x=\(Int(point.x)), y=\(Int(point.y))，App前台=\(AevonEntryHost.mountedInAppScene)，圆盘开着=\(AevonRingMenu.presented != nil))（AevonSystemGestureV108）")
+            }
+            return false
+        }
         touchPointer = 0
         pendingPointer = UInt(bitPattern: Unmanaged.passUnretained(touch).toOpaque())
         pointerDeadline = CACurrentMediaTime() + 12
@@ -265,6 +319,26 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         return true
+    }
+
+    // MARK: - 管线有效性反证（V0.1.8）
+
+    /// 全局通道在右缘看到了一次触摸。
+    ///
+    /// 若此时识别器从没被 `shouldReceiveTouch` 问过，说明它「登记成功了，却没进触摸流」——
+    /// 系统手势环境不认这个识别器。反证两次就自动降级到 0.1.3 的延迟接管老通道：
+    /// 宁可回到旧行为（圆盘照常呼出、抖音仍会跟动），也不能让右缘呼出变成哑巴。
+    /// 这条判据只在「识别器一次都没被问过」时成立，所以系统手势真生效时不会误降级。
+    func noteBandTouchSeenByGlobalChannel(at point: CGPoint) {
+        guard pipelineRegistered, pipelineTouchCount == 0 else { return }
+        pipelineMissCount += 1
+        if pipelineMissCount == 1 || pipelineMissCount % 5 == 0 {
+            AevonLog.warn("[手势] 管线已登记但右缘触摸没进识别器 (x=\(Int(point.x)), y=\(Int(point.y))，反证 \(pipelineMissCount) 次)（AevonSystemGestureV108）")
+        }
+        if pipelineMissCount >= 2 {
+            pipelineRegistered = false
+            AevonLog.warn("[手势] 系统手势管线登记成功却拿不到触摸，已回退 0.1.3 延迟接管（圆盘仍可呼出；抖音跟手本版未解决）（AevonSystemGestureV108 AevonBandDeferV103）")
+        }
     }
 
     // MARK: - 手势分发
