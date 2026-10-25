@@ -412,7 +412,6 @@ enum AevonEntryHost {
     /// V0.2.7（AevonAppBlindDiagV207）：最近一次确认「铺满整屏」的前台 App bundleID。
     /// 给右缘诊断用：global 兜底呼盘时若该 App 的 App 侧毫无起手痕迹，日志点名它。
     static var currentForegroundBundleID = ""
-    private static var appSceneView: UIView?
 
     /// 宿主是否真的铺满整屏并且正在显示（用于区分 App 画面容器与切换器卡片 / 后台场景）。
     private static func coversScreen(_ view: UIView) -> Bool {
