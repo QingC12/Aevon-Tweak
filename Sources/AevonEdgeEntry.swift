@@ -114,6 +114,19 @@ enum AevonRightEdge {
         return AevonPrefs.bool("RightEdgeTakeover", default: true)
     }
 
+    /// V0.1.16（AevonRightEdgeShowBandV116）：把接管带的**真实范围**画出来（默认关）。
+    ///
+    /// 为什么这一版要加它：28pt 是一条手指几乎看不见的宽度，而 Aevon(83) 里三次实测落点
+    /// 全在 y=656~671 —— 那正是接管带最下沿、紧贴热区上边界的几像素。
+    /// 「落点到底在不在带里、带的上边界在哪、这次是不是我们接住的」在真机上全靠猜，
+    /// 猜错一次就要再跑一轮构建。打开这个开关后：
+    ///   · 带内会有淡色填充 + 左边界竖线 + 上边界虚线，宽度/高度就是实际生效值；
+    ///   · 每次接管成功整条带闪一下（0.3 秒），看得见「这次归我们」。
+    /// 它只是一层绘制：`isUserInteractionEnabled = false` 且不改 hitTest，绝不影响触摸。
+    static var showBand: Bool {
+        return AevonPrefs.bool("RightEdgeShowBand", default: false)
+    }
+
     static var width: CGFloat {
         let value = AevonPrefs.double("RightEdgeWidth", default: defaultWidth)
         return CGFloat(min(max(value, minWidth), maxWidth))
@@ -139,7 +152,7 @@ enum AevonRightEdge {
     }
 
     static func signature() -> String {
-        return "\(enabled ? 1 : 0)|\(Int(width.rounded()))|\(Int(heightPercent.rounded()))"
+        return "\(enabled ? 1 : 0)|\(Int(width.rounded()))|\(Int(heightPercent.rounded()))|\(showBand ? 1 : 0)"
     }
 }
 
@@ -494,10 +507,23 @@ enum AevonEdgeEntry {
     /// 指纹变了就重排触发条（幂等；没变什么都不做）
     static func checkTriggerZoneChange() {
         let signature = AevonTriggerZone.signature()
-        guard signature != zoneSignature else { return }
-        zoneSignature = signature
-        refreshLayoutIfNeeded(logChange: true)
-        syncGuardConfig()
+        if signature != zoneSignature {
+            zoneSignature = signature
+            refreshLayoutIfNeeded(logChange: true)
+            syncGuardConfig()
+        }
+        // V0.1.16（AevonBandIndicatorV116）：右缘带的宽度 / 高度 / 可视化开关变了要立刻重画 ——
+        // 否则用户得注销才能看到新范围，而这一版的重点恰恰是「让他能看见那条带」。
+        // 首次进来只记指纹，不刷日志（避免启动时多一行噪音）。
+        let bandSignatureNow = AevonRightEdge.signature()
+        if bandSignatureNow != rightEdgeSignature {
+            let isFirst = rightEdgeSignature.isEmpty
+            rightEdgeSignature = bandSignatureNow
+            AevonSystemGestureV105.refreshBandIndicator()
+            if !isFirst {
+                AevonLog.info("[右缘] 配置已更新：\(AevonRightEdge.summary(in: UIScreen.main.bounds))，可视化=\(AevonRightEdge.showBand ? "开" : "关")（AevonBandIndicatorV116）")
+            }
+        }
     }
 
     /// V0.1.2（AevonGuardCleanupV102）：guard.conf 文件写入器已删除 ——
@@ -514,6 +540,8 @@ enum AevonEdgeEntry {
 
     private static var zoneTimer: Timer?
     private static var zoneSignature = ""
+    /// V0.1.16：右缘带（宽度 / 高度 / 可视化开关）的指纹，用于 0.2 秒轮询里发现改动后重画
+    private static var rightEdgeSignature = ""
     private static var prefsObserverInstalled = false
 
     /// 统一触发入口（手势条 / 窗口层兜底 / 识别器都走这里），带 0.6 秒去重。
@@ -880,7 +908,9 @@ enum AevonEdgeEntry {
                         ownsTouch = true
                         swallowDeadline = CACurrentMediaTime() + pressLimit
                         rightEdgeCount += 1
-                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·按下即接管（App 连 began 都收不到；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113）")
+                        // V0.1.16：接管成功闪一下带（开关关着时是空操作）
+                        AevonSystemGestureV105.flashBandIndicator()
+                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·按下即接管（App 连 began 都收不到；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113 AevonRightEdgeShowBandV116）")
                         return
                     }
                     // V0.1.13（AevonBandTakeoverBeganV113）：起手窗改成**两态**，中间态全部作废。
@@ -1020,7 +1050,9 @@ enum AevonEdgeEntry {
             if !globalFired, dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * horizontalRatio {
                 globalFired = true
                 if touchID == rightEdgeTouchID {
-                    AevonLog.info("[右缘] 判向成立 → 呼出圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(globalStart.x)),\(Int(globalStart.y))）（AevonRightEdgeTakeoverV115）")
+                    // V0.1.16：判向成立再闪一次 —— 用户能分清「接住了」与「接住并呼出」
+                    AevonSystemGestureV105.flashBandIndicator()
+                    AevonLog.info("[右缘] 判向成立 → 呼出圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(globalStart.x)),\(Int(globalStart.y))）（AevonRightEdgeTakeoverV115 AevonRightEdgeShowBandV116）")
                 }
                 attemptTrigger("全局左滑 \(Int(dx))pt", source: "global")
             }

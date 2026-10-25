@@ -89,6 +89,64 @@ final class AevonGestureBandView: UIView {
         }
         super.touchesBegan(touches, with: event)
     }
+
+    // MARK: - 接管带可视化（V0.1.16 / AevonBandIndicatorV116）
+    //
+    // 只画、不接触摸：
+    //   · `draw` 里没有任何事件处理，`point(inside:)` / `hitTest` / `touchesBegan` 一行没动
+    //     → 触摸行为与 0.1.15 完全一致；
+    //   · 绘制内容全部来自 `AevonRightEdge.band(in:)` 这个纯函数，带宽/带高改了立即跟着变
+    //     （设置里 0.2 秒轮询发现指纹变了就 `refreshBandIndicator()`）。
+
+    /// 闪示到期时间。`draw` 里读它决定用「亮色」还是「常态色」。
+    private var flashUntil: CFTimeInterval = 0
+
+    /// 接管成功时让整条带闪一下（开关关着时什么都不做，绝不打扰）。
+    func flashBand() {
+        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
+        flashUntil = CACurrentMediaTime() + 0.26
+        setNeedsDisplay()
+        // 0.3 秒后重画回常态色。用 asyncAfter 而不是动画，就是为了「零状态、零依赖」。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
+            self?.setNeedsDisplay()
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // 容器搬家 / 旋转后 bounds 变了，带的位置要跟着重算
+        if AevonRightEdge.showBand { setNeedsDisplay() }
+    }
+
+    override func draw(_ rect: CGRect) {
+        // 双重闸门：用户没打开可视化、或接管带已关 —— 一律不画（保持 0.1.15 的纯净画面）
+        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        let band = AevonRightEdge.band(in: bounds)
+        guard band.width > 1, band.height > 1 else { return }
+        let flashing = CACurrentMediaTime() < flashUntil
+
+        // 填充用两层叠色：白色一层保证浅色壁纸下可见，蓝色一层保证深色 App 下可见
+        context.setFillColor(UIColor(white: 1.0, alpha: flashing ? 0.32 : 0.12).cgColor)
+        context.fill(band)
+        context.setFillColor(UIColor(red: 0.20, green: 0.70, blue: 1.0,
+                                    alpha: flashing ? 0.34 : 0.10).cgColor)
+        context.fill(band)
+
+        // 靠屏幕内侧那条竖线 = 带的内边界（手指要落在它右边才算）
+        context.setStrokeColor(UIColor(white: 1.0, alpha: flashing ? 0.90 : 0.50).cgColor)
+        context.setLineWidth(1)
+        context.move(to: CGPoint(x: band.minX + 0.5, y: band.minY))
+        context.addLine(to: CGPoint(x: band.minX + 0.5, y: band.maxY))
+        context.strokePath()
+
+        // 上边界用虚线：它和「下半屏 60%」一一对应，用户能一眼确认高度占比
+        context.setLineDash(phase: 0, lengths: [5, 4])
+        context.move(to: CGPoint(x: band.minX, y: band.minY + 0.5))
+        context.addLine(to: CGPoint(x: band.maxX, y: band.minY + 0.5))
+        context.strokePath()
+        context.setLineDash(phase: 0, lengths: [])
+    }
 }
 
 final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
@@ -207,6 +265,16 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         guard channel.touchPointer != 0, channel.touchPointer == touchID else { return false }
         guard CACurrentMediaTime() <= channel.pointerDeadline else { return false }
         return true
+    }
+
+    /// V0.1.16（AevonBandIndicatorV116）：接管成功 → 让带闪一下（只画，不改行为）。
+    static func flashBandIndicator() {
+        shared.bandView?.flashBand()
+    }
+
+    /// V0.1.16：设置里改了带宽 / 带高 / 可视化开关 → 立刻重画，不用注销。
+    static func refreshBandIndicator() {
+        shared.bandView?.setNeedsDisplay()
     }
 
     // MARK: - 安装

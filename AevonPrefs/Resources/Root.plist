@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.1.15（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.1.15 起：全屏 App 内有两个稳入口 —— 右下角热区（48×320），以及屏幕右缘的接管带（默认宽 28pt、覆盖下半 60% 高度），两处都是「按下即接管、向左滑 ≥30pt 呼出」，App 全程收不到触摸、绝不会被带起来。代价写在「右缘接管带」开关下面：带内 App 自己的轻点 / 右滑也归我们，嫌碍事可以关掉或把宽度、高度调小。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.16（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.1.15 起：全屏 App 内有两个稳入口 —— 右下角热区（48×320），以及屏幕右缘的接管带（默认宽 28pt、覆盖下半 60% 高度），两处都是「按下即接管、向左滑 ≥30pt 呼出」，App 全程收不到触摸、绝不会被带起来。代价写在「右缘接管带」开关下面：带内 App 自己的轻点 / 右滑也归我们，嫌碍事可以关掉或把宽度、高度调小。0.1.16 新增「显示右缘接管带」：打开就能看见那条带的真实范围，接管成功会闪一下，测完关掉即可。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -47,6 +47,18 @@
 			<string>RightEdgeTakeover</string>
 			<key>label</key>
 			<string>右缘接管带（0.1.15 默认开）：全屏 App 内，屏幕右缘一条带按下即接管，向左滑 30pt 呼出圆盘，App 连 began 都收不到，所以绝不会跟着动。代价：这条带里 App 自己的轻点 / 右滑 / 贴边滚动也归我们（这是「整指接管」的物理代价，不是 bug）。宽度与高度在「细节调整」里调</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>RightEdgeShowBand</string>
+			<key>label</key>
+			<string>显示右缘接管带（0.1.16 新增，测试用，默认关）：打开后右缘会画出那条带的真实范围（淡色填充 + 内边界竖线 + 上边界虚线），宽度和高度就是实际生效值；每次接管成功整条带会闪一下，让你一眼看出「这次是不是我们接住的」。只绘制、不影响触摸，测完可以关掉</string>
 		</dict>
 		<dict>
 			<key>cell</key>

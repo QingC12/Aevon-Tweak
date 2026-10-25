@@ -717,3 +717,21 @@ __attribute__((used)) static const char AevonDeferProbeV114Marker[] = "AevonDefe
 __attribute__((used)) static const char AevonRightEdgeTakeoverV115Marker[] = "AevonRightEdgeTakeoverV115";
 __attribute__((used)) static const char AevonRightEdgeWidthV115Marker[] = "AevonRightEdgeWidthV115";
 __attribute__((used)) static const char AevonBandTouchBeganV115Marker[] = "AevonBandTouchBeganV115";
+
+/* ── V0.1.16（AevonRightEdgeShowBandV116）：本版标记 ──
+ * Aevon(83) 的实测：右缘接管带 3/3 生效（起手 → 判向 → 呼出），机制已通。
+ * 但那份日志暴露了两件事：
+ *   ① 三次落点全在 y=656~671 —— 接管带最下沿、紧贴热区上边界。28pt 是一条手指看不见的宽度，
+ *      用户在真机上无法确认「带在哪 / 这次是不是我们接住的」；
+ *   ② 0.1.15 设计的「命中共」取证**结构性不可能出现**：总入口在 began 就把整个 UIEvent 丢了，
+ *      `return` 掉原 sendEvent → hitTest 根本没跑 → bandView 永远收不到 touches。
+ *      所以「两条都有」这个判据从一开始就是错的，必须写清楚，不能再拿它当证据。
+ * 本版只加一层绘制（不改任何触摸行为）：把带的真实范围画出来 + 接管成功闪一下，
+ * 让真机测试从「猜」变成「看」。
+ *
+ *   AevonRightEdgeShowBandV116 = 可视化开关（RightEdgeShowBand，默认关）
+ *   AevonBandIndicatorV116     = 带子绘制 + 闪示 + 设置变更即时重画
+ *
+ * 同样 used 钉住：CI 只认二进制字节。 */
+__attribute__((used)) static const char AevonRightEdgeShowBandV116Marker[] = "AevonRightEdgeShowBandV116";
+__attribute__((used)) static const char AevonBandIndicatorV116Marker[] = "AevonBandIndicatorV116";

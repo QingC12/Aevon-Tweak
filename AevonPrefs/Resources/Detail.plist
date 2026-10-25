@@ -168,6 +168,20 @@
 			<key>footerText</key>
 			<string>默认 60 = 只覆盖下半屏（y 从屏高 40% 到底部），上半屏右侧完全不受影响。拉到 100 就是整条右缘都能呼出，代价是顶部右侧按钮也点不到。</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>RightEdgeShowBand</string>
+			<key>label</key>
+			<string>显示右缘接管带（测试用）：画出真实范围，接管时闪一下</string>
+			<key>footerText</key>
+			<string>0.1.16 新增。打开后回到全屏 App，右缘会出现一条淡色带：左边界那条竖线就是「手指要落在它右边才算」，上边界虚线就是「下半屏 60%」的分界。拖上面两个滑条时带子会实时跟着变，不用注销。每次接管成功整条带会闪一下 —— 闪了说明 App 这条路已经被掐断；没闪却呼出了圆盘，说明走的是别的入口。测完关掉即可，它只画不接触摸。</string>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>细节调整</string>
