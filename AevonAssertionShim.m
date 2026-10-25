@@ -677,3 +677,23 @@ __attribute__((used)) static const char AevonPipelineStandDownV113Marker[] = "Ae
 __attribute__((used)) static const char AevonBandTakeoverBeganV113Marker[] = "AevonBandTakeoverBeganV113";
 __attribute__((used)) static const char AevonBandTrackV111Marker[] = "AevonBandTrackV111";
 __attribute__((used)) static const char AevonBandWidenV111Marker[] = "AevonBandWidenV111";
+
+/* ── V0.1.14（AevonProbeP7V114 / 宿主审计）：本版标记 ──
+ * 本版**只加探针，不改任何行为**：右缘策略与 0.1.13 完全一致（识别器停手）。
+ * 五组探针只回答一个问题 —— 「我们自己的视图在右缘那个坐标上到底有没有被窗口问过」。
+ *
+ *   AevonProbeP7V114       = 五组调度入口
+ *   AevonWindowHitV114     = P7-1 窗口级命中链
+ *   AevonHostAuditV114     = P7-2 入口窗口/容器/App画面容器 三者关系
+ *   AevonRecognizerHostV114= P7-3 既有系统识别器的宿主视图与覆盖区
+ *   AevonOwnRecognizerV114 = P7-4 我们登记的那个识别器有没有宿主视图
+ *   AevonDeferProbeV114    = P7-5 BKS 延迟路由谓词能否表达几何区域
+ *
+ * 全部用 used 钉住：探针日志串多数很短，Swift 会走 SSO 内联、`strings` 查不到，
+ * 而 CI 一定是按二进制字节断言的（源码 grep 会把注释也算进去）。 */
+__attribute__((used)) static const char AevonProbeP7V114Marker[] = "AevonProbeP7V114";
+__attribute__((used)) static const char AevonWindowHitV114Marker[] = "AevonWindowHitV114";
+__attribute__((used)) static const char AevonHostAuditV114Marker[] = "AevonHostAuditV114";
+__attribute__((used)) static const char AevonRecognizerHostV114Marker[] = "AevonRecognizerHostV114";
+__attribute__((used)) static const char AevonOwnRecognizerV114Marker[] = "AevonOwnRecognizerV114";
+__attribute__((used)) static const char AevonDeferProbeV114Marker[] = "AevonDeferProbeV114";

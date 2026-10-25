@@ -56,7 +56,7 @@ enum AevonProbeV107 {
             ("P4 事件路由", { groupEventRouting() }),
             ("P5 场景浮窗", { groupScenes() }),
             ("P6 配置快照", { groupConfig() })
-        ]
+        ] + AevonProbeP7V114.groups()
 
         AevonLog.info("[探针] \(groups.count) 组探针已排队：\(Int(startDelay))s 后开始，组间隔 \(groupGap)s；全部走 ObjC @try 兜底（AevonProbeV107 AevonMultiProbeV107 AevonShieldV107）")
 

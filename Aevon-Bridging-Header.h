@@ -35,6 +35,14 @@ BOOL AevonObjectResponds(id object, NSString *selectorName);
 /// 给类发无参工厂消息（先验方法存在再发），取不到返回 nil。
 id AevonClassFactoryObject(NSString *className, NSString *selectorName);
 
+/// ── V0.1.14（AevonRecognizerHostV114）：宿主审计三件套（全部只读）──
+///
+/// P7 探针要回答的是「系统手势识别器挂在哪、覆盖哪里、我们的视图为什么排不上队」。
+/// 沿 ivar 往下挖的每一跳都是来路不明的对象，一律留在 ObjC 做，Swift 只拿拼好的字符串。
+NSArray<NSString *> *AevonDescribeRecognizersOfObject(id owner);
+NSString *AevonObjectIvarSummary(id object);
+NSString *AevonViewHostChain(id view, NSInteger depth);
+
 /// 全局触摸通道（V0.0.23）：hook `UIApplication -sendEvent:`，
 /// 把每个触摸的相位 / 身份 / 坐标交给 Swift 侧做边缘判定。
 /// 返回 NO 表示这条通道不可用，调用方继续用视图层通道兜底。

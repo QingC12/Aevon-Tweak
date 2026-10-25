@@ -432,6 +432,44 @@ jobs:
             || { echo "::error::带内抬手/取消只清 bandTouchID —— 会留下指向已释放 UITouch 的 globalTouchID"; exit 1; }
           echo "V0.1.13 校验: 识别器停手（断延迟补投）+ 起手窗两态（默认不干预 / 开关按下即接管）"
 
+          # V0.1.14（AevonProbeP7V114 / 宿主审计）：**只加探针，不改行为**。
+          # 0.1.5~0.1.13 九个版本都在改「策略」，却从没量过一件事：
+          # 我们自己的视图，在右缘那个坐标上到底有没有被窗口问过。
+          # 所以这版五组只回答「宿主」：窗口级命中链 / 入口窗口与容器关系 /
+          # 既有系统识别器的宿主视图 / 我们那个识别器有没有宿主 / BKS 谓词能否表达几何。
+          # 行为必须与 0.1.13 完全一致 —— 宁可这一版什么都不修，也不能因为探针把手机弄坏。
+          for s in AevonProbeP7V114 AevonWindowHitV114 AevonHostAuditV114 \
+                   AevonRecognizerHostV114 AevonOwnRecognizerV114 AevonDeferProbeV114; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.14 标记 $s 未编入"; exit 1; }
+          done
+          # 探针文件必须真的进构建（不在 Makefile 里等于没编进去）
+          grep -q 'Sources/AevonProbeP7V114.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::P7 探针文件没进 Makefile"; exit 1; }
+          # 五组必须真的被调度（没挂到 runAll 里，装了也白装）
+          grep -q 'AevonProbeP7V114.groups()' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
+            || { echo "::error::P7 五组没挂进探针调度"; exit 1; }
+          # 五组各一个入口函数，少一个就是「组没了」
+          for f in windowHitChain entryHost systemRecognizerHosts ownRecognizer deferringCapability; do
+            grep -q "func $f(" "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift" \
+              || { echo "::error::P7 探针组 $f 被删"; exit 1; }
+          done
+          # 只读纪律：探针里不许出现任何「改状态」的调用（加了识别器/改了 delegate/swizzle 都算）
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift" \
+               | grep -qE 'addGestureRecognizer|removeGestureRecognizer|\.delegate *=|swizzle|addSubview'; then
+            echo "::error::P7 探针里出现了改状态的调用 —— 探针必须只读"
+            exit 1
+          fi
+          # 每组都必须从 ObjC @try 里过（Swift 的 do/catch 捕不到 doesNotRecognizeSelector:）
+          test "$(grep -c 'AevonShieldRun' "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift")" -ge 1 \
+            || { echo "::error::P7 探针没有走 AevonShieldRun 兜底"; exit 1; }
+          # 宿主审计三件套必须在 ObjC 侧（沿 ivar 挖对象只能在 ObjC 做）
+          for f in AevonDescribeRecognizersOfObject AevonObjectIvarSummary AevonViewHostChain; do
+            grep -q "$f" "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
+              || { echo "::error::宿主审计函数 $f 不在 ObjC 安全带里"; exit 1; }
+          done
+          echo "V0.1.14 校验: 宿主审计五组 + 只读纪律 + ObjC @try 兜底（行为与 0.1.13 一致）"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }

@@ -123,6 +123,41 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         return channel.bandView != nil && AevonPrefs.bool("EdgeGestureEnabled", default: true)
     }
 
+    /// V0.1.14（AevonOwnRecognizerV114）：**只读**自检快照，专供探针 P7-4。
+    ///
+    /// 这一组要钉死的事实是「我们登记进 `_UISystemGestureManager` 的那个识别器，
+    /// 究竟有没有宿主视图」—— 9 个版本里它一次 `began` 都没有，怀疑就是因为它
+    /// 没有挂到任何视图上（登记只给了「被问要不要」的资格，没有宿主就进不了触摸流）。
+    /// 同时把两条判据在右缘 / 热区两个点上的结果打出来，用来区分
+    /// 「视图愿意接」和「窗口根本没把触摸送到这个视图」。
+    /// 只读：不登记、不改 delegate、不发任何会改状态的消息。
+    static func debugRecognizerSnapshot() -> [String] {
+        let channel = shared
+        var lines: [String] = []
+        lines.append("状态：已安装=\(channel.bandView != nil ? 1 : 0) 管线登记=\(channel.pipelineRegistered ? 1 : 0) 允许接摸=\(pipelineAllowed ? 1 : 0) 被问次数=\(channel.pipelineTouchCount) 反证次数=\(channel.pipelineMissCount)")
+        if let recognizer = channel.recognizer {
+            let viewName = recognizer.view.map { AevonSafeClassName($0) ?? "?" } ?? "nil（没有宿主视图）"
+            let delegateName = recognizer.delegate.map { AevonSafeClassName($0) ?? "?" } ?? "nil"
+            lines.append("识别器 \(AevonSafeClassName(recognizer) ?? "?") 宿主=\(viewName) delegate=\(delegateName) state=\(recognizer.state.rawValue) 延迟began=\(recognizer.delaysTouchesBegan ? 1 : 0) 取消=\(recognizer.cancelsTouchesInView ? 1 : 0) 启用=\(recognizer.isEnabled ? 1 : 0)")
+        } else {
+            lines.append("识别器 未创建（安装没走到这一步）")
+        }
+        if let band = channel.bandView {
+            let parentName = band.superview.map { AevonSafeClassName($0) ?? "?" } ?? "nil"
+            lines.append("带视图 \(AevonSafeClassName(band) ?? "?") frame=(\(Int(band.frame.origin.x)),\(Int(band.frame.origin.y)),\(Int(band.frame.size.width)),\(Int(band.frame.size.height))) 父=\(parentName) 交互=\(band.isUserInteractionEnabled ? 1 : 0) 隐藏=\(band.isHidden ? 1 : 0)")
+            lines.append("带视图窗口=\(band.window.map { AevonSafeClassName($0) ?? "?" } ?? "nil（不在任何窗口里）")")
+        } else {
+            lines.append("带视图 未挂载")
+        }
+        let screenWidth = UIScreen.main.bounds.width
+        for (label, point) in [("右缘中部", CGPoint(x: 424, y: 400)), ("热区内", CGPoint(x: 424, y: 750))] {
+            let accept = channel.acceptsTouch(at: point)
+            let observe = channel.observesTouch(at: point)
+            lines.append("判据 \(label)(\(Int(point.x)),\(Int(point.y)))：愿接=\(accept ? 1 : 0) 愿看=\(observe ? 1 : 0) 屏宽=\(Int(screenWidth)) 带内起点=\(Int(screenWidth - AevonGestureBandView.bandWidth))")
+        }
+        return lines
+    }
+
     /// 系统手势管线是否已经接管右缘。全局 sendEvent 通道据此让路，
     /// 避免同一根手指被「管线」和「延迟接管」各算一次。
     static var ownsBand: Bool {

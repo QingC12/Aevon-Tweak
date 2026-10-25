@@ -163,6 +163,50 @@ enum AevonEntryHost {
         return host === appView
     }
 
+    /// V0.1.14（AevonHostAuditV114）：**只读**宿主审计快照，专供探针 P7-2。
+    ///
+    /// 要回答的问题是「我们自己的窗口还在，为什么右缘的触摸轮不到我们」：
+    ///   · 入口窗口本身在不在窗口栈里、层级多少、右缘点上 `hitTest` 返回什么；
+    ///   · 容器现在挂在谁的下面、在兄弟里的序号（这决定它和 App 画面谁先被命中）；
+    ///   · App 画面容器是不是就是容器的父视图。
+    /// 全部只读：不 addSubview、不改 frame、不发任何会改状态的消息。
+    static var debugHostSnapshot: String {
+        func rectText(_ rect: CGRect) -> String {
+            return "(\(Int(rect.origin.x)),\(Int(rect.origin.y)),\(Int(rect.size.width)),\(Int(rect.size.height)))"
+        }
+        var lines: [String] = []
+        if let win = window {
+            let sceneName = win.windowScene.map { AevonSafeClassName($0) ?? "?" } ?? "无场景"
+            lines.append("入口窗口 \(AevonSafeClassName(win) ?? "?") level=\(Int(win.windowLevel.rawValue)) hidden=\(win.isHidden ? 1 : 0) alpha=\(String(format: "%.2f", win.alpha)) frame=\(rectText(win.frame)) 交互=\(win.isUserInteractionEnabled ? 1 : 0) 场景=\(sceneName)")
+            for (label, point) in [("右缘中部", CGPoint(x: 424, y: 400)), ("热区内", CGPoint(x: 424, y: 750))] {
+                let local = win.convert(point, from: nil)
+                let hit = win.hitTest(local, with: nil)
+                let hitName = hit.map { AevonSafeClassName($0) ?? "?" } ?? "nil（穿透）"
+                var chain = "—"
+                if let hit = hit {
+                    chain = AevonViewHostChain(hit, 4) ?? "?"
+                }
+                lines.append("入口窗口命中 \(label)(\(Int(point.x)),\(Int(point.y))) → \(hitName) 链=\(chain)")
+            }
+        } else {
+            lines.append("入口窗口 未创建")
+        }
+        if let box = container, let host = box.superview {
+            let index = host.subviews.firstIndex(of: box) ?? -1
+            var names: [String] = []
+            for (offset, sibling) in host.subviews.prefix(8).enumerated() {
+                names.append("\(offset):\(AevonSafeClassName(sibling) ?? "?")")
+            }
+            lines.append("容器 \(AevonSafeClassName(box) ?? "?") frame=\(rectText(box.frame)) 父=\(AevonSafeClassName(host) ?? "?") 序号=\(index)/\(host.subviews.count) 前几个兄弟=\(names.joined(separator: " "))")
+            let appName = appSceneView.map { AevonSafeClassName($0) ?? "?" } ?? "无"
+            lines.append("App 画面容器=\(appName) 与容器父视图同体=\((appSceneView != nil && appSceneView === host) ? "是" : "否")")
+            lines.append("容器宿主链=\(AevonViewHostChain(box, 6) ?? "?")")
+        } else {
+            lines.append("容器 未挂载（桌面态或尚未创建）")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - 创建
 
     /// 确保入口窗口与容器存在（幂等）。成功返回容器，失败返回 nil（并在稍后重试）。
