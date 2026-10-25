@@ -202,7 +202,8 @@ jobs:
             || { echo "::error::系统手势通道未编入（缺 UIScreenEdgePanGestureRecognizer）"; exit 1; }
           # 反回退：FBScene 拦截必须保留「先看 foreground 再决定动不动」的透传闸，
           # 否则会重新变成「无条件替换 settings 对象」—— 那正是 SIGTRAP 的来源。
-          grep -n 'sk_fbscene_updateSettings' -A 24 Sources/Hooks.swift \
+          # 注意：校验步在 verify/ 目录里跑，源码要用 $GITHUB_WORKSPACE 绝对路径。
+          grep -n 'sk_fbscene_updateSettings' -A 26 "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
             | grep -q 'shouldKeepForeground' \
             || { echo "::error::FBScene 拦截丢了透传闸（会重演安全模式崩溃）"; exit 1; }
           echo "V0.1.4 校验: 图标启动先释放浮窗 + 系统手势右缘接管 + FBScene 透传闸 已编入"
