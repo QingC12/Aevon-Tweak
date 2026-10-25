@@ -46,8 +46,8 @@ final class AevonGestureBandView: UIView {
         return AevonSystemGestureV105.shared.acceptsTouch(at: point)
     }
 
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        return point(inside: point, with: event) ? self : nil
+    override func hitTest(_ screenPoint: CGPoint, with event: UIEvent?) -> UIView? {
+        return point(inside: screenPoint, with: event) ? self : nil
     }
 }
 
