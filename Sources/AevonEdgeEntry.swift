@@ -111,7 +111,10 @@ enum AevonRightEdge {
     static let maxHeightPercent: Double = 100
 
     static var enabled: Bool {
-        return AevonPrefs.bool("RightEdgeTakeover", default: true)
+        // V0.1.17（Aevon(84) 事故后改默认）：**默认关**。
+        // 出过一次「整屏点不动、只能卸载」的事故之后，这条「整指吞」的功能必须由用户显式打开；
+        // 关着时右缘整段交回 App，只留一行「归口=起手窗·本版不干预」的记录。
+        return AevonPrefs.bool("RightEdgeTakeover", default: false)
     }
 
     /// V0.1.16（AevonRightEdgeShowBandV116）：把接管带的**真实范围**画出来（默认关）。
@@ -448,6 +451,7 @@ enum AevonEdgeEntry {
     /// 在 SpringBoard 进程内还有缓存 —— 用户拖完滑杆盯着屏幕看，触发条就是不动。
     static func startTriggerZoneWatch() {
         migrateLegacyBrokenZoneIfNeeded()
+        disableRiskyTakeoverOnceV117()
         if zoneSignature.isEmpty { zoneSignature = AevonTriggerZone.signature() }
         if !prefsObserverInstalled {
             prefsObserverInstalled = true
@@ -477,6 +481,10 @@ enum AevonEdgeEntry {
             // 旧版这里还顺手 AevonRingStore.invalidateCache()，0.2 秒一次跨进程重读
             // 导致圆盘 App 数与排序漂移（Aevon(24)），已删除。列表只在设置页广播时刷新。
             checkTriggerZoneChange()
+            // V0.1.17（AevonDeadManV117）：死手开关跟着这条 0.2 秒轮询走 ——
+            // 接管状态一旦泄漏，最多 1 秒余量 + 4 秒 pressLimit 就会自动释放，
+            // 不会再出现「整块屏幕点不动、只能卸载」的局面。
+            enforceDeadManSwitch()
         }
         RunLoop.main.add(timer, forMode: .common)
         zoneTimer = timer
@@ -502,6 +510,26 @@ enum AevonEdgeEntry {
         AevonPrefs.synchronize()
         zoneSignature = ""
         AevonLog.warn("[边缘] 检测到上一版误写的触发区（≈0% / 18pt / 80pt），已恢复默认 75% / 48pt / 320pt（AevonTriggerZoneResetV28）")
+    }
+
+    // MARK: - V0.1.17 首次启动的安全复位
+    //
+    // 为什么必须做：偏好是**跨版本保留**的。Aevon(84) 里用户把「显示右缘接管带」打开了，
+    // 升级到 0.1.17 之后那个 1 仍然会被读回来 —— 只改代码里的默认值，救不了已经在事故状态里的设备。
+    // 所以这里按「一次性标记」判定：把三个危险开关写回关闭，再立标记。
+    // 之后用户在设置里自己打开就永久保留，不会被反复重置（标记只在第一次生效）。
+    private static var migratedSafeV117 = false
+
+    private static func disableRiskyTakeoverOnceV117() {
+        guard !migratedSafeV117 else { return }
+        migratedSafeV117 = true
+        guard !AevonPrefs.bool("SafeTakeoverResetV117", default: false) else { return }
+        AevonPrefs.set("SafeTakeoverResetV117", true)
+        AevonPrefs.set("RightEdgeTakeover", false)
+        AevonPrefs.set("RightEdgeShowBand", false)
+        AevonPrefs.set("BandTakeoverFromBegan", false)
+        AevonPrefs.synchronize()
+        AevonLog.warn("[安全] 0.1.17 首次启动：已把「右缘接管带 / 显示右缘接管带 / 右缘全域接管」三个开关写回关闭（0.1.16 卡死整屏的事故）。要用请回设置里手动打开（AevonNoBandDrawV117）")
     }
 
     /// 指纹变了就重排触发条（幂等；没变什么都不做）
@@ -552,6 +580,9 @@ enum AevonEdgeEntry {
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
         AevonLog.info("[边缘] 触发（\(reason)，来源 \(source)），呼出圆盘")
+        // V0.1.17：圆盘要起来了，把右缘提示条收掉（别叠在圆盘上），并记下展开时刻给死手开关用。
+        AevonBandHint.hideNow()
+        ringOpenedAt = now
         presentRing(source: source)
     }
 
@@ -737,6 +768,87 @@ enum AevonEdgeEntry {
     /// 只吞不驱动：App 收不到，也不参与圆盘的手势状态机。
     private static var ringExtraTouchID: UInt = 0
     private static var ringExtraDeadline: CFTimeInterval = 0
+    /// V0.1.17（AevonDeadManV117）：圆盘展开时刻，死手开关据此兜「圆盘状态泄漏」。
+    private static var ringOpenedAt: CFTimeInterval = 0
+
+    // MARK: - V0.1.17 急救与死手开关（AevonDeadManV117 / AevonPanicThreeFingerV117）
+    //
+    // 起因是真机事故 Aevon(84)：用户打开「显示右缘接管带」后**整个屏幕失去操作**，
+    // 只能卸载插件恢复。那次是绘制路径卡死主线程；但它也暴露了一个更危险的结构性问题：
+    // 本插件有三条「整屏吞摸」的路（热区 / 右缘接管带 / 圆盘展开期），
+    // 任何一条的状态机漏掉一次 ended，用户就会面对一块点不动的屏幕，且**没法自己救**。
+    //
+    // 所以这一版补两道闸：
+    //   ① 死手开关：0.5 秒巡检一次，接管状态一旦超过自己的期限还没被清除，强制清空；
+    //      圆盘展开超过 20 秒强制收起。最坏情况从「只能卸载」变成「最多 4 秒自动恢复」。
+    //   ② 三指急救：任何位置三根手指同时按下 → 立刻释放全部接管 + 把右缘接管两个开关写盘关掉。
+    //      这条不依赖任何视图、任何开关，只要 hook 在就有效，是真正的逃生门。
+
+    /// 正在屏幕上的手指数（按 UITouch 指针计）。只用于三指急救判定。
+    private static var activeTouches = Set<UInt>()
+    /// 急救限频（3 秒内只执行一次，避免三指按住不放时反复写盘）
+    private static var panicAt: CFTimeInterval = 0
+    /// 接管状态宽限（秒）：超过自己的 deadline 再加这个余量还没被清 → 判定为泄漏
+    private static let deadManGrace: CFTimeInterval = 1.0
+    /// 圆盘展开硬上限（秒）：超过就强制收起（正常一次选择不会超过 20 秒）
+    private static let ringOpenLimit: CFTimeInterval = 20
+
+    /// 释放**所有**整指接管状态。幂等，任何路径都能调。
+    ///
+    /// 只清「谁归我」这类状态，不动浮窗几何、不动偏好、不动圆盘内容 ——
+    /// 目的是把手指还给系统，不是把用户的活儿撤销。
+    static func releaseAllTakeover(_ reason: String) {
+        let hadState = ownsTouch || globalTouchID != 0 || rightEdgeTouchID != 0 || bandTouchID != 0
+        ownsTouch = false
+        globalTouchID = 0
+        globalFired = false
+        swallowDeadline = 0
+        rightEdgeTouchID = 0
+        rightEdgeStart = .zero
+        rightEdgeDirLogged = false
+        bandTouchID = 0
+        bandStart = .zero
+        bandHoldTouchID = 0
+        bandHoldDeadline = 0
+        ringExtraTouchID = 0
+        ringExtraDeadline = 0
+        ringSource = ""
+        if hadState {
+            AevonLog.warn("[急救] 已释放接管状态（\(reason)）（AevonDeadManV117）")
+        }
+    }
+
+    /// 三指急救：不用卸载的逃生门。
+    private static func panicRelease() {
+        let now = CACurrentMediaTime()
+        guard now - panicAt > 3.0 else { return }
+        panicAt = now
+        releaseAllTakeover("三指同时按下")
+        AevonRingMenu.dismissCurrent()
+        // 写盘关掉两个「整指吞」的开关：用户下一次触碰就是正常 App 行为，
+        // 想再试的时候回设置里打开即可（不用重装、不用注销）。
+        AevonPrefs.set("RightEdgeTakeover", false)
+        AevonPrefs.set("BandTakeoverFromBegan", false)
+        AevonPrefs.synchronize()
+        AevonLog.warn("[急救] 三指同时按下 → 已关闭「右缘接管带 / 右缘全域接管」并释放全部接管；不用卸载，回设置里可再打开（AevonPanicThreeFingerV117 AevonDeadManV117）")
+    }
+
+    /// 死手开关：0.5 秒一次，只在「状态明显泄漏」时动手。
+    static func enforceDeadManSwitch() {
+        let now = CACurrentMediaTime()
+        if ownsTouch, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
+            releaseAllTakeover("接管超期未释放")
+        }
+        if rightEdgeTouchID != 0, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
+            releaseAllTakeover("右缘接管超期")
+        }
+        if AevonRingMenu.isPresented, ringOpenedAt > 0, now > ringOpenedAt + ringOpenLimit {
+            ringOpenedAt = 0
+            AevonLog.warn("[急救] 圆盘展开超过 \(Int(ringOpenLimit)) 秒 → 强制收起（AevonDeadManV117）")
+            AevonRingMenu.dismissCurrent()
+            releaseAllTakeover("圆盘超期")
+        }
+    }
 
     /// 装全局触摸通道（hook `UIApplication -sendEvent:`）。
     ///
@@ -763,6 +875,18 @@ enum AevonEdgeEntry {
 
     /// 全局触摸分发（由 `AevonTouchHook.m` 在 `UIApplication -sendEvent:` 里回调）。
     static func handleGlobal(phase: UITouch.Phase, point: CGPoint, touchID: UInt) {
+        // V0.1.17（AevonPanicThreeFingerV117）：急救判定放在**所有闸门之前** ——
+        // 哪怕插件开关被关、右缘接管被关，只要 hook 还活着，三指同时按下就必须能救回来。
+        switch phase {
+        case .began:
+            activeTouches.insert(touchID)
+            if activeTouches.count > 6 { activeTouches.removeAll() }
+            if activeTouches.count >= 3 { panicRelease() }
+        case .ended, .cancelled:
+            activeTouches.remove(touchID)
+        default:
+            break
+        }
         guard AevonPrefs.bool("Enabled", default: false) else { return }
         let screen = UIScreen.main.bounds
         switch phase {
@@ -1295,6 +1419,7 @@ enum AevonEdgeEntry {
     /// 任何一条路径（松手开窗、点空白、点圆心、设置重载后移除）都会走到这里。
     static func ringDidDismiss() {
         ringSource = ""
+        ringOpenedAt = 0
         swallowDeadline = 0
         globalTouchID = 0
         globalFired = false

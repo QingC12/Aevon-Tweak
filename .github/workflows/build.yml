@@ -487,10 +487,11 @@ jobs:
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'AevonRightEdge.band(in: screen).contains(point)' \
             || { echo "::error::右缘接管带判据被删/改 —— 右缘会退回「只记录不接管」"; exit 1; }
-          # 开关必须存在且默认开（用户开箱即用；不想要可以在设置里关）
+          # 开关必须存在。V0.1.17 反转默认值：Aevon(84) 出过「装上就整屏点不动」的事故，
+          # 这种「整指吞」功能此后一律默认关，由用户显式打开（0.1.15/0.1.16 的默认开已作废）。
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            | grep -q 'AevonPrefs.bool("RightEdgeTakeover", default: true)' \
-            || { echo "::error::RightEdgeTakeover 开关读法被改（默认必须是 true）"; exit 1; }
+            | grep -q 'AevonPrefs.bool("RightEdgeTakeover", default: false)' \
+            || { echo "::error::RightEdgeTakeover 必须默认关（出过全屏卡死事故）"; exit 1; }
           grep -q 'RightEdgeTakeover' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
             || { echo "::error::Root.plist 缺 RightEdgeTakeover 开关"; exit 1; }
           # 带宽/带高必须可调（默认 28pt × 下半 60%，用户能自己缩小牺牲面）
@@ -533,25 +534,71 @@ jobs:
             || { echo "::error::Root.plist 缺 RightEdgeShowBand 开关"; exit 1; }
           grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
             || { echo "::error::Detail.plist 缺 RightEdgeShowBand 开关（调滑条时看不见带子）"; exit 1; }
-          # 绘制进 draw(_:)：这是可视化唯一的落地点
-          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
-            | grep -q 'override func draw(_ rect: CGRect)' \
-            || { echo "::error::带视图没有 draw 实现（可视化被删）"; exit 1; }
-          # 双闸门：可视化关掉 / 接管带关掉时一行都不许画
-          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
-            | grep -q 'guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }' \
-            || { echo "::error::draw 的双闸门被删（会在用户没开可视化时也画）"; exit 1; }
+          # ★ V0.1.17 反转（Aevon(84) 全屏卡死事故）：带视图**不许**再有自绘与命中认领。
+          # 0.1.16 这里断言「必须有 draw」—— 那条断言现在反过来了，理由写在 0.1.17 块里。
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+               | grep -q 'override func draw(_ rect: CGRect)'; then
+            echo "::error::带视图又出现了 draw 自绘（0.1.16 因此卡死整屏，绝不加回）"; exit 1
+          fi
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+               | grep -q 'return point(inside: screenPoint, with: event) ? self : nil'; then
+            echo "::error::带视图又抢命中了（0.1.16 因此卡死整屏，绝不加回）"; exit 1
+          fi
           # 闪示必须挂在「接管成功」两个点上（起手 + 判向成立各一次）
           test "$(grep -c 'AevonSystemGestureV105.flashBandIndicator()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
             || { echo "::error::接管成功没有闪示（起手 / 判向成立两处都要调）"; exit 1; }
-          # ★ 行为不许变：bandView 的命中判据必须还是「带内返自身」
-          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
-            | grep -q 'return point(inside: screenPoint, with: event) ? self : nil' \
-            || { echo "::error::bandView 命中判据被改 —— 本版只许加绘制，不许动触摸"; exit 1; }
-          # ★ 行为不许变：设置变了要即时重画，但不能顺手改触发区逻辑
+          # 设置变了要即时预览，但不能顺手改触发区逻辑
           grep -q 'rightEdgeSignature = bandSignatureNow' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::右缘配置指纹未接进 0.2s 轮询（改了宽度要注销才生效）"; exit 1; }
-          echo "V0.1.16 校验: 接管带可视化（双闸门 draw + 接管闪示 + 设置即时重画）+ 触摸行为与 0.1.15 一致"
+          echo "V0.1.16 校验: 接管带可视化开关 + 设置即时预览（自绘部分已由 V0.1.17 反转断言守住）"
+
+          # V0.1.17（Aevon(84) 全屏卡死事故 → 安全修复版）
+          #
+          # 事故：用户打开「显示右缘接管带」后整个屏幕失去操作，必须卸载才恢复。
+          # 日志停在 15:44:19.092「容器已搬家 → App 画面进入」之后一行不剩（连触摸日志也没了）
+          # = SpringBoard 主线程卡死。0.1.16 相对 0.1.15 只多了「全屏视图自绘 + 命中认领 + touchesBegan」，
+          # 所以整块删除，并且此后 CI 反向锁死：谁把这几样加回来，构建直接红。
+          for s in AevonNoBandDrawV117 AevonBandHintV117 AevonDeadManV117 AevonPanicThreeFingerV117; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.17 标记 $s 未编入"; exit 1; }
+          done
+          # ① 带视图四个口子全部关闭（draw / hitTest / point(inside:) / touchesBegan / 重绘）
+          for bad in 'override func draw(' 'override func hitTest(' 'override func point(inside' 'override func touchesBegan' 'setNeedsDisplay()' 'flashBand()'; do
+            if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" | grep -qF "$bad"; then
+              echo "::error::带视图仍在跑 [$bad] —— 这是 0.1.16 卡死整屏的源头"; exit 1
+            fi
+          done
+          # ② 它必须是「1×1 + 隐藏 + 非交互」的占位，不能是全屏视图
+          grep -q 'band.isUserInteractionEnabled = false' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::带视图不是非交互（会重新参与命中）"; exit 1; }
+          grep -q 'band.isHidden = true' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::带视图没有隐藏（全屏透明视图会参与布局/渲染）"; exit 1; }
+          grep -q 'band.frame = CGRect(x: 0, y: 0, width: 1, height: 1)' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::带视图没有退回 1×1（全屏后备存储是卡死的一环）"; exit 1; }
+          # ③ 死手开关必须真的挂在 0.2 秒轮询里（定义 1 处 + 调用 1 处）
+          test "$(grep -c 'enforceDeadManSwitch()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
+            || { echo "::error::死手开关没接进 0.2s 轮询（接管泄漏后无法自愈）"; exit 1; }
+          grep -q 'static let deadManGrace: CFTimeInterval = 1.0' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::死手宽限期被改（默认 1 秒）"; exit 1; }
+          grep -q 'static let ringOpenLimit: CFTimeInterval = 20' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::圆盘展开硬上限被改（默认 20 秒）"; exit 1; }
+          # ④ 三指急救：判定必须在所有闸门之前，且必须自己把开关写盘关掉
+          grep -q 'if activeTouches.count >= 3 { panicRelease() }' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::三指急救判定被删（再出事故就只能卸载）"; exit 1; }
+          grep -q 'AevonPrefs.set("RightEdgeTakeover", false)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::急救没有关掉右缘接管开关（急救完还会复发）"; exit 1; }
+          # ⑤ 出过事故的功能不许默认开
+          grep -q '0.1.17 起默认关' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::右缘接管带开关说明没写默认关（Root.plist）"; exit 1; }
+          # ⑥ 首次启动必须把危险开关复位（偏好跨版本保留，只改默认值救不了老用户）
+          grep -q 'SafeTakeoverResetV117' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::首次启动安全复位被删（带着 0.1.16 的开关升级上来会直接复发）"; exit 1; }
+          # ⑦ 提示条两档时长（设置变化 3 秒 / 接管成功 0.35 秒），且不许常驻
+          grep -q 'show(duration: 3.0)' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::提示条 3 秒预览被删"; exit 1; }
+          grep -q 'show(duration: 0.35)' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            || { echo "::error::提示条接管闪示被删"; exit 1; }
+          echo "V0.1.17 校验: 全屏自绘已删（1×1 隐藏占位）+ 按需提示条 + 死手开关 + 三指急救"
 
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \

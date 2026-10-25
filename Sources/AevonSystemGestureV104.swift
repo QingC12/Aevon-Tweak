@@ -52,100 +52,102 @@ final class AevonGestureBandView: UIView {
     /// 放宽观察窗不会多抢一个点击，只会让「落点偏了 20pt」的左扫也能被我们接住。
     static let beginSlack: CGFloat = 44
 
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        return AevonSystemGestureV105.shared.acceptsTouch(at: point)
-    }
-
-    override func hitTest(_ screenPoint: CGPoint, with event: UIEvent?) -> UIView? {
-        return point(inside: screenPoint, with: event) ? self : nil
-    }
-
-    // V0.1.15（AevonBandTouchBeganV115）：命中这条路只留证据，**不改行为**。
+    // V0.1.17（AevonNoBandDrawV117）：**这里原来是 `point(inside:)` + `hitTest`**，已整块删除。
     //
-    // P7-1 实锤：右缘 (424,400) 的最高命中就是我们这个视图（挂在 SBMainSwitcherWindow
-    // level=5 里，压着 SBDeviceApplicationSceneView）。可 0.1.13 里它赢了命中、抖音照样跟动
-    // —— 说明「命中赢」不必然等于「App 收不到」。所以这一版把主力放在 sendEvent 整指丢弃，
-    // 这里只负责回答一个问题：App 的触摸到底走不走视图命中这条路。
+    // 删的理由是真机事故（Aevon(84)）：用户打开「显示右缘接管带」后整个屏幕失去操作，
+    // 必须卸载插件才能恢复。而日志停在 15:44:19.092「容器已搬家 → App 画面进入」之后
+    // 再无任何一行（连触摸日志都一条没有）—— 这是 SpringBoard 主线程卡死的特征。
     //
-    // 一份日志就能分辨三种情况：
-    //   · 只有「起手…归口=右缘接管带」→ sendEvent 吞生效，hitTest 根本没跑（预期）；
-    //   · 两条都有                      → 同一个 UIEvent 既进了 sendEvent 又走到了视图；
-    //   · 两条都没有                    → 这根触摸压根没进 SpringBoard（backboardd 直投 App），
-    //                                    那就只剩 App 侧吞摸库一条路，不再浪费时间调系统层。
+    // 0.1.16 相对 0.1.15 只多了「这个全屏视图的自绘 + 命中认领 + touchesBegan」三样：
+    //   · 视图是全屏 430×932@3x ≈ 14MB 后备存储；
+    //   · `layoutSubviews` 里每次布局都 `setNeedsDisplay`，容器一秒搬一次家就一秒重绘一次全屏；
+    //   · `draw` 里每次都读偏好（CFPreferences）。
+    // 三者叠在渲染提交路径上，是这次卡死最可能的来源。而它们**换不来任何东西**：
+    // 0.1.13 已经实测「bandView 赢了命中，抖音照样跟着动」，命中认领从来就没拦住过 App；
+    // 0.1.15 实测「命中共必然为 0」，取证价值也为零。
     //
-    // 刻意调用 super（把触摸照原样交给响应链），因为本版不在这里接管 —— 探针纪律：
-    // 加取证绝不能顺手改行为。
-    private static var bandTouchLogAt: CFTimeInterval = 0
+    // 所以：不画、不命中、不接触摸。它现在只是系统手势识别器的宿主占位（1×1、隐藏）。
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let touch = touches.first, AevonRightEdge.enabled {
-            let now = CACurrentMediaTime()
-            if now - AevonGestureBandView.bandTouchLogAt > 1.0 {
-                AevonGestureBandView.bandTouchLogAt = now
-                let point = touch.location(in: nil)
-                let gap = Int(UIScreen.main.bounds.width - point.x)
-                AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 命中共（bandView 确实拿到 touches；App 是否也收到要看有没有第二条证据）（AevonBandTouchBeganV115 AevonRightEdgeTakeoverV115）")
-            }
-        }
-        super.touchesBegan(touches, with: event)
-    }
+    // V0.1.15 曾在这里加 `touchesBegan` 记录「命中共」，V0.1.17 删除 —— 它的结论已经拿到了：
+    // 总入口在 began 就丢掉整个 UIEvent、不调原 `sendEvent`，UIKit 不跑 hitTest，
+    // 所以「命中共」结构性必然为 0（Aevon(83) 实测：一行都没有）。留着只是多一条触摸入口。
 
-    // MARK: - 接管带可视化（V0.1.16 / AevonBandIndicatorV116）
+    // V0.1.16 曾在这里做「全屏自绘可视化」：`draw` 画带 + `layoutSubviews` 里重绘 + 闪示。
+    // V0.1.17（AevonNoBandDrawV117）整块删除 —— Aevon(84) 打开「显示右缘接管带」后
+    // 整个屏幕失去操作、必须卸载。日志停在「容器已搬家 → App 画面进入」之后一行不剩，
+    // 是主线程卡死的特征；而 0.1.16 相对 0.1.15 只多了这段绘制，所以它就是嫌疑最大的一处。
     //
-    // 只画、不接触摸：
-    //   · `draw` 里没有任何事件处理，`point(inside:)` / `hitTest` / `touchesBegan` 一行没动
-    //     → 触摸行为与 0.1.15 完全一致；
-    //   · 绘制内容全部来自 `AevonRightEdge.band(in:)` 这个纯函数，带宽/带高改了立即跟着变
-    //     （设置里 0.2 秒轮询发现指纹变了就 `refreshBandIndicator()`）。
+    // 可视化改成 `AevonBandHint`：独立小视图、按需出现、几秒后自动移除，
+    // 不用 `draw`、不常驻、不参与 layout、不接触摸。
+}
 
-    /// 闪示到期时间。`draw` 里读它决定用「亮色」还是「常态色」。
-    private var flashUntil: CFTimeInterval = 0
+/// 右缘接管带的「按需提示条」（V0.1.17 / AevonBandHintV117）。
+///
+/// 为什么不用 0.1.16 的全屏 `draw`：那套东西在真机上把整台手机卡死了（Aevon(84)）。
+/// 这里的做法刻意做到「最不容易出事」：
+///   · 两个普通视图（底色 + 那条内边界线）叠出来，**没有任何 `draw` 重写**；
+///   · `isUserInteractionEnabled = false`，绝不接触摸；
+///   · 只在「开关变化」或「接管成功」时出现，默认 3 秒后自己 `isHidden = true`，不常驻；
+///   · 只改 `frame` / `backgroundColor`，不加动画、不加定时重绘。
+///
+/// 它只是**看一眼用的**：告诉用户「带在这里、多宽、多高」。真正的接管逻辑与它无关。
+enum AevonBandHint {
+    private static weak var box: UIView?
+    private static weak var edge: UIView?
+    private static var hideToken = 0
 
-    /// 接管成功时让整条带闪一下（开关关着时什么都不做，绝不打扰）。
-    func flashBand() {
+    /// 显示一次提示条，`duration` 秒后自动隐藏。
+    static func show(duration: CFTimeInterval) {
         guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
-        flashUntil = CACurrentMediaTime() + 0.26
-        setNeedsDisplay()
-        // 0.3 秒后重画回常态色。用 asyncAfter 而不是动画，就是为了「零状态、零依赖」。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
-            self?.setNeedsDisplay()
-        }
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // 容器搬家 / 旋转后 bounds 变了，带的位置要跟着重算
-        if AevonRightEdge.showBand { setNeedsDisplay() }
-    }
-
-    override func draw(_ rect: CGRect) {
-        // 双重闸门：用户没打开可视化、或接管带已关 —— 一律不画（保持 0.1.15 的纯净画面）
-        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
-        guard let context = UIGraphicsGetCurrentContext() else { return }
-        let band = AevonRightEdge.band(in: bounds)
+        guard let root = AevonEntryHost.activeRoot, root.bounds.width > 1 else { return }
+        let band = AevonRightEdge.band(in: root.bounds)
         guard band.width > 1, band.height > 1 else { return }
-        let flashing = CACurrentMediaTime() < flashUntil
 
-        // 填充用两层叠色：白色一层保证浅色壁纸下可见，蓝色一层保证深色 App 下可见
-        context.setFillColor(UIColor(white: 1.0, alpha: flashing ? 0.32 : 0.12).cgColor)
-        context.fill(band)
-        context.setFillColor(UIColor(red: 0.20, green: 0.70, blue: 1.0,
-                                    alpha: flashing ? 0.34 : 0.10).cgColor)
-        context.fill(band)
+        let fill: UIView
+        let line: UIView
+        if let existing = box, existing.superview === root, let existingLine = edge {
+            fill = existing
+            line = existingLine
+        } else {
+            box?.removeFromSuperview()
+            fill = UIView()
+            fill.isUserInteractionEnabled = false
+            fill.backgroundColor = UIColor(red: 0.20, green: 0.70, blue: 1.0, alpha: 0.18)
+            line = UIView()
+            line.isUserInteractionEnabled = false
+            line.backgroundColor = UIColor(white: 1.0, alpha: 0.60)
+            fill.addSubview(line)
+            root.addSubview(fill)
+            box = fill
+            edge = line
+        }
+        fill.frame = band
+        line.frame = CGRect(x: 0, y: 0, width: 1, height: band.height)
+        fill.isHidden = false
 
-        // 靠屏幕内侧那条竖线 = 带的内边界（手指要落在它右边才算）
-        context.setStrokeColor(UIColor(white: 1.0, alpha: flashing ? 0.90 : 0.50).cgColor)
-        context.setLineWidth(1)
-        context.move(to: CGPoint(x: band.minX + 0.5, y: band.minY))
-        context.addLine(to: CGPoint(x: band.minX + 0.5, y: band.maxY))
-        context.strokePath()
+        hideToken += 1
+        let token = hideToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard token == hideToken else { return }
+            box?.isHidden = true
+        }
+    }
 
-        // 上边界用虚线：它和「下半屏 60%」一一对应，用户能一眼确认高度占比
-        context.setLineDash(phase: 0, lengths: [5, 4])
-        context.move(to: CGPoint(x: band.minX, y: band.minY + 0.5))
-        context.addLine(to: CGPoint(x: band.maxX, y: band.minY + 0.5))
-        context.strokePath()
-        context.setLineDash(phase: 0, lengths: [])
+    /// 设置里改了宽度 / 带高 / 可视化开关 → 直接给 3 秒预览。
+    static func refresh() {
+        show(duration: 3.0)
+    }
+
+    /// 接管成功闪一下（只把底色提亮再落下，0.35 秒后自动隐藏）。
+    static func flash() {
+        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
+        show(duration: 0.35)
+    }
+
+    /// 圆盘起来 / 容器搬家时把提示条收掉，别和圆盘叠在一起。
+    static func hideNow() {
+        hideToken += 1
+        box?.isHidden = true
     }
 }
 
@@ -267,14 +269,18 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         return true
     }
 
-    /// V0.1.16（AevonBandIndicatorV116）：接管成功 → 让带闪一下（只画，不改行为）。
+    /// V0.1.17（AevonBandHintV117）：接管成功 → 让提示条闪 0.35 秒。
+    ///
+    /// 注意（Aevon(84) 事故后改的口径）：**没有带视图重绘这回事了**。
+    /// 0.1.16 是 `shared.bandView?.flashBand()` → 全屏 `setNeedsDisplay` → 卡死手机；
+    /// 现在只让一个独立小视图显隐，bandView 一行绘制代码都没有。
     static func flashBandIndicator() {
-        shared.bandView?.flashBand()
+        AevonBandHint.flash()
     }
 
-    /// V0.1.16：设置里改了带宽 / 带高 / 可视化开关 → 立刻重画，不用注销。
+    /// V0.1.17：设置里改了带宽 / 带高 / 可视化开关 → 给 3 秒预览（不用注销）。
     static func refreshBandIndicator() {
-        shared.bandView?.setNeedsDisplay()
+        AevonBandHint.refresh()
     }
 
     // MARK: - 安装
@@ -291,6 +297,10 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         let band = AevonGestureBandView(frame: .zero)
         band.backgroundColor = .clear
         band.isOpaque = false
+        // V0.1.17（AevonNoBandDrawV117）：**不画、不命中、不接触摸**。
+        // 它只是识别器的宿主占位，1×1 隐藏起来；全屏尺寸 + 自绘 + 命中认领是 0.1.16 卡死手机的来源。
+        band.isUserInteractionEnabled = false
+        band.isHidden = true
         guard AevonEntryHost.attachOverlay(band) else {
             if attempt < 12 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -301,6 +311,10 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
             }
             return
         }
+        // attachOverlay 会把 frame 设成容器尺寸 + 自适应；这里立刻改回 1×1 并取消自适应，
+        // 让它彻底退出布局与绘制（0.1.16 那套全屏后备存储 + 每次布局重绘，正是卡死手机的一环）。
+        band.autoresizingMask = []
+        band.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handle(_:)))
         pan.maximumNumberOfTouches = 1

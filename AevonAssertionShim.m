@@ -735,3 +735,17 @@ __attribute__((used)) static const char AevonBandTouchBeganV115Marker[] = "Aevon
  * 同样 used 钉住：CI 只认二进制字节。 */
 __attribute__((used)) static const char AevonRightEdgeShowBandV116Marker[] = "AevonRightEdgeShowBandV116";
 __attribute__((used)) static const char AevonBandIndicatorV116Marker[] = "AevonBandIndicatorV116";
+
+/* V0.1.17（Aevon(84) 全屏卡死事故）：把「全屏自绘」整块删掉，换成按需提示条 + 两道急救闸。
+ *
+ *   AevonNoBandDrawV117     = 带视图退回 1×1 隐藏占位（不画 / 不命中 / 不接触摸）
+ *   AevonBandHintV117       = 可视化改为按需提示条（开关变化 3 秒 / 接管成功 0.35 秒后自动消失）
+ *   AevonDeadManV117        = 死手开关：接管状态超期自动释放，圆盘展开超 20 秒强制收起
+ *   AevonPanicThreeFingerV117 = 三指同时按下急救：释放全部接管 + 写盘关掉右缘接管两个开关
+ *
+ * 这几条都是运行期真正会走到的路径，但 Swift 侧字符串可能被内联（≤15 字节）或被优化掉，
+ * 所以由 ObjC 的 used 常量钉在二进制里，CI 用 strings 校验。 */
+__attribute__((used)) static const char AevonNoBandDrawV117Marker[] = "AevonNoBandDrawV117";
+__attribute__((used)) static const char AevonBandHintV117Marker[] = "AevonBandHintV117";
+__attribute__((used)) static const char AevonDeadManV117Marker[] = "AevonDeadManV117";
+__attribute__((used)) static const char AevonPanicThreeFingerV117Marker[] = "AevonPanicThreeFingerV117";
