@@ -104,6 +104,8 @@ __attribute__((used)) static const char AevonAppExcludeV204Marker[] = "AevonAppE
 /* V0.2.5 权威判向 + 两帧确认（Aevon(91) 判读：用户报「问题依旧」） */
 __attribute__((used)) static const char AevonAppWinAuthV205Marker[] = "AevonAppWinAuthV205";
 __attribute__((used)) static const char AevonAppTwoFrameV205Marker[] = "AevonAppTwoFrameV205";
+/* V0.2.6 判向失败回传（Aevon(92) 判读：兜底呼盘不知道 App 已判失败） */
+__attribute__((used)) static const char AevonAppFailNotifyV206Marker[] = "AevonAppFailNotifyV206";
 
 #pragma mark - 日志
 
@@ -291,6 +293,18 @@ static void AevonAppPostRightEdgeBegan(void) {
                                          NULL, NULL, true);
 }
 
+/* V0.2.6（AevonAppFailNotifyV206）：判向失败回传。
+ *
+ * Aevon(92) 判读：16 次「让路」里 8 次最终由 global 兜底呼盘 —— App 侧判向失败
+ * （纵向/向右）时 SB 不知道，兜底只看 dx=-30 就呼盘，App 那份照滚 =
+ * 用户看到的「呼出圆盘的同时全屏 App 也被操作」。现在失败也广播，
+ * SB 在 1.5s 内不再允许 global 兜底呼盘（成功路径的 rightedgetrigger 不受影响）。 */
+static void AevonAppPostRightEdgeFail(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.aevon.rightedgefail"),
+                                         NULL, NULL, true);
+}
+
 /*
  * 真接管识别器（AevonAppTakeoverV201）。
  *
@@ -444,6 +458,7 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
         if (strongSelf == nil || strongSelf.decided || !strongSelf.claimed) { return; }
         strongSelf.decided = YES;
         AevonAppLog(@"卡死自愈：began 扣住 1.5s 未判定（无移动帧也无取消，序列疑似在系统层中断）→ 主动 Failed 整段放行（AevonAppStuckGuardV203）");
+        AevonAppPostRightEdgeFail();
         strongSelf.state = UIGestureRecognizerStateFailed;
     });
 }
@@ -491,14 +506,16 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     /* 向右扫 → 放弃（那是在关闭/推回，不是呼出） */
     if (dx >= 8.0) {
         self.decided = YES;
-        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 向右扫，整段补投（AevonAppDirectionV201）", dx, dy);
+        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 向右扫，整段补投（AevonAppDirectionV201 AevonAppFailNotifyV206）", dx, dy);
+        AevonAppPostRightEdgeFail();
         self.state = UIGestureRecognizerStateFailed;
         return;
     }
     /* 纵向占优 → 放弃（那是滚动，必须在 8pt 内让开，不能吃掉滚动起始） */
     if (fabs(dy) >= 8.0 && fabs(dy) > fabs(dx) * 1.2) {
         self.decided = YES;
-        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 纵向滚动，整段补投（AevonAppDirectionV201）", dx, dy);
+        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 纵向滚动，整段补投（AevonAppDirectionV201 AevonAppFailNotifyV206）", dx, dy);
+        AevonAppPostRightEdgeFail();
         self.state = UIGestureRecognizerStateFailed;
         return;
     }
@@ -529,8 +546,9 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     self.decided = YES;
     /* 没判出横向 8pt：轻点或短划。Failed → UIKit 把 began+moved+ended 整段补投，
      * 轻点在抬手时生效（带内轻点的已知代价），App 不会丢事件。 */
-    AevonAppLog(@"抬手 (%.0f,%.0f)：未满 8pt 横向 → 整段补投（轻点延迟到抬手生效，App 不丢事件）",
+    AevonAppLog(@"抬手 (%.0f,%.0f)：未满 8pt 横向 → 整段补投（轻点延迟到抬手生效，App 不丢事件）（AevonAppFailNotifyV206）",
                 point.x, point.y);
+    AevonAppPostRightEdgeFail();
     self.state = UIGestureRecognizerStateFailed;
 }
 
@@ -540,7 +558,8 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
      * 静默消失 —— 谁取消的（滚动容器 pan 抢先 Began / 系统）写清楚，断裂不再隐形 */
     if (self.decided) { return; }
     self.decided = YES;
-    AevonAppLog(@"序列被取消：App 内其他手势抢先（最可能是滚动容器 pan ~10pt Began）→ 本指放行（AevonAppEarlyJudgeV202）");
+    AevonAppLog(@"序列被取消：App 内其他手势抢先（最可能是滚动容器 pan ~10pt Began）→ 本指放行（AevonAppEarlyJudgeV202 AevonAppFailNotifyV206）");
+    AevonAppPostRightEdgeFail();
 }
 
 @end

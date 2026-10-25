@@ -426,6 +426,9 @@ enum AevonEdgeEntry {
     /// 窗口层兜底判定的状态
     private static var probeStart: CGPoint?
     private static var lastTriggerAt: CFTimeInterval = 0
+    /// V0.2.6（AevonEdgeFailGateV206）：App 侧最近一次判向失败（纵向/向右）的时刻，
+    /// 此后 1.5s 内 global 兜底不得呼盘（那根手指是滚动/推回，不是呼出）。
+    static var appEdgeFailUntil: CFTimeInterval = 0
     private static var loggedProbeBegan = false
     /// 最近一次边缘触摸的位置（窗口坐标），圆盘唤出时从这里接手那根手指
     private static var lastTouchPoint: CGPoint = .zero
@@ -532,6 +535,15 @@ enum AevonEdgeEntry {
                                            nil,
                                            aevonAppEdgeBeganHandler,
                                            "com.aevon.rightedgebegan" as CFString,
+                                           nil,
+                                           .deliverImmediately)
+            // V0.2.6（AevonEdgeFailGateV206）：App 侧判向失败（纵向滚动/向右扫）也回传 ——
+            // Aevon(92) 铁证：让路后兜底只看 dx=-30 就呼盘，不知道 App 已判失败，
+            // 结果「圆盘弹出 + App 照滚」。收到本通知 1.5s 内 global 兜底闭嘴。
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonAppEdgeFailHandler,
+                                           "com.aevon.rightedgefail" as CFString,
                                            nil,
                                            .deliverImmediately)
             AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26 AevonGuardCleanupV102）")
@@ -699,6 +711,15 @@ enum AevonEdgeEntry {
     /// `source` 决定后续触摸流转发给圆盘时走哪条通道（圆盘只认最先来的那条）。
     static func attemptTrigger(_ reason: String, source: String) {
         let now = CACurrentMediaTime()
+        // V0.2.6（AevonEdgeFailGateV206）：App 侧刚判过「失败」（纵向滚动/向右扫）→
+        // global 兜底在这根手指上必须闭嘴。Aevon(92) 铁证：16 次让路里 8 次兜底呼盘
+        // 发生在 App 已判失败之后（兜底只看 dx=-30，不看纵向），App 那份照滚 =
+        // 用户看到的「呼出圆盘的同时全屏 App 也被操作」。只拦 global 兜底，
+        // App 自己判成功走的 appedge 不受影响。
+        if source == "global", now < appEdgeFailUntil {
+            AevonLog.info("[右缘] App 侧已判失败（纵向/向右）→ 全局兜底不触发（AevonEdgeFailGateV206）")
+            return
+        }
         guard now - lastTriggerAt > 0.6 else { return }
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
@@ -1659,7 +1680,13 @@ enum AevonEdgeEntry {
         AevonRingMenu.present(in: root)
         // 唤出圆盘的那根手指还没离开屏幕 —— 把它的位置交给圆盘，后续移动就是旋转。
         // 圆盘只认这个 source，另一条通道（手势条 / 窗口探针）的重复事件会被忽略。
-        AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint, source: source)
+        // V0.2.6（AevonEdgePointerUnifyV206）：appedge 呼盘后，这根手指的后续移动
+        // 由**全局通道**以 source:"global" 持续喂给圆盘（右缘让路保留了观察）。
+        // 指针 source 必须与喂入方一致，否则圆盘收不到任何移动/抬手 ——
+        // 只能抬手后二次点选图标（Aevon(92) 用户反馈「需要抬手后二级选中」）。
+        // 统一成 "global" 后：手指继续拖 → 圆盘跟随/悬停高亮；松手在图标上 → 直接开窗。
+        let pointerSource = (source == "appedge") ? "global" : source
+        AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint, source: pointerSource)
 
         // V0.0.24：全局通道唤起时，这根手指的事件同时也被 App 收着（用户 Aevon(17) 反馈
         // 「滑圆盘时前台 App 跟着动」）。这里登记接管，`AevonTouchHook.m` 会在
@@ -1884,6 +1911,18 @@ private func aevonAppEdgeBeganHandler(_ center: CFNotificationCenter?,
                                       _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
         AevonEdgeEntry.yieldGlobalChannelToAppSide()
+    }
+}
+
+/// V0.2.6（AevonEdgeFailGateV206）：App 侧判向失败（纵向/向右/抬手未成立/卡死自愈）
+/// 的通知回调 → 1.5s 内禁止 global 兜底呼盘（那根手指不是在呼出）。
+private func aevonAppEdgeFailHandler(_ center: CFNotificationCenter?,
+                                     _ observer: UnsafeMutableRawPointer?,
+                                     _ name: CFNotificationName?,
+                                     _ object: UnsafeRawPointer?,
+                                     _ userInfo: CFDictionary?) {
+    DispatchQueue.main.async {
+        AevonEdgeEntry.appEdgeFailUntil = CACurrentMediaTime() + 1.5
     }
 }
 

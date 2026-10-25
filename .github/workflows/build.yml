@@ -1178,6 +1178,30 @@ jobs:
             || { echo "::error::桥接动态域被删 —— 第三方 App 的 App 侧日志将不可见"; exit 1; }
           echo "V0.2.5 校验: 权威判向（失败要求）+ 两帧确认 + 抬手快判 + 桥接动态域 已就位"
 
+          # V0.2.6（AevonAppFailNotifyV206 / AevonEdgeFailGateV206 / AevonEdgePointerUnifyV206）：
+          #   Aevon(92) 判读：8 次兜底呼盘发生在 App 已判失败之后（兜底只看 dx 不看纵向）；
+          #   appedge 呼盘后圆盘收不到手指移动（pointer source 不一致）→ 只能抬手二次点选。
+          #   ① App 侧失败回传 rightedgefail 必须在（4 个失败分支 + 卡死自愈）；
+          #   ② SB 侧失败闸（1.5s 内 global 兜底闭嘴）必须在；
+          #   ③ appedge 指针 source 统一为 "global"（跟手 + 松手在图标上直接开窗）；
+          #   ④ 场景标识解析必须剥 "sceneID:" 前缀与 "-default" 后缀。
+          strings "$APP_DYLIB" | grep -q "AevonAppFailNotifyV206" \
+            || { echo "::error::AevonApp.dylib 缺少 0.2.6 标记 AevonAppFailNotifyV206"; exit 1; }
+          strings "$APP_DYLIB" | grep -q "com.aevon.rightedgefail" \
+            || { echo "::error::App 侧缺失败回传通知名 com.aevon.rightedgefail"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'com.aevon.rightedgefail' \
+            || { echo "::error::SB 侧没监听 rightedgefail —— 兜底呼盘将不知道 App 已判失败"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'appEdgeFailUntil' \
+            || { echo "::error::失败闸状态变量被删 —— 纵向滚动中弹圆盘会复发"; exit 1; }
+          grep -q 'AevonEdgePointerUnifyV206' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::指针 source 统一被删 —— 圆盘只能抬手二次点选"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            | grep -q 'sceneID:' \
+            || { echo "::error::场景标识解析没剥 sceneID: 前缀 —— 动态域会是脏值"; exit 1; }
+          echo "V0.2.6 校验: App 失败回传 + SB 失败闸 + 指针 source 统一 + 场景解析修正 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

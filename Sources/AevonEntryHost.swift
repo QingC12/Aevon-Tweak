@@ -387,17 +387,24 @@ enum AevonEntryHost {
         }
     }
 
-    /// V0.2.5（AevonAppProbeWideV205）：从场景标识 "<bundleID>-<UUID>" 里解析 bundleID。
-    /// 场景标识必然以完整 UUID（8-4-4-4-12 十六进制）结尾，非贪婪匹配到第一段
-    /// 8-4-4-4-12 即为分隔点；解析失败返回 nil（不影响主流程）。
+    /// V0.2.5 起从场景标识解析 bundleID（V0.2.6 修正，AevonAppProbeWideV205）。
+    /// Aevon(92) 实证场景标识有两种形态：
+    ///   ① "sceneID:com.apple.mobilesafari-<UUID>"（UUID = 8-4-4-4-12 十六进制）；
+    ///   ② "sceneID:org.coolstar.SileoStore-default"（浮窗拉起的 App 场景）。
+    /// 0.2.5 只处理了 UUID 形态且没剥 "sceneID:" 前缀，导致监听域变成脏值
+    /// 「sceneID:com.apple.mobilesafari」；解析失败返回 nil（不影响主流程）。
     static func extractBundleID(from sceneIdentifier: String) -> String? {
-        guard let match = sceneIdentifier.range(of:
-            "^(.+?)-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
-            options: .regularExpression) else { return nil }
-        let full = sceneIdentifier[match]
-        // 去掉尾部 "-<UUID>"（48 个字符：1 个连字符 + 36 位 UUID）
-        guard full.count > 37 else { return nil }
-        return String(full.dropLast(37))
+        var s = sceneIdentifier
+        if s.hasPrefix("sceneID:") { s = String(s.dropFirst("sceneID:".count)) }
+        // 形态一：<bundleID>-<UUID> —— 去掉尾部 37 个字符（1 个连字符 + 36 位 UUID）
+        if s.range(of: "-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+                   options: .regularExpression) != nil {
+            if s.count > 37 { return String(s.dropLast(37)) }
+            return nil
+        }
+        // 形态二：<bundleID>-default
+        if s.hasSuffix("-default") { return String(s.dropLast("-default".count)) }
+        return nil
     }
 
     /// 宿主是否真的铺满整屏并且正在显示（用于区分 App 画面容器与切换器卡片 / 后台场景）。
