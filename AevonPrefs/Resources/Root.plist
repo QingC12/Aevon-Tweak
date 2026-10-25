@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.0（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在右下角热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.2.0 是「换层」的第一版，不是又调了一次参数：backboardd 会把同一根手指投两份 —— 一份给 SpringBoard，一份直投前台 App 进程。前十个版本在 SpringBoard 侧吞事件、停识别器、调带宽，动的全是第一份，所以圆盘出来了 App 也照样跟着动。这一版另起一个极小的 dylib（AevonApp.dylib），只注入「设置」和 Safari，把判定点搬进 App 自己的进程。这一版只记录、不拦截，用来验证四件事：① 能不能在 App 进程里加载 ② 能不能读到 com.Aevon 域的配置 ③ 能不能拿到 keyWindow 挂上识别器 ④ App 侧看到的右缘落点坐标和 SpringBoard 侧是否一致。四条全为真，0.2.1 才放开到所有 App 并真正接管；任一为假，这条路就地终止，不会硬推。验证方法：打开「App 进程接管」→ 去 Safari 从右缘往左滑 → 回来看 /var/mobile/Aevon.log，应有「[App侧桥接] com.apple.mobilesafari 新增 N 行」和逐条「右缘探针：起手 (x,y) 距右缘 Npt → 带内/带外」。右缘接管带（0.1.18 的 46pt）与三指急救全部原样保留。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.2.1（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 右下角热区左滑 / 全屏 App 右缘左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.2.1 把右缘判定真正搬进了 App 进程：0.2.0 只读探针已在 Aevon(87) 日志里证明「App 进程加载 / 读 com.Aevon 域」两件为真，本版在 App 侧挂上真识别器 —— delaysTouchesBegan 扣住带内 began，向左 30pt 且横向占优则 App 收到合法触摸取消并通知 SpringBoard 呼圆盘；判向失败则整段补投，点击滚动只晚几帧。先覆盖「设置」和 Safari 两个 App 验证「圆盘出来 App 不动」，下一版再扩白名单。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -40,13 +40,13 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<false/>
+			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>AppSideEnabled</string>
 			<key>label</key>
-			<string>App 进程接管（0.2.0 验证版，默认关）：把右缘判定搬进 App 自己的进程里 —— 这是唯一能做到「圆盘出来了、App 也不跟着动」的层。0.2.0 只对「设置」和 Safari 两个 App 生效，而且只记录、不拦截：它不改变任何 App 的手感，只把 App 侧看到的右缘落点写进日志，用来确认这条路通不通。打开后去 Safari 从右缘往左滑一下，再看 /var/mobile/Aevon.log 里有没有 [App侧(com.apple.mobilesafari)] 开头的行（没有的话，说明 App 进程里没加载成功，路 B 要换方案）</string>
+			<string>App 进程右缘接管（0.2.1 真接管，默认开）：右缘判定搬进 App 自己的进程 —— 圆盘出来了、App 也不再跟着动。0.2.1 只对「设置」和 Safari 生效，判向=向左滑 30pt 且横向占优；成立时 App 收到的是合法的触摸取消（不滚动），同时呼出圆盘；判向失败（纵向滚动 / 向右扫 / 轻点）时触摸整段补投，只晚几帧。代价：右缘 46pt 带内的轻点会延迟到抬手才生效（判向需要看见位移）。急救：三指同时按下 = App 侧立刻放行全部触摸（与 SB 侧急救同源）。验旧版只读探针（0.2.0）时可关掉它</string>
 		</dict>
 		<dict>
 			<key>cell</key>

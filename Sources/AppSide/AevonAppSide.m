@@ -7,7 +7,7 @@
 #import <unistd.h>
 
 /*
- * Aevon App 侧（V0.2.0，AevonAppSideV200 / AevonAppObserveV200）
+ * Aevon App 侧（V0.2.1，AevonAppTakeoverV201；0.2.0 只读探针的标记保留收容）
  * ============================================================
  *
  * 为什么要有这个文件
@@ -23,23 +23,29 @@
  *   · 判向失败 → UIKit 自己补投 began + 全部累积 moved，只晚几帧。
  * 这正是 0.1.19 方案书里「暂存 60ms 再按序补投」想做的事，而且一行伪造事件都不用写。
  *
- * 这一版（0.2.0）**不接管、不改时序**，只回答四个问题
+ * 0.2.0 只读探针的答案（Aevon(87) 日志验收）
  * ----------------------------------------------
- * 因为「动时序」出错时改的是所有 App 的手感，必须先证明基础设施成立：
- *   Q1 dylib 能不能在 App 进程里加载（而不是被系统拒掉）；
- *   Q2 App 侧能不能读到 `com.Aevon` 域的配置；
- *   Q3 能不能拿到 keyWindow 并把识别器挂上去；
- *   Q4 右缘的触摸到底会不会走进这个识别器，落点坐标是什么。
- * 四个问题任一为否，路 B 就地终止，不会进到改时序那一步。
+ *   Q1 App 进程加载          → 真（com.apple.Preferences pid=56261）；
+ *   Q2 读 com.Aevon 域配置    → 真（带宽=46 带高=60% 与默认值精确一致）；
+ *   Q3 keyWindow 挂识别器     → 未验证（AppSideEnabled 开关默认关，安全闸按设计工作）；
+ *   Q4 右缘落点坐标           → 未验证（识别器没挂）。
+ * ③④ 被默认关的开关挡住，不是机制失败 → 0.2.1 直接做真接管，随真接管自证。
  *
- * 零影响的实现方式（为什么这一版绝不会让 App 变卡 / 点不动）
- * --------------------------------------------------------
- * 不用 UIPanGestureRecognizer。用自定义 UIGestureRecognizer 子类，
- * 在整个触摸序列里**永远停在 possible**：不 success、不 fail、
- * `delaysTouchesBegan = NO`、`cancelsTouchesInView = NO`。
- * UIKit 的规则是「只有 recognized 才会 cancel 命中视图的触摸」，
- * 停在 possible 的识别器对手势竞争、响应链、highlighted 状态全部没有影响。
- * 它只做一件事：在 touchesBegan 里把落点记下来。
+ * 这一版（0.2.1，AevonAppTakeoverV201）才是真正的接管
+ * ----------------------------------------------------
+ * UIPanGestureRecognizer + 官方两个开关：
+ *   · delaysTouchesBegan = YES  → 带内触摸的 began 先扣在 UIKit 手势环境里；
+ *   · cancelsTouchesInView = YES → 判向成立时 App 收到的是**合法的 touchesCancelled**，
+ *     不是伪造事件；判向失败时 UIKit 自动把 began + 全部累积 moved **按序补投**，
+ *     点击 / 滚动 / 键盘只晚几帧，零伪造对象、零野指针 —— 这正是 0.1.19 方案书里
+ *     「暂存 60ms 再按序补投」想做的事，由 UIKit 官方机制完成。
+ *
+ * 判向参数与 SpringBoard 侧成熟版完全一致：向左 30pt 且 |dx| ≥ |dy|×1.2。
+ * 判向成立 → 取消 App 触摸 + Darwin 通知 com.aevon.rightedgetrigger 让 SB 呼圆盘。
+ *
+ * 三指急救（AevonAppPanicCrossV201，App 侧形态）：三根手指同时按下 → 识别器
+ * 立刻 Failed（扣住的 began 全部补投），绝不持有任何触摸。App 沙盒写不了
+ * com.Aevon 域，关开关的事仍由 SB 侧的急救负责；App 侧只保证**自己零持有**。
  *
  * 日志通道（App 沙盒写不了 /var/mobile，必须分层降级）
  * --------------------------------------------------
@@ -55,11 +61,17 @@
 
 static const char *AevonAppLogPath = "/var/mobile/Aevon.log";
 
-/* CI 校验标记（本文件编进 AevonApp.dylib，不进主插件） */
+/* CI 校验标记（本文件编进 AevonApp.dylib，不进主插件）。
+ * V200 四条是 0.2.0 只读探针的历史标记，只加不能改（历史校验串纪律）。 */
 __attribute__((used)) static const char AevonAppSideV200Marker[] = "AevonAppSideV200";
 __attribute__((used)) static const char AevonAppObserveV200Marker[] = "AevonAppObserveV200";
 __attribute__((used)) static const char AevonAppPrefDomainV200Marker[] = "AevonAppPrefDomainV200";
 __attribute__((used)) static const char AevonAppWhitelistV200Marker[] = "AevonAppWhitelistV200";
+/* V0.2.1 真接管标记 */
+__attribute__((used)) static const char AevonAppTakeoverV201Marker[] = "AevonAppTakeoverV201";
+__attribute__((used)) static const char AevonAppDirectionV201Marker[] = "AevonAppDirectionV201";
+__attribute__((used)) static const char AevonAppNotifySBV201Marker[] = "AevonAppNotifySBV201";
+__attribute__((used)) static const char AevonAppPanicCrossV201Marker[] = "AevonAppPanicCrossV201";
 
 #pragma mark - 日志
 
@@ -223,72 +235,167 @@ static double AevonAppPrefDouble(NSString *key, double fallback) {
     return result;
 }
 
-#pragma mark - 只读识别器
+#pragma mark - 真接管识别器（V0.2.1）
+
+/* Darwin 通知：判向成立 → 让 SpringBoard 呼圆盘（通知无载荷，SB 侧自己查开关）。
+ * 这是 Myrtle/ScreenCore 验证过的跨进程通道，Axs 逆向也确认了通知是这类插件的
+ * 标准回传方式；路 B 的回传方向是「App 判向 → SB 呼盘」。 */
+static void AevonAppPostRightEdgeTrigger(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.aevon.rightedgetrigger"),
+                                         NULL, NULL, true);
+}
 
 /*
- * 永远停在 possible 的识别器。
+ * 真接管识别器（AevonAppTakeoverV201）。
  *
- * 不设 `delaysTouchesBegan`（保持默认 NO）、不设 `cancelsTouchesInView`
- * （明确写成 NO），也从不给 self.state 赋值 —— 因此 UIKit 不会因它
- * cancel 任何触摸，App 的滚动手感、点击高亮、键盘全部不受影响。
+ * UIPanGestureRecognizer + delegate 自持。与 0.2.0 只读探针的三个本质区别：
+ *   ① delaysTouchesBegan = YES —— 带内触摸的 began 扣在 UIKit 手势环境里，
+ *      App 在判向结束前拿不到任何东西（点击/滚动的位移不会先泄露给 App）；
+ *   ② cancelsTouchesInView = YES —— 判向成立时 App 收到合法的 touchesCancelled；
+ *   ③ 判向失败显式 state = Failed —— UIKit 把 began + 全部累积 moved 按序补投，
+ *      只晚几帧，这正是「暂存 + 按序补投」的官方实现。
  *
- * 0.2.1 才会在这里引入真正的判向与 delaysTouchesBegan。
+ * 影响范围被 shouldReceiveTouch 压到最小：只接收右缘带内的落指，
+ * 带外触摸一律 NO —— delaysTouchesBegan 对没被接收的触摸完全不生效。
+ *
+ * 带内轻点的代价（明说）：轻点会延迟到抬手才生效（识别器 Failed 之后补投）。
+ * 这是「判向需要看见位移」的物理代价，46pt 带外的所有交互完全不受影响。
  */
-@interface AevonAppObserverGesture : UIGestureRecognizer
+@interface AevonAppTakeoverGesture : UIPanGestureRecognizer <UIGestureRecognizerDelegate>
 @property (nonatomic, assign) double bandWidth;
 @property (nonatomic, assign) double heightPercent;
 @property (nonatomic, assign) CGSize screenSize;
-@property (nonatomic, assign) BOOL loggedMove;
+@property (nonatomic, assign) CGPoint startPoint;   /* touchesBegan 时的起点 */
+@property (nonatomic, assign) BOOL decided;         /* 本条触摸序列已判完（成/败） */
+@property (nonatomic, assign) BOOL claimed;         /* 是否真的扣过 began（日志用） */
 @end
 
-@implementation AevonAppObserverGesture
+@implementation AevonAppTakeoverGesture
+
+- (instancetype)initWithTarget:(id)target action:(SEL)action {
+    self = [super initWithTarget:target action:action];
+    if (self != nil) {
+        /* 两个开关就是路 B 的全部机制，写死在构造里，改这里的人必须知道代价 */
+        self.delaysTouchesBegan = YES;
+        self.cancelsTouchesInView = YES;
+        self.delegate = self;
+    }
+    return self;
+}
+
+/* 只接收右缘带内的落指。开关每根手指都现读（恒假开关纪律：绝不缓存布尔）。 */
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldReceiveTouch:(UITouch *)touch {
+    BOOL enabled = AevonAppPrefBool(@"AppSideEnabled", YES);
+    BOOL edgeEnabled = AevonAppPrefBool(@"EdgeGestureEnabled", YES);
+    if (!enabled || !edgeEnabled) { return NO; }
+
+    UIWindow *window = touch.window;
+    if (window == nil) { return NO; }
+    CGSize screen = window.bounds.size;
+    if (screen.width < 1.0 || screen.height < 1.0) { return NO; }
+
+    CGPoint point = [touch locationInView:window];
+    double gap = screen.width - point.x;
+    double bandTop = screen.height * (1.0 - self.heightPercent / 100.0);
+    BOOL inBand = (gap >= 0 && gap <= self.bandWidth && point.y >= bandTop);
+    if (inBand) {
+        self.screenSize = screen;
+        return YES;
+    }
+    /* 带外：限频记一行自述（在带外 + 宽度差多少），然后绝不接收 */
+    static CFAbsoluteTime lastRejectLog = 0;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - lastRejectLog > 2.0) {
+        lastRejectLog = now;
+        if (gap < 0 || gap > self.bandWidth) {
+            AevonAppLog(@"右缘带外：起手 (%.0f,%.0f) 距右缘 %.0fpt → 不接收（宽度差 %.0fpt 需 ≤%.0f）",
+                        point.x, point.y, gap, gap - self.bandWidth, self.bandWidth);
+        } else {
+            AevonAppLog(@"右缘带外：起手 (%.0f,%.0f) 距右缘 %.0fpt → 不接收（y=%.0f 需 ≥%.0f，带高 %.0f%%）",
+                        point.x, point.y, gap, point.y, bandTop, self.heightPercent);
+        }
+    }
+    return NO;
+}
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
-    self.loggedMove = NO;
-    UITouch *touch = touches.anyObject;
-    if (touch == nil) { return; }
-    CGPoint point = [touch locationInView:self.view];
-    double gap = self.screenSize.width - point.x;
-    double bandTop = self.screenSize.height * (1.0 - self.heightPercent / 100.0);
-    BOOL inWidth = (gap >= 0 && gap <= self.bandWidth);
-    BOOL inHeight = (point.y >= bandTop);
+    self.decided = NO;
+    self.claimed = NO;
 
-    NSString *verdict = nil;
-    if (inWidth && inHeight) {
-        verdict = @"带内（本版只记录，不接管）";
-    } else if (!inWidth) {
-        verdict = [NSString stringWithFormat:@"带外·宽度差 %.0fpt（带宽 %.0fpt）", gap - self.bandWidth, self.bandWidth];
-    } else {
-        verdict = [NSString stringWithFormat:@"带外·高度差（y=%.0f 需 ≥%.0f，带高 %.0f%%）",
-                   point.y, bandTop, self.heightPercent];
+    /* 三指急救（App 侧形态，AevonAppPanicCrossV201）：三根手指同时按下 →
+     * 立刻 Failed。Failed 会让 UIKit 把所有被扣住的 began 连同后续帧整段补投，
+     * App 侧零持有；关开关（写 com.Aevon）是 SB 侧急救的职责，App 沙盒写不了。 */
+    if (event != nil && event.allTouches.count >= 3) {
+        AevonAppLog(@"急救（App 侧）：三指成形（%lu 指）→ 识别器立刻 Failed，全部触摸整段补投（AevonAppPanicCrossV201）",
+                    (unsigned long)event.allTouches.count);
+        self.state = UIGestureRecognizerStateFailed;
+        return;
     }
-    AevonAppLog(@"右缘探针：起手 (%.0f,%.0f) 距右缘 %.0fpt → %@", point.x, point.y, gap, verdict);
+
+    UITouch *touch = touches.anyObject;
+    if (touch == nil || self.view == nil) { return; }
+    self.startPoint = [touch locationInView:self.view];
+    self.claimed = YES;
+    double gap = self.screenSize.width - self.startPoint.x;
+    AevonAppLog(@"右缘起手 (%.0f,%.0f) 距右缘 %.0fpt → 带内·began 已扣住（判向中，30pt 横向占优则接管）（AevonAppTakeoverV201）",
+                self.startPoint.x, self.startPoint.y, gap);
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
-    if (self.loggedMove) { return; }
+    if (self.decided) { return; }
     UITouch *touch = touches.anyObject;
-    if (touch == nil) { return; }
-    CGPoint previous = [touch previousLocationInView:self.view];
+    if (touch == nil || self.view == nil) { return; }
+
     CGPoint now = [touch locationInView:self.view];
-    CGPoint delta = CGPointMake(now.x - previous.x, now.y - previous.y);
-    if (fabs(delta.x) < 1.0 && fabs(delta.y) < 1.0) { return; }
-    self.loggedMove = YES;
-    AevonAppLog(@"右缘探针：首次移动 dx=%.0f dy=%.0f（本版不判向、不拦截）", delta.x, delta.y);
+    double dx = now.x - self.startPoint.x;
+    double dy = now.y - self.startPoint.y;
+
+    /* 判向参数与 SpringBoard 侧成熟版一致：向左 30pt 且横向绝对占优 */
+    if (dx <= -30.0 && fabs(dx) >= fabs(dy) * 1.2) {
+        self.decided = YES;
+        AevonAppLog(@"判向成立：dx=%.0f dy=%.0f → 取消 App 触摸（合法 touchesCancelled）+ 通知 SB 呼圆盘（AevonAppDirectionV201 AevonAppNotifySBV201）",
+                    dx, dy);
+        AevonAppPostRightEdgeTrigger();
+        self.state = UIGestureRecognizerStateBegan;
+        self.state = UIGestureRecognizerStateEnded;
+        return;
+    }
+    /* 向右扫 → 放弃（那是在关闭/推回，不是呼出） */
+    if (dx >= 8.0) {
+        self.decided = YES;
+        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 向右扫，整段补投（AevonAppDirectionV201）", dx, dy);
+        self.state = UIGestureRecognizerStateFailed;
+        return;
+    }
+    /* 纵向占优 → 放弃（那是滚动，必须在 8pt 内让开，不能吃掉滚动起始） */
+    if (fabs(dy) >= 8.0 && fabs(dy) > fabs(dx) * 1.2) {
+        self.decided = YES;
+        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 纵向滚动，整段补投（AevonAppDirectionV201）", dx, dy);
+        self.state = UIGestureRecognizerStateFailed;
+        return;
+    }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
+    if (self.decided || !self.claimed) { return; }
     UITouch *touch = touches.anyObject;
-    if (touch == nil) { return; }
-    CGPoint point = [touch locationInView:self.view];
-    AevonAppLog(@"右缘探针：抬手于 (%.0f,%.0f)（本版未拦截任何触摸）", point.x, point.y);
+    CGPoint point = (touch != nil && self.view != nil) ? [touch locationInView:self.view] : CGPointZero;
+    self.decided = YES;
+    /* 没判出横向 30pt：轻点或短划。Failed → UIKit 把 began+moved+ended 整段补投，
+     * 轻点在抬手时生效（带内轻点的已知代价），App 不会丢事件。 */
+    AevonAppLog(@"抬手 (%.0f,%.0f)：未满 30pt 横向 → 整段补投（轻点延迟到抬手生效，App 不丢事件）",
+                point.x, point.y);
+    self.state = UIGestureRecognizerStateFailed;
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesCancelled:touches withEvent:event];
+    self.decided = YES;
 }
 
 @end
@@ -302,7 +409,7 @@ static double AevonAppPrefDouble(NSString *key, double fallback) {
 
 @implementation AevonAppSide {
     BOOL _installed;
-    AevonAppObserverGesture *_gesture;
+    AevonAppTakeoverGesture *_gesture;
     double _bandWidth;
     double _heightPercent;
 }
@@ -340,7 +447,7 @@ static double AevonAppPrefDouble(NSString *key, double fallback) {
     /* 双保险：filter 里本来就没有 SpringBoard，这里再挡一次，避免与主插件抢同一份日志 */
     NSArray<NSString *> *allowed = @[@"com.apple.Preferences", @"com.apple.mobilesafari"];
     if (![allowed containsObject:gAevonAppBundleID]) {
-        AevonAppLog(@"0.2.0 App 侧已加载，但不在验证白名单（%@）→ 本版不动作", allowed);
+        AevonAppLog(@"0.2.1 App 侧已加载，但不在验证白名单（%@）→ 本版不动作", allowed);
         return;
     }
 
@@ -351,11 +458,14 @@ static double AevonAppPrefDouble(NSString *key, double fallback) {
         [gAevonAppLock unlock];
     }
 
-    BOOL enabled = AevonAppPrefBool(@"AppSideEnabled", NO);
+    /* V0.2.1：默认开。0.2.0 的「默认关」是为了让安全闸先自证一轮；
+     * Aevon(87) 证明注入/读域/日志通道全通后，真接管就是这个功能的本体。
+     * 键从未被写过（日志确认「域里没有这个键」），改默认值不影响任何已写盘设备。 */
+    BOOL enabled = AevonAppPrefBool(@"AppSideEnabled", YES);
     _bandWidth = AevonAppPrefDouble(@"RightEdgeWidth", 46.0);
     _heightPercent = AevonAppPrefDouble(@"RightEdgeHeight", 60.0);
 
-    AevonAppLog(@"0.2.0 App 侧已加载：进程=%@ pid=%d 系统=%@ 通道=%@",
+    AevonAppLog(@"0.2.1 App 侧已加载：进程=%@ pid=%d 系统=%@ 通道=%@",
                 gAevonAppBundleID, (int)getpid(),
                 [UIDevice currentDevice].systemVersion ?: @"?",
                 gAevonAppChannel);
@@ -432,10 +542,7 @@ static double AevonAppPrefDouble(NSString *key, double fallback) {
     _heightPercent = AevonAppPrefDouble(@"RightEdgeHeight", _heightPercent);
 
     if (_gesture == nil) {
-        _gesture = [[AevonAppObserverGesture alloc] initWithTarget:nil action:nil];
-        /* 明确写死两个「不影响 App」的开关，将来改这里的人必须知道代价 */
-        _gesture.delaysTouchesBegan = NO;
-        _gesture.cancelsTouchesInView = NO;
+        _gesture = [[AevonAppTakeoverGesture alloc] initWithTarget:nil action:nil];
     }
     _gesture.bandWidth = _bandWidth;
     _gesture.heightPercent = _heightPercent;
@@ -443,7 +550,7 @@ static double AevonAppPrefDouble(NSString *key, double fallback) {
     [window addGestureRecognizer:_gesture];
 
     _installed = YES;
-    AevonAppLog(@"识别器已挂载：窗口=%@ 尺寸=%.0fx%.0f 带宽=%.0f 带高=%.0f%% 模式=只读探针（delaysTouchesBegan=NO cancelsTouchesInView=NO）",
+    AevonAppLog(@"识别器已挂载：窗口=%@ 尺寸=%.0fx%.0f 带宽=%.0f 带高=%.0f%% 模式=真接管（delaysTouchesBegan=YES cancelsTouchesInView=YES，判向失败整段补投）（AevonAppTakeoverV201）",
                 NSStringFromClass([window class]), screen.width, screen.height,
                 _bandWidth, _heightPercent);
 }

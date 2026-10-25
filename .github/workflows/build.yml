@@ -1066,11 +1066,38 @@ jobs:
             echo "::error::主插件里混进了 App 侧识别器（AevonAppObserverGesture）"
             exit 1
           fi
-          if grep -rnE 'delaysTouchesBegan[[:space:]]*=[[:space:]]*YES|cancelsTouchesInView[[:space:]]*=[[:space:]]*YES' "$GITHUB_WORKSPACE/Sources/AppSide" 2>/dev/null | grep -q .; then
-            echo "::error::App 侧把 delaysTouchesBegan / cancelsTouchesInView 设成了 YES —— 0.2.0 只许只读，改时序属 0.2.1"
-            exit 1
-          fi
-          echo "V0.2.0 校验: AevonApp.dylib（arm64e / 只读探针 / 2 个 App）+ 日志桥 已就位；触摸时序未改动"
+          # V0.2.1（AevonAppTakeoverV201）：0.2.0 的「App 侧不许动时序」断言在此反转。
+          # 历史正向标记（AevonAppSideV200 等 4 条）全部保留；只读形态的记录由这些
+          # 标记承担。0.2.1 的机制恰恰就是那两个开关置 YES —— 这是 0.1.19 方案书
+          # 「暂存+按序补投」的官方实现，断言改为**必须**为 YES。
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'delaysTouchesBegan = YES' \
+            || { echo "::error::0.2.1 App 侧 delaysTouchesBegan 必须为 YES —— 不扣 began 就拦不住 App 那份触摸（路 B 本体）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'cancelsTouchesInView = YES' \
+            || { echo "::error::0.2.1 App 侧 cancelsTouchesInView 必须为 YES —— 不取消就谈何接管"; exit 1; }
+          echo "V0.2.0 校验: AevonApp.dylib（arm64e / 2 个 App）+ 日志桥 已就位（只读断言已于 0.2.1 反转）"
+
+          # V0.2.1（AevonAppTakeoverV201）：App 侧真接管 + 判向 + 回传。
+          #   ① AevonApp.dylib 编入 4 条新标记（接管 / 判向 / 回传 / 急救）；
+          #   ② 判向参数必须与 SB 侧成熟版一致（30pt 横向占优）；
+          #   ③ Darwin 回传通道 com.aevon.rightedgetrigger 两端都要有；
+          #   ④ 注入名单仍为 2 个（扩白名单属 0.2.2）。
+          for s in AevonAppTakeoverV201 AevonAppDirectionV201 AevonAppNotifySBV201 AevonAppPanicCrossV201; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::AevonApp.dylib 缺少 0.2.1 标记 $s"; exit 1; }
+          done
+          strings "$APP_DYLIB" | grep -q 'com.aevon.rightedgetrigger' \
+            || { echo "::error::AevonApp.dylib 缺少回传通知名 com.aevon.rightedgetrigger（判向成立后 SB 呼不出圆盘）"; exit 1; }
+          grep -q 'dx <= -30.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧判向阈值不是 30pt（必须与 SB 侧成熟版一致）"; exit 1; }
+          grep -q 'fabs(dx) >= fabs(dy) \* 1.2' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧判向缺少横向占优判据（|dx| ≥ |dy|×1.2，否则吃掉纵向滚动）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonAppTriggerBridgeV201' \
+            || { echo "::error::主插件缺少 App 触发桥标记（AevonAppTriggerBridgeV201）"; exit 1; }
+          strings "$DYLIB" | grep -q 'com.aevon.rightedgetrigger' \
+            || { echo "::error::主插件缺少回传通知监听名 com.aevon.rightedgetrigger"; exit 1; }
+          echo "V0.2.1 校验: App 侧真接管（delays+cancels / 30pt 判向 / 三指急救）+ Darwin 回传桥 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

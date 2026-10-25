@@ -512,7 +512,18 @@ enum AevonEdgeEntry {
                                            "com.aevon.prefschanged" as CFString,
                                            nil,
                                            .deliverImmediately)
+            // V0.2.1（AevonAppTriggerBridgeV201）：App 进程内识别器判向成立 → 呼圆盘。
+            // 路 B 的回传通道：App 侧把右缘触摸合法取消（touchesCancelled）后广播这条通知，
+            // SB 在这里收。去重交给 attemptTrigger 的 0.6 秒闸 + isPresented 闸 ——
+            // 右下角热区可能同时被 SB 自己的通道和 App 侧命中，谁先到谁呼，后来的被去重。
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonAppTriggerHandler,
+                                           "com.aevon.rightedgetrigger" as CFString,
+                                           nil,
+                                           .deliverImmediately)
             AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26 AevonGuardCleanupV102）")
+            AevonLog.info("[边缘] 已监听 App 侧右缘判向通知（rightedgetrigger）（AevonAppTriggerBridgeV201）")
         }
         guard zoneTimer == nil else { return }
         syncGuardConfig()
@@ -1811,6 +1822,25 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
         AevonEdgeEntry.syncGuardConfig()
+    }
+}
+
+/// V0.2.1（AevonAppTriggerBridgeV201）：App 进程内识别器判向成立的通知回调。
+///
+/// App 侧（AevonApp.dylib）在右缘 30pt 横向占优时：① 让 App 收到合法的
+/// touchesCancelled（圆盘出来了 App 不再跟着动）；② 广播本通知。SB 收到后呼圆盘。
+///
+/// 双呼免疫：右下角热区的触摸 SB 自己也会命中（全局通道，来源 global），
+/// 与本通知都汇入 attemptTrigger —— 0.6 秒去重 + isPresented 闸保证只呼一次，
+/// 谁先到谁呼。圆盘呼出后那根手指的跟手旋转走不上（App 侧已取消、SB 侧
+/// 未登记该指），圆盘以「等待点选」形态存在，点图标 / 盘外松手照常。
+private func aevonAppTriggerHandler(_ center: CFNotificationCenter?,
+                                    _ observer: UnsafeMutableRawPointer?,
+                                    _ name: CFNotificationName?,
+                                    _ object: UnsafeRawPointer?,
+                                    _ userInfo: CFDictionary?) {
+    DispatchQueue.main.async {
+        AevonEdgeEntry.attemptTrigger("App 侧右缘判向成立（App 触摸已被合法取消）", source: "appedge")
     }
 }
 

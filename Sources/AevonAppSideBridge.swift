@@ -31,8 +31,8 @@ enum AevonAppSideBridge {
     }
 
     private static func drain() {
-        // 开关关着就零开销：连偏好都不读，直接返回
-        guard AevonPrefs.bool("AppSideEnabled", default: false) else { return }
+        // 开关关着就零开销：连偏好都不读，直接返回（V0.2.1 起默认开 —— 真接管是本体）
+        guard AevonPrefs.bool("AppSideEnabled", default: true) else { return }
 
         for domain in watchedDomains {
             guard let text = probeText(domain: domain) else { continue }
