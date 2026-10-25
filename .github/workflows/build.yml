@@ -226,6 +226,25 @@ jobs:
             || { echo "::error::系统手势管线登记选择子未编入（AevonSystemGestureV105）"; exit 1; }
           echo "V0.1.5 校验: 不写场景设置 + 有限前台补偿 + 系统手势管线 + 单浮窗 + 轻点呼出/吸附已删"
 
+          # V0.1.6（Aevon(73) 修复）：
+          # ①全屏启动时自动关浮窗（AevonFullscreenCloseV106）—— 浮窗黑窗的正解：
+          #   场景被系统拿去全屏呈现后我们那个 presenter 就没画面了，只能关；
+          #   场景标识由 AevonSceneIdentifierOfViewController 从 sceneHandle 反查。
+          # ②窗口诊断不许再截断（AevonWinDumpFullV106）—— 原来只印最高层 8 个，
+          #   15 个窗口里 7 个从没被看过，0.1.4 因此误判「系统没有手势窗口」。
+          # ③手势管理器改由运行时探针去找（AevonProbeV106），不再硬编码类名就断言「不存在」。
+          for s in AevonProbeV106 AevonFullscreenCloseV106 AevonWinDumpFullV106 AevonSystemGestureV106 AevonLaunchProbeV106; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.6 标记 $s 未编入"; exit 1; }
+          done
+          grep -q 'AevonSceneIdentifierOfViewController' "$GITHUB_WORKSPACE/Sources/AevonSceneHook.m" \
+            || { echo "::error::场景标识反查函数被删（全屏启动将无法自动关浮窗）"; exit 1; }
+          # 反回退：窗口诊断必须全量。注释里出现这个词是允许的（那是说明文字），
+          # 所以先滤掉行首注释再查 —— 否则自己写的解释会把自检打红。
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" | grep -q 'suffix(8)' \
+            && { echo "::error::窗口诊断又变成截断输出 —— 证据不完整就会重演「系统里没有」的误判"; exit 1; } || true
+          echo "V0.1.6 校验: 全屏自动关浮窗 + 窗口全量诊断 + 手势管理器运行时探针"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }

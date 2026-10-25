@@ -9,6 +9,11 @@
 BOOL AevonSceneHookAvailable(void);
 void AevonSceneHookInstall(void);
 
+/// V0.1.6（AevonFullscreenCloseV106）：从「全屏 App 画面容器」反查它承载的是哪个 App。
+/// 返回形如 `com.apple.Preferences-default` 的场景标识，或直接是 bundleIdentifier；
+/// 全部路径都取不到时返回 nil —— 调用方必须把 nil 当作「未知」而不是「不是同一个 App」。
+NSString *AevonSceneIdentifierOfViewController(UIViewController *vc);
+
 /// 全局触摸通道（V0.0.23）：hook `UIApplication -sendEvent:`，
 /// 把每个触摸的相位 / 身份 / 坐标交给 Swift 侧做边缘判定。
 /// 返回 NO 表示这条通道不可用，调用方继续用视图层通道兜底。

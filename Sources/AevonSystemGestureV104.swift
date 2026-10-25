@@ -128,9 +128,9 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         if installedLogged { return }
         installedLogged = true
         if pipelineRegistered {
-            AevonLog.info("[手势] 已登记进系统手势管线（带=右缘 \(Int(AevonGestureBandView.bandWidth))pt × 全屏高，只认向左横扫；App 收不到这条触摸）（AevonSystemGestureV105）")
+            AevonLog.info("[手势] 已登记进系统手势管线（带=右缘 \(Int(AevonGestureBandView.bandWidth))pt × 全屏高，只认向左横扫；App 收不到这条触摸）（AevonSystemGestureV105 AevonSystemGestureV106）")
         } else {
-            AevonLog.warn("[手势] 系统手势管线登记失败（管理器/方法不存在），右缘继续走 0.1.3 延迟接管老通道（AevonSystemGestureV105 AevonBandDeferV103）")
+            AevonLog.warn("[手势] 系统手势管线登记失败（已知类名与工厂名都不匹配，不代表管线不存在；真实类名见下方 [探针] 行），右缘继续走 0.1.3 延迟接管老通道（AevonSystemGestureV105 AevonSystemGestureV106 AevonBandDeferV103）")
         }
     }
 
@@ -142,6 +142,9 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     /// 全部按「存在性检查 → 调用 → 失败静默」处理，取不到就返回 false，绝不硬赌。
     private static func registerWithSystemGesturePipeline(_ recognizer: UIGestureRecognizer) -> Bool {
         let identity = mainDisplayIdentity()
+        if identity == nil {
+            AevonLog.warn("[手势] 取不到主屏 displayIdentity（FBDisplayManager.mainConfiguration 路径不通），只能试单参重载（AevonSystemGestureV106）")
+        }
         // 不同系统版本上取管理器的类方法名不一样（sharedInstance / mainDisplayManager / …），
         // 逐个试，全部取不到才放弃。
         var managers: [AnyObject] = []
@@ -153,17 +156,25 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
                 }
             }
         }
+        // V0.1.6（AevonSystemGestureV106）：硬编码类名全落空时**不再断言「不存在」**。
+        // 系统手势（控制中心、底部上滑）在真机上一直好使，说明这条管线必然在本进程里活着，
+        // 只是 iOS 17 的类名/工厂名和我们记忆里的不一样。交给探针按类表 + ivar 去挖。
+        if managers.isEmpty {
+            let scanned = AevonProbeV106.resolveGestureManagers()
+            AevonLog.info("[手势] 硬编码类名取不到管理器，类表+ivar 扫描得 \(scanned.count) 个候选（AevonSystemGestureV106）")
+            managers = scanned
+        }
         for manager in managers {
             let twoArg = Selector(("addGestureRecognizer:toDisplayWithIdentity:"))
             if let identity = identity, manager.responds(to: twoArg) {
                 callVoid(manager, twoArg, first: recognizer, second: identity)
-                AevonLog.info("[手势] 已向 \(AevonRuntime.className(manager) ?? "?") 登记识别器（带 displayIdentity）（AevonSystemGestureV105）")
+                AevonLog.info("[手势] 已向 \(AevonRuntime.className(manager) ?? "?") 登记识别器（带 displayIdentity）（AevonSystemGestureV106）")
                 return true
             }
             let oneArg = Selector(("addGestureRecognizer:"))
             if manager.responds(to: oneArg) {
                 callVoid(manager, oneArg, first: recognizer, second: nil)
-                AevonLog.info("[手势] 已向 \(AevonRuntime.className(manager) ?? "?") 登记识别器（无 displayIdentity 重载）（AevonSystemGestureV105）")
+                AevonLog.info("[手势] 已向 \(AevonRuntime.className(manager) ?? "?") 登记识别器（无 displayIdentity 重载）（AevonSystemGestureV106）")
                 return true
             }
         }

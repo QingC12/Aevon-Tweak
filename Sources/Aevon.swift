@@ -125,4 +125,12 @@ private func installExperimentalHooks() {
      *    0.1.4 找 `_UISystemGestureWindow` 的路已被归档(14) 的窗口清单证伪。
      */
     AevonSystemGestureV105.shared.install()
+
+    /*
+     * ⑧ V0.1.6（AevonProbeV106）：运行时探针。启动稳定后跑一次，把
+     *    ① 全部窗口（不截断）② 名字带手势管理的类及其方法 ③ 桌面图标启动链方法
+     *    写进日志。目的很明确：不再凭记忆里的类名断言「系统里没有这东西」——
+     *    系统手势在真机上一直可用，就说明管线活着，只是我们没找对入口。
+     */
+    AevonProbeV106.runOnce()
 }

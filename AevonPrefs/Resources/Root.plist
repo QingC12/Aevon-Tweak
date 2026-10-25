@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.1.5（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。全屏 App 内从右边缘向左滑呼出圆盘（走系统手势管线，App 不会跟着动）。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.6（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。全屏 App 内从右边缘向左滑呼出圆盘。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

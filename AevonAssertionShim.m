@@ -631,3 +631,12 @@ __attribute__((used)) static const char AevonGateRemovedV103Marker[] = "AevonGat
 __attribute__((used)) static const char AevonSystemGestureV104Marker[] = "AevonSystemGestureV104";
 __attribute__((used)) static const char AevonNoTapSummonV105Marker[] = "AevonNoTapSummonV105";
 __attribute__((used)) static const char AevonNoSnapV105Marker[] = "AevonNoSnapV105";
+
+/* ── V0.1.6（AevonProbeV106 / AevonFullscreenCloseV106 / AevonWinDumpFullV106）：本版标记 ──
+ * 这些串同时出现在运行期日志里，正常构建就能查到；这里用 used 常量再钉一遍，
+ * 避免以后有人把日志文案改掉导致 CI 断言假红。 */
+__attribute__((used)) static const char AevonProbeV106Marker[] = "AevonProbeV106";
+__attribute__((used)) static const char AevonFullscreenCloseV106Marker[] = "AevonFullscreenCloseV106";
+__attribute__((used)) static const char AevonWinDumpFullV106Marker[] = "AevonWinDumpFullV106";
+__attribute__((used)) static const char AevonSystemGestureV106Marker[] = "AevonSystemGestureV106";
+__attribute__((used)) static const char AevonLaunchProbeV106Marker[] = "AevonLaunchProbeV106";

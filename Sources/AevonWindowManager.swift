@@ -1,3 +1,4 @@
+import QuartzCore
 import Foundation
 import UIKit
 
@@ -15,6 +16,44 @@ import UIKit
 enum AevonWindowManager {
     private static var currentView: AevonWindowView?
     private static var currentBundleID: String?
+
+    /// 最近一次成功开窗的时间（`CACurrentMediaTime`）。
+    ///
+    /// V0.1.6（AevonFullscreenCloseV106）：开浮窗这个动作本身也会让 SpringBoard
+    /// 建一个全屏的 `SBDeviceApplicationSceneViewController`（因为场景被推了前台），
+    /// 于是 `viewDidAppear` 也会来一次。要区分「我们自己开窗的副作用」和
+    /// 「用户从桌面点图标把这个 App 全屏拉起」，只能靠时间：开窗后头几秒内的
+    /// 同 App 全屏画面一律认作副作用，不关窗。
+    private static var lastOpenedAt: CFTimeInterval = 0
+
+    /// App 全屏画面出现时调用（来自 `AevonEntryHost.appSceneAppeared`）。
+    ///
+    /// 背景：0.1.5 之后「浮窗开着设置 → 回桌面点设置图标」不再注销了，但浮窗会黑屏 ——
+    /// 同一个场景被系统拿去全屏呈现，我们浮窗里的 presenter 拿不到画面，只剩一个
+    /// 空壳子。用户要的语义很直接：**全屏打开时就把浮窗关掉**。
+    ///
+    /// 判定顺序（宁可漏关，不可误关）：
+    ///   ① 没有浮窗 → 什么都不做；
+    ///   ② 拿不到场景标识（KVC 全失败）→ 只记日志，**不动**（把未知当「未知」，
+    ///      绝不能把 nil 当成「不是同一个 App」然后随便关别人的窗）；
+    ///   ③ 标识里不含当前浮窗的 bundleID → 全屏进来的是别的 App，不动；
+    ///   ④ 距开窗不足 5 秒 → 判定为开窗自身的副作用，不动；
+    ///   ⑤ 其余情况 → 关窗（`releaseOnly`，不写任何场景状态，避免重演 SIGTRAP）。
+    static func handleFullscreenSceneAppeared(sceneIdentifier: String) {
+        guard let bundleID = openBundleID else { return }
+        guard !sceneIdentifier.isEmpty else {
+            AevonLog.warn("[窗口] 全屏 App 画面出现，但场景标识取不到（探针待补 KVC 路径）；本次不自动关窗（AevonFullscreenCloseV106）")
+            return
+        }
+        guard sceneIdentifier.contains(bundleID) else { return }
+        let age = CACurrentMediaTime() - lastOpenedAt
+        if age < 5.0 {
+            AevonLog.info("[窗口] 全屏画面（\(sceneIdentifier)）距开窗 \(String(format: "%.1f", age))s，判定为开窗自身副作用，保留浮窗（AevonFullscreenCloseV106）")
+            return
+        }
+        AevonLog.info("[窗口] \(bundleID) 被系统全屏拉起（\(sceneIdentifier)，距开窗 \(String(format: "%.1f", age))s）→ 自动关闭浮窗，避免残留黑窗（AevonFullscreenCloseV106）")
+        close(bundleID: bundleID, releaseOnly: true)
+    }
 
     /// 这个 App 是否正装在这个唯一浮窗里。
     static func isWindowed(_ bundleID: String) -> Bool {
@@ -123,6 +162,7 @@ enum AevonWindowManager {
             host.bringSubviewToFront(windowView)
             currentView = windowView
             currentBundleID = bundleID
+            lastOpenedAt = CACurrentMediaTime()
 
             // presenter 激活后画面是异步出来的，由承载器自己探测首帧
             sceneHost.startSyncing()

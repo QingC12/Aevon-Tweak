@@ -316,11 +316,18 @@ enum AevonEntryHost {
     /// 这是 V0.0.22 解决「全屏 App 里看不到触发条」的关键：
     /// SpringBoard 的前台 App 画面不是 UIWindow，而是挂在这个控制器的 view 里，
     /// 窗口层级对它无效；把容器直接塞进同一个 view 才能压在上面。
-    static func appSceneAppeared(_ view: UIView, reason: String) {
+    ///
+    /// V0.1.6（AevonFullscreenCloseV106）：多了 `sceneIdentifier`。同一个场景被系统
+    /// 拿去全屏呈现之后，我们浮窗里那个 presenter 就拿不到画面了（用户看到的是黑窗），
+    /// 所以要在这里认出来「全屏进来的是浮窗里那个 App」，然后把浮窗关掉。
+    static func appSceneAppeared(_ view: UIView, sceneIdentifier: String?, reason: String) {
         guard container != nil else { return }
         // App 切换器里的小卡片、分屏窄条、被推到后台的场景容器都不接管，
         // 只认「真的铺满整屏、并且确实在窗口里显示着」的那一个。
         guard coversScreen(view) else { return }
+        if let identifier = sceneIdentifier {
+            AevonWindowManager.handleFullscreenSceneAppeared(sceneIdentifier: identifier)
+        }
         appSceneView = view
         attach(to: view, reason: reason)
         // 场景出现后系统会继续往这个 view 里塞内容，延后再顶一次
@@ -446,13 +453,18 @@ enum AevonEntryHost {
     }
 
     /// 窗口栈诊断：把当前所有场景的窗口按层级打出来，外加容器的挂载点。
+    ///
+    /// V0.1.6（AevonWinDumpFullV106）：这里原来是 `sorted.suffix(8)` —— 只印最高层 8 个。
+    /// APP 场景稳定有 15 个窗口，剩下 7 个**从来没被打印过**，0.1.4 因此断言
+    /// 「系统上没有 SystemGesture 窗口」。用被截断的证据去否定机制是错的，
+    /// 现在改成全列（真正的逐行全景在 `AevonProbeV106.dumpWindowPanorama()`）。
     static func dumpWindowStack(_ tag: String) {
         var parts: [String] = []
         var index = 0
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
             var items: [String] = []
             let sorted = scene.windows.sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
-            for w in sorted.suffix(8) {
+            for w in sorted {
                 items.append("\(Int(w.windowLevel.rawValue)):\(type(of: w))\(w.isHidden ? "(h)" : "")")
             }
             let mine = (scene === window?.windowScene) ? "*" : ""
@@ -473,12 +485,19 @@ enum AevonEntryHost {
 // MARK: - C 入口（供 AevonSceneHook.m 调用）
 
 /// App 画面容器出现：把它交给宿主，容器会搬进去，从而压在全屏 App 之上。
+///
+/// `sceneIdentifier` 是 C 字符串（由 ObjC 侧从 sceneHandle 反查得到），
+/// 指针只在本次回调内有效 —— 必须**立刻**拷贝成 Swift String 再异步派发，
+/// 否则等主队列轮到我们时那块内存可能已经释放了。
 @_cdecl("AevonSceneVCDidAppear")
-public func AevonSceneVCDidAppear(_ vc: UIViewController) {
+public func AevonSceneVCDidAppear(_ vc: UIViewController, _ sceneIdentifier: UnsafePointer<CChar>?) {
     guard vc.isViewLoaded else { return }
     let view = vc.view!
+    let identifier = sceneIdentifier.map { String(cString: $0) }
     DispatchQueue.main.async {
-        AevonEntryHost.appSceneAppeared(view, reason: "App 画面进入（AevonSceneVCHookV22）")
+        AevonEntryHost.appSceneAppeared(view,
+                                        sceneIdentifier: identifier,
+                                        reason: "App 画面进入（AevonSceneVCHookV22）")
     }
 }
 
