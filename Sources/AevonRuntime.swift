@@ -18,7 +18,8 @@ enum AevonRuntime {
               let ivar = class_getInstanceVariable(cls, name) else { return nil }
         guard let encoding = ivar_getTypeEncoding(ivar),
               String(cString: encoding).hasPrefix("@") else { return nil }
-        return object_getIvar(object, ivar)
+        guard let value = object_getIvar(object, ivar) else { return nil }
+        return value as AnyObject
     }
 
     /// 读取字符串实例变量。

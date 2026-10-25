@@ -80,7 +80,7 @@ enum AevonProbeV107 {
     /// 以及**能拿到活的 manager 实例**（这个最值钱：下一版直接向它登记识别器）。
     private static func groupPipeline() {
         let started = CACurrentMediaTime()
-        let names = AevonAllClassNames()
+        let names = AevonAllClassNames() ?? []
         let gesture = names.filter { $0.lowercased().contains("gesture") }.sorted()
         AevonLog.info("[探针P1] 全进程类 \(names.count) 个，名字含 gesture 的 \(gesture.count) 个（AevonProbeP1V107）")
 
@@ -89,7 +89,7 @@ enum AevonProbeV107 {
         var lines: [String] = []
         for name in gesture {
             if printed >= 14 { break }
-            let methods = AevonMethodNamesForClass(name)
+            let methods = AevonMethodNamesForClass(name) ?? []
             let hits = methods.filter { selector in
                 let lower = selector.lowercased()
                 return hooks.contains { lower.contains($0) }
@@ -120,7 +120,7 @@ enum AevonProbeV107 {
 
         // 宿主单例的 ivar 里有没有夹带 gesture 对象（有些版本 manager 不暴露单例，只能从宿主挖）
         for host in ["SBMainWorkspace", "SBMainDisplaySceneManager", "SBSceneManager", "SBIconController", "SBApplicationController"] {
-            let ivars = AevonIvarNamesForClass(host).filter { $0.lowercased().contains("gesture") }
+            let ivars = (AevonIvarNamesForClass(host) ?? []).filter { $0.lowercased().contains("gesture") }
             if !ivars.isEmpty {
                 AevonLog.info("[探针P1] \(host) 的 gesture 相关 ivar：\(joined(ivars, limit: 10))")
             }
@@ -189,7 +189,7 @@ enum AevonProbeV107 {
     /// 已知老选择子 `iconManager:launchIconForIconView:withActions:` 在 17.3.1 不存在，
     /// 这里把候选类的方法名全印出来，下一版按真名精确 hook（不再泛洪 hook）。
     private static func groupLaunchChain() {
-        let names = AevonAllClassNames()
+        let names = AevonAllClassNames() ?? []
         let targets = names.filter { name in
             name.hasPrefix("SBIcon") || name.contains("IconController") || name.contains("IconView")
         }.sorted()
@@ -199,7 +199,7 @@ enum AevonProbeV107 {
         var printed = 0
         for name in targets {
             if printed >= 10 { break }
-            let methods = AevonMethodNamesForClass(name)
+            let methods = AevonMethodNamesForClass(name) ?? []
             let hits = methods.filter { selector in
                 let lower = selector.lowercased()
                 return keywords.contains { lower.contains($0) }
@@ -210,7 +210,7 @@ enum AevonProbeV107 {
         }
 
         for host in ["SBApplicationController", "SBWorkspace", "SBMainWorkspace", "SBApplication"] {
-            let methods = AevonMethodNamesForClass(host).filter { selector in
+            let methods = (AevonMethodNamesForClass(host) ?? []).filter { selector in
                 let lower = selector.lowercased()
                 return lower.contains("launch") || lower.contains("activate") || lower.contains("open")
             }
@@ -227,7 +227,7 @@ enum AevonProbeV107 {
     /// iOS 17 的 HID 事件在 SB 里走 deferring（事件延迟）路由，谁被登记成 recipient 谁先拿。
     /// 这条比「找窗口」更接近本质 —— 窗口只是结果，路由才是原因。
     private static func groupEventRouting() {
-        let names = AevonAllClassNames()
+        let names = AevonAllClassNames() ?? []
         let targets = names.filter { name in
             let lower = name.lowercased()
             return lower.contains("eventdeferring") || lower.contains("deferring")
@@ -239,7 +239,7 @@ enum AevonProbeV107 {
         var printed = 0
         for name in targets {
             if printed >= 12 { break }
-            let methods = AevonMethodNamesForClass(name).filter { selector in
+            let methods = (AevonMethodNamesForClass(name) ?? []).filter { selector in
                 let lower = selector.lowercased()
                 return lower.contains("defer") || lower.contains("route") || lower.contains("recipient")
                     || lower.contains("gate") || lower.contains("target") || lower.contains("resolve")
@@ -283,6 +283,30 @@ enum AevonProbeV107 {
         let width = AevonPrefs.double("RingTriggerWidth", default: AevonTriggerZone.defaultWidth)
         let height = AevonPrefs.double("RingTriggerHeight", default: AevonTriggerZone.defaultHeight)
         AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")")
+    }
+
+    // MARK: - 供手势通道复用（AevonSystemGestureV105 的兜底路径）
+
+    /// 给出手势管理器实例。硬编码类名全落空时，右缘通道从这里要候选。
+    ///
+    /// 只对「类名同时含 gesture 与 manager」的类试无参工厂，且由 ObjC 侧先验方法存在再发消息 ——
+    /// 绝不对着类盲发（盲发会抛 unrecognized selector，Swift 兜不住，SB 当场死）。
+    static func resolveManagers() -> [AnyObject] {
+        let names = AevonAllClassNames() ?? []
+        let candidates = names.filter { name in
+            let lower = name.lowercased()
+            return lower.contains("gesture") && lower.contains("manager")
+        }
+        var result: [AnyObject] = []
+        for name in candidates {
+            for factory in ["sharedInstance", "_sharedInstance", "sharedManager",
+                            "defaultManager", "mainDisplayManager"] {
+                guard let object = AevonClassFactoryObject(name, factory) else { continue }
+                if !result.contains(where: { $0 === object }) { result.append(object) }
+                break
+            }
+        }
+        return result
     }
 
     // MARK: - 小工具

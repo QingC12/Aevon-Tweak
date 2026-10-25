@@ -142,8 +142,11 @@ id AevonClassFactoryObject(NSString *className, NSString *selectorName) {
     @try {
         IMP imp = class_getMethodImplementation(object_getClass(cls), selector);
         if (imp == NULL) { return nil; }
-        id (*fn)(id, SEL) = (id (*)(id, SEL))imp;
-        return fn((id)cls, selector);
+        // 用 void * 中转再 __bridge 回来：直接把 IMP 转成「返回 id」的函数指针，
+        // 在 ARC 下会被当成持有语义不明的返回值，容易编译报错；这样写没有任何歧义。
+        void *(*fn)(id, SEL) = (void *(*)(id, SEL))imp;
+        void *raw = fn((id)cls, selector);
+        return (__bridge id)raw;
     } @catch (NSException *exception) {
         return nil;
     }

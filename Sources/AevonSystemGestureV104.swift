@@ -160,8 +160,8 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         // 系统手势（控制中心、底部上滑）在真机上一直好使，说明这条管线必然在本进程里活着，
         // 只是 iOS 17 的类名/工厂名和我们记忆里的不一样。交给探针按类表 + ivar 去挖。
         if managers.isEmpty {
-            let scanned = AevonProbeV106.resolveGestureManagers()
-            AevonLog.info("[手势] 硬编码类名取不到管理器，类表+ivar 扫描得 \(scanned.count) 个候选（AevonSystemGestureV106）")
+            let scanned = AevonProbeV107.resolveManagers()
+            AevonLog.info("[手势] 硬编码类名取不到管理器，类表扫描得 \(scanned.count) 个候选（AevonSystemGestureV106 AevonObjCProbeV107）")
             managers = scanned
         }
         for manager in managers {
