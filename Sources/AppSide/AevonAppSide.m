@@ -87,6 +87,9 @@ __attribute__((used)) static const char AevonAppEarlyJudgeV202Marker[] = "AevonA
 /* V0.2.3 让路通道 + 卡死自愈（Aevon(89) 日志根因） */
 __attribute__((used)) static const char AevonAppStuckGuardV203Marker[] = "AevonAppStuckGuardV203";
 __attribute__((used)) static const char AevonAppYieldNotifyV203Marker[] = "AevonAppYieldNotifyV203";
+/* V0.2.4 全 App 白名单 + 排除表 */
+__attribute__((used)) static const char AevonAppAllAppsV204Marker[] = "AevonAppAllAppsV204";
+__attribute__((used)) static const char AevonAppExcludeV204Marker[] = "AevonAppExcludeV204";
 
 #pragma mark - 日志
 
@@ -505,12 +508,57 @@ shouldReceiveTouch:(UITouch *)touch {
     return fallback;
 }
 
+/* V0.2.4（AevonAppExcludeV204）：逐 App 排除表。
+ *
+ * plist 已放开到 Classes=[UIApplication]，本表决定「在进程里做不做」：
+ *   · 内置前缀：SpringBoard（主插件已覆盖）+ 金融安全敏感 App（越狱检测最重，
+ *     接管手势没有任何理由进它们的进程）；
+ *   · 用户扩展：com.Aevon 域 `AppSideExcludePrefixes`（CFString 数组），
+ *     Filza / 探针里加前缀即可，每次 start 现读（恒假开关纪律）。
+ * 命中排除表 = 只加载、不挂识别器、不判向（对 App 零影响），日志留一行痕迹。 */
+static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
+    NSMutableArray<NSString *> *list = [NSMutableArray arrayWithArray:@[
+        @"com.apple.springboard",   /* 主插件已覆盖，App 侧让位 */
+        @"com.chinamworld",         /* 建行系 */
+        @"com.icbc",                /* 工行 */
+        @"com.cmbchina",            /* 招行 */
+        @"com.unionpay",            /* 云闪付 */
+        @"com.alipay",              /* 支付宝 */
+        @"com.chinamworld.bocbth",  /* 中行（同前缀族，冗余保险） */
+    ]];
+    CFPropertyListRef raw = CFPreferencesCopyAppValue(CFSTR("AppSideExcludePrefixes"), CFSTR("com.Aevon"));
+    if (raw != NULL) {
+        if (CFGetTypeID(raw) == CFArrayGetTypeID()) {
+            CFArrayRef arr = (CFArrayRef)raw;
+            for (CFIndex i = 0; i < CFArrayGetCount(arr); i++) {
+                CFPropertyListRef item = CFArrayGetValueAtIndex(arr, i);
+                if (item != NULL && CFGetTypeID(item) == CFStringGetTypeID()) {
+                    NSString *prefix = (__bridge NSString *)item;
+                    if (prefix.length > 0) { [list addObject:prefix]; }
+                }
+            }
+        }
+        CFRelease(raw);
+    }
+    return list;
+}
+
 - (void)start {
-    /* 双保险：filter 里本来就没有 SpringBoard，这里再挡一次，避免与主插件抢同一份日志 */
-    NSArray<NSString *> *allowed = @[@"com.apple.Preferences", @"com.apple.mobilesafari"];
-    if (![allowed containsObject:gAevonAppBundleID]) {
-        AevonAppLog(@"0.2.1 App 侧已加载，但不在验证白名单（%@）→ 本版不动作", allowed);
+    /* V0.2.4（AevonAppAllAppsV204）：filter 已放开到全部 App（Classes=[UIApplication]），
+     * 「进哪些进程」由 plist 管，「在进程里做不做」由这里的分支管：
+     *   ① SpringBoard → 主插件已覆盖，App 侧让位（一行日志都不留以外的动作不做）；
+     *   ② 排除表命中（内置 + 用户扩展）→ 只加载、不动作；
+     *   ③ 其余 → 真接管（开关仍可在设置里整体关）。 */
+    if ([gAevonAppBundleID isEqualToString:@"com.apple.springboard"]) {
         return;
+    }
+    NSArray<NSString *> *excluded = AevonAppExcludePrefixes();
+    for (NSString *prefix in excluded) {
+        if ([gAevonAppBundleID hasPrefix:prefix]) {
+            AevonAppLog(@"%@ 命中排除表（前缀 %@）→ 只加载、不动作（AevonAppExcludeV204）",
+                        gAevonAppBundleID ?: @"?", prefix);
+            return;
+        }
     }
 
     /* 先探测日志通道，否则下面第一条日志会把「通道」打成「未探测」 */
@@ -527,7 +575,7 @@ shouldReceiveTouch:(UITouch *)touch {
     _bandWidth = AevonAppPrefDouble(@"RightEdgeWidth", 46.0);
     _heightPercent = AevonAppPrefDouble(@"RightEdgeHeight", 60.0);
 
-    AevonAppLog(@"0.2.1 App 侧已加载：进程=%@ pid=%d 系统=%@ 通道=%@",
+    AevonAppLog(@"0.2.4 App 侧已加载（全 App 白名单+排除表）：进程=%@ pid=%d 系统=%@ 通道=%@（AevonAppAllAppsV204）",
                 gAevonAppBundleID, (int)getpid(),
                 [UIDevice currentDevice].systemVersion ?: @"?",
                 gAevonAppChannel);

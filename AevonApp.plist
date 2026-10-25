@@ -5,19 +5,23 @@
 	<key>Filter</key>
 	<dict>
 		<!--
-		  V0.2.1（AevonAppWhitelistV200 沿用）：仍然只列两个 App。
+		  V0.2.4（AevonAppAllAppsV204）：扩到全部 App。
 
-		  0.2.0 只读探针在 Aevon(87) 日志里证明了「App 进程加载 + 读 com.Aevon 域」
-		  两件为真；0.2.1 在这两个 App 上做真接管（delaysTouchesBegan +
-		  cancelsTouchesInView），验证「圆盘出来了、App 不再跟着动」。
-		  0.2.2 再放开到 Classes=[UIApplication] + 运行时白名单（带银行/游戏排除）。
-		  扩白名单之前，任何一环出问题都只影响设置和 Safari，随时可在设置里关掉
-		  「App 进程右缘接管」回到纯只读。
+		  路 B 四步已全部验真（Aevon(87)~(90)）：
+		    1. App 进程加载 + 读 com.Aevon 域（0.2.0/0.2.1）
+		    2. 真接管 delays+cancels + 8pt 判向 + Darwin 回传（0.2.1/0.2.2）
+		    3. 判向失败整段补投、纵向滚动零影响（0.2.2）
+		    4. SB 让路后双通道竞速解除，16 根手指 14 全成、1 根卡死自愈兜住（0.2.3）
+		  所以本版把注入范围从「设置+Safari」放开到 Classes=[UIApplication]，
+		  逐 App 排除交给出跑时的排除表（AevonAppSide.m 内置 + com.Aevon 域
+		  AppSideExcludePrefixes 可扩展）：plist 只管「进哪些进程」，
+		  「在进程里做不做」由代码分支决定（SpringBoard 直接让位主插件）。
+		  任何 App 出问题：设置里关「App 进程右缘接管」立即回到零影响，
+		  或把它的 bundleID 前缀加进 AppSideExcludePrefixes。
 		-->
-		<key>Bundles</key>
+		<key>Classes</key>
 		<array>
-			<string>com.apple.Preferences</string>
-			<string>com.apple.mobilesafari</string>
+			<string>UIApplication</string>
 		</array>
 	</dict>
 </dict>

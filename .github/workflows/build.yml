@@ -1049,17 +1049,17 @@ jobs:
           done
           APP_PLIST="$(find . -name 'AevonApp.plist' | head -n1)"
           [ -n "$APP_PLIST" ] || { echo "::error::缺少 AevonApp.plist（App 侧 dylib 不会被注入）"; exit 1; }
-          plutil -convert xml1 -o - "$APP_PLIST" | grep -q 'com.apple.mobilesafari' \
-            || { echo "::error::AevonApp.plist 没列出 Safari"; exit 1; }
-          plutil -convert xml1 -o - "$APP_PLIST" | grep -q 'com.apple.Preferences' \
-            || { echo "::error::AevonApp.plist 没列出设置"; exit 1; }
+          # V0.2.4：注入范围已放开到全部 App（Classes=[UIApplication]），
+          # 0.2.0 的「恰好 2 个 Bundles」断言在此反转（路 B 四步 Aevon(87)~(90) 全部验真）。
+          plutil -convert xml1 -o - "$APP_PLIST" | grep -q '<string>UIApplication</string>' \
+            || { echo "::error::AevonApp.plist 必须是 Classes=[UIApplication]（全 App 白名单，V0.2.4）"; exit 1; }
           if plutil -convert xml1 -o - "$APP_PLIST" | grep -q 'com.apple.springboard'; then
-            echo "::error::AevonApp.plist 里出现了 com.apple.springboard（会和主插件抢同一份逻辑）"
+            echo "::error::AevonApp.plist 里出现了 com.apple.springboard（SB 让位由代码分支管，不进 filter）"
             exit 1
           fi
           APP_BUNDLE_COUNT="$(plutil -convert xml1 -o - "$APP_PLIST" | grep -c '<string>com\.apple\.' || true)"
-          echo "App 侧注入名单: $APP_BUNDLE_COUNT 个"
-          [ "$APP_BUNDLE_COUNT" -eq 2 ] || { echo "::error::0.2.0 的 App 侧注入名单必须正好 2 个（设置 + Safari），实际 $APP_BUNDLE_COUNT"; exit 1; }
+          echo "App 侧注入名单: Classes=[UIApplication]（com.apple.* 显式条目 $APP_BUNDLE_COUNT 个，应为 0）"
+          [ "$APP_BUNDLE_COUNT" -eq 0 ] || { echo "::error::V0.2.4 起 plist 不再枚举 App（排除表在代码里）；请删除 Bundles 枚举"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonAppSideBridgeV200' \
             || { echo "::error::主插件缺少 App 侧日志桥（AevonAppSideBridgeV200）"; exit 1; }
           if strings "$DYLIB" | grep -q 'AevonAppObserverGesture'; then
@@ -1136,6 +1136,24 @@ jobs:
             | grep -q '首帧移动' \
             || { echo "::error::首帧移动取证被删 —— 断流是「没收到」还是「没写」又会不可判"; exit 1; }
           echo "V0.2.3 校验: SB 让路通道 + App 侧卡死自愈 + 首帧移动取证 已就位"
+
+          # V0.2.4（AevonAppAllAppsV204 / AevonAppExcludeV204）：全 App 白名单。
+          #   ① App 侧 dylib 编入 2 条新标记；
+          #   ② SpringBoard 分支（让位主插件）与排除表（内置 + AppSideExcludePrefixes）必须在；
+          #   ③ 排除表至少要含 com.apple.springboard 与一个金融前缀（防误删兜底）。
+          for s in AevonAppAllAppsV204 AevonAppExcludeV204; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::AevonApp.dylib 缺少 0.2.4 标记 $s"; exit 1; }
+          done
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'com.apple.springboard' \
+            || { echo "::error::App 侧 SpringBoard 让位分支被删 —— 会与主插件抢同一份逻辑"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'AppSideExcludePrefixes' \
+            || { echo "::error::用户扩展排除键 AppSideExcludePrefixes 被删 —— 出问题的 App 将无处可排"; exit 1; }
+          grep -q 'com.chinamworld' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::排除表缺金融前缀兜底（com.chinamworld）"; exit 1; }
+          echo "V0.2.4 校验: 全 App 白名单（Classes=[UIApplication]）+ SB 让位 + 排除表 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
