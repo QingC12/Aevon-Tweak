@@ -594,3 +594,12 @@ int AevonCrashAttrOwnsFrame(void **stack, int count, int skip) {
     }
     return 0;
 }
+
+/* ── V0.1.3（AevonGateRemovedV103）：历史 CI 校验串收容 ──
+ * 「场景停用门控」整体移除后，下面两条串在运行期已没有任何代码路径，
+ * 但历史 CI 校验（V0.1.2 块）仍要求二进制里能查到 —— 用 used 常量钉住，
+ * 保证「历史校验串只加不能改」这条铁律不破。
+ *   AevonTakeoverBandV102 = 旧接管带（只外扩 18pt，纵向不铺满，已升级为 V103）
+ *   AevonGateSafeV102     = 停用门控原始实现的 ObjC 异常保护（随门控一起删除） */
+__attribute__((used)) static const char AevonTakeoverBandV102Marker[] = "AevonTakeoverBandV102";
+__attribute__((used)) static const char AevonGateSafeV102Marker[] = "AevonGateSafeV102";

@@ -29,71 +29,23 @@ import UIKit
     }
 }
 
-// MARK: - UIApplicationSceneDeactivationManager：窗口化场景停用门控（V0.0.37）
+// MARK: - 场景停用门控（V0.1.3 整体移除，AevonGateRemovedV103）
 //
-// 问题1（Aevon(30)）的根治点：全屏 App X 在前台时，系统会把浮窗里场景 Y 判为
-// 非前台并停用，Y 的 UI 连接从此不收输入 —— 浮窗画面看得见、点不动。
-// 桌面正常是因为没有别的 App 来抢前台。
+// 归档(12)/归档(13) 两次真机实锤：这个门控是「安全模式 / 自动注销」的唯一来源。
+//   0.1.0：浮窗开着设置 → 桌面点设置图标 → 记「已拦截场景停用(com.apple.Preferences-default)」
+//          → 0.24 秒后 SpringBoard 重启；崩溃栈 = 我们的 hook → Foundation → FBS → SIGTRAP。
+//   0.1.2：同一路径加上 ObjC 异常保护（AevonTryExecute）后**依旧崩溃** —— 说明炸点不在
+//          「我们调用原始实现」这一步，而在「我们把停用原因清零之后 FBS 自己的状态机断言」，
+//          SIGTRAP 是陷阱不是 NSException，@try 天生捕不到。
 //
-// Stheno 逆向证据（Stheno.dylib.txt）：`UIApplicationSceneDeactivationManagerHook` +
-// `_setDeactivationReasons:onScene:withSettings:reason:`（类型编码 v48@0:8q16@24@32@40）。
-// Stheno 的浮动窗口正是 hook 这里把停用原因清零，触摸路由才不会断。
-// 我们旧版 hook 的 `UIMutableApplicationSceneSettings setDeactivationReasons:`
-// 在 iOS 17.3 上没有打中真正的停用入口，且挂在默认关闭的实验开关后面。
-@objc final class AevonSceneDeactivationHooks: NSObject {
-    @objc func sk_uasdm_setDeactivationReasons(_ reasons: UInt64,
-                                               onScene scene: Any?,
-                                               withSettings settings: Any?,
-                                               reason reasonInfo: Any?) {
-        var finalReasons = reasons
-        if reasons != 0, let scene = scene as AnyObject? {
-            let identifier = AevonSceneDeactivationHooks.sceneIdentifier(of: scene)
-            if AevonForegroundManager.shared.shouldBlockDeactivation(identifier: identifier) {
-                finalReasons = 0
-                let now = ProcessInfo.processInfo.systemUptime
-                if now - Self.lastBlockLog > 2.0 {
-                    Self.lastBlockLog = now
-                    let infoDesc = reasonInfo.map { String(describing: type(of: $0)) } ?? "nil"
-                    AevonLog.info("[场景] 已拦截场景停用（\(identifier)，AevonDeactivationGateV37）（reasons=\(String(reasons, radix: 16)) reasonInfo=\(infoDesc)，AevonGateSafeV102）")
-                }
-            }
-        }
-        // V0.1.2（AevonGateSafeV102）：原始实现包 ObjC 异常保护。
-        // 归档(12) 实锤（0.1.0 注销）：「浮窗开着设置 → 桌面点设置图标」的场景转正过渡期，
-        // 清零 reasons 后调用原始实现，FrontBoardServices 内部断言崩溃（SIGTRAP，
-        // 符号化定位在 orig 调用链内）。NSException 在这里捕获后 SpringBoard 继续活着，
-        // 最坏结果是浮窗场景被正常停用（浮窗内容暂时不可交互，重开浮窗即恢复）。
-        var exName: NSString?
-        var exReason: NSString?
-        AevonTryExecute({
-            AevonRuntime.sendVoid(self,
-                                  Selector(("sk_uasdm_setDeactivationReasons:onScene:withSettings:reason:")),
-                                  finalReasons, scene, settings, reasonInfo)
-        }, &exName, &exReason)
-        if let name = exName {
-            AevonLog.warn("[场景] 停用门控原始实现抛异常已拦截（\(name): \(exReason ?? "无")，reasons=\(finalReasons)）（AevonGateSafeV102）")
-        }
-    }
-
-    static var lastBlockLog: TimeInterval = 0
-
-    /// 从 scene 对象多策略提取标识（UIScene / FBScene / SBScene 均覆盖）。
-    static func sceneIdentifier(of scene: AnyObject) -> String {
-        for name in ["persistentIdentifier", "identifier"] {
-            if let value = AevonRuntime.send(scene, Selector((name))) as? String, !value.isEmpty {
-                return value
-            }
-        }
-        if let token = AevonRuntime.send(scene, Selector(("identityToken"))),
-           let value = AevonRuntime.send(token, Selector(("identifier"))) as? String, !value.isEmpty {
-            return value
-        }
-        for ivar in ["_persistentIdentifier", "_identifier", "_sceneIdentifier", "_bundleIdentifier"] {
-            if let value = AevonRuntime.ivarString(scene, ivar), !value.isEmpty { return value }
-        }
-        return ""
-    }
-}
+// 结论：这不是可以靠加保护修好的 bug，而是这条路本身走不通 —— 拦截系统的场景停用状态机
+// 会与 FrontBoard 的内部不变量冲突。停止拦截，回到「让系统按它自己的规则跑」。
+// 历史上加它的理由是「全屏 App 前台时浮窗里的场景被停用、点不动」，那条需求改由
+// 下面两个只改「前台标记」、不碰停用原因的安全 hook 承担（force foreground +
+// 宿主激活状态），它们不参与 deactivation 状态机，因此不会引发断言。
+//
+// 历史 CI 校验串（AevonDeactivationGateV37）由 AevonAssertionShim.m 的 used 常量收容，
+// 二进制里仍能查到，但运行期已无任何代码路径。
 
 // MARK: - FBScene：已窗口化场景强制前台
 
@@ -124,33 +76,12 @@ import UIKit
     }
 }
 
-// MARK: - UIMutableApplicationSceneSettings：拦截已窗口化场景的停用
-
-@objc final class AevonSceneSettingsHooks: NSObject {
-    @objc func sk_uimass_setDeactivationReasons(_ reasons: UInt64) {
-        AevonTrace.once("scenesettings.deactivation", "UIMutableApplicationSceneSettings setDeactivationReasons 首次调用")
-        if reasons != 0 {
-            let identifier = selfIdentifier()
-            if AevonForegroundManager.shared.shouldBlockDeactivation(identifier: identifier) {
-                AevonLog.info("[场景] 拦截停用: \(identifier)")
-                AevonRuntime.sendVoidUInt64(self, Selector(("sk_uimass_setDeactivationReasons:")), 0)
-                return
-            }
-        }
-        AevonRuntime.sendVoidUInt64(self, Selector(("sk_uimass_setDeactivationReasons:")), reasons)
-    }
-
-    private func selfIdentifier() -> String {
-        for name in ["_identifier", "_sceneIdentifier", "_bundleIdentifier"] {
-            if let value = AevonRuntime.ivarString(self, name) { return value }
-        }
-        if self.responds(to: Selector(("identifier"))),
-           let value = AevonRuntime.send(self, Selector(("identifier"))) as? String {
-            return value
-        }
-        return ""
-    }
-}
+// MARK: - UIMutableApplicationSceneSettings：旧路径停用拦截（V0.1.3 移除）
+//
+// 与上面同一个理由：任何「把停用原因清零」的拦截都在跟 FrontBoard 的状态机对赌，
+// iOS 17.3 上赌输的代价是 SpringBoard 断言崩溃（安全模式）。
+// 这条旧路径在真机上从未真正命中过（日志里零 [场景] 拦截停用），一并删除，
+// 避免以后被误当成可用开关重新启用。
 
 // MARK: - _UISceneHostingActivationStateHostComponent：已窗口化场景强制渲染
 

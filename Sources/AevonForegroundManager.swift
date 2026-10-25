@@ -43,7 +43,9 @@ final class AevonForegroundManager {
         return false
     }
 
-    /// 是否拦截场景停用（同样要求正向匹配）。
+    /// 是否拦截场景停用（V0.1.3 起不再使用：停用门控整体移除，拦截思路已废弃）。
+    /// 保留此函数仅为让历史调用点语义清晰 —— 任何**新增**代码都不要再走「清零停用原因」
+    /// 这条路，它在 iOS 17.3 上与 FrontBoard 状态机冲突，会以 SIGTRAP 带走 SpringBoard。
     func shouldBlockDeactivation(identifier: String) -> Bool {
         return shouldKeepForeground(identifier: identifier)
     }

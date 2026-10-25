@@ -557,6 +557,10 @@ enum AevonEdgeEntry {
     // V0.1.2（AevonTapSummonV102 / AevonForensicBandV102）
     private static var globalBeganAt: CFTimeInterval = 0
     private static var forensicCount = 0
+    // V0.1.3（AevonTakeoverBandV103 / AevonBandDeferV103）：右缘接管带「延迟接管」候选。
+    // 只登记，不吞：等看清是向左横扫才把这根手指收归圆盘（轻点 / 上下滑 / 向右扫仍归 App）。
+    private static var bandTouchID: UInt = 0
+    private static var bandStart: CGPoint = .zero
 
     // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
 
@@ -681,39 +685,60 @@ enum AevonEdgeEntry {
             // （桌面仍按原热区，避免右侧桌面图标点不动）。
             let zone = AevonTriggerZone.rect(in: screen)
             let appForeground = AevonEntryHost.mountedInAppScene
-            var takeoverZone = zone
-            if appForeground {
-                takeoverZone = zone.insetBy(dx: -18, dy: -18)
-                    .intersection(screen)
-            }
-            if AevonPrefs.bool("EdgeGestureEnabled", default: true),
-               takeoverZone.contains(point) {
-                // V0.1.2（AevonForensicBandV102）：穿透取证 —— 外扩带内每一次 began 都记判定，
-                // 事件发生时必记 + 计数上限（不走时间窗限频，V84 教训）。
-                if forensicCount < 40, !zone.contains(point) {
-                    forensicCount += 1
-                    AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 外扩带接管=是（App前台=\(appForeground)，原热区=\(zone.contains(point))，计数 \(forensicCount)）（AevonForensicBandV102）")
+            // V0.1.3（AevonTakeoverBandV103）：App 前台时接管带 = **右缘整条 × 全屏高**。
+            //
+            // 归档(13) 实锤：0.1.2 的接管带只是把底部热区四周外扩 18pt（纵向仍在 653~932），
+            // 取证日志抓到的漏摸却全在**屏幕顶部右缘** ——（399,8）（396,13）（396,85），
+            // x 距右缘只有 31~34pt，y 却远在热区之外，于是既不接管也不拦，整条滑动进了抖音
+            // （抖音顶部标签栏就是横向翻页的）。只加宽不铺高，永远漏竖向。
+            // 所以这里把纵向铺满整屏，横向至少 36pt（取热区宽度与 36 的较大者）。
+            let bandWidth = max(zone.width, 36)
+            let band = CGRect(x: screen.width - bandWidth, y: 0,
+                              width: bandWidth, height: screen.height)
+            let edgeEnabled = AevonPrefs.bool("EdgeGestureEnabled", default: true)
+            let inZone = zone.contains(point)
+            // 桌面只认原热区（接管优先，V0.0.33 同款）；App 前台才启用整条右缘接管带。
+            if edgeEnabled, inZone || (appForeground && band.contains(point)) {
+                if inZone {
+                    // 原热区：老规矩，按下即完全接管（App 连 began 都收不到）。
+                    globalTouchID = touchID
+                    globalStart = point
+                    globalBeganAt = CACurrentMediaTime()
+                    globalFired = false
+                    lastTouchPoint = point
+                    ownsTouch = true
+                    swallowDeadline = CACurrentMediaTime() + pressLimit
+                    let now = CACurrentMediaTime()
+                    if now - globalLastLogAt > 2.0 {
+                        globalLastLogAt = now
+                        AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=是（热区最高优先级）（AevonGlobalTouchV23 AevonZonePriorityV101 AevonTakeoverBandV103）")
+                    }
+                    return
                 }
-                globalTouchID = touchID
-                globalStart = point
-                globalBeganAt = CACurrentMediaTime()
-                globalFired = false
-                lastTouchPoint = point
-                // V0.0.25/V0.0.33：热区按下即完全接管，吞到 ended / cancelled。
-                ownsTouch = true
-                swallowDeadline = CACurrentMediaTime() + pressLimit
-                let now = CACurrentMediaTime()
-                if now - globalLastLogAt > 2.0 {
-                    globalLastLogAt = now
-                    AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=是（热区最高优先级）（AevonGlobalTouchV23 AevonZonePriorityV101 AevonTakeoverBandV102）")
+                // 带内、热区外：浮窗（含手柄 ±20pt 外扩）优先，否则整条右缘被接管后
+                // 浮窗贴右边缘时手柄就拖不动了。浮窗不相关时才进入延迟接管候选。
+                if !AevonEntryHost.pointHitsFloatingWindow(at: point) {
+                    // **只登记，不吞**（AevonBandDeferV103）。
+                    //
+                    // 为什么不在这里就吞：抖音的点赞 / 评论 / 收藏 / 分享按钮正好长在这条带上，
+                    // 一上来就吞等于把它们全部废掉。所以放行 began，等看清运动方向：
+                    //   · 向左横扫（dx ≤ -6 且横向占优）→ 立刻收归圆盘，后续事件全吞；
+                    //   · 轻点 / 上下滚 / 向右扫 → 彻底放手，App 按自己的逻辑处理。
+                    // 代价：App 会先收到 began 和最多一两帧位移（≤6pt）—— 不足以让它的翻页 /
+                    // 侧滑越过触发阈值，而我们从方向确认那一帧起就断供，手势不会成立。
+                    bandTouchID = touchID
+                    bandStart = point
+                    if forensicCount < 40 {
+                        forensicCount += 1
+                        AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管带=延迟接管（左扫才收，App前台=\(appForeground)，热区外，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102）")
+                    }
+                    return
                 }
-                return
             }
-            // V0.1.2（AevonForensicBandV102）：外扩带外但仍在右缘 44pt 内的 began 也记一条
-            // （起点比外扩带还偏的用户手势，就是抖音漏进去的那批）。
+            // V0.1.3：接管带外但仍在右缘 44pt 内的 began 记一条（bandWidth 之外的极端起点）。
             if forensicCount < 40, appForeground, point.x >= screen.width - 44 {
                 forensicCount += 1
-                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（超出外扩带，App前台=\(appForeground)，计数 \(forensicCount)）（AevonForensicBandV102）")
+                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（接管带外，App前台=\(appForeground)，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102）")
             }
             // 热区外：维持 V41 行为 —— 浮窗手柄手势 / 窗体命中探测。
             if handleFloatGestureBegan(point: point, touchID: touchID) { return }
@@ -728,6 +753,28 @@ enum AevonEdgeEntry {
                     ringExtraDeadline = CACurrentMediaTime() + swallowLimit
                 }
                 return
+            }
+            // V0.1.3（AevonBandDeferV103）：接管带候选的方向判定 —— 只有「向左横扫」才收归圆盘。
+            // 判定用绝对值占优（|dx| ≥ |dy|×1.2）保证斜着划也能中；纵向滚动 / 向右扫立刻放手，
+            // 让抖音右侧按钮的轻点、信息流的上下翻页完全不受影响。
+            if touchID == bandTouchID {
+                let dx = point.x - bandStart.x
+                let dy = point.y - bandStart.y
+                if dx <= -6, abs(dx) >= abs(dy) * 1.2 {
+                    bandTouchID = 0
+                    globalTouchID = touchID
+                    globalStart = bandStart
+                    globalBeganAt = CACurrentMediaTime()
+                    globalFired = false
+                    lastTouchPoint = point
+                    ownsTouch = true
+                    swallowDeadline = CACurrentMediaTime() + swallowLimit
+                    AevonLog.info("[边缘] 接管带确认左扫 → 收归圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(bandStart.x)),\(Int(bandStart.y))）（AevonBandDeferV103）")
+                } else if abs(dy) > 60 || dx > 30 {
+                    // 明确的 App 手势（纵向滚动 / 向右扫）：彻底放手，绝不再干预
+                    bandTouchID = 0
+                    return
+                }
             }
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
@@ -757,6 +804,12 @@ enum AevonEdgeEntry {
                 ringExtraDeadline = 0
                 return
             }
+            // V0.1.3：接管带候选抬手（始终没成左扫）—— 只清状态，事件本就归 App
+            if touchID == bandTouchID {
+                bandTouchID = 0
+                bandStart = .zero
+                return
+            }
             guard touchID == globalTouchID else { return }
             if let ring = AevonRingMenu.presented {
                 ring.remoteEnded(at: point, source: "global")
@@ -783,6 +836,12 @@ enum AevonEdgeEntry {
             if touchID == ringExtraTouchID {
                 ringExtraTouchID = 0
                 ringExtraDeadline = 0
+                return
+            }
+            // V0.1.3：接管带候选被系统取消 —— 只清状态
+            if touchID == bandTouchID {
+                bandTouchID = 0
+                bandStart = .zero
                 return
             }
             guard touchID == globalTouchID else { return }
@@ -947,6 +1006,9 @@ enum AevonEdgeEntry {
         ownsTouch = false
         ringExtraTouchID = 0
         ringExtraDeadline = 0
+        // V0.1.3：顺手清掉接管带候选，避免圆盘收起后残留一根「疑似归我」的手指
+        bandTouchID = 0
+        bandStart = .zero
         // V0.0.34：清共享内存圆盘状态位（Guard 侧立即恢复放行）
         AevonNotifySetRing(0)
         postRingState("com.aevon.ringclose")
