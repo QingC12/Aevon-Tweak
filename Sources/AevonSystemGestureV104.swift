@@ -62,7 +62,8 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
     private var touchPointer: UInt = 0
     private var pendingPointer: UInt = 0
     private var pointerDeadline: CFTimeInterval = 0
-    private var lastLogAt: CFTimeInterval = 0
+    /// 判向日志限频（V0.1.9 起接手 lastLogAt 的职责；右缘命中已改为每次必记）。
+    private var beginLogAt: CFTimeInterval = 0
     private var installedLogged = false
     /// V0.1.8：识别器在触摸流里被问过多少次（`shouldReceiveTouch` 次数）。
     /// 只要它真的挂进了系统手势环境，右缘落下时这里必然 > 0。
@@ -122,9 +123,23 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handle(_:)))
         pan.maximumNumberOfTouches = 1
-        pan.cancelsTouchesInView = false
-        pan.delaysTouchesBegan = false
-        pan.delaysTouchesEnded = false
+        // V0.1.9（AevonSystemGestureV109）—— 「抖音前一两次不动、后面又动」的正解就在这两行。
+        //
+        // 0.1.5~0.1.8 一直把这两个开关设成 false（当时的理由是「别干扰 App」），
+        // 结果识别器虽然真进了系统手势环境、也确实收到了触摸，但**App 那一份触摸照样完整收到**：
+        // UIPan 要位移才 began，而在它 began 之前的几十毫秒里，App 已经拿到了 began 和位移，
+        // 抖音的横滑手势就成立了 —— 于是圆盘出来、进度条也一起走。
+        // 这也解释了「前一两次不动、后面又动」：前几次落在右下角热区（那条是完全接管，
+        // App 连 began 都收不到），后面落在热区外走系统手势通道，App 就有机会先动手。
+        //
+        // 现在改成 true：
+        //   · delaysTouchesBegan —— 判定期内先扣住 App 的 began，等我们决定收不收；
+        //   · cancelsTouchesInView —— 我们收下之后，把 App 那条触摸整条取消。
+        // 代价（必然取舍）：右缘 20pt 带内的触摸会先延迟几十毫秒才轮到 App；
+        // 判定不是左扫就立刻 failed 还给它，轻点/竖滑基本无感。
+        pan.delaysTouchesBegan = true
+        pan.cancelsTouchesInView = true
+        pan.delaysTouchesEnded = true
         pan.delegate = self
         band.addGestureRecognizer(pan)
 
@@ -283,11 +298,16 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         // 而不是「这一次它有没有同意接收」。两个问题不能混为一个。
         pipelineTouchCount += 1
         let point = touch.location(in: nil)
+        // V0.1.9：右缘附近的触摸无论收不收都必须留证据 —— 「右缘到底有没有进识别器」
+        // 是这条通道存亡的唯一判据，上一版就是因为只记拒收总数、看不出坐标分布才绕了一圈。
+        let nearRightEdge = point.x >= UIScreen.main.bounds.width - AevonGestureBandView.bandWidth - 8
         guard acceptsTouch(at: point) else {
-            // 进了触摸流却被我们自己的判据拒 —— 与「根本没进触摸流」是两件事，
-            // 日志里必须能分开，否则下一轮又只能猜。
             let now = CACurrentMediaTime()
-            if now - rejectLogAt > 2.0 {
+            if nearRightEdge {
+                let zone = AevonTriggerZone.rect(in: UIScreen.main.bounds).contains(point)
+                let floating = AevonEntryHost.pointHitsFloatingWindow(at: point)
+                AevonLog.warn("[手势] 右缘触摸被拒 (x=\(Int(point.x)), y=\(Int(point.y))，App前台=\(AevonEntryHost.mountedInAppScene)，热区=\(zone)，浮窗=\(floating)，圆盘=\(AevonRingMenu.presented != nil))（AevonSystemGestureV109）")
+            } else if now - rejectLogAt > 2.0 {
                 rejectLogAt = now
                 AevonLog.info("[手势] 识别器已收到触摸但判据拒收 (x=\(Int(point.x)), y=\(Int(point.y))，App前台=\(AevonEntryHost.mountedInAppScene)，圆盘开着=\(AevonRingMenu.presented != nil))（AevonSystemGestureV108）")
             }
@@ -296,11 +316,10 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         touchPointer = 0
         pendingPointer = UInt(bitPattern: Unmanaged.passUnretained(touch).toOpaque())
         pointerDeadline = CACurrentMediaTime() + 12
-        let now = CACurrentMediaTime()
-        if now - lastLogAt > 1.5 {
-            lastLogAt = now
-            AevonLog.info("[手势] 系统手势管线拿到右缘触摸 (x=\(Int(point.x)), y=\(Int(point.y)))（AevonSystemGestureV105）")
-        }
+        // V0.1.9：右缘命中**每次必记**，不再限频。
+        // 上一版用 1.5 秒窗限频，结果最关键的那几次右缘触摸被自己的日志窗口藏掉了 ——
+        // 取证纪律：事件发生时必记，宁可多几行，也不许让证据消失。
+        AevonLog.info("[手势] 系统手势管线拿到右缘触摸 (x=\(Int(point.x)), y=\(Int(point.y)))（AevonSystemGestureV105 AevonSystemGestureV109）")
         return true
     }
 
@@ -311,8 +330,15 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         guard pipelineRegistered else { return false }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
         let translation = pan.translation(in: nil)
-        guard translation.x < 0, abs(translation.x) > abs(translation.y) else { return false }
-        return true
+        // V0.1.9：判据从「只要向左」收紧并提前到 8pt —— began 越早，App 的 began 被扣得越干净，
+        // 抖音那套横滑手势就越没有机会成立。1.2 倍纵横比是为了不把斜着刷信息流算成左扫。
+        let allowed = translation.x <= -8 && abs(translation.x) >= abs(translation.y) * 1.2
+        let now = CACurrentMediaTime()
+        if now - beginLogAt > 0.4 {
+            beginLogAt = now
+            AevonLog.info("[手势] 判向 dx=\(Int(translation.x)) dy=\(Int(translation.y)) → \(allowed ? "收归圆盘" : "还给 App")（AevonSystemGestureV109）")
+        }
+        return allowed
     }
 
     /// 与系统其他手势共存：右缘手势不与系统手势互相排斥（否则容易把便捷访问 / 多任务手势挤掉）
@@ -349,6 +375,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         case .began:
             touchPointer = pendingPointer
             pointerDeadline = CACurrentMediaTime() + 12
+            AevonLog.info("[手势] 识别器 began (x=\(Int(point.x)), y=\(Int(point.y))) → 呼出圆盘（AevonSystemGestureV109）")
             AevonEdgeEntry.triggerFromSystemGesture(point: point)
         case .changed:
             AevonRingMenu.presented?.remoteMoved(to: point, source: "systemgesture")

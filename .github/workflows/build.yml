@@ -303,6 +303,24 @@ jobs:
             || { echo "::error::反证调用点被删（降级永远不会触发）"; exit 1; }
           echo "V0.1.8 校验: 登记改走 _UISystemGestureManager + 反证降级"
 
+          # V0.1.9（Aevon(76) 日志）：
+          # 登记成功了（_UISystemGestureManager × FBSDisplayIdentity），识别器也确实进了触摸流
+          # （收到全屏任意位置触摸），但抖音还是会跟动 —— 因为 0.1.5~0.1.8 把
+          # delaysTouchesBegan / cancelsTouchesInView 都设成了 false：
+          # UIPan 要位移才 began，在它 began 之前 App 已经拿到 began 和位移，抖音横滑手势就成立了。
+          # 本版两个开关翻成 true、判向阈值提前到 8pt，并把右缘取证改成每次必记。
+          for s in AevonSystemGestureV109 "右缘触摸被拒" "判向 dx="; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.9 标记/文案 $s 未编入"; exit 1; }
+          done
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'delaysTouchesBegan = true' \
+            || { echo "::error::delaysTouchesBegan 又关掉了 —— App 会在识别器 began 前先动手（抖音跟动根因）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
+            | grep -q 'cancelsTouchesInView = true' \
+            || { echo "::error::cancelsTouchesInView 又关掉了 —— 收下之后不会取消 App 那条触摸"; exit 1; }
+          echo "V0.1.9 校验: 延迟/取消 App 触摸 + 判向提前 + 右缘取证每次必记"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
