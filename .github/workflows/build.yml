@@ -362,11 +362,40 @@ jobs:
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'max(zone.width, AevonGestureBandView.beginSlack)' \
             || { echo "::error::老通道接管带被改窄 —— 20~46pt 会重新变成没人兜底的缝"; exit 1; }
-          # 让路必须限定在接管缝内（否则缝外又整条让路 = 回到 V0.1.10 的坑）
-          grep -A 2 'let bandOwnedByPipeline' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            | grep -q 'screen.width - AevonGestureBandView.bandWidth' \
-            || { echo "::error::让路范围没有限定在接管缝内（缝外会让 App 整条吃掉）"; exit 1; }
-          echo "V0.1.11 校验: 让路收窄到接管缝 + 老通道铺到起手窗 + 跟踪采样"
+          # 让路判据：V0.1.12 起右缘不再让路给管线（见下方 V0.1.12 块），
+          # 这里只保留「接管带必须铺到 beginSlack」不变式。
+          echo "V0.1.11 校验: 老通道铺到起手窗 46pt + 跟踪采样"
+
+          # V0.1.12（Aevon(79) 日志）：
+          # 15 次呼出全部落在右下角热区（x=417~425，距右缘 5~13pt）且全部成功、抖音一次没动
+          # —— 说明「偶尔触发」必然发生在热区之外。热区之外以前是「began 给 App，看清方向才吞」，
+          # 判定期内 App 已经吃到 6pt 横向位移，而抖音自己的横滑阈值就在这个量级，
+          # 快一点/斜一点它就抢先立起来。本版换成「began 照给 App、移动帧先扣住」，
+          # 纯 SB 侧确定生效，不再赌系统手势管线的跟踪能力（0.1.11 已证它靠不住）。
+          strings "$DYLIB" | grep -q 'AevonBandHoldMovedV112' \
+            || { echo "::error::V0.1.12 标记 AevonBandHoldMovedV112 未编入"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'static let bandHoldLimit: CFTimeInterval = 0.6' \
+            || { echo "::error::扣帧判定期被删或改长 —— 右缘可能变成划不动"; exit 1; }
+          # 抬手必须放行：began 给出去了却扣住 ended，App 会留下孤儿触摸
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'if phase == 3 || phase == 4 { return false }' \
+            || { echo "::error::抬手帧不再放行 —— App 会留下没有 ended 的孤儿触摸"; exit 1; }
+          # 纵向必须立刻放行：扣帧是为了防横滑，不是为了拦滚动
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'abs(dy) >= 5, abs(dy) > abs(dx)' \
+            || { echo "::error::纵向放行判据被删 —— 右缘带内上下滑会被扣住"; exit 1; }
+          # began 必须放行（否则带内轻点全废 = 抖音右侧按钮点不到）
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'if phase == 0 { return false }' \
+            || { echo "::error::began 被吞了 —— 带内轻点/LongPress 全废"; exit 1; }
+          # 两侧签名必须同时带 phase（一处改了一处没改 = 判据错乱）
+          grep -q 'AevonGlobalTouchShouldSwallow(uintptr_t touchID, NSInteger phase)' "$GITHUB_WORKSPACE/Sources/AevonTouchHook.m" \
+            || { echo "::error::hook 的吞摸判定没带 phase（分不出 began/moved/ended）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int)' \
+            || { echo "::error::Swift 侧判据签名与 hook 不一致"; exit 1; }
+          echo "V0.1.12 校验: 右缘只扣移动帧 + 抬手必放行 + 纵向立刻放行 + 判定期 0.6s"
 
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \

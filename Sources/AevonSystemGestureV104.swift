@@ -419,6 +419,9 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         // 没进系统手势管线时这条带只做「视图层观察」，不参与呼出 ——
         // 否则会和 0.1.3 的延迟接管老通道各呼一次圆盘。
         guard pipelineRegistered else { return false }
+        // V0.1.12（AevonBandHoldMovedV112）：右缘呼出已独家交给全局通道（它扣移动帧，纯 SB 侧确定生效）。
+        // 管线这边只保留「延迟 App began」的附带作用 —— 它若也 begin，就会各呼一次圆盘。
+        guard !AevonEdgeEntry.isBandHoldingTouch else { return false }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
         let translation = pan.translation(in: nil)
         // V0.1.10：必须从右缘起手（落点在 44pt 内）。不看这一刻的位置 ——

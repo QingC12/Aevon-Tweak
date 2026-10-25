@@ -570,6 +570,19 @@ enum AevonEdgeEntry {
     // 只登记，不吞：等看清是向左横扫才把这根手指收归圆盘（轻点 / 上下滑 / 向右扫仍归 App）。
     private static var bandTouchID: UInt = 0
     private static var bandStart: CGPoint = .zero
+    // V0.1.12（AevonBandHoldMovedV112）：起手窗「只扣移动帧」的持有状态。
+    //
+    // Aevon(79) 的 15 次呼出全部落在右下角热区、全部成功，所以「偶尔触发」的那几次
+    // 根本没被这份日志覆盖到 —— 它只能发生在热区之外。热区之外以前是「began 照给 App，
+    // 等看清方向才吞」，判定期内 App 已经吃到 6pt 横向位移；抖音自己的横滑手势阈值就在
+    // 这个量级，快速或斜向起手时它会先立起来，于是圆盘出来了、进度条也动了。
+    // 现在的做法：began 仍给 App（轻点才能用），但**移动帧先扣住**，App 累计横向位移始终为 0，
+    // 横滑手势立不起来；看清是纵向 / 向右就立刻放行（App 拿到后续移动帧照样滚，只晚一两帧）。
+    private static var bandHoldTouchID: UInt = 0
+    private static var bandHoldDeadline: CFTimeInterval = 0
+    /// 判定期上限（秒）：超时还没定向就整根放行。
+    /// 宁可漏一次，也绝不让右缘变成「划不动」—— 这是本机制唯一可能伤到用户的地方。
+    private static let bandHoldLimit: CFTimeInterval = 0.6
 
     // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
 
@@ -715,22 +728,29 @@ enum AevonEdgeEntry {
             let inZone = zone.contains(point)
             // V0.1.8（AevonSystemGestureV108）：把「右缘真的来了触摸」这件事回报给系统手势通道，
             // 让通道自己判断登记是否真的生效（它只在「识别器一次都没被问过」时才降级）。
-            // 必须放在 bandOwnedByPipeline 求值之前 —— 降级要能在这一次触摸就恢复老通道。
+            // V0.1.12 起右缘已不依赖管线呼出，这里的计数只用于记录管线状态，降级也不影响呼出。
             if appForeground, !inZone, band.contains(point) {
                 AevonSystemGestureV105.shared.noteBandTouchSeenByGlobalChannel(at: point)
             }
-            // V0.1.5（AevonSystemGestureV105）：系统手势管线已接管右缘时，这条带上的触摸
-            // 从落下那一刻就归 SpringBoard 的识别器，全局通道不再登记候选 —— 否则同一根
-            // 手指会被算两次（管线呼一次、延迟接管再呼一次）。
+            // V0.1.12（AevonBandHoldMovedV112）：**整条右缘（0~46pt）一律由本通道登记候选**，
+            // 包含原来让给系统手势管线的那 20pt 缝。
             //
-            // V0.1.11：让路范围收窄到**接管缝 20pt**（管线在这段有实证能力），
-            // 缝外 20~46pt 交回老通道延迟接管。判据不再是「布了就让」，而是「这段它真管得住才让」。
-            let bandOwnedByPipeline = appForeground && AevonSystemGestureV105.ownsBand
-                && point.x >= screen.width - AevonGestureBandView.bandWidth
+            // 判据来自 Aevon(79)：15 次呼出全部落在右下角热区（x=417~425，距右缘 5~13pt）、
+            // 全部成功、抖音一次没动 —— 说明「偶尔触发」的那几次必然落在热区之外。
+            // 而热区之外以前是「began 照给 App，等看清方向才吞」，判定期内 App 已经吃到 6pt 横向位移，
+            // 抖音自己的横滑阈值就在这个量级，快一点、斜一点它就抢先立起来。
+            // 0.1.11 想让管线接手这段，可「登记进管线」只能让它被问要不要，真正跟踪仍要视图命中
+            // （0.1.11 自己的结论），靠不住。所以改由本通道独家负责，机制换成
+            // 「began 照给 App、移动帧先扣住」—— 纯 SB 侧就确定生效，不必赌管线的跟踪能力。
+            // 管线保留登记，只当「began 延迟器」叠加使用；它的呼出已被否决，不会双呼。
+            //
             // 桌面只认原热区（接管优先，V0.0.33 同款）；App 前台才启用整条右缘接管带。
-            if edgeEnabled, inZone || (appForeground && band.contains(point) && !bandOwnedByPipeline) {
+            if edgeEnabled, inZone || (appForeground && band.contains(point)) {
                 if inZone {
                     // 原热区：老规矩，按下即完全接管（App 连 began 都收不到）。
+                    // 热区这条路「began 就吞」，所以没有孤儿触摸问题，扣帧状态要顺手清掉。
+                    bandHoldTouchID = 0
+                    bandHoldDeadline = 0
                     globalTouchID = touchID
                     globalStart = point
                     globalFired = false
@@ -745,32 +765,33 @@ enum AevonEdgeEntry {
                     return
                 }
                 // 带内、热区外：浮窗（含手柄 ±20pt 外扩）优先，否则整条右缘被接管后
-                // 浮窗贴右边缘时手柄就拖不动了。浮窗不相关时才进入延迟接管候选。
+                // 浮窗贴右边缘时手柄就拖不动了。
                 if !AevonEntryHost.pointHitsFloatingWindow(at: point) {
-                    // **只登记，不吞**（AevonBandDeferV103）。
+                    // V0.1.12（AevonBandHoldMovedV112）：登记候选，并**从第一帧移动起就扣住**。
                     //
-                    // 为什么不在这里就吞：抖音的点赞 / 评论 / 收藏 / 分享按钮正好长在这条带上，
-                    // 一上来就吞等于把它们全部废掉。所以放行 began，等看清运动方向：
-                    //   · 向左横扫（dx ≤ -6 且横向占优）→ 立刻收归圆盘，后续事件全吞；
-                    //   · 轻点 / 上下滚 / 向右扫 → 彻底放手，App 按自己的逻辑处理。
-                    // 代价：App 会先收到 began 和最多一两帧位移（≤6pt）—— 不足以让它的翻页 /
-                    // 侧滑越过触发阈值，而我们从方向确认那一帧起就断供，手势不会成立。
+                    // 与 0.1.3 的区别只有一处：以前只登记、移动帧照给 App（判定期内 App 拿到 ≤6pt 位移）；
+                    // 现在 began 照给 App（轻点 / 长按照常可用），但移动帧在定向之前不投递 ——
+                    // App 累计横向位移恒为 0，它自己的横滑手势立不起来，抖音进度条就不会跟着动。
+                    // 看清方向立刻分流：纵向滚动 / 向右扫 → 放行（App 拿到后续移动帧照样滚，只晚一两帧）；
+                    // 向左横扫 → 整根收归圆盘。抬手帧一律放行，绝不给 App 留孤儿触摸。
                     bandTouchID = touchID
                     bandStart = point
-                    if forensicCount < 40 {
-                        forensicCount += 1
-                        AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管带=延迟接管（左扫才收，App前台=\(appForeground)，热区外，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102）")
-                    }
+                    bandHoldTouchID = touchID
+                    bandHoldDeadline = CACurrentMediaTime() + bandHoldLimit
+                    forensicCount += 1
+                    let gap = Int(screen.width - point.x)
+                    let tier = gap <= Int(AevonGestureBandView.bandWidth) ? "接管缝" : "起手窗"
+                    AevonLog.info("[右缘] 落点 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=\(tier)，接管方式=扣移动帧（began 已给 App，横向位移对 App 恒为 0），第 \(forensicCount) 次（AevonBandHoldMovedV112 AevonBandDeferV103 AevonForensicBandV102 AevonBandWidenV111）")
                     return
                 }
             }
-            // V0.1.3：接管带外但仍在右缘 46pt 内的 began 记一条（bandWidth 之外的极端起点）。
-            // V0.1.11：把「为什么没接管」写清楚 —— 让路给管线 / 起手太靠里，两件事不能混着叫「接管带外」。
+            // 正常流程走不到这里：接管带已铺到 46pt，右缘触摸都会在上一段被接走。
+            // 留着是为了「右缘呼出已关 / 浮窗压住」这两种情况仍有痕迹。
             if forensicCount < 40, appForeground, point.x >= screen.width - AevonGestureBandView.beginSlack {
                 forensicCount += 1
                 let gap = Int(screen.width - point.x)
-                let why = bandOwnedByPipeline ? "接管带外·让路给系统手势管线" : "接管带外·起手太靠里"
-                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（\(why)，距右缘 \(gap)pt，App前台=\(appForeground)，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102 AevonBandWidenV111）")
+                let why = !edgeEnabled ? "右缘呼出已关" : "浮窗压住"
+                AevonLog.info("[穿透取证] began (\(Int(point.x)),\(Int(point.y))) 接管=否（\(why)，距右缘 \(gap)pt，App前台=\(appForeground)，计数 \(forensicCount)）（AevonBandDeferV103 AevonForensicBandV102 AevonBandHoldMovedV112）")
             }
             // 热区外：维持 V41 行为 —— 浮窗手柄手势 / 窗体命中探测。
             if handleFloatGestureBegan(point: point, touchID: touchID) { return }
@@ -795,6 +816,7 @@ enum AevonEdgeEntry {
                 if AevonSystemGestureV105.isHandling(touchID: touchID) {
                     bandTouchID = 0
                     bandStart = .zero
+                    bandHoldTouchID = 0
                     return
                 }
                 let dx = point.x - bandStart.x
@@ -807,11 +829,18 @@ enum AevonEdgeEntry {
                     lastTouchPoint = point
                     ownsTouch = true
                     swallowDeadline = CACurrentMediaTime() + swallowLimit
-                    AevonLog.info("[边缘] 接管带确认左扫 → 收归圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(bandStart.x)),\(Int(bandStart.y))）（AevonBandDeferV103）")
-                } else if abs(dy) > 60 || dx > 30 {
-                    // 明确的 App 手势（纵向滚动 / 向右扫）：彻底放手，绝不再干预
+                    // V0.1.12：扣帧窗口跟着接管一起续期 —— 否则 0.6s 判定期一到就松手，
+                    // 整条滑动后半段会漏回 App（那等于把刚补上的洞重新挖开）。
+                    bandHoldDeadline = CACurrentMediaTime() + swallowLimit
+                    AevonLog.info("[边缘] 接管带确认左扫 → 收归圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(bandStart.x)),\(Int(bandStart.y))）（AevonBandDeferV103 AevonBandHoldMovedV112）")
+                } else if let reason = bandReleaseReason(dx: dx, dy: dy) {
+                    // V0.1.12：看清不是左扫就**立刻放行**。扣移动帧是为了不让 App 立起横滑手势，
+                    // 不是为了拦它滚动 —— 放行后 App 拿到后续移动帧照常生效（只晚一两帧）。
                     bandTouchID = 0
-                    return
+                    bandStart = .zero
+                    bandHoldTouchID = 0
+                    bandHoldDeadline = 0
+                    AevonLog.info("[穿透取证] 放手→App（dx=\(Int(dx)) dy=\(Int(dy))，原因=\(reason)）（AevonBandHoldMovedV112 AevonBandDeferV103）")
                 }
             }
             guard touchID == globalTouchID else { return }
@@ -834,6 +863,12 @@ enum AevonEdgeEntry {
             }
 
         case .ended:
+            // V0.1.12：抬手一律先清「扣移动帧」状态 —— 抬手帧在 hook 里已经放行给 App 了，
+            // 这里不清会留下一个永远吞移动帧的指针（touchID 是 UITouch 指针，会被复用）。
+            if touchID == bandHoldTouchID {
+                bandHoldTouchID = 0
+                bandHoldDeadline = 0
+            }
             // V0.0.41：浮窗拖拽抬手 —— 提交几何 / 命中 ✕ 才关窗 / 记录双击候选
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: false) { return }
             // V0.0.29：额外手指抬起（hook 已按「先询问再上报」把抬手帧吞掉）—— 只清状态
@@ -861,6 +896,11 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            // V0.1.12：被系统取消同样先清扣帧状态
+            if touchID == bandHoldTouchID {
+                bandHoldTouchID = 0
+                bandHoldDeadline = 0
+            }
             // V0.0.41：浮窗拖拽被系统打断 —— 缩放退回原几何，移动不落盘
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: true) { return }
             if touchID == ringExtraTouchID {
@@ -1043,17 +1083,55 @@ enum AevonEdgeEntry {
         postRingState("com.aevon.ringclose")
     }
 
+    /// V0.1.12：右缘起手窗是否正持有这根手指（供系统手势通道防双呼）。
+    ///
+    /// 右缘呼出现在独家归本通道 —— 它扣移动帧，是纯 SB 侧确定生效的机制；
+    /// 管线里那个识别器只要也 begin，就会各呼一次圆盘，所以那边直接否决。
+    static var isBandHoldingTouch: Bool {
+        return bandHoldTouchID != 0
+    }
+
+    /// V0.1.12：判定期内的放行判据。返回 nil = 方向还没定，继续扣着移动帧。
+    ///
+    /// 顺序不能换：调用方先判「向左横扫」收归圆盘，剩下才问这里要不要放手。
+    /// 纵向判据用「纵向位移绝对占优」（|dy| ≥ 5 且 |dy| > |dx|）而不是「|dx| 很小」——
+    /// 快速竖划的第一帧可能已经带了 5~8pt 横向抖动，按「|dx| 小」判会一路扣着不放，
+    /// 那才是真正会让右缘「划不动」的写法。
+    private static func bandReleaseReason(dx: CGFloat, dy: CGFloat) -> String? {
+        if abs(dy) >= 5, abs(dy) > abs(dx) { return "纵向滚动（|dy|>|dx|）" }
+        if dx >= 3 { return "向右扫" }
+        if CACurrentMediaTime() > bandHoldDeadline { return "\(Int(bandHoldLimit * 1000))ms 内未定向" }
+        return nil
+    }
+
     /// `AevonTouchHook.m` 逐帧询问：这根触摸要不要吞掉（不投递给 App）。
     ///
-    /// 两条独立的接管路径，任意一条成立就吞：
-    ///   A. **热区接管（V0.0.25）**：App 前台时，手指一落到热区就归我们 —— 连 began 都不给 App，
-    ///      所以前台 App 不会跟着滑。桌面不接管（否则热区里的桌面图标点不动）。
-    ///   B. **圆盘接管（V0.0.24）**：圆盘已由全局通道唤起，继续接管到圆盘收起。
+    /// `phase`：0 = began，1 = moved，3 = ended，4 = cancelled（V0.1.12 起传入）。
+    ///
+    /// 三条独立的接管路径，任意一条成立就吞：
+    ///   A. **右缘起手窗扣移动帧（V0.1.12 / AevonBandHoldMovedV112）**：began 与抬手放行，
+    ///      只扣「方向未定」的移动帧 —— App 累计横向位移恒为 0，横滑手势立不起来。
+    ///   B. **热区接管（V0.0.25）**：App 前台时，手指一落到热区就归我们 —— 连 began 都不给 App。
+    ///   C. **圆盘接管（V0.0.24）**：圆盘已由全局通道唤起，继续接管到圆盘收起。
     ///
     /// 还有三条硬性前提：必须是唤起/接管的那一根手指（别的指头照常给 App），且没超时。
-    static func shouldSwallowGlobalTouch(_ touchID: UInt) -> Bool {
+    static func shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int) -> Bool {
         guard AevonPrefs.bool("Enabled", default: false) else { return false }
         guard touchID != 0 else { return false }
+        // A. 右缘起手窗：只扣移动帧（V0.1.12）
+        //
+        //   · began 一律放行 —— 轻点 / 长按 / App 自己的按钮必须照常可用；
+        //   · 抬手一律放行 —— 否则 App 会留下一条只有 began、永远没有 ended 的孤儿触摸。
+        //     （热区那条路 began 就吞了，所以它没有孤儿问题；这条路 began 是给出去的，必须有始有终。）
+        //   · 已收归圆盘 → 后续移动帧全吞；
+        //   · 判定期内 → 扣住移动帧；超时放行（宁可漏一次，也绝不让右缘变成「划不动」）。
+        if touchID == bandHoldTouchID {
+            if phase == 3 || phase == 4 { return false }
+            if phase == 0 { return false }
+            if ownsTouch, touchID == globalTouchID { return true }
+            guard CACurrentMediaTime() <= bandHoldDeadline else { return false }
+            return true
+        }
         // V0.0.41（AevonFloatGlobalV41）：浮窗拖拽期间这根手指完全归浮窗。
         // 手柄在浮窗**外侧**，落点就是 App 内容 —— 不吞的话拖窗会连带拖动 App 页面 / 列表。
         if floatGestureActive, touchID == floatTouchID,
@@ -1130,9 +1208,13 @@ public func AevonGlobalTouchPhase(_ phase: Int, _ touchID: UInt, _ x: CGFloat, _
 }
 
 /// V0.0.24：事件是否丢弃（不投递给 App）的判定入口，供 `AevonTouchHook.m` 调用。
+///
+/// V0.1.12（AevonBandHoldMovedV112）：多收一个 `phase`。右缘起手窗要「began 放行、移动帧扣住、
+/// 抬手放行」，光凭 touchID 分不出这三件事。签名改了就必须两侧同改 —— AevonTouchHook.m 里的
+/// extern 声明已同步，CI 也会查这两处。
 @_cdecl("AevonGlobalTouchShouldSwallow")
-public func AevonGlobalTouchShouldSwallow(_ touchID: UInt) -> Bool {
-    return AevonEdgeEntry.shouldSwallowGlobalTouch(touchID)
+public func AevonGlobalTouchShouldSwallow(_ touchID: UInt, _ phase: Int) -> Bool {
+    return AevonEdgeEntry.shouldSwallowGlobalTouch(touchID, phase: phase)
 }
 
 /// V0.0.26：设置页写完偏好后的 Darwin 通知回调。

@@ -26,7 +26,16 @@
  */
 
 extern void AevonGlobalTouchPhase(NSInteger phase, uintptr_t touchID, CGFloat x, CGFloat y);
-extern BOOL AevonGlobalTouchShouldSwallow(uintptr_t touchID);
+// V0.1.12（AevonBandHoldMovedV112）：多带一个阶段。
+//
+// 为什么要带阶段：右缘起手窗（20~46pt）以前是「began 照给 App、等看清方向才吞」，
+// 于是 App 在判定期里已经吃到 6pt 横向位移，偶发的快速/斜向起手会让它自己的横滑手势成立
+// —— 这就是「偶尔触发抖音进度条」。新策略是「began 照给 App，但移动帧先扣住」：
+// 方向不明时移动帧不投递（App 累计位移始终为 0，横滑手势立不起来），
+// 一旦看清是纵向滚动 / 向右扫就立刻放行（App 拿到后续移动帧照样能滚，只晚一两帧），
+// 看清是向左横扫就整根接管。抬手帧必须放行，否则 App 那边会留下没有任何后续的孤儿 touch。
+// 所以判定函数必须知道这是哪一阶段 —— 只凭 touchID 分不出 began / moved / ended。
+extern BOOL AevonGlobalTouchShouldSwallow(uintptr_t touchID, NSInteger phase);
 
 static IMP AevonOrigSendEvent = NULL;
 static BOOL AevonTouchHookInstalled = NO;
@@ -65,11 +74,11 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                  */
                 BOOL isRelease = (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled);
                 if (isRelease) {
-                    if (AevonGlobalTouchShouldSwallow(touchID)) { swallowCount += 1; }
+                    if (AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) { swallowCount += 1; }
                     AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
                 } else {
                     AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
-                    if (AevonGlobalTouchShouldSwallow(touchID)) { swallowCount += 1; }
+                    if (AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) { swallowCount += 1; }
                 }
             }
             // 整条事件的所有活动触摸都属于「被圆盘接管的那根手指」才丢弃；
