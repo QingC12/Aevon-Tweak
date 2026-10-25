@@ -586,9 +586,25 @@ jobs:
             || { echo "::error::死手宽限期被改（默认 1 秒）"; exit 1; }
           grep -q 'static let ringOpenLimit: CFTimeInterval = 20' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::圆盘展开硬上限被改（默认 20 秒）"; exit 1; }
-          # ④ 三指急救：判定必须在所有闸门之前，且必须自己把开关写盘关掉
-          grep -q 'if activeTouches.count >= 3 { panicRelease() }' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            || { echo "::error::三指急救判定被删（再出事故就只能卸载）"; exit 1; }
+          # ④ 三指急救：判定必须在所有闸门之前，且必须能真正把开关写盘关掉。
+          #   V0.1.19 起语义升级为两档（三指成形只释放接管、按住 2 秒才写盘关开关），
+          #   旧形态的判定串保留为「兼容分支」，同时新增四条硬断言把两档钉住 ——
+          #   不是放宽，是换了形态之后一条都不能少。
+          if grep -q 'if activeTouches.count >= 3 { panicRelease() }' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
+            echo "三指急救：旧形态（0.1.18 及以前）"
+          elif grep -q 'panicReleaseNow("三指同时按下")' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            && grep -q 'static let panicHoldDisableAfter: CFTimeInterval = 2.0' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            && grep -q 'static let panicHoldHintAfter: CFTimeInterval = 0.6' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            && grep -q 'panicCooldownUntil' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
+            echo "三指急救：0.1.19 两档形态（成形只释放 / 按住 2 秒才关开关 / 0.8 秒冷却）"
+          else
+            echo "::error::三指急救判定被删（再出事故就只能卸载）"
+            exit 1
+          fi
+          grep -q 'AevonPanicHint.show' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::急救状态提示条没有接进急救流程（关了开关用户看不见）"; exit 1; }
+          grep -q 'RightEdgePanicOffV119' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::急救关闭标记 RightEdgePanicOffV119 缺失（重启后不会提醒用户）"; exit 1; }
           grep -q 'AevonPrefs.set("RightEdgeTakeover", false)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::急救没有关掉右缘接管开关（急救完还会复发）"; exit 1; }
           # ⑤ 出过事故的功能不许默认开
