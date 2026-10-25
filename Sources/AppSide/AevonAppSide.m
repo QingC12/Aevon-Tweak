@@ -120,7 +120,7 @@ static void AevonAppPublishToOwnDomainLocked(void) {
                              (__bridge CFStringRef)snapshot,
                              domain);
     CFPreferencesSetAppValue(CFSTR("AevonAppProbeSeq"),
-                             (__bridge CFStringRef)[NSNumber numberWithInteger:gAevonAppSeq],
+                             (__bridge CFNumberRef)[NSNumber numberWithInteger:gAevonAppSeq],
                              domain);
     Boolean ok = CFPreferencesAppSynchronize(domain);
     if (ok) {
