@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.1.13（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.1.13 起：全屏 App 内呼出只认「右下角热区里向左滑」，右缘 20~46pt 那一段整段交回 App，不再拦截（绝不会带起 App 自己的手势）；若你要在右缘中部也能呼出，打开下面的「右缘全域接管」。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.1.15（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 在设定的热区内向左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.1.15 起：全屏 App 内有两个稳入口 —— 右下角热区（48×320），以及屏幕右缘的接管带（默认宽 28pt、覆盖下半 60% 高度），两处都是「按下即接管、向左滑 ≥30pt 呼出」，App 全程收不到触摸、绝不会被带起来。代价写在「右缘接管带」开关下面：带内 App 自己的轻点 / 右滑也归我们，嫌碍事可以关掉或把宽度、高度调小。日志：/var/mobile/Aevon.log。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -40,13 +40,25 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>RightEdgeTakeover</string>
+			<key>label</key>
+			<string>右缘接管带（0.1.15 默认开）：全屏 App 内，屏幕右缘一条带按下即接管，向左滑 30pt 呼出圆盘，App 连 began 都收不到，所以绝不会跟着动。代价：这条带里 App 自己的轻点 / 右滑 / 贴边滚动也归我们（这是「整指接管」的物理代价，不是 bug）。宽度与高度在「细节调整」里调</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
 			<false/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>BandTakeoverFromBegan</string>
 			<key>label</key>
-			<string>右缘全域接管（0.1.13 新增，默认关）：打开后全屏 App 右缘 20~46pt 任意高度按下即接管，圆盘能在右缘中部呼出；代价是这一段里 App 自己的按钮（抖音点赞 / 评论 / 收藏）点不到。关着时这一段整段交回 App，呼不出圆盘但绝不会带起 App 手势</string>
+			<string>右缘全域接管（旧机制，默认关）：把接管带扩到右缘 44pt × 整屏高，连上半屏也能呼出。一般不用开 —— 上面那条带已经覆盖下半屏；只有你要在屏幕上半部右缘呼出时才打开</string>
 		</dict>
 		<dict>
 			<key>cell</key>

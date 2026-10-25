@@ -697,3 +697,23 @@ __attribute__((used)) static const char AevonHostAuditV114Marker[] = "AevonHostA
 __attribute__((used)) static const char AevonRecognizerHostV114Marker[] = "AevonRecognizerHostV114";
 __attribute__((used)) static const char AevonOwnRecognizerV114Marker[] = "AevonOwnRecognizerV114";
 __attribute__((used)) static const char AevonDeferProbeV114Marker[] = "AevonDeferProbeV114";
+
+/* ── V0.1.15（AevonRightEdgeTakeoverV115）：本版标记 ──
+ * Aevon(82) 的 P7 把前九版的假设全推翻了：
+ *   ① 右缘 (424,400) 的最高命中**就是我们自己的带视图**（在 SBMainSwitcherWindow level=5 里
+ *      压着 SBDeviceApplicationSceneView）→ 命中早就赢了，不是瓶颈；
+ *   ② 入口窗口三个落点全是 nil（纯穿透）→ 它不参与裁决；
+ *   ③ 我们的识别器和 14 个系统识别器**同宿** UISystemGestureView(0,0,430,932) → 确实进了系统手势环境；
+ *   ④ BKSHIDEventDeferringPredicate 只有 environment/display/token，无几何 → 按区域延迟判死。
+ * 结论：命中赢 ≠ App 收不到；系统手势环境只给观察权；能决定 App 收不收摸的只有
+ * `UIApplication -sendEvent:` 整指丢弃（热区 12/12 干净就是靠它）。
+ * 所以本版把右缘做成「第二个热区」：began 即接管，与热区共用 ownsTouch 生命周期。
+ *
+ *   AevonRightEdgeTakeoverV115 = 右缘接管带（总入口整指吞 + 判向呼出）
+ *   AevonRightEdgeWidthV115    = 带宽/带高可调（默认 28pt × 下半 60%）
+ *   AevonBandTouchBeganV115    = 命中通道取证（bandView 是否真的拿到 touches）
+ *
+ * 全部用 used 钉住：Swift 短串会走 SSO 内联，`strings` 查不到；CI 只认二进制字节。 */
+__attribute__((used)) static const char AevonRightEdgeTakeoverV115Marker[] = "AevonRightEdgeTakeoverV115";
+__attribute__((used)) static const char AevonRightEdgeWidthV115Marker[] = "AevonRightEdgeWidthV115";
+__attribute__((used)) static const char AevonBandTouchBeganV115Marker[] = "AevonBandTouchBeganV115";

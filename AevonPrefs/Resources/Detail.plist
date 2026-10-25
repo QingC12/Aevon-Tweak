@@ -120,6 +120,54 @@
 			<key>action</key>
 			<string>aevonResetTriggerZone</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>④ 右缘接管带（0.1.15 新增）</string>
+			<key>footerText</key>
+			<string>全屏 App 里，屏幕右缘有一条「按下即接管」的带：手指落进去就归圆盘，向左滑 30pt 呼出，App 连 began 都收不到，所以绝不会被带起来。代价是这条带里 App 自己的轻点 / 右滑 / 贴边滚动也归我们 —— 这是整指接管的物理代价。宽度越小越不撞 App 按钮，高度只覆盖下半屏就不会影响顶部。默认 28pt × 下半 60%。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>RightEdgeWidth</string>
+			<key>label</key>
+			<string>右缘带宽度：从右边缘往左有多厚（pt）</string>
+			<key>minValue</key>
+			<integer>8</integer>
+			<key>maxValue</key>
+			<integer>46</integer>
+			<key>min</key>
+			<integer>8</integer>
+			<key>max</key>
+			<integer>46</integer>
+			<key>default</key>
+			<integer>28</integer>
+			<key>footerText</key>
+			<string>默认 28。抖音右侧的点赞 / 评论 / 收藏按钮中心一般距边 30pt 开外，28 基本不撞；调到 46 更容易呼出，但贴边按钮会点不到。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>RightEdgeHeight</string>
+			<key>label</key>
+			<string>右缘带高度：占屏高的百分比（从底边往上）</string>
+			<key>minValue</key>
+			<integer>40</integer>
+			<key>maxValue</key>
+			<integer>100</integer>
+			<key>min</key>
+			<integer>40</integer>
+			<key>max</key>
+			<integer>100</integer>
+			<key>default</key>
+			<integer>60</integer>
+			<key>footerText</key>
+			<string>默认 60 = 只覆盖下半屏（y 从屏高 40% 到底部），上半屏右侧完全不受影响。拉到 100 就是整条右缘都能呼出，代价是顶部右侧按钮也点不到。</string>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>细节调整</string>

@@ -78,6 +78,71 @@ enum AevonTriggerZone {
     }
 }
 
+/// 右缘接管带（V0.1.15，AevonRightEdgeTakeoverV115）。
+///
+/// Aevon(82) 的 P7 探针把前九版的假设全推翻了，四条实测：
+///   · P7-1：右缘 (424,400) 的最高命中**就是我们自己的带视图** —— 它挂在
+///     `SBMainSwitcherWindow`（level=5，App 画面所在窗口）里，压着 `SBDeviceApplicationSceneView`；
+///     所以「我们的视图在命中链里排不上队」是错的，命中早就赢了。
+///   · P7-2：入口窗口三个落点全是 `nil（穿透）` —— 它只负责显示，根本不参与裁决。
+///   · P7-3：`SBMainDisplaySystemGestureManager` 的 14 个识别器**全部**挂在
+///     `UISystemGestureView(0,0,430,932)` 上，而我们登记的那一个也在这个视图上 —— 同宿。
+///     即「像 Stheno 一样进了系统手势环境」这件事我们已经做到了。
+///   · P7-5：`BKSHIDEventDeferringPredicate` 只有 environment / display / token 三个维度，
+///     **没有任何几何信息** → 无法「只延迟右缘那一带」，整屏延迟等于废手机 → 这条路判死。
+///
+/// 于是结论只剩一条：命中赢 ≠ App 收不到；系统手势环境只给「观察权」，不给「所有权」；
+/// 真正能决定 App 收不收摸的，是 `UIApplication -sendEvent:` 这一层整指丢弃
+/// （热区 12 次呼出零漏摸就是靠它，而右缘从 0.1.13 起在这一层是「本版不干预」）。
+///
+/// 所以这个版本把右缘做成「第二个热区」：began 即接管，与热区共用同一套 `ownsTouch`
+/// 生命周期；不再碰识别器、不再扣移动帧、不再赌判向 —— 因为吞了 began 之后，
+/// 判向失败也还不回去了（App 没有 began 就拿不住这根 touch）。
+///
+/// 代价是物理代价，不是 bug：带内 App 的轻点 / 右滑 / 贴边滚动全部归我们。
+/// 因此带宽默认 28pt（抖音右侧按钮中心距边一般 ≥30pt），
+/// 带高默认只覆盖**下半 60%**，上半屏右侧完全不受影响。
+enum AevonRightEdge {
+    static let defaultWidth: Double = 28
+    static let defaultHeightPercent: Double = 60
+    static let minWidth: Double = 8
+    static let maxWidth: Double = 46
+    static let minHeightPercent: Double = 40
+    static let maxHeightPercent: Double = 100
+
+    static var enabled: Bool {
+        return AevonPrefs.bool("RightEdgeTakeover", default: true)
+    }
+
+    static var width: CGFloat {
+        let value = AevonPrefs.double("RightEdgeWidth", default: defaultWidth)
+        return CGFloat(min(max(value, minWidth), maxWidth))
+    }
+
+    /// 带高占屏高的百分比（从底边往上量）。
+    static var heightPercent: CGFloat {
+        let value = AevonPrefs.double("RightEdgeHeight", default: defaultHeightPercent)
+        return CGFloat(min(max(value, minHeightPercent), maxHeightPercent))
+    }
+
+    /// 屏幕坐标下的接管带（贴右边缘、贴底边向上伸展）。
+    static func band(in bounds: CGRect) -> CGRect {
+        guard bounds.width > 1, bounds.height > 1 else { return .zero }
+        let w = min(width, bounds.width)
+        let h = bounds.height * heightPercent / 100
+        return CGRect(x: bounds.maxX - w, y: bounds.maxY - h, width: w, height: h)
+    }
+
+    static func summary(in bounds: CGRect) -> String {
+        let r = band(in: bounds)
+        return "宽 \(Int(r.width))pt · 高占比 \(Int(heightPercent))%（带 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
+    }
+
+    static func signature() -> String {
+        return "\(enabled ? 1 : 0)|\(Int(width.rounded()))|\(Int(heightPercent.rounded()))"
+    }
+}
+
 /// 屏幕右侧边缘的手势条。
 ///
 /// 逆向证据（Stheno.dylib）：`_showEgdeGesture` / `_edgeWidth` / `_effectEdge` /
@@ -587,6 +652,17 @@ enum AevonEdgeEntry {
     /// 宁可漏一次，也绝不让右缘变成「划不动」—— 这是本机制唯一可能伤到用户的地方。
     private static let bandHoldLimit: CFTimeInterval = 0.6
 
+    // V0.1.15（AevonRightEdgeTakeoverV115）：右缘接管带「按下即接管」的当前手指。
+    //
+    // 与上面的 bandHoldTouchID 是**互斥的两套**：那套是「began 给 App、只扣移动帧」的旧机制
+    // （0.1.12 留下、0.1.13 默认停用），这套是「began 就吞」的新机制。二者同时只用一套。
+    private static var rightEdgeTouchID: UInt = 0
+    private static var rightEdgeStart: CGPoint = .zero
+    /// 判向日志只记一次（逐帧刷屏没意义，一次足够定位方向）
+    private static var rightEdgeDirLogged = false
+    /// 右缘呼出计数器（日志里看「这一版到底用了几次右缘」）
+    private static var rightEdgeCount = 0
+
     // MARK: - 浮窗手势（V0.0.41，AevonFloatGlobalV41）
 
     /// 当前被全局通道接管的那根手指（0 = 没接管浮窗）
@@ -771,6 +847,42 @@ enum AevonEdgeEntry {
                 // 浮窗贴右边缘时手柄就拖不动了。
                 if !AevonEntryHost.pointHitsFloatingWindow(at: point) {
                     let gap = Int(screen.width - point.x)
+                    // V0.1.15（AevonRightEdgeTakeoverV115）：**右缘接管带 = 第二个热区**。
+                    //
+                    // 优先级：热区（上面已 return）→ 本带 → 0.1.13 的「起手窗两态」遗留分支。
+                    // 本带是热区的真子集（默认 28pt × 下半 60%，热区在右下角 48×320），
+                    // 所以本带接管的那一段，热区早就先接走了；它接的是热区上方那一段右缘。
+                    //
+                    // 机制与热区完全一致：began 就把这根手指收归自己（ownsTouch + globalTouchID），
+                    // hook 紧接着的「要不要吞」询问必然拿到 YES，`UIApplication -sendEvent:`
+                    // 整个 UIEvent 被丢弃 → App 连 began 都收不到。
+                    // 这条路不再依赖识别器（P7 已证明系统手势环境只给观察权）、
+                    // 不再依赖视图命中（P7-1 证明命中早就赢了、但赢了也拦不住 App）。
+                    if AevonRightEdge.enabled, appForeground,
+                       AevonRightEdge.band(in: screen).contains(point) {
+                        // 上一根手指的 ended 万一丢了（多指 / 场景切换），新的一根直接顶替它，
+                        // 方向日志也重新开始 —— 绝不能让旧状态把新手指判成「已定向」。
+                        rightEdgeTouchID = touchID
+                        rightEdgeStart = point
+                        rightEdgeDirLogged = false
+                        // 旧的扣帧状态与新的接管互斥，顺手清干净。
+                        // `bandTouchID` 也必须一起清：它是上一套机制（0.1.12 扣移动帧）的候选指针，
+                        // 万一它的 ended 丢了、指针又被系统复用给这根新手指，
+                        // 新手指就会在 moved 里被旧分支当成「判向失败」而撒手（ownsTouch 被清）。
+                        bandHoldTouchID = 0
+                        bandHoldDeadline = 0
+                        bandTouchID = 0
+                        bandStart = .zero
+                        globalTouchID = touchID
+                        globalStart = point
+                        globalFired = false
+                        lastTouchPoint = point
+                        ownsTouch = true
+                        swallowDeadline = CACurrentMediaTime() + pressLimit
+                        rightEdgeCount += 1
+                        AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 归口=右缘接管带·按下即接管（App 连 began 都收不到；\(AevonRightEdge.summary(in: screen))），第 \(rightEdgeCount) 次（AevonRightEdgeTakeoverV115 AevonBandTakeoverBeganV113）")
+                        return
+                    }
                     // V0.1.13（AevonBandTakeoverBeganV113）：起手窗改成**两态**，中间态全部作废。
                     //
                     // Aevon(80) 复盘把 0.1.12 的「began 给 App、只扣移动帧」判死：
@@ -877,6 +989,20 @@ enum AevonEdgeEntry {
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
             if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
+            // V0.1.15（AevonRightEdgeTakeoverV115）：右缘接管带的判向证据，一根手指只记一次。
+            // 这里**只记录、不决策** —— began 已经被 sendEvent 丢掉了，判向失败也还不回 App
+            // （App 没有 began 就拿不住这根 touch）。记它只为下一次复盘时知道方向分布。
+            if touchID == rightEdgeTouchID, !rightEdgeDirLogged {
+                let rdx = point.x - rightEdgeStart.x
+                let rdy = point.y - rightEdgeStart.y
+                if abs(rdx) >= 8 || abs(rdy) >= 8 {
+                    rightEdgeDirLogged = true
+                    let dir = (rdx <= -8 && abs(rdx) >= abs(rdy) * 1.2)
+                        ? "左扫"
+                        : (abs(rdy) > abs(rdx) ? "纵向" : "向右")
+                    AevonLog.info("[右缘] 判向 dx=\(Int(rdx)) dy=\(Int(rdy)) → \(dir)（已吞，不还 App）（AevonRightEdgeTakeoverV115）")
+                }
+            }
             // 圆盘已展开：这根手指继续驱动它（旋转 / 选定 / 松手开窗）
             if let ring = AevonRingMenu.presented {
                 // 滑动期间续期：只要手指还在动，就持续把这条 touch 挡在 App 外面。
@@ -888,12 +1014,29 @@ enum AevonEdgeEntry {
             }
             let dx = point.x - globalStart.x
             let dy = point.y - globalStart.y
-            if !globalFired, dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
+            // V0.1.15：右缘接管带用 1.2 的横向占优比（与它自己的判向日志一致），
+            // 热区那条路维持原来的 0.7（热区已验证 12/12，不动它）。
+            let horizontalRatio: CGFloat = (touchID == rightEdgeTouchID) ? 1.2 : 0.7
+            if !globalFired, dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * horizontalRatio {
                 globalFired = true
+                if touchID == rightEdgeTouchID {
+                    AevonLog.info("[右缘] 判向成立 → 呼出圆盘（dx=\(Int(dx)) dy=\(Int(dy))，起点 \(Int(globalStart.x)),\(Int(globalStart.y))）（AevonRightEdgeTakeoverV115）")
+                }
                 attemptTrigger("全局左滑 \(Int(dx))pt", source: "global")
             }
 
         case .ended:
+            // V0.1.15：右缘接管带抬手 —— 只清本带状态，**绝不 return**，
+            // 让下面的 globalTouchID 清理照常跑到；否则会留下一个指向已释放 UITouch 的
+            // globalTouchID（指针会被复用，下一根手指可能莫名被吞）。
+            if touchID == rightEdgeTouchID {
+                if !globalFired {
+                    AevonLog.info("[右缘] 抬手，全程未定向 → 只吞不呼出（AevonRightEdgeTakeoverV115）")
+                }
+                rightEdgeTouchID = 0
+                rightEdgeStart = .zero
+                rightEdgeDirLogged = false
+            }
             // V0.1.12：抬手一律先清「扣移动帧」状态 —— 抬手帧在 hook 里已经放行给 App 了，
             // 这里不清会留下一个永远吞移动帧的指针（touchID 是 UITouch 指针，会被复用）。
             if touchID == bandHoldTouchID {
@@ -935,6 +1078,12 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            // V0.1.15：同 ended，右缘接管带只清本带状态，不提前 return
+            if touchID == rightEdgeTouchID {
+                rightEdgeTouchID = 0
+                rightEdgeStart = .zero
+                rightEdgeDirLogged = false
+            }
             // V0.1.12：被系统取消同样先清扣帧状态
             if touchID == bandHoldTouchID {
                 bandHoldTouchID = 0

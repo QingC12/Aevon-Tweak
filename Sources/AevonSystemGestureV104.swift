@@ -59,6 +59,36 @@ final class AevonGestureBandView: UIView {
     override func hitTest(_ screenPoint: CGPoint, with event: UIEvent?) -> UIView? {
         return point(inside: screenPoint, with: event) ? self : nil
     }
+
+    // V0.1.15（AevonBandTouchBeganV115）：命中这条路只留证据，**不改行为**。
+    //
+    // P7-1 实锤：右缘 (424,400) 的最高命中就是我们这个视图（挂在 SBMainSwitcherWindow
+    // level=5 里，压着 SBDeviceApplicationSceneView）。可 0.1.13 里它赢了命中、抖音照样跟动
+    // —— 说明「命中赢」不必然等于「App 收不到」。所以这一版把主力放在 sendEvent 整指丢弃，
+    // 这里只负责回答一个问题：App 的触摸到底走不走视图命中这条路。
+    //
+    // 一份日志就能分辨三种情况：
+    //   · 只有「起手…归口=右缘接管带」→ sendEvent 吞生效，hitTest 根本没跑（预期）；
+    //   · 两条都有                      → 同一个 UIEvent 既进了 sendEvent 又走到了视图；
+    //   · 两条都没有                    → 这根触摸压根没进 SpringBoard（backboardd 直投 App），
+    //                                    那就只剩 App 侧吞摸库一条路，不再浪费时间调系统层。
+    //
+    // 刻意调用 super（把触摸照原样交给响应链），因为本版不在这里接管 —— 探针纪律：
+    // 加取证绝不能顺手改行为。
+    private static var bandTouchLogAt: CFTimeInterval = 0
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first, AevonRightEdge.enabled {
+            let now = CACurrentMediaTime()
+            if now - AevonGestureBandView.bandTouchLogAt > 1.0 {
+                AevonGestureBandView.bandTouchLogAt = now
+                let point = touch.location(in: nil)
+                let gap = Int(UIScreen.main.bounds.width - point.x)
+                AevonLog.info("[右缘] 起手 (\(Int(point.x)),\(Int(point.y))) 距右缘 \(gap)pt → 命中共（bandView 确实拿到 touches；App 是否也收到要看有没有第二条证据）（AevonBandTouchBeganV115 AevonRightEdgeTakeoverV115）")
+            }
+        }
+        super.touchesBegan(touches, with: event)
+    }
 }
 
 final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
@@ -150,10 +180,14 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
             lines.append("带视图 未挂载")
         }
         let screenWidth = UIScreen.main.bounds.width
+        // V0.1.15：命中范围已改为与接管带一致（AevonRightEdge），这里照实打印接管带
+        let rightEdgeSummary = AevonRightEdge.enabled
+            ? AevonRightEdge.summary(in: UIScreen.main.bounds)
+            : "已关"
         for (label, point) in [("右缘中部", CGPoint(x: 424, y: 400)), ("热区内", CGPoint(x: 424, y: 750))] {
             let accept = channel.acceptsTouch(at: point)
             let observe = channel.observesTouch(at: point)
-            lines.append("判据 \(label)(\(Int(point.x)),\(Int(point.y)))：愿接=\(accept ? 1 : 0) 愿看=\(observe ? 1 : 0) 屏宽=\(Int(screenWidth)) 带内起点=\(Int(screenWidth - AevonGestureBandView.bandWidth))")
+            lines.append("判据 \(label)(\(Int(point.x)),\(Int(point.y)))：愿接=\(accept ? 1 : 0) 愿看=\(observe ? 1 : 0) 屏宽=\(Int(screenWidth)) 右缘带=\(rightEdgeSummary)")
         }
         return lines
     }
@@ -376,10 +410,14 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
         return true
     }
 
-    /// 外侧 20pt：系统判归属于本条带的那一缝（带内轻点不传 App，故收窄）。
+    /// V0.1.15：命中范围改为与接管带**完全一致**（`AevonRightEdge`：默认 28pt × 下半 60%）。
+    ///
+    /// 0.1.13/0.1.14 这里是「外侧 20pt × 全屏高」——上半屏那 20pt 会吃掉命中却什么都不做
+    /// （App 拿不到、我们也不呼出），属于白白牺牲。现在只认接管带，牺牲面与收益面对齐。
     private func insideHardBand(_ point: CGPoint) -> Bool {
+        guard AevonRightEdge.enabled else { return false }
         let screen = UIScreen.main.bounds
-        guard point.x >= screen.width - AevonGestureBandView.bandWidth else { return false }
+        guard AevonRightEdge.band(in: screen).contains(point) else { return false }
         // 底部热区是老入口，优先级更高（按住即接管 + 左滑呼出都在那儿）
         guard !AevonTriggerZone.rect(in: screen).contains(point) else { return false }
         // 浮窗（含外侧手柄）压住的地方交给浮窗，否则贴边浮窗拖不动

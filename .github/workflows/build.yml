@@ -470,6 +470,50 @@ jobs:
           done
           echo "V0.1.14 校验: 宿主审计五组 + 只读纪律 + ObjC @try 兜底（行为与 0.1.13 一致）"
 
+          # V0.1.15（Aevon(82) 的 P7 结论 → 右缘做成「第二个热区」）：
+          # P7 四条实测把所有旧假设推翻：
+          #   · P7-1 右缘 (424,400) 最高命中 = AevonGestureBandView（在 SBMainSwitcherWindow
+          #     level=5 里压着 SBDeviceApplicationSceneView）→ 命中早就赢了，不是瓶颈；
+          #   · P7-2 入口窗口三个落点全 nil（穿透）→ 它不参与裁决；
+          #   · P7-3 我们的识别器与 14 个系统识别器同宿 UISystemGestureView(0,0,430,932)；
+          #   · P7-5 BKSHIDEventDeferringPredicate 只有 environment/display/token，无几何 → 判死。
+          # 所以本版只做一件事：右缘在 UIApplication -sendEvent: 层 began 即整指接管，
+          # 与热区共用 ownsTouch 生命周期；不再碰识别器、不再扣移动帧。
+          for s in AevonRightEdgeTakeoverV115 AevonRightEdgeWidthV115 AevonBandTouchBeganV115; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.1.15 标记 $s 未编入"; exit 1; }
+          done
+          # 右缘必须真的在 began 就接管（不是"只记录"）：必须同时设 ownsTouch 与 globalTouchID
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'AevonRightEdge.band(in: screen).contains(point)' \
+            || { echo "::error::右缘接管带判据被删/改 —— 右缘会退回「只记录不接管」"; exit 1; }
+          # 开关必须存在且默认开（用户开箱即用；不想要可以在设置里关）
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'AevonPrefs.bool("RightEdgeTakeover", default: true)' \
+            || { echo "::error::RightEdgeTakeover 开关读法被改（默认必须是 true）"; exit 1; }
+          grep -q 'RightEdgeTakeover' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::Root.plist 缺 RightEdgeTakeover 开关"; exit 1; }
+          # 带宽/带高必须可调（默认 28pt × 下半 60%，用户能自己缩小牺牲面）
+          grep -q 'RightEdgeWidth' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 缺 RightEdgeWidth 滑条"; exit 1; }
+          grep -q 'RightEdgeHeight' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 缺 RightEdgeHeight 滑条"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'static let defaultWidth: Double = 28' \
+            || { echo "::error::右缘默认宽度不是 28pt"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'static let defaultHeightPercent: Double = 60' \
+            || { echo "::error::右缘默认高度占比不是 60%（应当只覆盖下半屏）"; exit 1; }
+          # 抬手/取消必须清右缘状态，否则 touchID 指针被复用后会误吞下一根手指
+          test "$(grep -c 'if touchID == rightEdgeTouchID {' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
+            || { echo "::error::右缘状态清理不全（ended / cancelled 两处都必须清）"; exit 1; }
+          grep -q 'if touchID == rightEdgeTouchID, !rightEdgeDirLogged' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::右缘判向取证被删（moved 分支）"; exit 1; }
+          # 识别器必须仍然停手：0.1.13 的延迟补投根因不能因为本版改回旧路
+          strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
+            || { echo "::error::识别器停手标记丢失 —— 会退回 0.1.12 的延迟补投"; exit 1; }
+          echo "V0.1.15 校验: 右缘接管带（began 整指吞）+ 宽高可调 + 抬手清状态 + 识别器仍停手"
+
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
             || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
