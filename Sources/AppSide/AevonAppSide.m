@@ -106,6 +106,8 @@ __attribute__((used)) static const char AevonAppWinAuthV205Marker[] = "AevonAppW
 __attribute__((used)) static const char AevonAppTwoFrameV205Marker[] = "AevonAppTwoFrameV205";
 /* V0.2.6 判向失败回传（Aevon(92) 判读：兜底呼盘不知道 App 已判失败） */
 __attribute__((used)) static const char AevonAppFailNotifyV206Marker[] = "AevonAppFailNotifyV206";
+/* V0.2.7 挂载重试加宽（Aevon(93)：QQ 冷启动 ~3s 才有 keyWindow，旧 4 次重试撑不过） */
+__attribute__((used)) static const char AevonAppMountRetryV207Marker[] = "AevonAppMountRetryV207";
 
 #pragma mark - 日志
 
@@ -729,14 +731,20 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
         AevonAppLog(@"第 %ld 次取 keyWindow：没取到（已连接场景 %lu 个）",
                     (long)attempt,
                     (unsigned long)[[UIApplication sharedApplication] connectedScenes].count);
-        if (attempt < 4) {
+        /* V0.2.7（AevonAppMountRetryV207）：Aevon(93) 实测 QQ 冷启动 ~3 秒后才有可用
+         * keyWindow，旧上限 4 次（1+2+3 秒）撑不过启动窗口 —— 用户在 QQ 划右缘时
+         * 识别器还没挂上 = App 侧全盲，global 兜底呼盘 + QQ 跟着动。
+         * 改成 0.5 秒间隔 × 40 次（20 秒窗口），盖住最慢的冷启动。 */
+        if (attempt < 40) {
             __weak typeof(self) weakSelf = self;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * attempt * NSEC_PER_SEC)),
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) self_ = weakSelf;
                 if (self_ == nil) { return; }
                 [self_ installWithAttempt:attempt + 1];
             });
+        } else {
+            AevonAppLog(@"20 秒内始终取不到 keyWindow → 放弃挂载（App 侧保持只加载不动作）");
         }
         return;
     }

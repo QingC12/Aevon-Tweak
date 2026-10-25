@@ -723,6 +723,13 @@ enum AevonEdgeEntry {
         guard now - lastTriggerAt > 0.6 else { return }
         guard !AevonRingMenu.isPresented else { return }
         lastTriggerAt = now
+        // V0.2.7（AevonAppBlindDiagV207）：global 兜底触发且 App 侧长时间无起手痕迹 →
+        // 大概率该 App 里识别器还没挂上（冷启动重试窗口）或没注入。钉到日志里好归因。
+        if source == "global", now - lastYieldAt > 2.0,
+           !AevonEntryHost.currentForegroundBundleID.isEmpty {
+            AevonLog.info("[右缘] 诊断：前台 App=\(AevonEntryHost.currentForegroundBundleID)，本指无 App 侧起手痕迹（>2s 无让路）→ App 侧可能未挂载/未注入（AevonAppBlindDiagV207）")
+        }
+        appEdgePointerAdopted = false
         AevonLog.info("[边缘] 触发（\(reason)，来源 \(source)），呼出圆盘")
         // V0.1.17：圆盘要起来了，把右缘提示条收掉（别叠在圆盘上），并记下展开时刻给死手开关用。
         AevonBandHint.hideNow()
@@ -742,6 +749,7 @@ enum AevonEdgeEntry {
         guard !AevonRingMenu.isPresented else { return }
         guard ownsTouch, globalTouchID != 0 else { return }
         ownsTouch = false
+        lastYieldAt = CACurrentMediaTime()
         AevonLog.info("[右缘] App 侧已在带内起手 → 全局通道让路（停吞本指，保留观察与 global 兜底触发）（AevonAppYieldV203）")
     }
 
@@ -921,6 +929,16 @@ enum AevonEdgeEntry {
     /// 接管硬上限：无论发生什么，12 秒后一定解除，杜绝「整块屏幕点不动」的最坏情况
     private static let swallowLimit: CFTimeInterval = 12
 
+    /// V0.2.7（AevonEdgeAdoptV207）：appedge 呼盘后是否已收养过「SB 侧没登记的手指」。
+    /// 起手点在 App 侧 46pt 带内但不在 SB 18pt 热区（且 SB 接管带开关关闭）时，
+    /// SB 从未登记这根手指的 globalTouchID —— 呼盘后 moved/ended 全被
+    /// `guard touchID == globalTouchID` 挡掉，圆盘收不到任何事件 = 「圆盘卡住」。
+    /// 收养 = 把呼盘后第一根移动的手指登记为 globalTouchID 继续喂圆盘。每次呼盘重置。
+    private static var appEdgePointerAdopted = false
+    /// V0.2.7（AevonAppBlindDiagV207）：最近一次 App 侧让路的时刻。
+    /// global 兜底触发时若远超此时刻（且前台有 App），说明 App 侧没收到起手 —— 打诊断行。
+    private static var lastYieldAt: CFTimeInterval = 0
+
     /// 热区接管（V0.0.25）：在热区里按下的那根手指，**从 began 起**就完全归我们。
     ///
     /// Aevon(18) 的问题是：触发那一刻 App 已经收到了 began 和前几帧移动，
@@ -1011,6 +1029,7 @@ enum AevonEdgeEntry {
         ringExtraTouchID = 0
         ringExtraDeadline = 0
         ringSource = ""
+        appEdgePointerAdopted = false
         if hadState {
             AevonLog.warn("[急救] 已释放接管状态（\(reason)）（AevonDeadManV117）")
         }
@@ -1396,6 +1415,21 @@ enum AevonEdgeEntry {
                     AevonLog.info("[穿透取证] 放手→App（dx=\(Int(dx)) dy=\(Int(dy))，原因=\(reason)）（AevonBandHoldMovedV112 AevonBandDeferV103）")
                 }
             }
+            // V0.2.7（AevonEdgeAdoptV207）：圆盘展开但这根手指 SB 侧没登记过（起手在
+            // App 侧 46pt 带内、不在 18pt 热区，且 SB 接管带开关关闭时正是如此）——
+            // 呼盘后它的 moved/ended 全被下面的 guard 挡掉，圆盘收不到任何事件 =
+            // Aevon(93) 用户反馈「圆盘卡住不动，要二次点击才能关」。收养它：登记为
+            // globalTouchID 继续喂圆盘。只登记观察，**不开 ownsTouch**（不吞 App 份 ——
+            // 判向成立的那根已被 App 侧合法取消；万一多指误收养也不影响 App 触摸）。
+            if touchID != globalTouchID, AevonRingMenu.isPresented, ringSource == "global",
+               !appEdgePointerAdopted, touchID != ringExtraTouchID {
+                appEdgePointerAdopted = true
+                globalTouchID = touchID
+                globalStart = point
+                globalFired = true          // 收养只喂圆盘，绝不再走触发逻辑
+                lastTouchPoint = point
+                AevonLog.info("[右缘] 收养手指（SB 侧未登记，起手应在 App 侧带内）→ 继续喂圆盘（AevonEdgeAdoptV207）")
+            }
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
             if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
@@ -1506,6 +1540,16 @@ enum AevonEdgeEntry {
                     globalTouchID = 0
                 }
                 return
+            }
+            // V0.2.7（AevonEdgeAdoptV207）：同 moved —— 未登记的手指在圆盘展开期间抬手，
+            // 也要收养后送达 remoteEnded，否则「松手未选中」永远不来，圆盘留在屏上。
+            if touchID != globalTouchID, AevonRingMenu.isPresented, ringSource == "global",
+               !appEdgePointerAdopted, touchID != ringExtraTouchID {
+                appEdgePointerAdopted = true
+                globalTouchID = touchID
+                globalFired = true
+                lastTouchPoint = point
+                AevonLog.info("[右缘] 收养手指（抬手）→ 圆盘收起（AevonEdgeAdoptV207）")
             }
             guard touchID == globalTouchID else { return }
             if let ring = AevonRingMenu.presented {
@@ -1691,7 +1735,10 @@ enum AevonEdgeEntry {
         // V0.0.24：全局通道唤起时，这根手指的事件同时也被 App 收着（用户 Aevon(17) 反馈
         // 「滑圆盘时前台 App 跟着动」）。这里登记接管，`AevonTouchHook.m` 会在
         // sendEvent 里把这条 touch 丢掉，不再投递给 App。
-        ringSource = source
+        // V0.2.7（AevonEdgeAdoptV207）：appedge 也统一成 "global" —— Aevon(93) 铁证：
+        // ringSource=="appedge" 时，moved 续期（1419）、吞事件判定（1796/1807）全部不生效，
+        // 且「已接管」日志只在 source=="global" 打 —— appedge 呼盘的圆盘看起来「卡住不动」。
+        ringSource = "global"
         swallowDeadline = CACurrentMediaTime() + swallowLimit
         // V0.0.29：告诉 AevonGuard（App 进程）圆盘已展开 —— 它会在自己的进程里
         // 把下半屏的触摸整条吞掉，前台 App 在圆盘开着期间彻底收不到下半屏输入。
@@ -1701,8 +1748,8 @@ enum AevonEdgeEntry {
         // Aevon(27) 连续 3 版「圆盘滑动带动全屏 App」的共同根因。共享内存位零时序依赖。
         AevonNotifySetRing(1)
         postRingState("com.aevon.ringopen")
-        if source == "global" {
-            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102）")
+        if source == "global" || source == "appedge" {
+            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102 AevonEdgeAdoptV207）")
         }
     }
 
@@ -1717,6 +1764,7 @@ enum AevonEdgeEntry {
     /// 任何一条路径（松手开窗、点空白、点圆心、设置重载后移除）都会走到这里。
     static func ringDidDismiss() {
         ringSource = ""
+        appEdgePointerAdopted = false
         ringOpenedAt = 0
         swallowDeadline = 0
         globalTouchID = 0

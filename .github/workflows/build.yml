@@ -1202,6 +1202,23 @@ jobs:
             || { echo "::error::场景标识解析没剥 sceneID: 前缀 —— 动态域会是脏值"; exit 1; }
           echo "V0.2.6 校验: App 失败回传 + SB 失败闸 + 指针 source 统一 + 场景解析修正 已就位"
 
+          # ---- V0.2.7（Aevon(93) 判读）：圆盘卡死收养 + App 侧挂载重试加宽 + 盲区诊断 ----
+          grep -q 'AevonEdgeAdoptV207' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::收养逻辑标记被删 —— appedge 呼盘圆盘会冻结（Aevon(93) 卡住主因）"; exit 1; }
+          grep -q 'appEdgePointerAdopted' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::收养状态变量被删 —— 未登记手指的 moved/ended 进不了圆盘"; exit 1; }
+          grep -q 'ringSource = "global"' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::presentRing 没把 ringSource 统一成 global —— appedge 呼盘吞事件/续期全部失效"; exit 1; }
+          grep -q 'AevonAppMountRetryV207' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧挂载重试标记被删 —— 冷启动 App 全盲（QQ 两次操作根因）"; exit 1; }
+          grep -q 'attempt < 40' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::挂载重试上限回退 —— 必须 0.5s×40 次盖住冷启动窗口"; exit 1; }
+          grep -q 'AevonAppBlindDiagV207' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::盲区诊断被删 —— global 兜底呼盘无法归因到具体 App"; exit 1; }
+          grep -q 'currentForegroundBundleID' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::前台 bundleID 记录被删 —— 诊断行没有主语"; exit 1; }
+          echo "V0.2.7 校验: appedge 收养喂盘 + ringSource 统一 + 挂载重试 40 次 + 盲区诊断 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4
