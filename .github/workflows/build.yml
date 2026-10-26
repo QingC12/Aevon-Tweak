@@ -1784,8 +1784,8 @@ jobs:
           done
           grep -q 'contentAspect: CGFloat = 3.0 / 5.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::内容区比例不是 3:5 竖窗（5:3 = 高5:宽3，Aevon(106) 纠偏）"; exit 1; }
-          grep -q 'CGAffineTransform(scaleX: scale, y: scale)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::内容必须等比缩放（底对齐，AevonFloatBottomFitV223）"; exit 1; }
+          grep -q 'applyContentLayout' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::内容必须 App 场景原生布局（AevonFloatSceneLayoutV224）"; exit 1; }
           grep -q 'minimumPressDuration = 0.3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::边条长按 0.3s 拖动未实现"; exit 1; }
           grep -q 'floatBarHoldDelay: CFTimeInterval = 0.3' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
@@ -1820,9 +1820,24 @@ jobs:
             && { echo "::error::.close 抓取分支不许回潮"; exit 1; }
           grep -q 'barThickness: CGFloat = 26' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::手势区未加宽（26/44）"; exit 1; }
-          grep -q 'topBarHeight: CGFloat = 28' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::顶部留白栏未实现"; exit 1; }
-          echo "V0.2.23 校验: 等比底对齐 + 手势区 26/44 + 顶部留白栏 已就位"
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'topBar' \
+            && { echo "::error::顶部留白栏不许回潮（Aevon(108) 实测盖内容显示异常，已整体移除）"; exit 1; }
+          echo "V0.2.23 校验: 手势区 26/44 已就位；顶部留白栏已按 Aevon(108) 退休"
+
+          # ---- V0.2.24（Aevon(108) 定档）：场景原生 5:3 布局 + 手柄压边 + 缩放全程圆角
+          for s in AevonFloatSceneLayoutV224 AevonFloatGripOverlapV224 AevonFloatRoundResizeV224; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::浮窗 0.2.24 缺标记 $s"; exit 1; }
+          done
+          grep -q 'gripOverlap: CGFloat = 10' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::手柄未向窗内压边 10pt"; exit 1; }
+          grep -q 'container.bounds = target' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::App 场景容器必须用窗口尺寸原生布局（PullOverX 同款）"; exit 1; }
+          grep -q 'CGAffineTransform(scaleX: scale, y: scale)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::等比 transform 缩放不许回潮（不是真正的 5:3 内容）"; exit 1; }
+          grep -q 'cornerRadius = 0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::缩放期间不许关圆角（四角直角已修，AevonFloatRoundResizeV224）"; exit 1; }
+          echo "V0.2.24 校验: 场景原生 5:3 + 压边手势区 + 缩放全程圆角 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

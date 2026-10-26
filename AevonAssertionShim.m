@@ -956,3 +956,8 @@ __attribute__((used)) static const char AevonRestoreDefaultV101RetiredMarker[] =
 /* V0.2.23（Aevon(107)）：AevonFloatStretchFillV222 退休收容 —— X/Y 独立拉伸把字体压扁，
  * 改回等比底对齐（AevonFloatBottomFitV223）；CI 历史串只加不能改。 */
 __attribute__((used)) static const char AevonFloatStretchFillV222RetiredMarker[] = "AevonFloatStretchFillV222";
+/* V0.2.24（Aevon(108)）：AevonFloatBottomFitV223 退休收容 —— 等比缩放的内容不是真正的
+ * 5:3 窗口内容，改 App 场景原生布局（AevonFloatSceneLayoutV224，PullOverX 同款）。
+ * AevonFloatTopBarV223 退休收容 —— 顶部留白栏盖住内容造成显示异常，整体移除。 */
+__attribute__((used)) static const char AevonFloatBottomFitV223RetiredMarker[] = "AevonFloatBottomFitV223";
+__attribute__((used)) static const char AevonFloatTopBarV223RetiredMarker[] = "AevonFloatTopBarV223";

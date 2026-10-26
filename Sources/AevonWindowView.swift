@@ -74,17 +74,16 @@ final class AevonWindowView: UIView {
     /// V0.2.23（AevonFloatWideGripV223）：Aevon(107) 反馈「不容易触发」，18/34 → 26/44。
     static let barThickness: CGFloat = 26
     static let cornerSize: CGFloat = 44
+    /// V0.2.24（AevonFloatGripOverlapV224）：手柄向窗内压边宽度（pt）——
+    /// 边线两侧都算手势区，瞄准边缘的指尖不再滑进 App 内容。
+    static let gripOverlap: CGFloat = 10
 
-    /// 顶部留白栏高度（pt，AevonFloatTopBarV223）
-    static let topBarHeight: CGFloat = 28
     /// 全局唯一的偏好域，和设置面板共用
     private static let prefsSuite = "com.Aevon"
     /// Stheno 式全局几何记忆键（medusaFrameLast 对应物）
     private static let frameMemoryKey = "MedusaFrameLast"
 
     private let contentClip = UIView()
-    /// V0.2.23（AevonFloatTopBarV223）：顶部留白装饰栏（✕ 已移除，底边双击=唯一关闭手势）
-    private let topBar = UIView()
     private let hintLabel = UILabel()
 
     private var moveOriginFrame: CGRect = .zero
@@ -100,9 +99,6 @@ final class AevonWindowView: UIView {
     private var isLiveResizing = false
     /// 边条长按拖动进行中（V0.2.21，AevonFloatBarLongPressV221）
     private var isBarHoldMoving = false
-    /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
-    private var lastClipSize: CGSize = .zero
-    private var lastAppliedScale: CGFloat = 0
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
@@ -150,25 +146,17 @@ final class AevonWindowView: UIView {
             }
         }
 
-        // V0.2.23（AevonFloatTopBarV223）：顶部留白栏 —— ✕ 已随底边双击关闭一起移除，
-        // 但顶部保留一条空白装饰栏，窗口观感更标准；它压在内容顶层，
-        // 被盖住的只是本来就要裁掉的顶部溢出区，不损失可见内容。
-        topBar.frame = CGRect(x: 0, y: 0, width: restored.width, height: AevonWindowView.topBarHeight)
-        topBar.autoresizingMask = [.flexibleWidth]
-        topBar.backgroundColor = UIColor(white: 0.10, alpha: 0.55)
-        topBar.layer.cornerRadius = AevonWindowView.cornerRadius
-        topBar.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        topBar.isUserInteractionEnabled = false
-        addSubview(topBar)
+        // V0.2.24（AevonFloatTopBarV223 退休）：顶部留白栏整体移除 —— Aevon(108) 实测
+        // 它盖住内容造成显示异常。顶部不再有任何覆盖物。
 
         // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.21 起只剩下角块 + 底/左/右边条）
         installOutsideGestureHandles(width: restored.width, height: restored.height)
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
-            + "内容等比适配·底对齐·顶部裁切（AevonFloatBottomFitV223），"
-            + "手势区加宽 26/44（AevonFloatWideGripV223），"
-            + "顶部留白栏·✕移除（AevonFloatTopBarV223），"
+            + "内容=App 场景原生 5:3 布局（AevonFloatSceneLayoutV224，PullOverX applyPreferredSceneFrame 同款），"
+            + "手势区 26/44+压边10（AevonFloatWideGripV223 AevonFloatGripOverlapV224），"
+            + "缩放全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
@@ -198,7 +186,7 @@ final class AevonWindowView: UIView {
         if contentClip.frame != bounds {
             contentClip.frame = bounds
         }
-        applyContentScale()
+        applyContentLayout()
     }
 
     /// 触摸落在本窗口时把自己提到最前（多窗重叠时点哪个哪个在上）。
@@ -226,36 +214,24 @@ final class AevonWindowView: UIView {
         return false
     }
 
-    /// 把整屏尺寸的容器**等比缩放、底部对齐**放进内容区（V0.2.23，AevonFloatBottomFitV223）。
+    /// 把 App 场景容器**原生铺进**内容区（V0.2.24，AevonFloatSceneLayoutV224）。
     ///
-    /// Aevon(107) 用户定档：0.2.22 的 X/Y 独立拉伸把字体压扁了，改回**等比**；
-    /// 5:3 竖窗比屏幕原生比例矮胖，等比装下宽度后高度必然溢出 —— 溢出部分
-    /// 从**顶部裁掉**（状态栏方向），底部与左右两侧保证完整：
-    ///   · scale = 窗宽 ÷ 屏宽（宽度精确铺满 → 左右零裁切、零变形）；
-    ///   · 底边对齐（position.y = 窗高 − 屏高×scale）→ 底栏永远可见；
-    ///   · 顶部超出部分被 contentClip 裁掉（用户明确允许）。
-    private func applyContentScale() {
-        let screen = UIScreen.main.bounds.size
-        guard screen.width > 0, screen.height > 0,
-              contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
-
-        let scale = contentClip.bounds.width / screen.width
-
-        let clipSize = contentClip.bounds.size
-        if abs(clipSize.width - lastClipSize.width) < 0.01,
-           abs(clipSize.height - lastClipSize.height) < 0.01,
-           abs(scale - lastAppliedScale) < 0.0001 {
-            return
-        }
-        lastClipSize = clipSize
-        lastAppliedScale = scale
-
+    /// Aevon(108) 用户定档：不要等比缩放的内容 ——「那不是真正的 5:3 窗口内容」。
+    /// 采用 PullOverX 的方案（applyPreferredSceneFrame / videoAppliedHostedFrameSize 体系，
+    /// 其偏好文案「选中的应用始终保持原始比例，不改变卡片尺寸」反向证明默认行为）：
+    /// **App 场景本身的尺寸 = 浮窗尺寸**，App 按原生 5:3 重新布局，无 transform、
+    /// 无拉伸、无裁切、无黑边 —— 窗口里看到的就是一个真正的 5:3 窗口内容。
+    /// 顺带消掉逐帧矩阵提交（0.2.23 移动/缩放卡顿的渲染侧根源）。
+    private func applyContentLayout() {
+        guard contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
         let container = sceneHost.container
-        container.layer.anchorPoint = .zero
-        container.bounds = CGRect(origin: .zero, size: screen)
-        container.transform = CGAffineTransform(scaleX: scale, y: scale)
-        // 宽度恰好铺满（x=0），底边对齐（顶部溢出被裁）
-        container.layer.position = CGPoint(x: 0, y: clipSize.height - screen.height * scale)
+        let target = CGRect(origin: .zero, size: contentClip.bounds.size)
+        if container.bounds.size != target.size || container.transform != .identity {
+            container.transform = .identity
+            container.bounds = target
+            container.layer.anchorPoint = .zero
+            container.layer.position = .zero
+        }
     }
 
     // MARK: - 外侧手势区（V0.0.37，AevonSthenoEdgeBarV37）
@@ -269,21 +245,26 @@ final class AevonWindowView: UIView {
     ///   · 底 / 左 / 右三条边条 = 长按 0.3s 后拖动移动；
     ///   · 底部边条另有双击 = 关闭浮窗。
     /// 顶部条与上角块整体移除 —— 顶部不再有任何手势。
+    ///
+    /// V0.2.24（AevonFloatGripOverlapV224）：Aevon(108) 反馈「手势区像在边缘线上而不是
+    /// 窗外紧贴边缘」—— 指尖瞄准边缘时经常落在边线内侧 1~3pt，那一点属于 App 内容。
+    /// 所有手柄**向窗内压边 10pt**（与窗外部分连成一体），边线两侧都算手势区。
     private func installOutsideGestureHandles(width: CGFloat, height: CGFloat) {
         let b = AevonWindowView.barThickness
         let c = AevonWindowView.cornerSize
+        let o = AevonWindowView.gripOverlap
         let handles: [(UIRectEdge, CGRect, UIView.AutoresizingMask)] = [
-            // 两个下角块（缩放）
-            ([.bottom, .left],  CGRect(x: -c, y: height, width: c, height: c),
+            // 两个下角块（缩放）：窗外 c + 向窗内压边 o
+            ([.bottom, .left],  CGRect(x: -c, y: height - o, width: c + o, height: c + o),
              [.flexibleTopMargin]),
-            ([.bottom, .right], CGRect(x: width, y: height, width: c, height: c),
+            ([.bottom, .right], CGRect(x: width - o, y: height - o, width: c + o, height: c + o),
              [.flexibleLeftMargin, .flexibleTopMargin]),
-            // 三条边条（长按拖动移动）
-            ([.bottom],         CGRect(x: c, y: height, width: max(0, width - 2 * c), height: b),
+            // 三条边条（长按拖动移动）：窗外 b + 向窗内压边 o
+            ([.bottom],         CGRect(x: c, y: height - o, width: max(0, width - 2 * c), height: b + o),
              [.flexibleWidth, .flexibleTopMargin]),
-            ([.left],           CGRect(x: -b, y: 0, width: b, height: max(0, height - c)),
+            ([.left],           CGRect(x: -b, y: 0, width: b + o, height: max(0, height - c)),
              [.flexibleHeight]),
-            ([.right],          CGRect(x: width, y: 0, width: b, height: max(0, height - c)),
+            ([.right],          CGRect(x: width - o, y: 0, width: b + o, height: max(0, height - c)),
              [.flexibleLeftMargin, .flexibleHeight]),
         ]
         for (edges, rect, mask) in handles {
@@ -434,8 +415,6 @@ final class AevonWindowView: UIView {
                 isLiveResizing = false
                 transform = .identity
                 layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-                contentClip.layer.cornerRadius = AevonWindowView.cornerRadius
-                contentClip.clipsToBounds = true
                 frame = resizeOriginFrame
                 setNeedsLayout()
             }
@@ -541,7 +520,9 @@ final class AevonWindowView: UIView {
         return result
     }
 
-    /// 进入「实时缩放」：锚点挪到固定点，关掉内容区裁剪，内部一个属性都不动。
+    /// 进入「实时缩放」：锚点挪到固定点，内部一个属性都不动。
+    /// V0.2.24（AevonFloatRoundResizeV224）：Aevon(108) 反馈缩放中四角变直角 ——
+    /// 不再临时关圆角/裁剪（圆角全程保持，场景原生布局后离屏合成成本也可控）。
     private func beginLiveResize(anchor: CGPoint) {
         isLiveResizing = true
         resizeAnchor = anchor
@@ -550,8 +531,6 @@ final class AevonWindowView: UIView {
                             y: frame.origin.y + anchor.y * frame.height)
         layer.anchorPoint = anchor
         layer.position = fixed
-        contentClip.layer.cornerRadius = 0
-        contentClip.clipsToBounds = false  // 圆角 + 裁剪 + 缩放会走离屏合成
     }
 
     /// 抬手：把矩阵换成真实 frame，只在这一下做一次完整布局。
@@ -563,8 +542,6 @@ final class AevonWindowView: UIView {
         let anchor = resizeAnchor
         transform = .identity
         layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        contentClip.layer.cornerRadius = AevonWindowView.cornerRadius
-        contentClip.clipsToBounds = true
 
         let screen = UIScreen.main.bounds
         let aspect = AevonWindowView.contentAspect
