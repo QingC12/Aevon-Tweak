@@ -522,15 +522,17 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
      * 「关掉圆盘后全屏 App 划不动，必须切一下屏或点一下别的应用才恢复」。
      * 加上这一层：手里没指头 = 绝不压别人，把「阻塞别人」从几何概率里摘出去。 */
     if (self.numberOfTouches == 0 || !self.claimed) { return NO; }
-    /* V0.2.12（AevonAppRingGoneGuardV212）：**圆盘不在场就绝不压任何人**。
+    /* V0.2.12（AevonAppRingGoneGuardV212）：**成立之后**才发现圆盘早已收起 → 立刻停止压人。
      *
-     * 上面那条只挡「手里没指头」。Aevon(98) 证明还有第二种更坏的情况：
-     * 识别器停在 .began、UIKit 手里还挂着那根 touch（numberOfTouches==1），
-     * 但圆盘早就收起了 —— 于是这一句仍然返回 YES，本 App 所有带内平移继续
-     * 等一个永不到来的 Failed，整个 App 划不动。
-     * 圆盘状态位是所有判据里唯一不吃事件、不吃时序的，放在这里等于给
-     * 「失败要求」装了一个总闸：只要圆盘不在，App 手势环境立刻恢复正常。 */
-    if (AevonAppRingBit() == 0) { return NO; }
+     * 注意这里只能管「已成立」的状态，不能无条件看圆盘位：
+     * 判向进行中圆盘本来就还没展开（要先判完才呼盘），这时若因为「圆盘位=0」返回 NO，
+     * App 的滚动 pan 就能抢在判定前起来 —— 那正是 0.2.5 用失败要求压下去的
+     * 「圆盘出来了、App 也跟着滚」的老问题，绝不能在这版把它放回来。
+     *
+     * 判向成立（successActive）之后，App 那份触摸已被合法取消，此时唯一还需要
+     * 「压住」的理由就是「手指还在圆盘上转」。圆盘都收起了，这个理由就不存在了 ——
+     * 所以这一条不是放宽，是把「压人」的正当性收回到它真正成立的那段时间里。 */
+    if (self.successActive && AevonAppRingBit() == 0) { return NO; }
     /* 开关每帧现读（恒假开关纪律）：关了绝不设失败要求，App 手感原样 */
     if (!AevonAppPrefBool(@"AppSideEnabled", YES) ||
         !AevonAppPrefBool(@"EdgeGestureEnabled", YES)) { return NO; }
@@ -767,7 +769,7 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
      * 「判向成立后抬手」。识别器停在 .began 不放，失败要求对本 App 所有带内
      * 平移恒 YES → 整个 App 划不动，只能靠切屏/切应用碰运气恢复。
      *
-     * 现在改成 0.4 秒轮询共享内存的圆盘状态位：只要「圆盘已收起 + 我还在 .began」
+     * 现在改成 0.2 秒轮询共享内存的圆盘状态位：只要「圆盘已收起 + 我还在 .began」
      * 就立刻收尾。这条判据不吃事件、不吃通知、不吃时序，结构上不可能断。
      * 圆盘还在场就继续等（用户可以在盘上转很久），另设 20 秒硬上限兜底。 */
     self.successActive = YES;
@@ -776,18 +778,18 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     [self watchRingGoneWithToken:self.releaseToken elapsed:0];
 }
 
-/* V0.2.12：圆盘状态位轮询（0.4s 一次，最长 20s）。见 beginSuccessHold 的注释。 */
+/* V0.2.12：圆盘状态位轮询（0.2s 一次，最长 20s）。见 beginSuccessHold 的注释。 */
 - (void)watchRingGoneWithToken:(NSInteger)token elapsed:(NSInteger)elapsed {
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf == nil || !strongSelf.successActive || strongSelf.releaseToken != token) { return; }
-        if (AevonAppRingBit() != 0 && elapsed < 50) {
+        if (AevonAppRingBit() != 0 && elapsed < 100) {
             [strongSelf watchRingGoneWithToken:token elapsed:elapsed + 1];
             return;
         }
-        BOOL timedOut = (elapsed >= 50);
+        BOOL timedOut = (elapsed >= 100);
         strongSelf.successActive = NO;
         strongSelf.claimed = NO;
         strongSelf.decided = YES;
