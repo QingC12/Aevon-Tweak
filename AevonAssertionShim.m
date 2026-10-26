@@ -152,6 +152,26 @@ void AevonNotifySetRing(int on) {
     }
 }
 
+/* V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位（bit39）。
+ *
+ * 这是全插件唯一「零时序、零事件依赖」的状态判据：不靠 Darwin 通知送达、
+ * 不靠抬手帧到达、不靠跨进程回调。App 侧识别器只要拿它对照自己的 state，
+ * 就能判断「圆盘早就关了，我却还压着这根手指」。
+ * 读不到（token 失效 / 版本位不对）一律返回 0 —— 出错方向必须是「认为圆盘已关」，
+ * 因为对 App 来说「以为圆盘还开着」会把整台设备的滚动全部压死。 */
+int AevonNotifyGetRing(void) {
+    @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return 0; }
+        uint64_t pack = 0;
+        notify_get_state(token, &pack);
+        if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
+        return (pack & AEVON_NOTIFY_RING_BIT) ? 1 : 0;
+    } @catch (NSException *exception) {
+        return 0;
+    }
+}
+
 int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled) {
     @try {
         int token = AevonNotifyZoneToken();
@@ -835,3 +855,19 @@ __attribute__((used)) static const char AevonAppRingCloseReleaseV211Marker[] = "
 __attribute__((used)) static const char AevonAppNoBlockIdleV211Marker[] = "AevonAppNoBlockIdleV211";
 __attribute__((used)) static const char AevonRingGlyphTopV211Marker[] = "AevonRingGlyphTopV211";
 __attribute__((used)) static const char AevonRingHubFitV211Marker[] = "AevonRingHubFitV211";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.2.12（Aevon(98) 事故结构性加固）
+ *   AevonSwallowSelfHealV212    = 圆盘不在场 / 超绝对上限 → 接管状态当场归还（全系统触摸必经之路上的自愈）
+ *   AevonEndAlwaysCleanV212     = 抬手 / 取消分支用 defer 保证清理，任何 return 都漏不掉
+ *   AevonReleaseAlsoClosesRingV212 = 释放接管时连圆盘一起收掉并补发 ringclose
+ *   AevonOwnHardDeadlineV212    = 死手开关改按「收归起始时刻」算绝对上限，不被 moved 续期
+ *   AevonAppRingGoneGuardV212   = App 侧轮询圆盘状态位，圆盘收起即收尾识别器
+ *   AevonRingBitReadV212        = 跨进程只读圆盘状态位（bit39）的最小实现
+ * ────────────────────────────────────────────────────────────────── */
+__attribute__((used)) static const char AevonSwallowSelfHealV212Marker[] = "AevonSwallowSelfHealV212";
+__attribute__((used)) static const char AevonEndAlwaysCleanV212Marker[] = "AevonEndAlwaysCleanV212";
+__attribute__((used)) static const char AevonReleaseAlsoClosesRingV212Marker[] = "AevonReleaseAlsoClosesRingV212";
+__attribute__((used)) static const char AevonOwnHardDeadlineV212Marker[] = "AevonOwnHardDeadlineV212";
+__attribute__((used)) static const char AevonAppRingGoneGuardV212Marker[] = "AevonAppRingGoneGuardV212";
+__attribute__((used)) static const char AevonRingBitReadV212Marker[] = "AevonRingBitReadV212";

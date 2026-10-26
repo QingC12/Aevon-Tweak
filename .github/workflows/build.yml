@@ -1373,6 +1373,52 @@ jobs:
           done
           echo "V0.2.11 校验: ⓘ 首次不压字 + 带区间 8~140pt/6~100% + 成立后保持在场直到抬手 + ringclose 收尾 + 心圆不压图标 已就位"
 
+          # ---- V0.2.12（Aevon(98) 事故）：圆盘自动收起后整机只剩点击 ----
+          # 事故现象：呼出圆盘后不在盘上选，圆盘自动收起 → 全屏 App 划不动，
+          # 且系统手势（顶部下拉控制中心 / 底部上滑进后台 / 锁屏上滑解锁）全部失效，
+          # 屏幕只剩点击可用。根因是两处状态泄漏同时发生，都必须有结构性的兜底：
+          #   ① SpringBoard 侧 ownsTouch / globalTouchID 漏清 → 按 UITouch 指针吞摸，
+          #      指针被池化复用后每一根新手指都命中 → SpringBoard 这一份触摸整体消失
+          #      → 系统手势全废（App 那份是 backboardd 直投，所以点击还在）。
+          #   ② App 侧识别器停在 .began 永不收尾 → 失败要求对本 App 所有带内平移恒 YES
+          #      → App 内一切滚动被压死。
+          grep -q 'AevonSwallowSelfHealV212' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::接管状态自愈被删 —— 圆盘收起后 SpringBoard 会继续吞触摸（整机只剩点击）"; exit 1; }
+          grep -q 'healGlobalTakeoverIfNeeded()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::自愈没有挂在 shouldSwallowGlobalTouch 入口上 —— 全系统触摸的必经之路才是唯一可靠的巡检点"; exit 1; }
+          grep -q 'globalOwnHardLimit' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::接管状态缺绝对上限 —— moved 每次续期会让死手开关永远判不到期"; exit 1; }
+          grep -q 'AevonEndAlwaysCleanV212' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::抬手/取消分支没有 defer 兜底清理 —— 任何一个 return 都会漏掉归还"; exit 1; }
+          grep -q 'endedHeldGlobal' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::ended 分支的 defer 清理标记丢失"; exit 1; }
+          grep -q 'cancelledHeldGlobal' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::cancelled 分支的 defer 清理标记丢失"; exit 1; }
+          grep -q 'AevonReleaseAlsoClosesRingV212' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::释放接管时不再顺手收圆盘 —— 全屏圆盘视图会继续整屏吞摸"; exit 1; }
+          grep -q 'AevonOwnHardDeadlineV212' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::死手开关没有改成按「收归起始时刻」算绝对上限"; exit 1; }
+          grep -q 'AevonAppRingGoneGuardV212' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧没有圆盘状态位轮询 —— 识别器会永久停在 .began"; exit 1; }
+          grep -q 'AevonAppRingBit' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺共享内存圆盘状态位读取（唯一不吃事件、不吃时序的判据）"; exit 1; }
+          grep -q 'notify_register_check' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧圆盘状态位没有走 notify token 读取"; exit 1; }
+          grep -q 'watchRingGoneWithToken' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧圆盘状态轮询函数丢失 —— 收尾判据又只剩「等抬手」"; exit 1; }
+          grep -q 'AevonNotifyGetRing' "$GITHUB_WORKSPACE/AevonAssertionShim.h" \
+            || { echo "::error::AevonNotifyGetRing 声明丢失"; exit 1; }
+          grep -q 'AevonNotifyGetRing' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::AevonNotifyGetRing 实现丢失"; exit 1; }
+          grep -q 'AevonAppRingBit() == 0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::失败要求没有接圆盘状态位总闸 —— 圆盘收起后 App 仍会被压住"; exit 1; }
+          for s in AevonSwallowSelfHealV212 AevonEndAlwaysCleanV212 AevonReleaseAlsoClosesRingV212 \
+                   AevonOwnHardDeadlineV212 AevonAppRingGoneGuardV212 AevonRingBitReadV212; do
+            grep -q "$s" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+              || { echo "::error::V212 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
+          done
+          echo "V0.2.12 校验: 接管状态全系统自愈 + 抬手/取消 defer 归还 + 释放即收盘 + 绝对上限 + App 侧圆盘状态位轮询 + 失败要求圆盘总闸 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

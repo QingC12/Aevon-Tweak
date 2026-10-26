@@ -1014,6 +1014,46 @@ enum AevonEdgeEntry {
     private static var globalStart: CGPoint = .zero
     private static var globalFired = false
     private static var globalLastLogAt: CFTimeInterval = 0
+
+    // MARK: - V0.2.12 接管状态自愈（AevonSwallowSelfHealV212）
+    //
+    // Aevon(98) 事故复盘：App 侧判向成立 → SB 接管本指 → 圆盘没选中自动收起 →
+    // **整台设备只剩点击**：顶部下拉控制中心、底部上滑进后台、锁屏上滑解锁全部失效。
+    //
+    // 结构原因只有一个：`ownsTouch` / `globalTouchID` 这对状态一旦漏掉一次清空，
+    // `shouldSwallowGlobalTouch` 就会继续对「那根手指」的每一帧返回 true。
+    // 而 `touchID` 是 `UITouch` 指针，UIKit 会**池化复用**：手指抬起后同一个对象
+    // 被派给下一根手指 → 那一根的 began / moved / ended 全被丢弃 →
+    // SpringBoard 这一份触摸整体消失。系统手势全在 SpringBoard 里处理，于是全废；
+    // 而 backboardd 直投 App 进程的那一份没被碰过，所以**点击仍然可用** ——
+    // 这正是用户描述的「屏幕只能点击」。
+    //
+    // 为什么以前的三道闸都没拦住：
+    //   ① 抬手清状态：抬手帧被我们自己的 hook 先询问后上报，`.ended` 分支里
+    //      任何一条 `return`（touchID 不匹配 / 提前 return）都会跳过清理；
+    //   ② 死手开关：`swallowDeadline` 在每次 moved 里被续期（+4 秒），
+    //      用户一直试图滑动 → 一直续期 → 永远不到期；
+    //   ③ 急救：只有用户自己三指按下才生效（日志里 678 / 683 两次都是这么救回来的）。
+    //
+    // 所以这一版把「不可能卡死」做成结构保证，而不是再补一条事件路径：
+    //   · 吞咽的唯一正当性 = **圆盘正展开**。圆盘不在场，这根手指就没有任何理由被吞；
+    //   · 圆盘在场时也有**绝对**上限（不随 moved 续期）。
+    // 判据放在 `shouldSwallowGlobalTouch` 入口 —— 它是全系统每一根手指每一帧的必经之路，
+    // 比任何回调、任何定时器都更早、更全。
+    /// 「收归本指」的起始时刻（0 = 当前没有接管）
+    private static var globalOwnedAt: CFTimeInterval = 0
+    /// 这个起始时刻对应的是哪一根手指（touchID 变化 = 新接管，必须重新记时）
+    private static var globalOwnedForTouch: UInt = 0
+    /// 自愈日志限频（1 秒一行，避免逐帧刷屏把日志刷爆）
+    private static var lastHealLogAt: CFTimeInterval = 0
+    /// 圆盘在场时单根手指被吞的绝对上限（秒）。滑动**不续期**。
+    /// 12 秒：正常呼盘后在盘上找图标 / 旋转很少超过这个量级（圆盘本身 20 秒自动收）；
+    /// 一旦超过，宁可让 App 收到后续触摸（最坏是页面跟着动一下），也绝不继续吞。
+    private static let globalOwnHardLimit: CFTimeInterval = 12
+    /// 圆盘不在场时，接管最多再保留多久（秒）。这段窗口是留给「began 即接管 → 判向 → 呼盘」
+    /// 的：判向在 60ms 量级完成，1.5 秒是极宽裕的上限；超过就说明这次接管已经没有去处。
+    private static let healIdleWindow: CFTimeInterval = 1.5
+
     // V0.1.2（AevonTapSummonV102 / AevonForensicBandV102）
     private static var forensicCount = 0
     // V0.1.3（AevonTakeoverBandV103 / AevonBandDeferV103）：右缘接管带「延迟接管」候选。
@@ -1196,6 +1236,7 @@ enum AevonEdgeEntry {
         globalTouchID = 0
         globalFired = false
         swallowDeadline = 0
+        globalOwnedAt = 0
         rightEdgeTouchID = 0
         rightEdgeStart = .zero
         rightEdgeDirLogged = false
@@ -1216,6 +1257,17 @@ enum AevonEdgeEntry {
         deskZoneFired = false
         if hadState {
             AevonLog.warn("[急救] 已释放接管状态（\(reason)）（AevonDeadManV117）")
+            // V0.2.12（AevonReleaseAlsoClosesRingV212）：释放接管必须**连圆盘一起收掉**。
+            //
+            // Aevon(98) 事故里，死手开关走「接管超期」这条路释放了状态，但圆盘这个
+            // 全屏视图还留在屏上 —— 它自己就是一层整屏吞摸（isUserInteractionEnabled=true）。
+            // 释放接管却留着圆盘，等于「左手还了手指，右手又扣回去」。
+            // dismiss() 是幂等的（current 已 nil / isDismissing 时直接 return），
+            // 并且它内部会走 ringDidDismiss() → post ringclose 通知 App 侧一起收尾。
+            AevonRingMenu.dismissCurrent()
+            // 再补一次广播：dismiss() 里的 ringDidDismiss() 万一被 guard 挡掉（current 已空），
+            // App 侧就永远等不到「圆盘收起」。这条是幂等的，重复发没有副作用。
+            postRingState("com.aevon.ringclose")
         }
     }
 
@@ -1248,6 +1300,16 @@ enum AevonEdgeEntry {
         let now = CACurrentMediaTime()
         if ownsTouch, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
             releaseAllTakeover("接管超期未释放")
+        }
+        // V0.2.12（AevonOwnHardDeadlineV212）：**绝对**上限，不随 moved 续期。
+        //
+        // 上面那条 `swallowDeadline` 判据形同虚设：moved 每次都给 swallowDeadline
+        // 续 +4 秒（那是「按住不动」的兜底，不是「一直在滑」的兜底）。
+        // Aevon(98) 里用户正是「一直在试图滑动」—— 每一次尝试都在续期，
+        // 于是死手开关永远判不到期，最后靠三指急救才救回来。
+        // 这条按「收归本指」的起始时刻算，8 秒到点无条件归还。
+        if (ownsTouch || globalTouchID != 0), globalOwnedAt > 0, now - globalOwnedAt > globalOwnHardLimit {
+            releaseAllTakeover("收归超过 \(Int(globalOwnHardLimit)) 秒未归还")
         }
         if rightEdgeTouchID != 0, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
             releaseAllTakeover("右缘接管超期")
@@ -1732,6 +1794,24 @@ enum AevonEdgeEntry {
             }
 
         case .ended:
+            // V0.2.12（AevonEndAlwaysCleanV212）：抬手**必然**归还，不给任何分支留漏口。
+            //
+            // Aevon(98) 事故的结构性缺口：这条 case 里有七八个 `return`（桌面候选、
+            // 额外手指、接管带候选、float、`guard touchID == globalTouchID`…），
+            // 只要抬手那一帧的 touchID 和登记的 globalTouchID 对不上（多指、指针复用、
+            // 圆盘已被别处收起），清理整段就被跳过 —— 而 hook 那边这一帧已经
+            // 「先询问后上报」吞掉了，于是这根手指永远留在 ownsTouch 里。
+            // 用 defer 把清理挂在 case 入口：不管从哪一行 return，都一定执行。
+            let endedHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)
+            defer {
+                if endedHeldGlobal {
+                    globalTouchID = 0
+                    globalFired = false
+                    ownsTouch = false
+                    swallowDeadline = 0
+                    globalOwnedAt = 0
+                }
+            }
             // V0.2.8（AevonDeskZoneObserveV208）：桌面热区观察候选抬手 —— 只清状态。
             // 未呼盘（轻点/纵向）→ 整段已放行给桌面，打一行收尾日志后 return；
             // 已呼盘（左扫成立且被收养）→ 绝不 return，让下面的 globalTouchID 清理
@@ -1841,6 +1921,18 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            // V0.2.12（AevonEndAlwaysCleanV212）：同 ended —— 被系统取消同样是终态，
+            // 这一根手指必须归还。理由见上面 ended 分支的注释（漏一个 return 就是整屏卡死）。
+            let cancelledHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)
+            defer {
+                if cancelledHeldGlobal {
+                    globalTouchID = 0
+                    globalFired = false
+                    ownsTouch = false
+                    swallowDeadline = 0
+                    globalOwnedAt = 0
+                }
+            }
             // V0.2.8（AevonDeskZoneObserveV208）：同 ended，桌面热区观察候选只清状态；
             // 已呼盘被收养的照常落到下面 remoteCancelled。
             if touchID == deskZoneTouchID {
@@ -2059,6 +2151,7 @@ enum AevonEdgeEntry {
         globalTouchID = 0
         globalFired = false
         ownsTouch = false
+        globalOwnedAt = 0
         ringExtraTouchID = 0
         ringExtraDeadline = 0
         // V0.2.8（AevonDeskZoneObserveV208）：桌面呼盘收养指的豁免随收起一并清掉
@@ -2103,9 +2196,64 @@ enum AevonEdgeEntry {
     ///   C. **圆盘接管（V0.0.24）**：圆盘已由全局通道唤起，继续接管到圆盘收起。
     ///
     /// 还有三条硬性前提：必须是唤起/接管的那一根手指（别的指头照常给 App），且没超时。
+    /// V0.2.12（AevonSwallowSelfHealV212）：接管状态自愈 —— 全系统触摸的必经之路上做巡检。
+    ///
+    /// 只在 `shouldSwallowGlobalTouch` 里调用，每根手指每一帧一次，开销就是两次时间比较。
+    /// 两条判据，任意一条成立立刻归还：
+    ///   ① **圆盘已不在场** —— 吞咽存在的唯一理由就是「圆盘正被这根手指驱动」。
+    ///      圆盘收起后没有任何正当性继续吞；接管带「只扣移动帧」那条路（bandHoldTouchID）
+    ///      不经 ownsTouch，不受影响，照常按它自己的 0.6 秒期限工作。
+    ///   ② **圆盘在场但超过 8 秒绝对上限** —— 防「圆盘卡在屏上」时无限吞。
+    private static func healGlobalTakeoverIfNeeded() {
+        let now = CACurrentMediaTime()
+        // 记时：只要「这根手指还挂着」（ownsTouch 或 globalTouchID）就开始算；
+        // 两者都清掉才归零。**换了新手指（globalTouchID 变化）必须重新记时** ——
+        // 否则「上一轮的旧接管时刻」会立刻把刚建立的新接管判成超期并清掉，
+        // 热区连判向都做不成（这一条是本版最容易被写错的地方）。
+        let holding = (ownsTouch || globalTouchID != 0)
+        if holding {
+            if globalTouchID != globalOwnedForTouch || globalOwnedAt == 0 {
+                globalOwnedForTouch = globalTouchID
+                globalOwnedAt = now
+            }
+        } else {
+            globalOwnedForTouch = 0
+            globalOwnedAt = 0
+        }
+        guard holding, globalOwnedAt > 0 else { return }
+
+        var reason = ""
+        if !AevonRingMenu.isPresented, now - globalOwnedAt > healIdleWindow {
+            // 圆盘不在场 + 接管已经存在超过判向窗口 = 这次接管没有任何去处了。
+            // 为什么不能「圆盘一不在就清」：热区/接管带的整个设计是「began 即接管，
+            // 看清左扫才呼盘」—— 接管那一瞬间圆盘必然还没展开，若立刻清，
+            // 热区连判向都做不成，功能整体失效。判向在 60ms 内完成，1.5 秒是极宽裕的上限。
+            reason = "圆盘已收起且接管超过 \(String(format: "%.1f", healIdleWindow)) 秒"
+        } else if now - globalOwnedAt > globalOwnHardLimit {
+            reason = "收归超过 \(Int(globalOwnHardLimit)) 秒"
+        }
+        guard !reason.isEmpty else { return }
+
+        let heldID = globalTouchID
+        ownsTouch = false
+        globalTouchID = 0
+        globalFired = false
+        swallowDeadline = 0
+        globalOwnedAt = 0
+        globalOwnedForTouch = 0
+        if now - lastHealLogAt > 1.0 {
+            lastHealLogAt = now
+            AevonLog.warn("[自愈] 接管状态未正常归还（\(reason)）→ 立刻把手指还给系统：ownsTouch=0 globalTouchID=\(heldID) → 0（AevonSwallowSelfHealV212）")
+        }
+    }
+
     static func shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int) -> Bool {
         guard AevonPrefs.bool("Enabled", default: false) else { return false }
         guard touchID != 0 else { return false }
+        // V0.2.12（AevonSwallowSelfHealV212）：任何判断之前先自愈。
+        // 这一行就是「结构上不可能卡死」的全部：只要圆盘不在场，ownsTouch / globalTouchID
+        // 会被当场清零，后面所有分支都不可能再对任何手指返回 true。
+        healGlobalTakeoverIfNeeded()
         // V0.2.8（AevonDeskZoneObserveV208）：桌面热区呼盘的收养指 —— 吞摸豁免。
         // 这根手指 began 就给了桌面，后续帧（含 ended）必须照常投递，
         // 否则桌面翻页卡半路；圆盘只靠观察喂盘，不靠吞。

@@ -32,6 +32,13 @@ int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled)
 /// SpringBoard 在圆盘开 / 关时调用；Guard 每条 sendEvent 直接读共享内存，
 /// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
 void AevonNotifySetRing(int on);
+/// V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位。返回 1 = 圆盘正展开，0 = 已收起。
+///
+/// 为什么 App 侧必须能读：Aevon(98) 事故里 App 识别器停在 .began 之后，抬手帧被
+/// SpringBoard 吞掉（那是它的职责），Darwin 的 ringclose 通知也可能没送到 ——
+/// 唯一不依赖任何事件、任何时序的判据就是这个共享内存位。App 侧轮询它，
+/// 只要「圆盘已收起 + 我还在 .began」就立刻收尾，卡死结构上不可能发生。
+int AevonNotifyGetRing(void);
 
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），
