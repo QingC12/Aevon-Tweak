@@ -154,7 +154,8 @@ final class AevonWindowView: UIView {
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
-            + "内容=App 场景原生 5:3 布局（AevonFloatSceneLayoutV224，PullOverX applyPreferredSceneFrame 同款），"
+            + "内容=App 场景原生 5:3 布局（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
+            + "呈现上下文 resizesHostedContext=开，App 随窗尺寸原生重排，PullOver-X 同款），"
             + "手势区 26/44+压边10（AevonFloatWideGripV223 AevonFloatGripOverlapV224），"
             + "缩放全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
@@ -222,6 +223,11 @@ final class AevonWindowView: UIView {
     /// **App 场景本身的尺寸 = 浮窗尺寸**，App 按原生 5:3 重新布局，无 transform、
     /// 无拉伸、无裁切、无黑边 —— 窗口里看到的就是一个真正的 5:3 窗口内容。
     /// 顺带消掉逐帧矩阵提交（0.2.23 移动/缩放卡顿的渲染侧根源）。
+    ///
+    /// V0.2.25（AevonFloatHostedResizeV225）：0.2.24 缺了最后一环 —— 呈现上下文没开
+    /// resizesHostedContext，App 场景收到不到新尺寸（Aevon(109) 日志：呈现视图 430x932），
+    /// 内容仍是全屏渲染被裁。开关已在 AevonPresenterShim 补设（PullOver-X 同款），
+    /// 这里改容器 bounds → presentationView（flexible autoresizing）→ App 原生重排全链路才通。
     private func applyContentLayout() {
         guard contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
         let container = sceneHost.container

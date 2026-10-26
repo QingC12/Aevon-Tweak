@@ -961,3 +961,10 @@ __attribute__((used)) static const char AevonFloatStretchFillV222RetiredMarker[]
  * AevonFloatTopBarV223 退休收容 —— 顶部留白栏盖住内容造成显示异常，整体移除。 */
 __attribute__((used)) static const char AevonFloatBottomFitV223RetiredMarker[] = "AevonFloatBottomFitV223";
 __attribute__((used)) static const char AevonFloatTopBarV223RetiredMarker[] = "AevonFloatTopBarV223";
+
+/* V0.2.25（Aevon(109)）：AevonFloatHostedResizeV225 —— presenter 呈现上下文补设
+ * setResizesHostedContext:YES（PullOver-X 呈现上下文四开关之一，开源版源码实证）。
+ * 0.2.24 只改了外层容器 bounds，App 场景始终 430x932 全屏渲染再被外层裁掉
+ * （Aevon(109) 日志铁证：「呈现视图 430x932，首个子视图 430x932」）——
+ * 这是「浮窗内内容不完全」与「缩放卡顿（每帧跨进程合成全屏大纹理）」的共同根源。 */
+__attribute__((used)) static const char AevonFloatHostedResizeV225Marker[] = "AevonFloatHostedResizeV225";

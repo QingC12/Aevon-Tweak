@@ -1839,6 +1839,17 @@ jobs:
             && { echo "::error::缩放期间不许关圆角（四角直角已修，AevonFloatRoundResizeV224）"; exit 1; }
           echo "V0.2.24 校验: 场景原生 5:3 + 压边手势区 + 缩放全程圆角 已就位"
 
+          # ---- V0.2.25（Aevon(109)）：呈现上下文 resizesHostedContext —— App 场景随窗原生重排
+          for s in AevonFloatHostedResizeV225; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::浮窗 0.2.25 缺标记 $s"; exit 1; }
+          done
+          grep -q 'setResizesHostedContext' "$GITHUB_WORKSPACE/AevonPresenterShim.m" \
+            || { echo "::error::呈现上下文缺 resizesHostedContext（App 场景不随窗重排，内容被全屏渲染裁切）"; exit 1; }
+          grep -q 'AevonVoidFnBool1' "$GITHUB_WORKSPACE/AevonPresenterShim.m" \
+            || { echo "::error::resizesHostedContext 的调用垫片缺失"; exit 1; }
+          echo "V0.2.25 校验: resizesHostedContext 已就位（App 场景随浮窗尺寸原生重排）"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

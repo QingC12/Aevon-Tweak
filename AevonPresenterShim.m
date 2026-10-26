@@ -17,6 +17,7 @@ typedef id (*AevonIdFn1)(id, SEL, id);
 typedef void (*AevonVoidFn0)(id, SEL);
 typedef void (*AevonVoidFn1)(id, SEL, id);
 typedef void (*AevonVoidFnInt1)(id, SEL, NSInteger);
+typedef void (*AevonVoidFnBool1)(id, SEL, BOOL);
 typedef void (*AevonVoidFnBlock1)(id, SEL, void (^)(id));
 
 id AevonPresenterCreate(id scene, NSString *identifier) {
@@ -33,7 +34,12 @@ id AevonPresenterCreate(id scene, NSString *identifier) {
         id presenter = ((AevonIdFn1)objc_msgSend)(manager, createSelector, identifier);
         if (presenter == nil) return nil;
 
-        // appearanceStyle = 2：只要 App 自己的内容，不要系统给它加的装饰
+        // appearanceStyle = 2：只要 App 自己的内容，不要系统给它加的装饰。
+        // V0.2.25（AevonFloatHostedResizeV225）：补设 resizesHostedContext = YES
+        // （PullOver-X 呈现上下文同款四开关之一）。没有它，浮窗改容器尺寸时
+        // App 场景永远收不到新尺寸 —— App 始终 430x932 全屏渲染再被外层裁掉
+        // （Aevon(109) 日志铁证：呈现视图 430x932），即「浮窗内内容不完全」；
+        // 同时缩放时每帧都在跨进程合成全屏大纹理，是「缩放卡顿」的渲染侧根源。
         SEL modifySelector = NSSelectorFromString(@"modifyPresentationContext:");
         if ([presenter respondsToSelector:modifySelector]) {
             void (^configure)(id) = ^(id context) {
@@ -42,8 +48,12 @@ id AevonPresenterCreate(id scene, NSString *identifier) {
                     if ([context respondsToSelector:styleSelector]) {
                         ((AevonVoidFnInt1)objc_msgSend)(context, styleSelector, 2);
                     }
+                    SEL resizeSelector = NSSelectorFromString(@"setResizesHostedContext:");
+                    if ([context respondsToSelector:resizeSelector]) {
+                        ((AevonVoidFnBool1)objc_msgSend)(context, resizeSelector, YES);
+                    }
                 } @catch (NSException *exception) {
-                    // 外观设置失败不影响呈现
+                    // 外观/尺寸设置失败不影响呈现
                 }
             };
             ((AevonVoidFnBlock1)objc_msgSend)(presenter, modifySelector, configure);

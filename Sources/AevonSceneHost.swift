@@ -15,7 +15,10 @@ import UIKit
 /// 正确路径（iOS 15–17，参考 LiveContainer / MilkyWay 的做法）：
 ///   scene.uiPresentationManager
 ///     → createPresenterWithIdentifier:           申请一个呈现者
-///     → modifyPresentationContext: appearanceStyle = 2（只要内容，不要系统装饰）
+///     → modifyPresentationContext:               appearanceStyle = 2（只要内容）+
+///                                                resizesHostedContext = YES
+///                                                （V0.2.25，App 场景随浮窗尺寸原生重排，
+///                                                 PullOver-X 呈现上下文同款）
 ///     → activate                                  这一步才会让 App 真正开始渲染
 ///     → presentationView                          把这张视图塞进浮窗
 /// 关闭时必须 deactivate + invalidate，否则下次释放就是上面那条异常。

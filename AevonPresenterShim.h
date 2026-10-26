@@ -5,7 +5,8 @@
 /// iOS 15–17 把「别的 App 的实时画面」放进自己的窗口里，正确路径是向场景的
 /// `uiPresentationManager` 申请 presenter，而不是自己造图层宿主视图：
 ///   presenter = [scene.uiPresentationManager createPresenterWithIdentifier:@"xxx"];
-///   [presenter modifyPresentationContext:^(ctx){ ctx.appearanceStyle = 2; }];
+///   [presenter modifyPresentationContext:^(ctx){ ctx.appearanceStyle = 2;
+///                                             ctx.resizesHostedContext = YES; }];
 ///   [presenter activate];
 ///   [view addSubview:presenter.presentationView];
 ///
