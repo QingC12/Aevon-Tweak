@@ -67,6 +67,11 @@ NSString *AevonSelfSceneDebugState(id scene);
 ///   返回 -1 = 探测不到（proxy nil / 类缺失），调用方按 2 处理（保持旧版行为）。
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
 
+/// V0.2.38（AevonSceneRouteV238）：分流取证 —— 把 AevonSelfSceneAppSceneSupport
+/// 链路每一段拼串（lsCls/proxySel/proxy/infoSel/info/manifest/mKeys/configs/
+/// legacyDel/multi），一回真机日志定 -1 断点。全只读，返回串仅供日志。
+NSString *AevonSelfSceneRouteDump(NSString *bundleID);
+
 /// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段
 /// （client / clientPort，全 @try，取不到写 nil），区分「FB 层就没客户端」与
 /// 「App 端 UIKit 拒绝」。返回串仅供日志。

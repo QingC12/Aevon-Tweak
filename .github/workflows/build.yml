@@ -2071,6 +2071,19 @@ jobs:
           grep -q 'AevonSceneRouteV237' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧缺老式自动桥接分流注释锚"; exit 1; }
           echo "V0.2.37 校验: scene delegate 类名判据（老式自动桥接回旧路径）已就位"
+          # ── V0.2.38 校验（AevonSceneRouteV238）：白名单制 + 分流取证。
+          # 0.2.37 真机翻车 + Sileo 源码破案：Sileo Info.plist 无 manifest 本应
+          # return 0，三版真机却全走自建且分流零行 = 全返回 -1（取证链断点）被放行。
+          # 改为只有确证 2 才自建，-1 保守旧路径；dump 串定断点。只加不改。
+          for s in AevonSceneRouteV238; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.38 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'AevonSelfSceneRouteDump' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺分流取证函数"; exit 1; }
+          grep -q 'AevonSceneRouteV238' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺白名单制分流"; exit 1; }
+          echo "V0.2.38 校验: 白名单制（只有确证 2 才自建）+ 分流取证 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

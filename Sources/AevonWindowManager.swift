@@ -154,15 +154,19 @@ enum AevonWindowManager {
             // App 端 UIKit 拒绝（创建链与开源参照逐字段一致，FrontBoardAppLauncher
             // README 同款已知限制）。无 scene manifest 的 App 直接走全屏接管旧路径：
             // 不自建、不广播、不进 8 秒黑窗 —— 画面即刻出现（0.2.27 行为）。
+            // V0.2.38（AevonSceneRouteV238）：白名单制。0.2.37 真机翻车 + Sileo
+            // 源码破案：Sileo 的 Info.plist 根本没有 UIApplicationSceneManifest
+            // （老式 storyboard App），本应 return 0 走旧路径，但 0.2.35~37 三版
+            // 真机 Sileo/Filza/抖音/QQ 全走自建且分流零行 = 三版全返回 -1（取证链
+            // proxy/info 段断点）而 -1 一直被放行。改为只有确证 2 才自建，
+            // -1 一律保守旧路径（画面优先）；每次开窗打取证串定断点。
+            // 历史判据（AevonSceneRouteV235 / AevonSceneRouteV236 / AevonSceneRouteV237）：
+            // 0=无 manifest；1=有 manifest 单场景或无 scene delegate 类名；
+            // 2=manifest 带真 scene delegate 类名 + 多场景。
+            let routeDump = AevonSelfSceneRouteDump(bundleID)
             let sceneSupport = AevonSelfSceneAppSceneSupport(bundleID)
-            if sceneSupport == 0 {
-                AevonLog.info("[场景] 分流：\(bundleID) 无 scene manifest（老式单场景 App，UIKit 只认主场景）→ 全屏接管旧路径（AevonSceneRouteV235）")
-            } else if sceneSupport == 1 {
-                // V0.2.37（AevonSceneRouteV237）：0.2.36 翻车 —— Sileo/Filza/抖音/
-                // 微信 manifest 写了 supportsMultipleScenes=YES 骗过细判仍黑屏。
-                // App 侧探针实锤：delegate 未实现 configurationForConnecting =
-                // 老式自动桥接必拒。SB 侧近似 = manifest 无真 scene delegate 类名。
-                AevonLog.info("[场景] 分流：\(bundleID) 无多场景呈现（老式 AppDelegate 自动桥接 / 未开多场景）→ 全屏接管旧路径（AevonSceneRouteV236 AevonSceneRouteV237）")
+            if sceneSupport != 2 {
+                AevonLog.info("[场景] 分流：\(bundleID) 判=\(sceneSupport) → 全屏接管旧路径；取证：\(routeDump)（AevonSceneRouteV238）")
             } else if AevonPrefs.bool("SelfBuiltScene", default: true) {
                 let size = AevonWindowView.plannedContentSize()
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`

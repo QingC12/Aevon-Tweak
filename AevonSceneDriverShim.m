@@ -71,6 +71,14 @@ __attribute__((used)) static const char AevonSceneRouteV236Marker[] = "AevonScen
  * （UISceneConfigurations…UISceneDelegateClassName 或 UIApplicationSceneDelegateClassName）
  * —— 老式 App 的 manifest 就算写满 supportsMultipleScenes 也没有这些键。 */
 __attribute__((used)) static const char AevonSceneRouteV237Marker[] = "AevonSceneRouteV237";
+/* V0.2.38（AevonSceneRouteV238）：0.2.37 真机翻车 + Sileo 源码破案 ——
+ * Sileo 的 Info.plist 根本没有 UIApplicationSceneManifest（UIMainStoryboardFile=Main
+ * 老式 storyboard App），按判据本应 return 0 走旧路径，但 0.2.35~37 三版真机
+ * Sileo/Filza/抖音/QQ 全部走自建且分流零行 = 三版全返回 -1（取证链 proxy/info
+ * 段断点），而 -1 一直被放行进自建场景。两刀：
+ * ① 白名单制：只有确证 2 才自建，-1 从「维持自建」改「保守旧路径」；
+ * ② AevonSelfSceneRouteDump 把链路每一段拼串打进日志，一回定终判。 */
+__attribute__((used)) static const char AevonSceneRouteV238Marker[] = "AevonSceneRouteV238";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -591,6 +599,56 @@ NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
         return 1; /* 键缺失 = iOS 文档缺省 NO = 单场景 */
     } @catch (NSException *exception) {
         return -1;
+    }
+}
+
+/* V0.2.38（AevonSceneRouteV238）：分流取证 —— 把 AevonSelfSceneAppSceneSupport
+ * 链路每一段（lsCls/proxySel/proxy/infoSel/info/manifest 及其键）拼串打进日志，
+ * 一回真机日志定 -1 断在哪。全只读，不改分流行为。 */
+NSString *AevonSelfSceneRouteDump(NSString *bundleID) {
+    NSMutableString *out = [NSMutableString stringWithString:@"route: "];
+    @try {
+        [out appendFormat:@"bid=%@ ", bundleID.length ? @"ok" : @"empty"];
+        Class lsCls = NSClassFromString(@"LSApplicationProxy");
+        [out appendFormat:@"lsCls=%@ ", lsCls ? @"ok" : @"nil"];
+        if (!lsCls) { return out; }
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        BOOL resp = [(id)lsCls respondsToSelector:proxySel];
+        [out appendFormat:@"proxySel=%@ ", resp ? @"ok" : @"no"];
+        if (!resp) { return out; }
+        id proxy = ((AevonSDIdFn1)objc_msgSend)((id)lsCls, proxySel, bundleID);
+        [out appendFormat:@"proxy=%@ ", proxy ? NSStringFromClass([proxy class]) : @"nil"];
+        if (!proxy) { return out; }
+        SEL infoSel = NSSelectorFromString(@"infoDictionary");
+        BOOL iresp = [proxy respondsToSelector:infoSel];
+        [out appendFormat:@"infoSel=%@ ", iresp ? @"ok" : @"no"];
+        if (!iresp) { return out; }
+        NSDictionary *info = ((AevonSDIdFn0)objc_msgSend)(proxy, infoSel);
+        [out appendFormat:@"info=%@ keys=%lu ",
+            info ? NSStringFromClass([info class]) : @"nil",
+            info ? (unsigned long)[info count] : (unsigned long)0];
+        if (!info) { return out; }
+        id manifest = info[@"UIApplicationSceneManifest"];
+        [out appendFormat:@"manifest=%@ ", manifest ? NSStringFromClass([manifest class]) : @"nil"];
+        if ([manifest isKindOfClass:[NSDictionary class]]) {
+            [out appendFormat:@"mKeys=%@ ",
+                [((NSDictionary *)manifest).allKeys componentsJoinedByString:@"," }];
+            id configs = ((NSDictionary *)manifest)[@"UISceneConfigurations"];
+            [out appendFormat:@"configs=%@ ", configs ? NSStringFromClass([configs class]) : @"nil"];
+            if ([configs isKindOfClass:[NSDictionary class]]) {
+                [out appendFormat:@"cKeys=%@ ",
+                    [((NSDictionary *)configs).allKeys componentsJoinedByString:@"," ]];}
+            id legacyDel = ((NSDictionary *)manifest)[@"UIApplicationSceneDelegateClassName"];
+            id multi = ((NSDictionary *)manifest)[@"UIApplicationSupportsMultipleScenes"];
+            [out appendFormat:@"legacyDel=%@ multi=%@ ",
+                legacyDel ? @"yes" : @"no",
+                [multi isKindOfClass:[NSNumber class]] ? (((NSNumber *)multi).boolValue ? @"YES" : @"NO")
+                                                      : (id)@"nil"];
+        }
+        return out;
+    } @catch (NSException *exception) {
+        [out appendFormat:@"EXC=%@ ", exception.name];
+        return out;
     }
 }
 
