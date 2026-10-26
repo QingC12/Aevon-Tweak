@@ -296,12 +296,9 @@ final class AevonEdgeStripView: UIView {
         return false
     }
 
-    /// 触摸流入口保留但永不触发（`hitTest` 恒 nil），只用于记录一次「有人想走旧路」。
-    /// 这样若将来有人在别处重新让它可命中，日志里会立刻暴露。
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesBegan(touches, with: event)
-        AevonLog.info("[边缘] 手势条收到触摸（V0.2.9 起条子不参与命中，此路径应永不出现 —— 出现了就是有人把它接回命中链）（AevonStripNoHitV209）")
-    }
+    /// 原来的 touchesBegan / touchesMoved（下方「触摸（不使用手势识别器）」一节）保持不变 ——
+    /// 它们只是永远收不到触摸了。留着是为了「万一有人把 hitTest 接回去」时行为可回溯，
+    /// 而不是留一条隐形的新路径。
 
     /// 热区矩形（逻辑坐标，来自设置项）。三个通道共用同一个计算，避免「设置里调了但实际没变」。
     static func bandRect(in bounds: CGRect) -> CGRect {
@@ -497,6 +494,9 @@ enum AevonEdgeEntry {
         AevonEdgeEntry.startTriggerZoneWatch()
         let rootBounds = root.bounds
         AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt）（AevonEdgeTouch AevonTriggerZoneV25 AevonRingListLiveV27 AevonAppGuardSideV27 AevonSwipeOnlyV38）")
+        // V0.2.9（AevonStripNoHitV209）：条子从这一版起只是「看得见的那条淡色线」，
+        // 命中测试永远拿不到它 —— 桌面/浮窗在右下角那块重新变回正常的触摸区域。
+        AevonLog.info("[边缘] 手势条只做显示：hitTest 恒 nil，不参与命中测试，呼盘改由全局通道判定（AevonStripNoHitV209）")
 
         // 圆盘的默认内容：首次使用时用应用列表预填，保证呼出不是空盘
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
