@@ -155,10 +155,14 @@ enum AevonWindowManager {
                 // → 短重试等登记，共 4 次尝试 × 0.3s；其余 step 串不重试（重试也不会好）。
                 // V0.2.30（AevonSelfSceneRBSV230）：路线 B（RBSProcessHandle）后，
                 // 可重试串补 pid-nil / rb-handle-nil（RunningBoard 登记也有冷启动期）。
+                // V0.2.31（AevonSelfScenePidV231）：0.2.30 全卡 pid-nil 但 AevonAppInfo.pid
+                // 同刻取到 → 调用方用已验证路径（AevonAppInfo.pid）预取 pidHint 直传垫片。
                 var created: AnyObject? = nil
                 var errOut: NSString? = nil
                 for attempt in 1...4 {
+                    let pidHint = AevonAppInfo.pid(bundleID: bundleID) ?? 0
                     created = AevonSelfSceneCreate(bundleID,
+                                                   pidHint,
                                                    Double(size.width), Double(size.height),
                                                    &selfSceneIDOut, &errOut) as AnyObject?
                     if created != nil { break }
@@ -166,7 +170,7 @@ enum AevonWindowManager {
                     let retryable = step == "app-object-nil" || step == "process-handle-nil"
                         || step == "pid-nil" || step == "rb-handle-nil"
                     if attempt < 4 && retryable {
-                        AevonLog.info("[场景] 自建场景重试 \(attempt)/3（step=\(step)，等进程登记）（AevonSelfSceneRetryV229）")
+                        AevonLog.info("[场景] 自建场景重试 \(attempt)/3（step=\(step)，AppInfo pid=\(pidHint)，等进程登记）（AevonSelfSceneRetryV229）")
                         Thread.sleep(forTimeInterval: 0.3)
                     } else {
                         break

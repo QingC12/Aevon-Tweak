@@ -26,9 +26,10 @@
 ///   · 全链 @try/@catch，任何一步失败返回 nil + 英文步骤串，调用方回退全屏接管路径，
 ///     绝不卡开机、绝不黑屏。
 
-/// 创建自建场景（画布 w×h）。成功返回 FBScene，*outSceneID 写场景标识；
+/// 创建自建场景（画布 w×h；pidHint = 调用方用 AevonAppInfo.pid 预取的进程号，
+/// 0 = 未知由垫片自读）。成功返回 FBScene，*outSceneID 写场景标识；
 /// 失败返回 nil，*outErr 写失败步骤（英文短串，调用方进 Aevon 日志）。
-id AevonSelfSceneCreate(NSString *bundleID, double w, double h,
+id AevonSelfSceneCreate(NSString *bundleID, NSInteger pidHint, double w, double h,
                         NSString * __autoreleasing *outSceneID,
                         NSString * __autoreleasing *outErr);
 

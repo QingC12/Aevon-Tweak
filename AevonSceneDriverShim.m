@@ -30,6 +30,7 @@ __attribute__((used)) static const char AevonSelfSceneV228Marker[] = "AevonSelfS
 __attribute__((used)) static const char AevonSelfSceneFallbackV228Marker[] = "AevonSelfSceneFallbackV228";
 __attribute__((used)) static const char AevonSelfSceneFixV229Marker[] = "AevonSelfSceneFixV229";
 __attribute__((used)) static const char AevonSelfSceneRBSV230Marker[] = "AevonSelfSceneRBSV230";
+__attribute__((used)) static const char AevonSelfScenePidV231Marker[] = "AevonSelfScenePidV231";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -93,7 +94,14 @@ static void AevonSDSetObject(id obj, const char *prop, id v) {
 /// 注：LiveContainer 还调 FBProcessManager registerProcessForAuditToken:，
 /// 那是因为它自己 spawn 的进程 FrontBoard 不认识；我们的 App 是 FrontBoard 正常
 /// 拉起的，SB 的 FBProcessManager 本来就管理着它，无需注册。
-static id AevonSDAppProcessHandle(NSString *bundleID, NSString * __autoreleasing *outStep) {
+///
+/// V0.2.31（AevonSelfScenePidV231，0.2.30 真机实锤）：0.2.30 全部卡 pid-nil，
+/// 但同一时刻 AevonAppInfo.pid（先 pid 选择子、败则 processState.pid）立刻取到
+/// pid=68883（间隔 4ms）→ pid 读出链与已验证路径没对齐。本次：
+///   ① 调用方用 AevonAppInfo.pid 预取 pidHint 直传（主通路，逐选择子对齐成功路径）；
+///   ② 垫片自读兜底改为 AevonAppInfo 同款双段（pid → processState.pid）。
+static id AevonSDAppProcessHandle(NSString *bundleID, NSInteger pidHint,
+                                  NSString * __autoreleasing *outStep) {
     // ── 路线 A：SBApplication.processHandle（老通路）──
     id controller = AevonSDClassFactory(@"SBApplicationController", @"sharedInstance");
     if (controller == nil) { if (outStep) { *outStep = @"controller-nil"; } return nil; }
@@ -110,14 +118,28 @@ static id AevonSDAppProcessHandle(NSString *bundleID, NSString * __autoreleasing
     // 默认结论：两条路线都没拿到句柄（0.2.29 step 串保留，Swift 侧按此重试）
     if (outStep) { *outStep = @"process-handle-nil"; }
 
-    // ── 路线 B：pid → RBSProcessPredicate → RBSProcessHandle（iOS 17 主通路）──
-    NSInteger pid = 0;
-    SEL pidSel = NSSelectorFromString(@"pid");
-    if ([app respondsToSelector:pidSel]) {
-        pid = ((AevonSDIntFn0)objc_msgSend)(app, pidSel);
+    // ── pid 解析：pidHint（AevonAppInfo 预取）→ pid 选择子 → processState.pid ──
+    NSInteger pid = pidHint > 0 ? pidHint : 0;
+    if (pid <= 0) {
+        SEL pidSel = NSSelectorFromString(@"pid");
+        if ([app respondsToSelector:pidSel]) {
+            pid = ((AevonSDIntFn0)objc_msgSend)(app, pidSel);
+        }
+    }
+    if (pid <= 0) {
+        // AevonAppInfo.pid 的兜底段：SBApplication.processState.pid
+        SEL stateSel = NSSelectorFromString(@"processState");
+        if ([app respondsToSelector:stateSel]) {
+            id state = ((AevonSDIdFn0)objc_msgSend)(app, stateSel);
+            SEL statePidSel = NSSelectorFromString(@"pid");
+            if (state != nil && [state respondsToSelector:statePidSel]) {
+                pid = ((AevonSDIntFn0)objc_msgSend)(state, statePidSel);
+            }
+        }
     }
     if (pid <= 0) { if (outStep) { *outStep = @"pid-nil"; } return nil; }
 
+    // ── 路线 B：pid → RBSProcessPredicate → RBSProcessHandle（iOS 17 主通路）──
     Class predCls = NSClassFromString(@"RBSProcessPredicate");
     Class handleCls = NSClassFromString(@"RBSProcessHandle");
     SEL predSel = NSSelectorFromString(@"predicateMatchingIdentifier:");
@@ -135,15 +157,15 @@ static id AevonSDAppProcessHandle(NSString *bundleID, NSString * __autoreleasing
     return handle;
 }
 
-static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,
+static id AevonSelfSceneCreateInner(NSString *bundleID, NSInteger pidHint, double w, double h,
                                     NSString * __autoreleasing *outSceneID,
                                     NSString * __autoreleasing *outErr);
 
-id AevonSelfSceneCreate(NSString *bundleID, double w, double h,
+id AevonSelfSceneCreate(NSString *bundleID, NSInteger pidHint, double w, double h,
                         NSString * __autoreleasing *outSceneID,
                         NSString * __autoreleasing *outErr) {
     @try {
-        return AevonSelfSceneCreateInner(bundleID, w, h, outSceneID, outErr);
+        return AevonSelfSceneCreateInner(bundleID, pidHint, w, h, outSceneID, outErr);
     } @catch (NSException *exception) {
         if (outErr) { *outErr = [NSString stringWithFormat:@"exception:%@", exception.name]; }
         return nil;
@@ -151,7 +173,7 @@ id AevonSelfSceneCreate(NSString *bundleID, double w, double h,
 }
 
 /// 创建主体（ARC 下 goto 跨 __strong 局部变量初始化是编译错误 —— 全部 early-return）。
-static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,
+static id AevonSelfSceneCreateInner(NSString *bundleID, NSInteger pidHint, double w, double h,
                                     NSString * __autoreleasing *outSceneID,
                                     NSString * __autoreleasing *outErr) {
     if (outErr) { *outErr = nil; }
@@ -161,7 +183,7 @@ static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,
 
     // ── 1. 运行中 App 的进程身份（clientIdentity 必须指向已存在的进程）──
     NSString *handleStep = nil;
-    id handle = AevonSDAppProcessHandle(bundleID, &handleStep);
+    id handle = AevonSDAppProcessHandle(bundleID, pidHint, &handleStep);
     if (handle == nil) { if (outErr) { *outErr = handleStep ?: @"app-not-running"; } return nil; }
     id processIdentity = nil;
     for (NSString *key in @[@"identity", @"processIdentity"]) {
