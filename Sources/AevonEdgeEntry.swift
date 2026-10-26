@@ -1277,7 +1277,14 @@ enum AevonEdgeEntry {
     /// 接管状态宽限（秒）：超过自己的 deadline 再加这个余量还没被清 → 判定为泄漏
     private static let deadManGrace: CFTimeInterval = 1.0
     /// 圆盘展开硬上限（秒）：超过就强制收起（正常一次选择不会超过 20 秒）
-    private static let ringOpenLimit: CFTimeInterval = 20
+    /// 圆盘安全网（V0.2.18 / AevonRingCloseOnLiftV218 起从「展开超过 20 秒」改成
+    /// 「**连续 30 秒没有任何指针事件**」）。
+    ///
+    /// 用户 Aevon(104) 的规则只有一条：手指还在屏上就不收。旧判据按「展开时长」算，
+    /// 慢慢找图标 / 慢慢转 20 秒就会被收掉 —— 那正好是规则的例外。
+    /// 现在按「静默时长」算：只要还有一只手指在动，它永远不到期；
+    /// 到了期就说明要么 ended 丢了、要么人早就走了，这时候收掉是必要的卫生。
+    private static let ringOpenLimit: CFTimeInterval = 30
 
     /// 释放**所有**整指接管状态。幂等，任何路径都能调。
     ///
@@ -1351,7 +1358,16 @@ enum AevonEdgeEntry {
     /// 死手开关：0.2 秒一次，只在「状态明显泄漏」时动手。
     static func enforceDeadManSwitch() {
         let now = CACurrentMediaTime()
-        if ownsTouch, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
+        // V0.2.18（AevonRingCloseOnLiftV218）：**手指还在屏上，定时器一律不替圆盘做决定。**
+        //
+        // 下面三条都是「超时强收」。它们存在的理由是「接管状态泄漏了，必须兜底」，
+        // 而不是「圆盘开太久要收」。手指在场时泄漏根本不存在 —— 抬手一定会走
+        // `handlePointerEnded`，圆盘收起一定会走 `ringDidDismiss()` 把状态清干净。
+        // 所以：手指在场 → 跳过这三档；手指离场（ended / cancelled）→ 恢复原样。
+        // 万一 ended 真的丢了，`isFingerDown` 会一直是 true，兜底由上面那条
+        // 「连续 30 秒没有任何指针事件」承担。
+        let ringHoldsFinger = AevonRingMenu.presented?.isFingerDown == true
+        if !ringHoldsFinger, ownsTouch, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
             releaseAllTakeover("接管超期未释放")
         }
         // V0.2.12（AevonOwnHardDeadlineV212）：**绝对**上限，不随 moved 续期。
@@ -1361,17 +1377,22 @@ enum AevonEdgeEntry {
         // Aevon(98) 里用户正是「一直在试图滑动」—— 每一次尝试都在续期，
         // 于是死手开关永远判不到期，最后靠三指急救才救回来。
         // 这条按「收归本指」的起始时刻算，8 秒到点无条件归还。
-        if (ownsTouch || globalTouchID != 0), globalOwnedAt > 0, now - globalOwnedAt > globalOwnHardLimit {
+        if !ringHoldsFinger, (ownsTouch || globalTouchID != 0), globalOwnedAt > 0,
+           now - globalOwnedAt > globalOwnHardLimit {
             releaseAllTakeover("收归超过 \(Int(globalOwnHardLimit)) 秒未归还")
         }
-        if rightEdgeTouchID != 0, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
+        if !ringHoldsFinger, rightEdgeTouchID != 0, swallowDeadline > 0, now > swallowDeadline + deadManGrace {
             releaseAllTakeover("右缘接管超期")
         }
-        if AevonRingMenu.isPresented, ringOpenedAt > 0, now > ringOpenedAt + ringOpenLimit {
-            ringOpenedAt = 0
-            AevonLog.warn("[急救] 圆盘展开超过 \(Int(ringOpenLimit)) 秒 → 强制收起（AevonDeadManV117）")
-            AevonRingMenu.dismissCurrent()
-            releaseAllTakeover("圆盘超期")
+        if let ring = AevonRingMenu.presented, ringOpenedAt > 0 {
+            // 两个时长取小：既要「展开够久」，也要「确实没有任何指针事件」。
+            let silentFor = min(now - ringOpenedAt, ring.pointerIdleSeconds)
+            if silentFor > ringOpenLimit {
+                ringOpenedAt = 0
+                AevonLog.warn("[急救] 圆盘连续 \(Int(ringOpenLimit)) 秒没有任何指针事件（ended 可能丢了）→ 强制收起（AevonDeadManV117 AevonRingCloseOnLiftV218）")
+                AevonRingMenu.dismissCurrent()
+                releaseAllTakeover("圆盘静默超期")
+            }
         }
         // V0.1.19（AevonPanicHoldV119）：三指按住的第二、三档升级。
         // 第一档（释放接管）已经在 began 里当场做了，这里只负责「超时升级」。
@@ -2322,7 +2343,14 @@ enum AevonEdgeEntry {
             // 看清左扫才呼盘」—— 接管那一瞬间圆盘必然还没展开，若立刻清，
             // 热区连判向都做不成，功能整体失效。判向在 60ms 内完成，1.5 秒是极宽裕的上限。
             reason = "圆盘已收起且接管超过 \(String(format: "%.1f", healIdleWindow)) 秒"
-        } else if now - globalOwnedAt > globalOwnHardLimit {
+        } else if now - globalOwnedAt > globalOwnHardLimit, !AevonRingMenu.isPresented {
+            // V0.2.18（AevonRingCloseOnLiftV218）：圆盘还开着就不再走这一档。
+            //
+            // 这一档的正当性来自「接管已经没有去处了」；圆盘开着时接管恰好是最有去处的时候。
+            // 旧版在圆盘开着时照砍：12 秒一到把 globalTouchID 清掉 → 圆盘的喂料瞬间断流
+            // （moved / ended 全部被 `guard touchID == globalTouchID` 挡掉），
+            // 用户看到的是「手指还在屏上，圆盘先定住、然后被强制收掉」。
+            // 止血交给 `enforceDeadManSwitch` 里那条 30 秒「完全没有指针事件」的安全网。
             reason = "收归超过 \(Int(globalOwnHardLimit)) 秒"
         }
         guard !reason.isEmpty else { return }

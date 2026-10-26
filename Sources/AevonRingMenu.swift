@@ -118,9 +118,14 @@ final class AevonRingIcon: UIView {
 ///   3. 旋转模式下**其它图标一律不能选中**，只有圆心可以操作；
 ///      再按住圆心 1 秒（或按一下就松手）→ 退出旋转，回到选择模式。
 ///   4. 旋转中把手指移到盘外松手 → 收起圆盘（不打开任何 App）。
-///   5. 唤出圆盘的那根手指**不必抬起**：它直接从边缘滑进圆盘就能选图标；
-///      一旦抬起而没落在图标 / 圆心上 → 圆盘立刻收起（V0.2.17 / AevonRingLiftDismissV217，
-///      取代 0.0.28 的「盘外抬手保持展开」AevonRingKeepOpenV28）。
+///   5. 唤出圆盘的那根手指**不必抬起**：它直接从边缘滑进圆盘就能选图标。
+///      **手指没离开屏幕，圆盘绝不收起**（哪怕手指已经在盘外滑了一大圈 —— 呼盘那一下
+///      手指本来就贴在右缘、离圆心一百多 pt，那不叫「在盘外」）；
+///      只有**抬手**那一刻才判定：在盘外 → 收；在图标之间的间隙里 → 也收；
+///      落在图标上 → 开窗；落在圆心 → 打开面板。
+///      （V0.2.18 / AevonRingCloseOnLiftV218，取代 0.0.28 的「盘外抬手保持展开」
+///      AevonRingKeepOpenV28 与 0.2.17 的「抬手即收」AevonRingLiftDismissV217 —— 规则没变，
+///      变的是「手指还在屏上时，外面的定时器不许替它收」。）
 ///   6. **屏幕上没有任何文字**（圆心、底部都没有）—— 状态只靠圆心图标 / 颜色和动效表达。
 ///
 /// 触摸来源去重：唤出圆盘的那根手指可能同时被「边缘手势条」「窗口 sendEvent 探针」
@@ -137,6 +142,24 @@ final class AevonRingMenu: UIView {
     private static let centerHoldDuration: TimeInterval = 1.0
     /// 圆心命中半径（比按钮本身放大一点，手指压在图标边缘也算）
     private static let centerHitRadius: CGFloat = 40
+
+    // MARK: - 划过图标的「跳跃」动画（V0.0.35 起，V0.2.18 加大）
+    //
+    // 用户 Aevon(104) 的两条要求，都在这一组常量里：
+    //   ① 「图标跳动的高度增加 50%」 —— 8pt → 12pt（`hoverLift`）；
+    //   ② 「划过图标时放大效果再大一点，圆盘看起来更 Q 弹」 —— 1.18 → 1.30（`hoverScale`），
+    //      同时把弹簧阻尼从 0.42 降到 0.34、初速从 2.8 提到 3.4 —— 阻尼越低回摆越多，
+    //      视觉上就是「弹上去 → 超调 → 吸回来」的那一下。
+    //
+    // 位置放在这里而不是写进 `setHovered` 里：这两个数以后只该改这一处。
+    /// 划过图标时的向上跳跃高度（屏幕坐标，负 y = 向上）
+    static let hoverLift: CGFloat = 12
+    /// 划过图标时的放大倍数
+    static let hoverScale: CGFloat = 1.30
+    /// 跳跃 / 放大的弹簧参数（时长、阻尼比、初速）
+    static let hoverSpringDuration: TimeInterval = 0.52
+    static let hoverSpringDamping: CGFloat = 0.34
+    static let hoverSpringVelocity: CGFloat = 3.4
     /// 指针事件中断多久之后允许新手指出手接管（自愈，防止某条通道漏发 ended 把圆盘卡死）
     private static let pointerStaleInterval: CFTimeInterval = 1.2
     /// 指针**通道**交接阈值（V0.2.16 / AevonRingPointerHandoffV216）。
@@ -199,6 +222,24 @@ final class AevonRingMenu: UIView {
     private var pointerLastEventAt: CFTimeInterval = 0
     /// 这根手指是否进过圆盘范围（区分「唤出圆盘那一下」和「进盘后拖出去取消」）
     private var pointerEverInsideRing = false
+
+    /// 手指是否**还压在屏上**（V0.2.18 / AevonRingFingerDownV218）。
+    ///
+    /// 用户 Aevon(104) 把关闭规则讲清楚了：
+    ///   ① 手指滑出圆盘但没离开屏幕 —— **不算**「在圆盘外」，圆盘不许收；
+    ///   ② 只有手指**离开屏幕**时在盘外，或落在图标之间的**间隙**里，才收圆盘。
+    ///
+    /// 所以「收不收」只由 `handlePointerEnded` 一处决定。这个字段的作用是给外面
+    /// （SpringBoard 侧的三个定时器）一个判据：手指还在屏上就别替我收。
+    /// 置真：began / moved / 通道交接；置假：ended / cancelled / 收起。
+    private(set) var isFingerDown = false
+
+    /// 距离上一次指针事件过去了多少秒（没有过事件时返回一个大数）。
+    /// 只用于「真的没人操作了」的安全网，不参与「收不收」的判断。
+    var pointerIdleSeconds: CFTimeInterval {
+        guard pointerLastEventAt > 0 else { return .greatestFiniteMagnitude }
+        return CACurrentMediaTime() - pointerLastEventAt
+    }
 
     /// 旋转模式：只有「按住圆心 1 秒」能开关
     private var rotating = false
@@ -697,6 +738,8 @@ final class AevonRingMenu: UIView {
         pointerPoint = point
         pointerAngle = angle(from: ringCenter, to: point)
         pointerLastEventAt = now
+        // V0.2.18（AevonRingFingerDownV218）：换通道继续喂，说明这根手指还在屏上。
+        isFingerDown = true
         if isInsideRingArea(point) { pointerEverInsideRing = true }
         if !previous.isEmpty, now - pointerHandoffLogAt > 0.5 {
             pointerHandoffLogAt = now
@@ -716,6 +759,7 @@ final class AevonRingMenu: UIView {
         pointerPoint = point
         pointerAngle = angle(from: ringCenter, to: point)
         pointerLastEventAt = now
+        isFingerDown = true
         pointerEverInsideRing = isInsideRingArea(point)
         // 新手指落下来，重新允许「按住圆心 1 秒」切换模式
         centerHoldSuppressed = false
@@ -732,6 +776,7 @@ final class AevonRingMenu: UIView {
         guard claimPointer(source: source, at: point) else { return }
         pointerPoint = point
         pointerLastEventAt = CACurrentMediaTime()
+        isFingerDown = true
         if isInsideRingArea(point) { pointerEverInsideRing = true }
 
         let currentAngle = angle(from: ringCenter, to: point)
@@ -756,6 +801,15 @@ final class AevonRingMenu: UIView {
         updateCenterHold(at: point)
     }
 
+    /// 手指**离开屏幕**。圆盘收不收，全部在这一处决定（V0.2.18 / AevonRingCloseOnLiftV218）。
+    ///
+    /// 用户 Aevon(104) 把规则讲清楚了，这里逐条对上：
+    ///   · 滑出圆盘但手指没离开屏幕 → **什么都不做**（不叫「在圆盘外」，不许收）；
+    ///   · 抬手时在盘外 → 收；
+    ///   · 抬手时落在图标之间的**间隙**里（盘内但没有图标）→ 收；
+    ///   · 抬手时正好在图标上 → 用浮窗打开它；
+    ///   · 抬手时在圆心 → 打开应用面板。
+    /// 换句话说：**只有抬手这一件事会收起圆盘**（加上选中开窗、圆心面板、三指急救三条显式路径）。
     private func handlePointerEnded(at point: CGPoint, source: String) {
         guard AevonRingMenu.current === self, !isDismissing else { return }
         guard claimPointer(source: source, at: point) else { return }
@@ -765,19 +819,19 @@ final class AevonRingMenu: UIView {
         // 取证用：这根手指这一次有没有进过盘内（0.2.17 起不再影响「收不收」，
         // 只写进日志 —— 用户报「刚划出来就没了」时，靠它区分是抬手太早还是触发太晚）
         let everInside = pointerEverInsideRing
+        let landing = isInsideRingArea(point) ? "盘内" : "盘外"
         clearPointer()
 
-        // ① 旋转模式：按在圆心松手 = 退出旋转；移到盘外松手 = 收起；其余忽略
+        // ① 旋转模式：按在圆心松手 = 退出旋转；其余一律收起（与选择模式同一条规则）
         if rotating {
             if isInsideCenter(point) {
                 setRotating(false, at: point)
                 AevonLog.info("[圆盘] 圆心松手，退出旋转模式，回到选图标（AevonRingHoldRotateV28）")
                 return
             }
-            if !isInsideRingArea(point) {
-                AevonLog.info("[圆盘] 旋转中移到盘外松手，收起圆盘")
-                dismiss()
-            }
+            AevonLog.info("[圆盘] 旋转中松手（\(landing)，来源 \(source)），收起圆盘（AevonRingCloseOnLiftV218）")
+            setHovered(nil)
+            dismiss()
             return
         }
 
@@ -796,14 +850,18 @@ final class AevonRingMenu: UIView {
             return
         }
 
-        // ④ 盘外 / 空白处松手：**一律收起**（V0.2.17 / AevonRingLiftDismissV217）
+        // ④ 落在盘外、或落在盘内图标之间的间隙：**一律收起**
         //
         // 0.0.28 ~ 0.2.16 这里是「从没进过圆盘（就是唤出圆盘那一下）→ 圆盘保持展开等下一次触摸」
         // （旧标记 AevonRingKeepOpenV28，0.2.17 起作废）。用户 Aevon(103) 的结论很直接：
         // 松开就该收起 —— 圆盘的用法是「按住不松、直接滑到图标上再松手」（0.2.16 的
         // 指针通道交接就是为了这条路），没松手就不该有第二个状态。
         // 留着「保持展开」只有一个后果：呼盘那一下抬起，屏上多一个必须再点一次才消失的圆盘。
-        AevonLog.info("[圆盘] 松手未选中（\(isInsideRingArea(point) ? "空白处" : "盘外")，进过盘内=\(everInside ? "是" : "否")），收起圆盘（AevonRingLiftDismissV217）")
+        //
+        // Aevon(104) 补充的语义（本版写进日志，免得再猜）：**只有抬手才会收**。
+        // 呼盘那一刻手指贴在右缘、离圆心一百多 pt（本来就在盘外），这不叫「手指在圆盘外」；
+        // 手指继续按着往盘里滑的整段过程，圆盘一动不动，直到抬手才判定。
+        AevonLog.info("[圆盘] 抬手未选中（\(landing)·间隙，来源 \(source)，进过盘内=\(everInside ? "是" : "否")），收起圆盘（AevonRingLiftDismissV217 AevonRingCloseOnLiftV218）")
         setHovered(nil)
         dismiss()
     }
@@ -816,12 +874,22 @@ final class AevonRingMenu: UIView {
         }
         cancelCenterHold()
         clearPointer()
+        // V0.2.18（AevonRingCloseOnLiftV218）：**取消 ≠ 抬手**。
+        //
+        // 取消是「这条通道不投了」的意思（系统手势识别器被别的识别器抢走、App 切后台…），
+        // 手指通常还压在屏幕上。把它当成抬手，等于让三个定时器重新获得「替圆盘收」的权力，
+        // 用户看到的就是「我手指没离开，圆盘自己收了」。这里保留「手指在屏上」的判断，
+        // 真正的收尾交给 30 秒静默安全网，或者下一根手指的 touchesBegan。
+        isFingerDown = true
     }
 
     private func clearPointer() {
         pointerSource = ""
         pointerEverInsideRing = false
         pointerLastEventAt = 0
+        // V0.2.18（AevonRingFingerDownV218）：指针没了 = 这根手指已经离开屏幕（或圆盘已收起）。
+        // 外面三个定时器看到这一位变假，才会重新使用「强制收起」这一档。
+        isFingerDown = false
     }
 
     // MARK: - 圆心按住 1 秒：开 / 关旋转模式
@@ -970,21 +1038,23 @@ final class AevonRingMenu: UIView {
         for item in icons {
             let on = (item === icon)
             item.setHighlighted(on)
-            // V0.0.35（AevonRingHopV35）：划过图标 = 放大 1.18 + **向上跳跃 8pt** ——
-            // 弹簧阻尼 0.42 + 初速 2.8，跳上去有过冲、回落的吸回感（用户点名要的跳跃动画）。
+            // V0.0.35（AevonRingHopV35）：划过图标 = 放大 + **向上跳跃** ——
             // 位移用屏幕坐标向上（y 负），与圆周角度无关，任何位置的图标都是「向上跳」。
+            // V0.2.18（AevonRingJumpPunchV218）：跳跃高度 8 → 12pt（用户要求 +50%），
+            // 放大 1.18 → 1.30，弹簧阻尼 0.42 → 0.34、初速 2.8 → 3.4、时长 0.45 → 0.52。
+            // 四个数一起动才有「Q 弹」：只放大是变粗，只加高是变飘，阻尼降下来才有回摆。
             let target: CGAffineTransform
             if on {
-                target = CGAffineTransform(translationX: 0, y: -8)
-                    .scaledBy(x: 1.18, y: 1.18)
+                target = CGAffineTransform(translationX: 0, y: -AevonRingMenu.hoverLift)
+                    .scaledBy(x: AevonRingMenu.hoverScale, y: AevonRingMenu.hoverScale)
             } else {
                 target = .identity
             }
             if item.transform != target {
-                UIView.animate(withDuration: 0.45,
+                UIView.animate(withDuration: AevonRingMenu.hoverSpringDuration,
                                delay: 0,
-                               usingSpringWithDamping: 0.42,
-                               initialSpringVelocity: 2.8,
+                               usingSpringWithDamping: AevonRingMenu.hoverSpringDamping,
+                               initialSpringVelocity: AevonRingMenu.hoverSpringVelocity,
                                options: [.allowUserInteraction, .beginFromCurrentState]) {
                     item.transform = target
                 }
@@ -1046,7 +1116,14 @@ final class AevonRingMenu: UIView {
             guard index < iconRadii.count, index < iconBaseAngles.count else { continue }
             let radius = iconRadii[index]
             // 径向容差：半圈间距（至少图标半径）—— V0.0.31 用图标实际尺寸（自适应后各圈不同）
-            let tolerance = max(icon.frame.width * 0.78, 28)
+            //
+            // V0.2.18（AevonRingHitStableV218）：这里必须用 `bounds`，不能用 `frame`。
+            // `frame` 会跟着 transform 变 —— 悬停放大从 1.18 提到 1.30 之后，
+            // 被放大的那个图标判定半径会跟着膨胀 30%，隔壁图标会被它抢走，
+            // 表现是「手指明明在这个图标上，高亮的却是旁边那个」。
+            // `bounds` 不受 transform 影响，永远是布局时的原始尺寸。
+            let baseSize = icon.bounds.width
+            let tolerance = max(baseSize * 0.78, 28)
             guard abs(distance - radius) <= tolerance else { continue }
             var iconAngle = (iconBaseAngles[index] + rotation).truncatingRemainder(dividingBy: 360)
             if iconAngle < 0 { iconAngle += 360 }
@@ -1060,7 +1137,7 @@ final class AevonRingMenu: UIView {
             }
         }
         guard let candidate = best else { return nil }
-        return bestScore <= candidate.frame.width * AevonRingMenu.hitFactor ? candidate : nil
+        return bestScore <= candidate.bounds.width * AevonRingMenu.hitFactor ? candidate : nil
     }
 
     private func angle(from center: CGPoint, to point: CGPoint) -> CGFloat {

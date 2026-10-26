@@ -891,3 +891,15 @@ __attribute__((used)) static const char AevonFloatTouchAlwaysV217Marker[] = "Aev
 __attribute__((used)) static const char AevonProbeDefaultOffV217Marker[] = "AevonProbeDefaultOffV217";
 __attribute__((used)) static const char AevonRingKeepOpenV28RetiredMarker[] = "AevonRingKeepOpenV28";
 __attribute__((used)) static const char AevonSysEdgeOffMigrateV214RetiredMarker[] = "AevonSysEdgeOffMigrateV214";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.2.18（Aevon(104) 判读）：圆盘动画加大 + 关闭规则改成「只认抬手」
+ *   AevonRingJumpPunchV218  = 划过图标跳跃 8 → 12pt（+50%）、放大 1.18 → 1.30、弹簧更弹
+ *   AevonRingHitStableV218  = 命中判定改用 bounds（放大后 frame 会膨胀，会抢隔壁图标）
+ *   AevonRingFingerDownV218 = 圆盘记住「手指是否还在屏上」
+ *   AevonRingCloseOnLiftV218= 手指在屏上时任何定时器都不许收；只有抬手才判定收
+ * ────────────────────────────────────────────────────────────────── */
+__attribute__((used)) static const char AevonRingJumpPunchV218Marker[] = "AevonRingJumpPunchV218";
+__attribute__((used)) static const char AevonRingHitStableV218Marker[] = "AevonRingHitStableV218";
+__attribute__((used)) static const char AevonRingFingerDownV218Marker[] = "AevonRingFingerDownV218";
+__attribute__((used)) static const char AevonRingCloseOnLiftV218Marker[] = "AevonRingCloseOnLiftV218";

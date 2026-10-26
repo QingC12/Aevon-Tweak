@@ -341,7 +341,8 @@ static NSArray *AevonBuildFallback(id target) {
     id group1 = AevonNewGroup(@"Aevon 分屏",
                               @"所有功能只在本页开关，无需终端/SSH。"
                               @"用法：桌面右下角贴边向左拉、或全屏 App 右缘左滑 → 圆盘出来 → 手指不用抬起，"
-                              @"直接滑到图标上再松手就开浮窗；没落在图标 / 圆心上松手，圆盘立刻收起。"
+                              @"直接滑到图标上再松手就开浮窗。手指还按在屏幕上时圆盘永远不自己收（滑到盘外也不算）；"
+                              @"只有抬手那一刻才判定：图标上=开窗，圆心=打开面板，其余（盘外 / 图标间隙）=收起。"
                               @"桌面上只会有一个浮窗，再点别的 App 会直接换成它（AevonSingleWindowV105）。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
