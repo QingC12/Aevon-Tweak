@@ -1457,7 +1457,8 @@ enum AevonEdgeEntry {
             // 现在分两种情况：
             //   · 原指针还压着（正在旋转 / 拖动）→ 新手指只登记为「额外吞掉」，
             //     不驱动圆盘（圆盘同一时刻只认一根手指）；
-            //   · 原指针已抬起（KeepOpen 等待选择）→ 新触摸接管为当前指针，
+            //   · 原指针已抬起（0.2.17 起抬手即收盘，这条只剩「收盘动画那 0.18 秒」与
+            //     通道漏发 ended 的自愈两种情形）→ 新触摸接管为当前指针，
             //     可以继续点图标 / 点圆心 / 盘外松手收起。
             if let ring = AevonRingMenu.presented {
                 // V0.1.2（AevonRingFullSwallowV102）：圆盘展开期间 **整屏** 触摸一律归圆盘。
@@ -2394,7 +2395,8 @@ enum AevonEdgeEntry {
         if touchID == ringExtraTouchID {
             return CACurrentMediaTime() <= ringExtraDeadline
         }
-        // V0.0.29：圆盘展开期间重新登记的指针（KeepOpen 后点选 / 盘外松手收起的那根）。
+        // V0.0.29：圆盘展开期间重新登记的指针（旧版是 KeepOpen 后点选的那根；
+        // 0.2.17 起抬手即收盘，剩下的是「收盘动画的 0.18 秒」与通道漏发 ended 的自愈）。
         // 桌面也要吞 —— 下半屏在圆盘开着时不该点动桌面图标。
         if AevonRingMenu.isPresented, ringSource == "global",
            touchID == globalTouchID, CACurrentMediaTime() <= swallowDeadline {
