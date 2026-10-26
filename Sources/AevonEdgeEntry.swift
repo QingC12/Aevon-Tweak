@@ -1201,12 +1201,14 @@ enum AevonEdgeEntry {
     private static let floatDoubleTapGap: CFTimeInterval = 0.34
     private static let floatDoubleTapRadius: CGFloat = 26
 
-    /// V0.2.21（AevonFloatBarHoldV221）：边条长按拖动 —— 按住 0.3s 才开始移动。
-    /// 期间手指跑出 floatBarHoldRadius 视为误触，整段放弃（不吞不拖）。
+    /// V0.2.21（AevonFloatBarHoldV221）：边条长按拖动裁决机制。
+    /// V0.2.27（AevonFloatEdgeGripV227）：延迟归零 —— **落指即拖**（Aevon(1).(1) 用户定档：
+    /// 「手指放到热区中就触发手势」）。floatBarPending 只剩一个用途：
+    /// 无位移的轻点记双击候选（底边双击=关闭依赖它）。
     private static var floatBarPending = false
     private static var floatBarHoldPoint: CGPoint = .zero
     private static var floatBarHoldDeadline: CFTimeInterval = 0
-    private static let floatBarHoldDelay: CFTimeInterval = 0.3
+    private static let floatBarHoldDelay: CFTimeInterval = 0
     private static let floatBarHoldRadius: CGFloat = 18
 
     /// 浮窗手势是否正压着某根手指（供吞事件判断）
@@ -2163,12 +2165,12 @@ enum AevonEdgeEntry {
         floatDeadline = now + floatDragLimit
         switch hit.grab {
         case .bar:
-            // V0.2.21（AevonFloatBarHoldV221）：长按拖动 —— 先按住 0.3s 才算数，
-            // 期间手指跑出 18pt 视为误触，整段放弃。这里先不 grabBegin。
+            // V0.2.27（AevonFloatEdgeGripV227）：落指即拖（延迟 0）——
+            // 手指一动（首个 .moved）立即 grabBegin；原地不动 = 轻点，记双击候选。
             floatBarPending = true
             floatBarHoldPoint = point
             floatBarHoldDeadline = now + floatBarHoldDelay
-            AevonLog.info("[窗口] 全局通道按住边条，0.3s 后可拖动 \(Int(point.x)),\(Int(point.y))（AevonFloatBarHoldV221）")
+            AevonLog.info("[窗口] 全局通道按住边条，落指即拖 \(Int(point.x)),\(Int(point.y))（AevonFloatBarHoldV221 AevonFloatEdgeGripV227）")
         case .corner:
             hit.window.grabBegin(hit.grab, at: hit.layerPoint)
             AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
@@ -2189,17 +2191,17 @@ enum AevonEdgeEntry {
             clearFloatGesture()
             return false
         }
-        // V0.2.21（AevonFloatBarHoldV221）：边条长按期内的裁决
+        // V0.2.27（AevonFloatEdgeGripV227）：延迟=0，首个 .moved 立即接管。
         if floatBarPending {
             if now >= floatBarHoldDeadline {
-                // 按住满 0.3s → 从当前位置开始移动（原点=激活点，窗口不跳）
+                // 落指即拖：从当前位置开始移动（原点=激活点，窗口不跳）
                 floatBarPending = false
                 guard let grab = floatGrab, case .bar = grab else {
                     clearFloatGesture()
                     return false
                 }
                 win.grabBegin(grab, at: AevonEntryHost.floatLayerPoint(fromScreen: point))
-                AevonLog.info("[窗口] 长按达成 → 开始移动（全局通道）（AevonFloatBarHoldV221）")
+                AevonLog.info("[窗口] 落指即拖 → 开始移动（全局通道）（AevonFloatEdgeGripV227）")
             } else if hypot(point.x - floatBarHoldPoint.x,
                             point.y - floatBarHoldPoint.y) > floatBarHoldRadius {
                 // 按住未满 0.3s 就跑远 = 误触，整段放手（这根手指后续不再归我们）

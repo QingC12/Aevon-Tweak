@@ -99,7 +99,7 @@ final class AevonWindowView: UIView {
 
     /// 手势进行中（此时只允许改 transform，不允许改 frame）
     private var isLiveResizing = false
-    /// 边条长按拖动进行中（V0.2.21，AevonFloatBarLongPressV221）
+    /// 边条拖动进行中（V0.2.21 建；V0.2.27 起落指即拖，AevonFloatEdgeGripV227）
     private var isBarHoldMoving = false
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
@@ -145,14 +145,17 @@ final class AevonWindowView: UIView {
         sceneHost.onFirstContent = { [weak self] in
             DispatchQueue.main.async {
                 self?.hintLabel.isHidden = true
+                // V0.2.27（AevonFloatSnapCacheV227）：首帧到达后空闲预抓快照，
+                // 之后的缩放手势落指即用缓存图（零同步渲染）
+                self?.scheduleSnapshotRecapture()
             }
         }
 
         // V0.2.24（AevonFloatTopBarV223 退休）：顶部留白栏整体移除 —— Aevon(108) 实测
         // 它盖住内容造成显示异常。顶部不再有任何覆盖物。
 
-        // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.26 起 = Stheno 布置：
-        // 顶 / 底两条全宽边条 + 底部两角块，左右边条删除）
+        // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.27 起 = 左/右/底三条边条
+        // 落指即拖 + 底部两角块，顶边条删除）
         installOutsideGestureHandles(width: restored.width, height: restored.height)
 
         // V0.2.26（AevonPiPProbeV226）：真重排路线 P0 探测（只读，一次一进程）
@@ -162,9 +165,10 @@ final class AevonWindowView: UIView {
             + "（外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
             + "内容=整屏场景呈现（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
             + "真重排唯一通路=自建场景路线，P0 探测 AevonPiPProbeV226），"
-            + "手势区=Stheno 布置 顶/底全宽 30/44+压边10（AevonFloatWideGripV223"
-            + " AevonFloatGripOverlapV224 AevonFloatSthenoEdgeV226），"
-            + "缩放快照冻结（AevonFloatSnapResizeV226）全程圆角（AevonFloatRoundResizeV224），"
+            + "手势区=左/右/底全宽 30/44+压边10 落指即拖（AevonFloatWideGripV223"
+            + " AevonFloatGripOverlapV224 AevonFloatSthenoEdgeV226 AevonFloatEdgeGripV227，顶边条已删），"
+            + "缩放快照冻结+空闲预抓缓存（AevonFloatSnapResizeV226 AevonFloatSnapCacheV227）"
+            + "全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
@@ -297,31 +301,32 @@ final class AevonWindowView: UIView {
     ///
     /// V0.2.21（AevonFloat53V221）手势位：角块 + 边条；V0.2.24 压边 10pt。
     ///
-    /// V0.2.26（AevonFloatSthenoEdgeV226）：热区**布置**照抄 Stheno（Aevon(109) 调研定案）——
-    /// 其 GestureIntroduction 原文「手势区域为边缘外侧，竖屏上下横屏左右」：
-    /// 竖屏 = **顶 / 底两条全宽边条**（全宽最好瞄准，左右边条删除）+ 底部两角块
-    /// （Stheno 同款「边角滑动缩放」）。**手势功能保留我们自己的**：
-    /// 边条长按 0.3s = 移动、底边双击 = 关闭、角块 = 缩放（Stheno 的上滑关闭 /
-    /// 双点缩小 / 长按换向不引入）。
+    /// V0.2.26（AevonFloatSthenoEdgeV226）：热区布置照抄 Stheno —— 竖屏顶/底两条全宽边条。
+    ///
+    /// V0.2.27（AevonFloatEdgeGripV227）：Aevon(1).(1) 用户定档再改 ——
+    /// ① 顶边条**删除**（顶部不要任何手势）；② 左右两侧补回类似顶部的边条；
+    /// ③ 移动手势**落指即拖**：不再长按 0.3s，指尖在热区里一动窗口就跟着走
+    ///    （pan 识别器约 10pt 位移即 began，等效落指接管）。
+    /// 功能保留我们自己的：边条拖动 = 移动、底边双击 = 关闭、角块 = 缩放。
     private func installOutsideGestureHandles(width: CGFloat, height: CGFloat) {
         let b = AevonWindowView.barThickness
         let c = AevonWindowView.cornerSize
         let o = AevonWindowView.gripOverlap
         let handles: [(UIRectEdge, CGRect, UIView.AutoresizingMask)] = [
             // 两个下角块（缩放）：窗外 c + 向窗内压边 o。
-            // 角块与底边条的 frame **刻意不重叠**（底边条只铺两角块之间）：
-            // 角块后压在窗内边缘 o=10pt 上，边条补足其余全宽 ——
-            // 两类手柄在任意一点都只有一方命中，窗内手势与全局通道不会给出两种答案。
             ([.bottom, .left],  CGRect(x: -c, y: height - o, width: c + o, height: c + o),
              [.flexibleTopMargin]),
             ([.bottom, .right], CGRect(x: width - o, y: height - o, width: c + o, height: c + o),
              [.flexibleLeftMargin, .flexibleTopMargin]),
-            // 底边条（长按拖动移动 + 双击关闭）：全宽铺进两角块之间
+            // 底边条（落指即拖移动 + 双击关闭）：全宽铺进两角块之间
             ([.bottom],         CGRect(x: o, y: height - o, width: max(0, width - 2 * o), height: b + o),
              [.flexibleWidth, .flexibleTopMargin]),
-            // 顶边条（长按拖动移动）：全宽，Stheno 竖屏「上下」的另一条
-            ([.top],            CGRect(x: 0, y: -b, width: width, height: b + o),
-             [.flexibleWidth, .flexibleBottomMargin]),
+            // 左 / 右边条（落指即拖移动）：V0.2.27 新增（用户定档：顶部删除、左右补回）。
+            // 高度止于角块上缘（height - c），与角块不重叠。
+            ([.left],           CGRect(x: -b, y: 0, width: b + o, height: max(0, height - c)),
+             [.flexibleHeight]),
+            ([.right],          CGRect(x: width - o, y: 0, width: b + o, height: max(0, height - c)),
+             [.flexibleLeftMargin, .flexibleHeight]),
         ]
         for (edges, rect, mask) in handles {
             guard rect.width > 0, rect.height > 0 else { continue }
@@ -330,21 +335,14 @@ final class AevonWindowView: UIView {
             handle.backgroundColor = .clear
             if !mask.isEmpty { handle.autoresizingMask = mask }
             addSubview(handle)
-            if handle.isCorner {
-                // 角块 = 缩放：pan 直接跟手
-                let pan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
-                handle.addGestureRecognizer(pan)
-            } else {
-                // 边条 = 长按 0.3s 进入拖动（V0.2.21，AevonFloatBarLongPressV221）。
-                // allowableMovement 放宽到 60pt：按住期间手微微晃动不判失败。
-                let hold = UILongPressGestureRecognizer(target: self,
-                                                        action: #selector(handleOutsideHold(_:)))
-                hold.minimumPressDuration = 0.3
-                hold.allowableMovement = 60
-                handle.addGestureRecognizer(hold)
-            }
+            // V0.2.27（AevonFloatEdgeGripV227）：角块与边条统一走 pan ——
+            // 边条不再用 UILongPressGestureRecognizer（0.3s 长按版已退休，
+            // 标记 AevonFloatBarLongPressV221 收容在 AevonAssertionShim.m）。
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
+            handle.addGestureRecognizer(pan)
             if edges == .bottom {
-                // 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）
+                // 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）。
+                // 与落指即拖共存：pan 需要约 10pt 位移才 began，双击原地点两下不会触发拖动。
                 let doubleTap = UITapGestureRecognizer(target: self,
                                                        action: #selector(handleBottomDoubleTap(_:)))
                 doubleTap.numberOfTapsRequired = 2
@@ -353,17 +351,19 @@ final class AevonWindowView: UIView {
         }
     }
 
-    /// 外侧手势的统一入口：角块 → 缩放（边条的 pan 已撤，长按走 handleOutsideHold）。
+    /// 外侧手势的统一入口：角块 → 缩放；边条 → 落指即拖移动（V0.2.27）。
     @objc private func handleOutsidePan(_ gesture: UIPanGestureRecognizer) {
         guard let handle = gesture.view as? AevonEdgeHandleView else { return }
         if handle.isCorner {
             handleCornerResize(gesture, edges: handle.edges)
+        } else {
+            handleBarPan(gesture)
         }
     }
 
-    /// 边条长按拖动 = 移动窗口（V0.2.21，AevonFloatBarLongPressV221）。
-    /// 长按 0.3s 进入（.began），之后 .changed 连续跟手，与全局通道共用 applyBarMove。
-    @objc private func handleOutsideHold(_ gesture: UILongPressGestureRecognizer) {
+    /// 边条拖动 = 移动窗口（V0.2.27 落指即拖，AevonFloatEdgeGripV227）。
+    /// pan .began（约 10pt 位移）即接管，之后 .changed 连续跟手，与全局通道共用 applyBarMove。
+    @objc private func handleBarPan(_ gesture: UIPanGestureRecognizer) {
         guard let superview = superview else { return }
         let point = gesture.location(in: superview)
         switch gesture.state {
@@ -371,7 +371,7 @@ final class AevonWindowView: UIView {
             isBarHoldMoving = true
             moveOriginFrame = frame
             moveOriginPoint = point
-            AevonLog.info("[窗口] 长按进入移动（AevonFloatBarLongPressV221）")
+            AevonLog.info("[窗口] 边条落指即拖 → 移动（AevonFloatEdgeGripV227）")
         case .changed:
             guard isBarHoldMoving else { break }
             applyBarMove(to: point)
@@ -596,19 +596,21 @@ final class AevonWindowView: UIView {
         layer.position = fixed
     }
 
-    // MARK: - 缩放快照冻结（V0.2.26，AevonFloatSnapResizeV226）
+    // MARK: - 缩放快照冻结（V0.2.26，AevonFloatSnapResizeV226；V0.2.27 缓存化 AevonFloatSnapCacheV227）
 
     private var resizeSnapshotView: UIImageView?
+    /// 空闲时预抓的内容快照（V0.2.27，AevonFloatSnapCacheV227）
+    private var cachedSnapshotImage: UIImage?
+    private var snapshotRecaptureWork: DispatchWorkItem?
 
-    /// 把内容区当前画面冻结成静态图盖在最上层。**不隐藏实时内容** ——
-    /// 若远程图层渲染进上下文失败（跨进程表面不保证可抓），快照就是透明的，
-    /// 底下实时内容照常显示，行为退回 0.2.25 而不会黑屏（结构性兜底）。
-    private func installResizeSnapshot() {
-        guard resizeSnapshotView == nil else { return }
+    /// 抓一帧内容区当前画面，并校验非空（远程表面抓取可能得到全透明图 —— 4×4 采样 alpha）。
+    /// 只在空闲路径调用；缩放手势 .began 上绝不做同步渲染。
+    private func captureSnapshotImage() -> UIImage? {
         let bounds = contentClip.bounds
-        guard bounds.width > 1, bounds.height > 1 else { return }
+        guard bounds.width > 1, bounds.height > 1, !isLiveResizing else { return nil }
         var image: UIImage?
-        let exception = AevonShieldRun {
+        let exception = AevonShieldRun { [weak self] in
+            guard let self else { return }
             let format = UIGraphicsImageRendererFormat()
             format.scale = self.contentClip.layer.contentsScale
             let renderer = UIGraphicsImageRenderer(size: bounds.size, format: format)
@@ -616,7 +618,49 @@ final class AevonWindowView: UIView {
                 self.contentClip.layer.render(in: ctx.cgContext)
             }
         }
-        guard exception == nil, let image, image.size.width > 1 else { return }
+        guard exception == nil, let image, image.size.width > 1, let cg = image.cgImage else { return nil }
+        // 有效性校验：缩到 4×4 读 alpha，全透明 = 抓取失败（返回 nil，调用方走兜底）
+        var pixels = [UInt8](repeating: 0, count: 4 * 4 * 4)
+        if let ctx = CGContext(data: &pixels, width: 4, height: 4, bitsPerComponent: 8,
+                               bytesPerRow: 4 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.interpolationQuality = .low
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 4, height: 4))
+            var maxAlpha: UInt8 = 0
+            for i in stride(from: 3, to: pixels.count, by: 4) { maxAlpha = max(maxAlpha, pixels[i]) }
+            if maxAlpha <= 8 { return nil }
+        }
+        return image
+    }
+
+    /// 空闲时预抓快照进缓存（窗口创建后首帧、每次缩放提交后各一次）。
+    private func scheduleSnapshotRecapture(after delay: TimeInterval = 0.6) {
+        snapshotRecaptureWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isLiveResizing, !self.isBarHoldMoving,
+                  self.hintLabel.isHidden else { return }
+            self.cachedSnapshotImage = self.captureSnapshotImage()
+        }
+        snapshotRecaptureWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// 缩放开始时把当前画面冻结成静态图盖在最上层。
+    ///
+    /// V0.2.27（AevonFloatSnapCacheV227）：0.2.26 的两处残余卡顿都在这里修 ——
+    /// ① 手势 .began 上同步 layer.render 整屏 430×932@3x（主线程几百毫秒的起手顿挫）
+    ///    → 改为**空闲时预抓进缓存**，落指时直接用图，零同步渲染；
+    /// ② 快照盖在上面但 contentClip（远程大表面 + 圆角掩膜）仍在逐帧合成，GPU 没省
+    ///    → 快照有效时**隐藏 contentClip**，逐帧合成从远程大表面降为一张本地小图。
+    /// 兜底：缓存未就绪才现场抓一帧（0.2.26 行为）；抓不到（全透明/异常）→ 不盖快照
+    /// 也不隐藏实时内容，行为退回 0.2.25，绝不黑屏。
+    private func installResizeSnapshot() {
+        guard resizeSnapshotView == nil else { return }
+        let bounds = contentClip.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        var image = cachedSnapshotImage
+        if image == nil { image = captureSnapshotImage() }
+        guard let image else { return }
         let snapshot = UIImageView(image: image)
         snapshot.frame = contentClip.frame
         snapshot.contentMode = .scaleToFill
@@ -626,9 +670,11 @@ final class AevonWindowView: UIView {
         snapshot.isUserInteractionEnabled = false
         addSubview(snapshot)
         resizeSnapshotView = snapshot
+        contentClip.isHidden = true
     }
 
     private func removeResizeSnapshot() {
+        contentClip.isHidden = false
         resizeSnapshotView?.removeFromSuperview()
         resizeSnapshotView = nil
     }
@@ -662,6 +708,9 @@ final class AevonWindowView: UIView {
         frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
         setNeedsLayout()
         persistFrame()
+        // V0.2.27（AevonFloatSnapCacheV227）：尺寸已提交，旧快照作废，空闲后重抓
+        cachedSnapshotImage = nil
+        scheduleSnapshotRecapture(after: 0.8)
         AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（AevonEdgeResizeV37）")
     }
 

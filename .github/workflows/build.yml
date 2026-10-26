@@ -1786,10 +1786,11 @@ jobs:
             || { echo "::error::内容区比例不是 3:5 竖窗（5:3 = 高5:宽3，Aevon(106) 纠偏）"; exit 1; }
           grep -q 'applyContentLayout' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::内容必须 App 场景原生布局（AevonFloatSceneLayoutV224）"; exit 1; }
-          grep -q 'minimumPressDuration = 0.3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::边条长按 0.3s 拖动未实现"; exit 1; }
-          grep -q 'floatBarHoldDelay: CFTimeInterval = 0.3' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            || { echo "::error::全局通道边条长按裁决未实现"; exit 1; }
+          # V0.2.27 反转（AevonFloatEdgeGripV227）：落指即拖取代长按 0.3s —— 不许回潮
+          grep -q 'minimumPressDuration' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::边条长按不许回潮（0.2.27 落指即拖，AevonFloatEdgeGripV227）"; exit 1; }
+          grep -q 'floatBarHoldDelay: CFTimeInterval = 0$' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::全局通道边条必须落指即拖（延迟=0，AevonFloatEdgeGripV227）"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'restoreDefaultFrame' \
             && { echo "::error::顶部双击恢复默认不应回潮（0.2.21 已移除）"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q '\[\.top,' \
@@ -1861,15 +1862,31 @@ jobs:
           done
           grep -q 'static let barThickness: CGFloat = 30' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::边条厚度必须 30（Stheno edgeWidth 默认值，AevonFloatSthenoEdgeV226）"; exit 1; }
+          # V0.2.27 反转：顶边条删除、左右边条补回（用户定档，AevonFloatEdgeGripV227）
           grep -qF 'y: -b, width: width, height: b + o' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::顶边条缺失（Stheno 竖屏=上下两条全宽边条，AevonFloatSthenoEdgeV226）"; exit 1; }
+            && { echo "::error::顶边条不许回潮（0.2.27 用户定档删除顶部手势）"; exit 1; }
           grep -q 'CGRect(x: -b, y: 0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            && { echo "::error::左边条不许回潮（Stheno 竖屏布置已删左右边条）"; exit 1; }
+            || { echo "::error::左边条缺失（0.2.27 左右补回，AevonFloatEdgeGripV227）"; exit 1; }
+          grep -q 'CGRect(x: width - o, y: 0, width: b + o' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::右边条缺失（0.2.27 左右补回，AevonFloatEdgeGripV227）"; exit 1; }
           grep -q 'installResizeSnapshot' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::缩放快照冻结缺失（AevonFloatSnapResizeV226）"; exit 1; }
           grep -q '_createSceneWithDefinition:settings:' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::P0 场景路线探测缺失（AevonPiPProbeV226）"; exit 1; }
           echo "V0.2.26 校验: Stheno 手势布置 + 快照冻结 + P0 探测 已就位"
+
+          # ---- V0.2.27（Aevon(1).(1)）：顶删左右补 + 落指即拖 + 快照预抓缓存
+          for s in AevonFloatEdgeGripV227 AevonFloatSnapCacheV227; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::浮窗 0.2.27 缺标记 $s"; exit 1; }
+          done
+          grep -q 'cachedSnapshotImage' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::快照预抓缓存缺失（AevonFloatSnapCacheV227）"; exit 1; }
+          grep -q 'contentClip.isHidden = true' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::缩放期间必须隐藏实时远程表面（AevonFloatSnapCacheV227）"; exit 1; }
+          grep -q 'handleBarPan' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::边条落指即拖缺失（AevonFloatEdgeGripV227）"; exit 1; }
+          echo "V0.2.27 校验: 左右底落指即拖 + 顶边条删除 + 快照预抓缓存 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
