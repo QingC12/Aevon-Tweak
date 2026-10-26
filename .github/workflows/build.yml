@@ -1482,7 +1482,7 @@ jobs:
           grep -q 'AevonSwallowOnRingV214' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::V0.2.14 标记缺失 —— 热区吞摸时机没改回「呼盘之后」"; exit 1; }
           # 热区 App 前台分支必须是「观察」：began 之后 ownsTouch 不许为 true
-          python3 -c "import re,sys; s=open('Sources/AevonEdgeEntry.swift',encoding='utf-8').read(); m=re.search(r'globalFired = false\n\s+lastTouchPoint = point\n\s+lastTouchAt = CACurrentMediaTime\(\)\n\s+ownsTouch = (true|false)', s); sys.exit(0 if (m and m.group(1)=='false') else 1)" \
+          python3 -c "import os,re,sys; s=open(os.environ['GITHUB_WORKSPACE']+'/Sources/AevonEdgeEntry.swift',encoding='utf-8').read(); m=re.search(r'globalFired = false\n\s+lastTouchPoint = point\n\s+lastTouchAt = CACurrentMediaTime\(\)\n\s+ownsTouch = (true|false)', s); sys.exit(0 if (m and m.group(1)=='false') else 1)" \
             || { echo "::error::热区又开始「按下即接管」—— 底部/顶部系统手势会被一起吞掉"; exit 1; }
           # 呼盘时才开吞，且必须有时限闸（0.6s 内的手指才算活着，UITouch 指针会复用）
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
