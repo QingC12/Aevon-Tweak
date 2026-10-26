@@ -1736,8 +1736,12 @@ jobs:
           if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | grep -q '开关未打开'; then
             echo "::error::带外落点又提示「开关未打开」了（RightEdgeTakeover 0.2.17 已从设置页撤掉）"; exit 1
           fi
-          grep -q '带外·不在热区' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            || { echo "::error::带外落点没有改成如实的「不在热区」自述（AevonMissReasonV219）"; exit 1; }
+          # 带外自述必须保留「宽度差 / 高度差 + 需要多大」（V0.1.18 的历史要求），
+          # 并在末尾带结论与标记 —— 这两条一起才算「说清了为什么落空」。
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | grep -q '带外·宽度差' \
+            || { echo "::error::带外落点不再说明需要多宽（V0.1.18 的历史要求）"; exit 1; }
+          grep -q 'AevonMissReasonV219' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::带外落点没有带上结论标记（AevonMissReasonV219）"; exit 1; }
           if grep -q '起手应在 App 侧带内' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
             echo "::error::收养手指的日志又断言「起手应在带内」（带外的呼盘也会打这一行，纯误导）"; exit 1
           fi

@@ -203,12 +203,12 @@ enum AevonRightEdge {
         let widthShort = point.x < r.minX
         let heightShort = point.y < r.minY
         if widthShort, heightShort {
-            return "带外·不在热区（距右缘 \(gap)pt 需带宽 ≥\(needWidth)pt，y=\(Int(point.y)) 需带高 ≥\(needPercent)%；当前 \(Int(width))pt×\(heightPercent)%）→ 整段交回 App（AevonMissReasonV219）"
+            return "带外·宽度和高度都差（距右缘 \(gap)pt 需带宽 ≥\(needWidth)pt，y=\(Int(point.y)) 需带高 ≥\(needPercent)%；当前 \(Int(width))pt×\(heightPercent)%）→ 整段交回 App（AevonMissReasonV219）"
         }
         if widthShort {
-            return "带外·不在热区（距右缘 \(gap)pt，需带宽 ≥\(needWidth)pt，当前 \(Int(width))pt）→ 整段交回 App（AevonMissReasonV219）"
+            return "带外·宽度差（距右缘 \(gap)pt，需带宽 ≥\(needWidth)pt，当前 \(Int(width))pt）→ 整段交回 App（AevonMissReasonV219）"
         }
-        return "带外·不在热区（y=\(Int(point.y)) 在带顶 y=\(Int(r.minY)) 之上，需带高 ≥\(needPercent)%，当前 \(Int(heightPercent))%）→ 整段交回 App（AevonMissReasonV219）"
+        return "带外·高度差（y=\(Int(point.y)) 在带顶 y=\(Int(r.minY)) 之上，需带高 ≥\(needPercent)%，当前 \(Int(heightPercent))%）→ 整段交回 App（AevonMissReasonV219）"
     }
 
     static func signature() -> String {
