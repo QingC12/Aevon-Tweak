@@ -1211,8 +1211,13 @@ jobs:
             || { echo "::error::presentRing 没把 ringSource 统一成 global —— appedge 呼盘吞事件/续期全部失效"; exit 1; }
           grep -q 'AevonAppMountRetryV207' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧挂载重试标记被删 —— 冷启动 App 全盲（QQ 两次操作根因）"; exit 1; }
-          grep -q 'attempt < 40' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::挂载重试上限回退 —— 必须 0.5s×40 次盖住冷启动窗口"; exit 1; }
+          # V0.2.10（AevonAppMountFastV210）：窗口从 0.5s×40（20 秒）改成 0.2s×80（16 秒）——
+          # 总时长只少 4 秒，但**第一次可用时刻**从 0.5 秒提前到 0.2 秒，重复 80 次足够盖住冷启动。
+          # 这两条一起查：只改间隔不改次数会让总窗口缩水，只改次数不改间隔等于白等。
+          grep -q 'attempt < 80' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::挂载重试上限回退 —— 必须 0.2s×80 次（16 秒窗口）盖住冷启动窗口"; exit 1; }
+          grep -q '0.2 \* NSEC_PER_SEC' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::挂载重试间隔回退到 0.5s —— 冷启动盲期又被拉回去"; exit 1; }
           grep -q 'AevonAppBlindDiagV207' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::盲区诊断被删 —— global 兜底呼盘无法归因到具体 App"; exit 1; }
           grep -q 'currentForegroundBundleID' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \

@@ -505,6 +505,9 @@ enum AevonEdgeEntry {
         // 再守下去等于把「App 前台呼盘」整个功能关死（那是用户的选择，不是故障）。
         guard AevonPrefs.bool("AppSideEnabled", default: true) else { return false }
         guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
+        // 浮窗开着时前台 bundleID 是浮窗里那个 App，但触摸归桌面通道处理（浮窗落点直通），
+        // 拿它的在场状态去守门会误伤桌面热区 —— 这条路径不参与盲期判定。
+        guard AevonWindowManager.openBundleID == nil else { return false }
         let bundle = AevonEntryHost.currentForegroundBundleID
         guard !bundle.isEmpty else { return false }
         let now = CACurrentMediaTime()
