@@ -610,10 +610,10 @@ final class AevonWindowView: UIView {
         var image: UIImage?
         let exception = AevonShieldRun {
             let format = UIGraphicsImageRendererFormat()
-            format.scale = contentClip.layer.contentsScale
+            format.scale = self.contentClip.layer.contentsScale
             let renderer = UIGraphicsImageRenderer(size: bounds.size, format: format)
             image = renderer.image { ctx in
-                contentClip.layer.render(in: ctx.cgContext)
+                self.contentClip.layer.render(in: ctx.cgContext)
             }
         }
         guard exception == nil, let image, image.size.width > 1 else { return }
