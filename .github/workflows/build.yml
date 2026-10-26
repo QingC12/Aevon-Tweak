@@ -629,9 +629,16 @@ jobs:
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::V0.1.18 标记 $s 未编入"; exit 1; }
           done
-          # 滑条下限必须是 24：8~23 属于「设了也必然落空」的区间，不许再出现在面板上
-          grep -q '<integer>24</integer>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
-            || { echo "::error::Detail.plist 右缘宽度下限不是 24"; exit 1; }
+          # 滑条下限的**纪律升级**（V0.2.11 / Aevon(97)，不是放宽）：
+          # 0.1.18 把下限钉在 24，理由是「8~23 属于设了也必然落空的区间」。但用户 Aevon(97)
+          # 明确要求「可以随意更改，无法继续降低高度」—— 默认值该守纪律，滑条不该。
+          # 所以这一条从「下限必须是 24」升级为：
+          #   ① 下限必须是 8（想更贴边就得能调下去）；
+          #   ② 默认值必须仍是 46（老用户升级后手感不变，不许被顺手改小）。
+          grep -q '<integer>8</integer>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 右缘宽度下限不是 8（用户要求可继续降低）"; exit 1; }
+          grep -q '<integer>46</integer>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 右缘宽度默认值不是 46（默认值不该跟着区间一起改）"; exit 1; }
           # 带外落点必须自己说清原因（宽度差 / 高度差 + 需要多大），不能再是一句「本版不干预」
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q '带外·宽度' \
@@ -1318,6 +1325,46 @@ jobs:
           INFO_COUNT2="$(grep -c 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
           [ "$INFO_COUNT2" -ge 11 ] || { echo "::error::Root.plist 的开关说明不足 11 条（实际 $INFO_COUNT2）"; exit 1; }
           echo "V0.2.10 校验: 盲期守门 + appready + 挂载提速 + ⓘ 移到名字后 + 心圆底盘 + 面板毛玻璃 + 区域实时预览 已就位"
+
+          # ---- V0.2.11（Aevon(97) 判读）：ⓘ 首次压字 + 区间放开 + 关盘后 App 划不动 + 心圆压图标 ----
+          grep -q 'AevonPrefsInfoFitV211' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::ⓘ 定位没有走 AevonPlaceInfoButton —— 首次进入会再压一次字"; exit 1; }
+          grep -q 'AevonPlaceInfoButton' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::ⓘ 几何函数 AevonPlaceInfoButton 丢失"; exit 1; }
+          grep -q 'AevonInfoFindSwitch' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::ⓘ 不再按真实 UISwitch 边界夹紧 —— 又会退化成猜开关宽度"; exit 1; }
+          grep -q 'layoutIfNeeded' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::ⓘ 定位前没有 layoutIfNeeded —— 首次进入拿不到真实 frame"; exit 1; }
+          grep -q 'AevonBandRangeFreeV211' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::接管带区间又写死后收窄（Aevon(97)：滑条拖到底就不动）"; exit 1; }
+          grep -q 'static let minWidth: Double = 8' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::接管带宽度下限不是 8pt"; exit 1; }
+          grep -q 'static let minHeightPercent: Double = 6' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::接管带高度下限不是 6%"; exit 1; }
+          grep -q '<integer>8</integer>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 接管带宽度滑条下限没放开"; exit 1; }
+          grep -q '<integer>6</integer>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 接管带高度滑条下限没放开"; exit 1; }
+          grep -q 'AevonAppReleaseCleanV211' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧又把手势在触摸未结束时就 .ended 掉（关圆盘后 App 划不动的根因）"; exit 1; }
+          grep -q 'AevonAppRingCloseReleaseV211' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧没有监听 ringclose 收尾 —— 圆盘收起后识别器可能仍压着滚动"; exit 1; }
+          grep -q 'AevonAppNoBlockIdleV211' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::失败要求又变成只看几何、不看手里有没有触摸"; exit 1; }
+          grep -q 'self.numberOfTouches == 0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::失败要求缺「手里没触摸就不压别人」的门"; exit 1; }
+          grep -q 'AevonRingGlyphTopV211' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::圆心四宫格没有独立成层 —— 会被蓝色渐变盖住"; exit 1; }
+          grep -q 'AevonRingHubFitV211' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::心圆底盘没按内圈半径反算 —— 92pt 会压到内圈图标"; exit 1; }
+          grep -q 'centerGlyph' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::centerGlyph 图标层被删"; exit 1; }
+          for s in AevonPrefsInfoFitV211 AevonBandRangeFreeV211 AevonAppReleaseCleanV211 \
+                   AevonAppRingCloseReleaseV211 AevonAppNoBlockIdleV211 AevonRingGlyphTopV211 AevonRingHubFitV211; do
+            grep -q "$s" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+              || { echo "::error::V211 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
+          done
+          echo "V0.2.11 校验: ⓘ 首次不压字 + 带区间 8~140pt/6~100% + 成立后保持在场直到抬手 + ringclose 收尾 + 心圆不压图标 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

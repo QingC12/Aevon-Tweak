@@ -154,6 +154,14 @@ final class AevonRingMenu: UIView {
     private let hubPlate = UIView()
     private let hubInner = UIView()
     private let centerGradient = CAGradientLayer()
+    // V0.2.11（AevonRingGlyphTopV211）：四宫格「应用选择」图标单独一层。
+    //
+    // 用户 Aevon(97) 第四条：「圆盘中心的应用选择图标不要被蓝色层覆盖」。
+    // 0.2.10 把圆心底色从 backgroundColor 换成了插在 layer 第 0 位的 CAGradientLayer ——
+    // 于是这个图标能不能看见，取决于 UIKit 给 UIButton 的 imageView 排在第几层，
+    // 那是实现细节，不该由它决定。现在图标是**独立视图**，层级比按钮高一级（zPosition 3），
+    // 蓝层再怎么插都盖不住它。
+    private let centerGlyph = UIImageView()
 
     private var icons: [AevonRingIcon] = []
     private var iconRadii: [CGFloat] = []
@@ -236,12 +244,14 @@ final class AevonRingMenu: UIView {
         hubPlate.backgroundColor = UIColor(white: 1.0, alpha: 0.07)
         hubPlate.layer.borderWidth = 1.0
         hubPlate.layer.borderColor = UIColor(white: 1.0, alpha: 0.13).cgColor
+        hubPlate.layer.zPosition = 0
         addSubview(hubPlate)
 
         hubInner.isUserInteractionEnabled = false
         hubInner.backgroundColor = UIColor(white: 1.0, alpha: 0.05)
         hubInner.layer.borderWidth = 1.0
         hubInner.layer.borderColor = UIColor(white: 1.0, alpha: 0.10).cgColor
+        hubInner.layer.zPosition = 0
         addSubview(hubInner)
 
         // V0.0.25：圆心只留四宫格图标，不再有任何文字
@@ -265,10 +275,12 @@ final class AevonRingMenu: UIView {
         centerButton.layer.shadowRadius = 12
         centerButton.layer.shadowOffset = CGSize(width: 0, height: 3)
         // 圆心图标：四宫格（表示「应用列表 / 面板」）
+        // V0.2.11（AevonRingGlyphTopV211）：图标不再挂在按钮上（UIButton 的 imageView 层级
+        // 由 UIKit 决定，蓝色渐变一插入就可能压住它）—— 改成独立视图，zPosition 最高。
         let symbolConfig = UIImage.SymbolConfiguration(pointSize: 21, weight: .semibold)
         if let symbol = UIImage(systemName: "square.grid.2x2.fill", withConfiguration: symbolConfig) {
-            centerButton.setImage(symbol, for: .normal)
-            centerButton.tintColor = .white
+            centerGlyph.image = symbol
+            centerGlyph.tintColor = .white
         } else {
             centerButton.setTitle("A", for: .normal)
             centerButton.setTitleColor(.white, for: .normal)
@@ -276,7 +288,14 @@ final class AevonRingMenu: UIView {
         }
         // 圆心不接收触摸：由几何判定处理，避免和旋转手势冲突
         centerButton.isUserInteractionEnabled = false
+        centerButton.layer.zPosition = 2
         addSubview(centerButton)
+
+        // 图标层压在最上面：蓝色渐变 / 底盘 / 高亮环都在它下面，怎么插都盖不住
+        centerGlyph.isUserInteractionEnabled = false
+        centerGlyph.contentMode = .scaleAspectFit
+        centerGlyph.layer.zPosition = 3
+        addSubview(centerGlyph)
     }
 
     required init?(coder: NSCoder) {
@@ -297,15 +316,34 @@ final class AevonRingMenu: UIView {
 
         centerButton.center = ringCenter
         centerGradient.frame = centerButton.bounds
+        layoutHub()
+    }
 
-        // V0.2.10（AevonRingHubV210）：两层底盘跟着圆心走，尺寸固定（92 / 70），
-        // 内层离圆心按钮留 11pt，外层离内圈轨道（62pt 半径）留 4pt —— 视觉上「贴着内圈」。
-        hubPlate.bounds = CGRect(x: 0, y: 0, width: 92, height: 92)
+    /// V0.2.11（AevonRingHubFitV211）：心圆底盘 + 四宫格图标的尺寸与位置。
+    ///
+    /// 0.2.10 把底盘写死成 92 / 70 —— 92 的半径 46 比「内圈半径 62 − 图标半宽 19 = 43」
+    /// 还大 3pt，于是底盘边缘必然压在内圈图标的内侧边上（用户 Aevon(97) 看到的
+    /// 「中心图标被盖住」）。现在按**实际内圈半径和本圈图标尺寸**反算：
+    ///   底盘半径 = min(46, 内圈半径 − 图标半宽 − 5)，至少 35；
+    ///   内层半径 = 底盘半径 − 6，至少 30。
+    /// 一圈布局（内圈半径更大）时自动放大，多圈挤压时自动缩小，永远不与图标相交。
+    private func layoutHub() {
+        let innerRadius = ringRadii.first ?? 62
+        let iconHalf = (icons.first.map { $0.bounds.width } ?? AevonRingMenu.iconSize) / 2
+        let plateRadius = min(46, max(35, innerRadius - iconHalf - 5))
+        let innerHole = max(30, plateRadius - 6)
+
+        hubPlate.bounds = CGRect(x: 0, y: 0, width: plateRadius * 2, height: plateRadius * 2)
         hubPlate.center = ringCenter
-        hubPlate.layer.cornerRadius = 46
-        hubInner.bounds = CGRect(x: 0, y: 0, width: 70, height: 70)
+        hubPlate.layer.cornerRadius = plateRadius
+
+        hubInner.bounds = CGRect(x: 0, y: 0, width: innerHole * 2, height: innerHole * 2)
         hubInner.center = ringCenter
-        hubInner.layer.cornerRadius = 35
+        hubInner.layer.cornerRadius = innerHole
+
+        let glyphSide: CGFloat = 22
+        centerGlyph.frame = CGRect(x: 0, y: 0, width: glyphSide, height: glyphSide)
+        centerGlyph.center = ringCenter
     }
 
     /// 圆的可用最大半径：不超出左右边界，也不顶到状态栏 / 底部
@@ -411,6 +449,8 @@ final class AevonRingMenu: UIView {
                 cursor += 1
                 let name = AevonWindowManager.title(for: bundleID)
                 let icon = AevonRingIcon(bundleID: bundleID, name: name, size: iconSize)
+                // V0.2.11（AevonRingGlyphTopV211）：图标层级固定 1（底盘 0 / 蓝层按钮 2 / 四宫格 3）
+                icon.layer.zPosition = 1
                 addSubview(icon)
                 icons.append(icon)
                 iconRadii.append(radius)
@@ -420,11 +460,14 @@ final class AevonRingMenu: UIView {
 
         drawRingTracks()
         layoutIcons()
+        // 图标与半径都就位了，按真实几何重算心圆底盘（不能放在 computeGeometry 里 ——
+        // 那一刻 ringRadii / icons 还是空的，会算成默认 62/40）
+        layoutHub()
 
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35 AevonRingGlyphTopV211 AevonRingHubFitV211）")
     }
 
     private func drawRingTracks() {
@@ -503,6 +546,8 @@ final class AevonRingMenu: UIView {
         trackLayer.opacity = 0
         centerButton.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
         centerButton.alpha = 0
+        centerGlyph.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
+        centerGlyph.alpha = 0
         // V0.2.10（AevonRingHubV210）：底盘比按钮早一点淡入、放大到位，视觉上「按钮从盘里长出来」
         hubPlate.alpha = 0
         hubInner.alpha = 0
@@ -513,6 +558,8 @@ final class AevonRingMenu: UIView {
             self.dimView.alpha = 1
             self.centerButton.alpha = 1
             self.centerButton.transform = .identity
+            self.centerGlyph.alpha = 1
+            self.centerGlyph.transform = .identity
         })
         UIView.animate(withDuration: 0.26, delay: 0.02, options: [.curveEaseOut], animations: {
             self.hubPlate.alpha = 1
@@ -574,6 +621,7 @@ final class AevonRingMenu: UIView {
         UIView.animate(withDuration: 0.18, animations: {
             self.alpha = 0
             self.centerButton.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
+            self.centerGlyph.alpha = 0
             self.hubPlate.alpha = 0
             self.hubInner.alpha = 0
         }, completion: { _ in
@@ -807,9 +855,10 @@ final class AevonRingMenu: UIView {
         let config = UIImage.SymbolConfiguration(pointSize: 21, weight: .semibold)
         let name = rotating ? "arrow.triangle.2.circlepath" : "square.grid.2x2.fill"
         if let symbol = UIImage(systemName: name, withConfiguration: config) {
-            centerButton.setImage(symbol, for: .normal)
+            // V0.2.11（AevonRingGlyphTopV211）：换的是独立图标层，不是按钮的 image
+            centerGlyph.image = symbol
         }
-        centerButton.tintColor = .white
+        centerGlyph.tintColor = .white
         // V0.2.10（AevonRingHubV210）：底色改由渐变层承担，这里换的是渐变的两个端点。
         let top = rotating
             ? UIColor(red: 0.26, green: 0.88, blue: 0.74, alpha: 0.98)

@@ -128,17 +128,17 @@
 			<key>label</key>
 			<string>接管带宽度（pt）</string>
 			<key>minValue</key>
-			<integer>24</integer>
+			<integer>8</integer>
 			<key>maxValue</key>
-			<integer>46</integer>
+			<integer>140</integer>
 			<key>min</key>
-			<integer>24</integer>
+			<integer>8</integer>
 			<key>max</key>
-			<integer>46</integer>
+			<integer>140</integer>
 			<key>default</key>
 			<integer>46</integer>
 			<key>footerText</key>
-			<string>默认 46（最大）。你实测的四个落点距右缘 12 / 19 / 25 / 42pt —— 46pt 能盖住其中 3 个；调到 24~32 可以保住抖音右侧的点赞 / 评论 / 收藏按钮，代价是起手必须更贴边。拖动时橙色框跟着变宽。</string>
+			<string>可调范围 8 ~ 140pt，默认 46。取 8 = 只认最贴边的 8pt（最不容易误触，要求起手非常贴边）；取 30 左右可以保住抖音右侧的点赞 / 评论 / 收藏按钮；取 46 以上命中率最高。你实测的四个落点距右缘 12 / 19 / 25 / 42pt，46pt 能盖住其中 3 个。拖动时橙色框实时变宽变窄。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -148,17 +148,17 @@
 			<key>label</key>
 			<string>接管带高度（屏高 %）</string>
 			<key>minValue</key>
-			<integer>40</integer>
+			<integer>6</integer>
 			<key>maxValue</key>
 			<integer>100</integer>
 			<key>min</key>
-			<integer>40</integer>
+			<integer>6</integer>
 			<key>max</key>
 			<integer>100</integer>
 			<key>default</key>
 			<integer>60</integer>
 			<key>footerText</key>
-			<string>默认 60 = 只覆盖下半屏（从屏高 40% 到底部），上半屏右侧完全不受影响。拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。拖动时橙色框的上边界跟着升降。急救：三根手指同时按下 = 立刻释放全部接管并关掉接管带。</string>
+			<string>可调范围 6% ~ 100%，默认 60（= 只覆盖下半屏，从屏高 40% 到底部，上半屏右侧完全不受影响）。6% ≈ 底部 56pt 的右下角一小块，最不容易误触；拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。拖动时橙色框的上边界实时升降。急救：三根手指同时按下 = 立刻释放全部接管并关掉接管带。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

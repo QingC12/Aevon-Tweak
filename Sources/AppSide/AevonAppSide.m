@@ -111,6 +111,10 @@ __attribute__((used)) static const char AevonAppMountRetryV207Marker[] = "AevonA
 /* V0.2.10 盲期（Aevon(96) 抖音第 8 次：App 侧未挂载时 SB 照旧呼盘 → App 跟着滚） */
 __attribute__((used)) static const char AevonAppReadyV210Marker[] = "AevonAppReadyV210";
 __attribute__((used)) static const char AevonAppMountFastV210Marker[] = "AevonAppMountFastV210";
+/* V0.2.11 手势环境归还（Aevon(97)：关圆盘后全屏 App 划不动，必须切应用才恢复） */
+__attribute__((used)) static const char AevonAppReleaseCleanV211Marker[] = "AevonAppReleaseCleanV211";
+__attribute__((used)) static const char AevonAppRingCloseReleaseV211Marker[] = "AevonAppRingCloseReleaseV211";
+__attribute__((used)) static const char AevonAppNoBlockIdleV211Marker[] = "AevonAppNoBlockIdleV211";
 
 #pragma mark - 日志
 
@@ -386,6 +390,19 @@ static void AevonAppPostReady(void) {
 @property (nonatomic, assign) BOOL claimed;         /* 是否真的扣过 began（日志用） */
 @property (nonatomic, assign) BOOL sawMoved;        /* 是否收到过首帧移动（V0.2.3 取证） */
 @property (nonatomic, assign) int moveFrames;       /* 收到过几帧移动（V0.2.5 两帧确认） */
+/* V0.2.11（AevonAppReleaseCleanV211）：判向成立之后，本识别器是否**仍在场**。
+ * 以前成立时会连写 .began → .ended，手指还按在屏幕上就把手势「结束」掉；
+ * 那一次结束是假的（触摸序列还活着），UIKit 的取消/归还记账没有对称收尾，
+ * 表现就是 Aevon(97) 说的「关掉圆盘后全屏 App 划不动，切一下应用才恢复」。
+ * 现在成立只走 .began，之后一直保持到真正抬手 / 真正被取消。 */
+@property (nonatomic, assign) BOOL successActive;
+/* 成立之后如果 6 秒仍没等到抬手（已知的「序列在系统层断流」），强制收尾。
+ * 取 6 秒而不是 1.5 秒：圆盘是**可以长时间按着转**的，正常持有不能被自愈打断；
+ * 6 秒已经远超一次真实呼盘 + 选图标的全过程，只在投递层真断流时才会响。 */
+@property (nonatomic, assign) NSInteger releaseToken;
+/* V0.2.11：成立后保持在场 / 圆盘收起时强制收尾（声明在这里，跨类调用才不会退化成隐式 id） */
+- (void)beginSuccessHold;
+- (void)releaseFromRingEvent;
 @end
 
 @implementation AevonAppTakeoverGesture
@@ -467,6 +484,15 @@ shouldReceiveTouch:(UITouch *)touch {
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
 shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
     if (self.view == nil) { return NO; }
+    /* V0.2.11（AevonAppNoBlockIdleV211）：**只有本识别器此刻真的握着一根带内手指时**
+     * 才建失败要求。
+     *
+     * 原来只按几何判定（落点在带内 +6pt 容差就返回 YES），不看自己手里有没有触摸。
+     * 一旦 UIKit 在「我们并没有接收这根触摸」的场合也问一句，App 的滚动 pan 就会
+     * 等一个永远不会到来的 Failed —— 表现正是 Aevon(97) 主诉的
+     * 「关掉圆盘后全屏 App 划不动，必须切一下屏或点一下别的应用才恢复」。
+     * 加上这一层：手里没指头 = 绝不压别人，把「阻塞别人」从几何概率里摘出去。 */
+    if (self.numberOfTouches == 0 || !self.claimed) { return NO; }
     /* 开关每帧现读（恒假开关纪律）：关了绝不设失败要求，App 手感原样 */
     if (!AevonAppPrefBool(@"AppSideEnabled", YES) ||
         !AevonAppPrefBool(@"EdgeGestureEnabled", YES)) { return NO; }
@@ -498,6 +524,9 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     self.claimed = NO;
     self.sawMoved = NO;
     self.moveFrames = 0;
+    /* 新序列开始：上一轮成立的「在场」标记与看门狗一起作废 */
+    self.successActive = NO;
+    self.releaseToken += 1;
 
     /* 三指急救（App 侧形态，AevonAppPanicCrossV201）：三根手指同时按下 →
      * 立刻 Failed。Failed 会让 UIKit 把所有被扣住的 began 连同后续帧整段补投，
@@ -541,6 +570,13 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
+    if (self.successActive) {
+        /* 成立之后手指还在动：把状态推到 .changed，UIKit 知道手势仍在进行中 */
+        if (self.state == UIGestureRecognizerStateBegan) {
+            self.state = UIGestureRecognizerStateChanged;
+        }
+        return;
+    }
     if (self.decided) { return; }
     UITouch *touch = touches.anyObject;
     if (touch == nil || self.view == nil) { return; }
@@ -575,8 +611,7 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
         AevonAppLog(@"判向成立：dx=%.0f dy=%.0f（第 %d 帧确认）→ 取消 App 触摸（合法 touchesCancelled）+ 通知 SB 呼圆盘（AevonAppDirectionV201 AevonAppNotifySBV201 AevonAppEarlyJudgeV202 AevonAppTwoFrameV205）",
                     dx, dy, self.moveFrames);
         AevonAppPostRightEdgeTrigger();
-        self.state = UIGestureRecognizerStateBegan;
-        self.state = UIGestureRecognizerStateEnded;
+        [self beginSuccessHold];
         return;
     }
     /* 向右扫 → 放弃（那是在关闭/推回，不是呼出） */
@@ -615,6 +650,17 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
+    /* V0.2.11（AevonAppReleaseCleanV211）：成立后一直在场，**真正抬手**才结束。
+     * 这是「关圆盘后 App 划不动」的正解：手势的生命周期和触摸序列的生命周期对齐，
+     * UIKit 的 cancel / restore 记账才有对称的收尾。 */
+    if (self.successActive) {
+        self.successActive = NO;
+        self.releaseToken += 1;
+        self.claimed = NO;
+        self.state = UIGestureRecognizerStateEnded;
+        AevonAppLog(@"判向成立后抬手 → 本识别器正常结束（App 手势环境当场归还，无需切屏）（AevonAppReleaseCleanV211）");
+        return;
+    }
     if (self.decided || !self.claimed) { return; }
     UITouch *touch = touches.anyObject;
     CGPoint point = (touch != nil && self.view != nil) ? [touch locationInView:self.view] : CGPointZero;
@@ -629,6 +675,9 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
             AevonAppLog(@"判向成立：抬手快判 dx=%.0f dy=%.0f（快速短划在帧间结束）→ 取消 App 触摸 + 通知 SB 呼圆盘（AevonAppTwoFrameV205）",
                         dx, dy);
             AevonAppPostRightEdgeTrigger();
+            /* 抬手快判里手指已经离开，不需要再「保持在场」—— 直接 .began 取消失效，
+             * 一次 .began→.ended 就是这条序列的真实终态。 */
+            self.claimed = NO;
             self.state = UIGestureRecognizerStateBegan;
             self.state = UIGestureRecognizerStateEnded;
             return;
@@ -636,6 +685,7 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     }
 
     self.decided = YES;
+    self.claimed = NO;
     /* 没判出横向 8pt：轻点或短划。Failed → UIKit 把 began+moved+ended 整段补投，
      * 轻点在抬手时生效（带内轻点的已知代价），App 不会丢事件。 */
     AevonAppLog(@"抬手 (%.0f,%.0f)：未满 8pt 横向 → 整段补投（轻点延迟到抬手生效，App 不丢事件）（AevonAppFailNotifyV206）",
@@ -646,12 +696,66 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesCancelled:touches withEvent:event];
+    /* 成立后被打断（系统抢走 / 圆盘收起强拆）：走 .cancelled，同样是「手势真的结束了」。
+     * 以前这里 `if (self.decided) return;` 直接吞掉 —— 手势停在 .began，
+     * App 的滚动 pan 就一直在等一个不会来的 Failed。 */
+    if (self.successActive) {
+        self.successActive = NO;
+        self.releaseToken += 1;
+        self.claimed = NO;
+        self.state = UIGestureRecognizerStateCancelled;
+        AevonAppLog(@"判向成立后被系统/圆盘打断 → 手势按 .cancelled 正式收尾（AevonAppReleaseCleanV211 AevonAppRingCloseReleaseV211）");
+        return;
+    }
     /* V0.2.2 取证（AevonAppEarlyJudgeV202）：Aevon(88) 里横向呼盘手指在这一分支
      * 静默消失 —— 谁取消的（滚动容器 pan 抢先 Began / 系统）写清楚，断裂不再隐形 */
     if (self.decided) { return; }
     self.decided = YES;
+    self.claimed = NO;
     AevonAppLog(@"序列被取消：App 内其他手势抢先（最可能是滚动容器 pan ~10pt Began）→ 本指放行（AevonAppEarlyJudgeV202 AevonAppFailNotifyV206）");
     AevonAppPostRightEdgeFail();
+}
+
+- (void)beginSuccessHold {
+    /* 只走 .began：App 立刻收到合法的 touchesCancelled（cancelsTouchesInView），
+     * 而本识别器**继续在场**，直到真正抬手 —— 这就是「手指在盘上转、App 一根都收不到」
+     * 和「松手后 App 立刻能滑」同时成立的原因。 */
+    self.successActive = YES;
+    self.state = UIGestureRecognizerStateBegan;
+    self.releaseToken += 1;
+    NSInteger token = self.releaseToken;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf.successActive || strongSelf.releaseToken != token) { return; }
+        strongSelf.successActive = NO;
+        strongSelf.claimed = NO;
+        strongSelf.decided = YES;
+        strongSelf.state = UIGestureRecognizerStateCancelled;
+        AevonAppLog(@"成立后 6 秒没等到抬手（序列在系统层断流）→ 强制 .cancelled 收尾，App 手势环境归还（AevonAppReleaseCleanV211）");
+    });
+}
+
+/* V0.2.11（AevonAppRingCloseReleaseV211）：SpringBoard 收起圆盘 → 立刻把本识别器收尾。
+ *
+ * Aevon(97) 主诉之三：「有时关闭圆盘时会发现全屏 App 无法滑动，必须切一下屏或者
+ * 点击一下其他应用才能恢复」。App 进程里唯一能压住滚动的东西就是这个识别器
+ * （delaysTouchesBegan + 失败要求），所以圆盘一收起就必须确认它已经不在场。
+ * 圆盘是 SpringBoard 的事，这里只做「收到 ringclose 就自检收尾」，不依赖任何时序。 */
+- (void)releaseFromRingEvent {
+    if (self.state == UIGestureRecognizerStateBegan ||
+        self.state == UIGestureRecognizerStateChanged) {
+        self.state = UIGestureRecognizerStateCancelled;
+        AevonAppLog(@"收到圆盘收起 → 识别器从进行中状态强制 .cancelled（App 立刻恢复滚动）（AevonAppRingCloseReleaseV211）");
+    } else if (self.state == UIGestureRecognizerStatePossible && self.claimed) {
+        self.state = UIGestureRecognizerStateFailed;
+        AevonAppLog(@"收到圆盘收起 → 扣住的 began 立刻 .failed 整段补投（App 不丢这一下）（AevonAppRingCloseReleaseV211）");
+    }
+    self.successActive = NO;
+    self.releaseToken += 1;
+    self.claimed = NO;
+    self.decided = YES;
 }
 
 @end
@@ -661,7 +765,24 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 @interface AevonAppSide : NSObject
 + (instancetype)sharedInstance;
 - (void)start;
+/* V0.2.11：SpringBoard 收起圆盘 → 本进程收尾识别器（由 Darwin 通知触发） */
+- (void)handleRingClosed;
 @end
+
+/* V0.2.11（AevonAppRingCloseReleaseV211）：Darwin 通知回调（C 函数，必须裸类型）。
+ * 收到 `com.aevon.ringclose` 就把工作丢回主线程 —— 手势状态只能在主线程改。 */
+static void AevonAppRingCloseCallback(CFNotificationCenterRef center,
+                                      void *observer,
+                                      CFNotificationName name,
+                                      const void *object,
+                                      CFDictionaryRef userInfo) {
+    (void)center; (void)name; (void)object; (void)userInfo;
+    AevonAppSide *side = (__bridge AevonAppSide *)observer;
+    if (side == nil) { return; }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [side handleRingClosed];
+    });
+}
 
 @implementation AevonAppSide {
     BOOL _installed;
@@ -790,12 +911,27 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
                                                  name:UIApplicationDidBecomeActiveNotification
                                                object:nil];
 
+    /* V0.2.11（AevonAppRingCloseReleaseV211）：注册圆盘收起监听。
+     * 圆盘一收，本进程立刻自检「我还有没有握着这根手指」，握着就正式收尾 ——
+     * 这是 Aevon(97)「关圆盘后全屏 App 划不动」的兜底闭环，不依赖任何时序假设。 */
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    (__bridge const void *)(self),
+                                    AevonAppRingCloseCallback,
+                                    CFSTR("com.aevon.ringclose"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+
     /* V0.2.10（AevonAppMountFastV210）：这里原来是**固定等 1 秒**再第一次尝试挂载，
      * 叠加构造阶段那 0.6 秒，冷启动 App 的盲期长达 1.6 秒起步 —— Aevon(96) 抖音
      * 1.8 秒时用户已经在划右缘了，识别器还没挂上，于是「圆盘 + App 同时响应」。
      * 现在改成立刻试一次（keyWindow 通常已经有了），失败交给 0.2 秒一次的快速重试。
      * 挂载本身只是 addGestureRecognizer，代价可以忽略，不需要用时间换稳定。 */
     [self installWithAttempt:1];
+}
+
+- (void)handleRingClosed {
+    if (_gesture == nil) { return; }
+    [_gesture releaseFromRingEvent];
 }
 
 - (void)handleBecomeActive {

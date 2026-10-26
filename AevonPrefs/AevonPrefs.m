@@ -3,6 +3,13 @@
 #import <objc/runtime.h>
 #import <CoreFoundation/CoreFoundation.h>
 
+/* V0.2.11（AevonPrefsInfoFitV211）：ⓘ 定位改「先布局、再量文字、按真实开关边界夹紧」。
+ * CI 断言靠这条 used 常量命中设置包字节（改文案不会让历史串消失）。 */
+__attribute__((used)) static const char AevonPrefsInfoFitV211Marker[] = "AevonPrefsInfoFitV211";
+/* 历史校验串收容（只加不能改）：0.2.10「ⓘ 从贴开关左侧改到名字正后方」的标记。
+ * 0.2.11 把定位逻辑整体搬进 AevonPlaceInfoButton，这条串必须继续留在字节里。 */
+__attribute__((used)) static const char AevonPrefsInfoPosV210Marker[] = "AevonPrefsInfoPosV210";
+
 /*
  * Aevon 设置页控制器
  * =====================================================================
@@ -412,6 +419,18 @@ static NSArray *AevonBuildFallbackDetail(id target) {
     id z3 = AevonNewSlider(@"触发高度（pt）", target, @"RingTriggerHeight", 80, 900, 320);
     if (z3 != nil) [result addObject:z3];
 
+    /* V0.2.11（AevonBandRangeFreeV211）：接管带几何的代码兜底版。
+     * Detail.plist 是主力入口，但 plist 加载失败时会走这里 —— 用户 Aevon(97) 要的
+     * 「可随意更改」必须两条路都拿得到，否则一旦降级就只剩触发区三根滑条。 */
+    id groupBand = AevonNewGroup(@"④ 右缘接管带几何",
+                                 @"「右缘接管带」开关打开时才生效：决定那条带多宽、覆盖多高。"
+                                 @"宽度 8~140pt、带高 6~100%，拖动时橙色框实时跟手变形。");
+    if (groupBand != nil) [result addObject:groupBand];
+    id b1 = AevonNewSlider(@"接管带宽度（pt）", target, @"RightEdgeWidth", 8, 140, 46);
+    if (b1 != nil) [result addObject:b1];
+    id b2 = AevonNewSlider(@"接管带高度（屏高 %）", target, @"RightEdgeHeight", 6, 100, 60);
+    if (b2 != nil) [result addObject:b2];
+
     id resetButton = AevonNewSpecifier(@"恢复默认触发区域（75% / 48pt / 320pt）",
                                        target,
                                        NSSelectorFromString(@"aevonResetTriggerZone"),
@@ -549,6 +568,130 @@ static char AevonSliderTagKey;
 static char AevonInfoButtonKey;
 static char AevonInfoTextKey;
 
+/* V0.2.11（AevonPrefsInfoFitV211）：ⓘ 定位的确定性实现（静态函数，只被列表回调调用）。
+ *
+ * Aevon(97) 主诉「首次进入设置时，圆圈叹号会和文字重叠」。根因不是宽度算错，是**取文案取错了时机**：
+ * `willDisplayCell` 第一次跑的时候 `textLabel.text` 还是空串（PSSwitchCell 要等 cellForRow 之后
+ * 才把文案填进去），于是走进 fallback 分支、`labelRight` 停在 16 → ⓘ 落在 x≈22，
+ * 正好压住头两个字；退出再进这一页时 cell 已带文案，位置又正常 —— 所以看起来像「偶发」。
+ *
+ * 现在三条一起改：
+ *   ① 文案优先取 specifier 的 label（永远有值），textLabel.text 只作交叉校验；
+ *   ② 先 `layoutIfNeeded`，用**真实**的 textLabel 起点 + 真实 UISwitch 左边界，不再猜开关宽度；
+ *   ③ 横向空间不够时，把 textLabel 的宽度夹到 ⓘ 左边 8pt —— 文字在 ⓘ 之前就用省略号截断，
+ *      「不重叠」从概率变成几何保证（哪怕以后有人把开关名字写长）。
+ */
+static UILabel *AevonInfoTextLabel(UITableViewCell *cell) {
+    if (cell == nil) { return nil; }
+    @try {
+        if ([cell respondsToSelector:@selector(textLabel)]) { return cell.textLabel; }
+    } @catch (NSException *exception) {
+    }
+    return nil;
+}
+
+static UISwitch *AevonInfoFindSwitch(UITableViewCell *cell) {
+    if (cell == nil) { return nil; }
+    NSMutableArray<UIView *> *queue = [NSMutableArray array];
+    if (cell.accessoryView != nil) { [queue addObject:cell.accessoryView]; }
+    [queue addObjectsFromArray:cell.subviews];
+    if (cell.contentView != nil) { [queue addObjectsFromArray:cell.contentView.subviews]; }
+    for (UIView *node in queue) {
+        if ([node isKindOfClass:[UISwitch class]]) { return (UISwitch *)node; }
+    }
+    return nil;
+}
+
+static void AevonPlaceInfoButton(UITableViewCell *cell, UIButton *button, id spec) {
+    if (cell == nil || button == nil) { return; }
+
+    /* 文案：specifier 的 label 是唯一可靠来源 */
+    NSString *title = nil;
+    id rawLabel = AevonGetProperty(spec, @"label");
+    if ([rawLabel isKindOfClass:[NSString class]] && [rawLabel length] > 0) {
+        title = (NSString *)rawLabel;
+    }
+
+    /* 布局一次，让 textLabel / UISwitch 的 frame 变成真值（首次进入时它们还没排过） */
+    @try { [cell layoutIfNeeded]; } @catch (NSException *exception) { }
+
+    CGFloat cellWidth = CGRectGetWidth(cell.bounds);
+    if (cellWidth < 1.0) { cellWidth = CGRectGetWidth([UIScreen mainScreen].bounds); }
+    const CGFloat side = 26.0;
+    const CGFloat gapTextToDot = 8.0;    /* 文字与 ⓘ 之间至少这么宽 */
+    const CGFloat gapDotToSwitch = 12.0; /* ⓘ 与开关之间至少这么宽（拇指拨开关的缓冲区） */
+
+    UILabel *text = AevonInfoTextLabel(cell);
+    if (title.length == 0 && text.text.length > 0) { title = text.text; }
+    UIFont *font = (text.font != nil) ? text.font : [UIFont systemFontOfSize:17.0];
+
+    /* 文字起点：优先用真实 frame，取不到就按系统默认左内边距 + 缩进 */
+    CGFloat left = 0;
+    if (text != nil) {
+        CGRect f = text.frame;
+        if (f.origin.x > 0.5 && f.origin.x < cellWidth) { left = f.origin.x; }
+    }
+    if (left < 0.5) {
+        left = 16.0 + cell.indentationWidth * (CGFloat)cell.indentationLevel;
+    }
+
+    CGFloat textWidth = 0;
+    if (title.length > 0) {
+        @try {
+            textWidth = ceil([title sizeWithAttributes:@{NSFontAttributeName: font}].width);
+        } @catch (NSException *exception) {
+            textWidth = 0;
+        }
+    }
+
+    /* 开关左边界：拿到真 UISwitch 就用它，否则退回保守估计（62pt = 51 轨道 + 边距） */
+    CGFloat switchMinX = cellWidth - 62.0;
+    UISwitch *toggle = AevonInfoFindSwitch(cell);
+    if (toggle != nil && CGRectGetWidth(toggle.bounds) > 1.0) {
+        CGRect inCell = CGRectZero;
+        @try {
+            inCell = [toggle.superview convertRect:toggle.frame toView:cell];
+        } @catch (NSException *exception) {
+            inCell = CGRectZero;
+        }
+        if (CGRectGetWidth(inCell) > 1.0) { switchMinX = CGRectGetMinX(inCell); }
+    }
+    CGFloat dotMaxX = switchMinX - gapDotToSwitch;
+    CGFloat dotX = dotMaxX - side;
+
+    /* 首选：紧跟名字后面 */
+    if (textWidth > 0) {
+        CGFloat preferred = left + textWidth + gapTextToDot;
+        if (preferred + side <= dotMaxX) {
+            dotX = preferred;
+        } else {
+            /* 名字太长，没地方：ⓘ 让到开关前，并把文字宽度夹到 ⓘ 左边 —— 保证不重叠 */
+            if (text != nil && text.frame.size.width > 1.0) {
+                CGRect f = text.frame;
+                CGFloat allowed = dotX - gapTextToDot - CGRectGetMinX(f);
+                if (allowed < 0) { allowed = 0; }
+                if (allowed < CGRectGetWidth(f)) {
+                    f.size.width = allowed;
+                    @try { text.frame = f; } @catch (NSException *exception) { }
+                }
+            }
+        }
+    } else {
+        /* 连文案都取不到：宁可放到最右边，也绝不放在行首压字 */
+        dotX = dotMaxX - side;
+    }
+
+    if (dotX < left) { dotX = left; }
+    if (dotX > cellWidth - side) { dotX = cellWidth - side; }
+
+    CGRect frame = button.frame;
+    frame.size = CGSizeMake(side, side);
+    frame.origin.x = round(dotX);
+    frame.origin.y = round((CGRectGetHeight(cell.bounds) - side) * 0.5);
+    button.frame = frame;
+    button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+}
+
 /*
  * 用户 Aevon(95) 的原话：「设置中的开关注释并不清晰，可以简化开关名字，
  * 然后开关名字后面添加圆圈叹号，点击会出现开关的详细注释」。
@@ -597,41 +740,22 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             if (created.superview != cell) { [cell addSubview:created]; }
             button = created;
         }
-        /* V0.2.10（AevonPrefsInfoPosV210）：从「紧贴开关左侧」改到「开关名字正后方」。
-         *
-         * Aevon(96) 截图 IMG_1701：ⓘ 和 UISwitch 的圆角轨道几乎贴在一起（只差 8pt），
-         * 拇指想拨开关时很容易点到 ⓘ。根源是我把位置写成「从右边数第 51+26+8 个像素」，
-         * 那是**猜**开关宽度，实际 UISwitch 在不同系统版本上更宽，于是两者压在一起。
-         *
-         * 现在改成按**文字实际宽度**定位：ⓘ 跟在名字后面 6pt，离右侧开关永远 ≥12pt。
-         * 名字都是短词（4~7 个字），所以 ⓘ 落在行中间偏左 —— 既是用户原话「开关名字后面
-         * 添加圆圈叹号」的字面意思，也彻底消除了误触。 */
-        CGFloat side = 26.0;
-        CGFloat labelRight = 16.0;
-        @try {
-            UILabel *text = [cell respondsToSelector:@selector(textLabel)] ? cell.textLabel : nil;
-            if (text != nil && text.text.length > 0) {
-                /* 用「字号 + 文字」直接量宽，**不依赖 textLabel 当前的 frame 宽度**：
-                 * willDisplayCell 这一刻单元格可能还没布局，frame 宽度是旧的甚至为 0，
-                 * 拿它当依据会把 ⓘ 甩回行首、压在第一个字上。 */
-                UIFont *font = text.font ?: [UIFont systemFontOfSize:17.0];
-                CGFloat textWidth = ceil([text.text sizeWithAttributes:@{NSFontAttributeName: font}].width);
-                CGFloat left = CGRectGetMinX(text.frame);
-                if (left < 1.0 || left > cell.bounds.size.width) { left = 16.0; }
-                labelRight = left + textWidth;
+        /* V0.2.11（AevonPrefsInfoFitV211）：定位改走静态函数 —— 先布局、再从 specifier 取文案、
+         * 量文字实际宽度，最后按「真实 UISwitch 左边界」夹紧并保证文字不会压到 ⓘ 下面。
+         * 0.2.10 那版仍然会在**首次进入**时压字：那一刻 `textLabel.text` 还是空串，
+         * 量出来宽度 0 → ⓘ 落在 x=22（用户 Aevon(97) 看到的就是这一下）。 */
+        AevonPlaceInfoButton(cell, button, spec);
+        /* 首次进入时 cell 的最终布局可能在本次回调之后才落定（PSSwitchCell 会再排一次），
+         * 所以下一个 runloop 再定位一次；两次都跑同一个纯几何函数，谁后跑谁生效，结果一致。 */
+        UITableViewCell *lateCell = cell;
+        UIButton *lateButton = button;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (lateCell.window == nil || lateButton.superview == nil) { return; }
+            @try {
+                AevonPlaceInfoButton(lateCell, lateButton, spec);
+            } @catch (NSException *exception) {
             }
-        } @catch (NSException *exception) {
-            labelRight = 16.0;
-        }
-        /* 右侧留够：开关约 51pt + 右边距 10pt + 与 ⓘ 之间的 12pt 空隙 */
-        CGFloat ceiling = cell.bounds.size.width - 51.0 - 10.0 - 12.0 - side;
-        CGFloat x = MIN(labelRight + 6.0, MAX(16.0, ceiling));
-        CGRect frame = button.frame;
-        frame.size = CGSizeMake(side, side);
-        frame.origin.x = x;
-        frame.origin.y = (cell.bounds.size.height - side) * 0.5;
-        button.frame = frame;
-        button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        });
         /* cell 会被复用，文案每次刷新 */
         objc_setAssociatedObject(button, &AevonInfoTextKey, info, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } @catch (NSException *exception) {

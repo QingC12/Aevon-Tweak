@@ -819,3 +819,19 @@ __attribute__((used)) static const char AevonRingHubV210Marker[] = "AevonRingHub
 __attribute__((used)) static const char AevonPickerBeautyV210Marker[] = "AevonPickerBeautyV210";
 __attribute__((used)) static const char AevonGeomOverlayV210Marker[] = "AevonGeomOverlayV210";
 __attribute__((used)) static const char AevonGeomPreviewLiveV210Marker[] = "AevonGeomPreviewLiveV210";
+
+/* V0.2.11（Aevon(97) 判读）：四条主诉各配一条 used 常量，日志文案改写时 CI 断言不假红。
+ *   AevonPrefsInfoFitV211      = 设置页 ⓘ 先布局再量文字，首次进入也不压字
+ *   AevonBandRangeFreeV211     = 接管带宽度 8~140pt / 带高 6~100%，滑条不再有硬底
+ *   AevonAppReleaseCleanV211   = App 侧判向成立后保持在场到真正抬手（手势环境对称收尾）
+ *   AevonAppRingCloseReleaseV211 = 收到圆盘收起即在 App 进程收尾识别器
+ *   AevonAppNoBlockIdleV211    = 手里没触摸时绝不建失败要求（不压别人的滚动 pan）
+ *   AevonRingGlyphTopV211      = 圆心四宫格独立一层，蓝色渐变盖不住
+ *   AevonRingHubFitV211        = 心圆底盘按内圈半径反算，不再压内圈图标 */
+__attribute__((used)) static const char AevonPrefsInfoFitV211Marker[] = "AevonPrefsInfoFitV211";
+__attribute__((used)) static const char AevonBandRangeFreeV211Marker[] = "AevonBandRangeFreeV211";
+__attribute__((used)) static const char AevonAppReleaseCleanV211Marker[] = "AevonAppReleaseCleanV211";
+__attribute__((used)) static const char AevonAppRingCloseReleaseV211Marker[] = "AevonAppRingCloseReleaseV211";
+__attribute__((used)) static const char AevonAppNoBlockIdleV211Marker[] = "AevonAppNoBlockIdleV211";
+__attribute__((used)) static const char AevonRingGlyphTopV211Marker[] = "AevonRingGlyphTopV211";
+__attribute__((used)) static const char AevonRingHubFitV211Marker[] = "AevonRingHubFitV211";

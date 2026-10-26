@@ -116,11 +116,21 @@ enum AevonRightEdge {
     //
     // 代价必须写明：46pt 会压到抖音右侧按钮（中心一般距边 30pt 开外），
     // 想保住按钮就把宽度调回 24~32，或者把带高缩到 40%。
+    // V0.2.11（AevonBandRangeFreeV211）：上下限放开。
+    //
+    // 用户 Aevon(97)：「橙色右侧接管带的高度和宽度调节存在固定数值，无法继续降低高度」。
+    // 0.1.18 把区间定成 24~46pt / 40~100%，依据是当时「把宽度调到必然落空 =
+    // 把猜落点成本转给用户」这个结论。但那是**默认值**该守的纪律，不是**滑条**该守的：
+    // 用户明确要「随意更改」，而限制区间只会让他以为滑条坏了。
+    // 现在：宽度 8~140pt（8 = 只认最贴边的 8pt，140 ≈ 屏宽 1/3）、
+    //       带高 6~100%（6% ≈ 底部 56pt 的右下角一小块）。
+    // 默认值一个都不动（46 / 60），所以老用户升级后手感完全相同。
+    // 落地时仍然 clamp，clamp 只防「手改偏好域写出非法值」，不再挡住正常拖动。
     static let defaultWidth: Double = 46
     static let defaultHeightPercent: Double = 60
-    static let minWidth: Double = 24
-    static let maxWidth: Double = 46
-    static let minHeightPercent: Double = 40
+    static let minWidth: Double = 8
+    static let maxWidth: Double = 140
+    static let minHeightPercent: Double = 6
     static let maxHeightPercent: Double = 100
 
     static var enabled: Bool {
@@ -164,7 +174,10 @@ enum AevonRightEdge {
 
     static func summary(in bounds: CGRect) -> String {
         let r = band(in: bounds)
-        return "宽 \(Int(r.width))pt · 高占比 \(Int(heightPercent))%（带 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))）"
+        // V0.2.11（AevonBandRangeFreeV211）：区间放开到 8~140pt / 6~100% 之后，
+        // 每行摘要都把「现在生效的区间」写出来 —— 用户报「滑条拖到底就不动了」时，
+        // 一眼能看出是自己拖到了边界，还是代码又把它夹住了。
+        return "宽 \(Int(r.width))pt · 高占比 \(Int(heightPercent))%（带 x \(Int(r.minX))~\(Int(r.maxX)) y \(Int(r.minY))~\(Int(r.maxY))；可调 \(Int(minWidth))~\(Int(maxWidth))pt / \(Int(minHeightPercent))~\(Int(maxHeightPercent))%）（AevonBandRangeFreeV211）"
     }
 
     /// V0.1.18（AevonRightEdgeMissHintV118）：落点**为什么**没进带、要多大才进。
