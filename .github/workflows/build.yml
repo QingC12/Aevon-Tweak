@@ -1419,6 +1419,58 @@ jobs:
           done
           echo "V0.2.12 校验: 接管状态全系统自愈 + 抬手/取消 defer 归还 + 释放即收盘 + 绝对上限 + App 侧圆盘状态位轮询 + 失败要求圆盘总闸 已就位"
 
+          # ---- V0.2.13（AevonSysEdgeV213）：右缘改走系统手势管线的 withType 接口 ----
+          #
+          # 为什么重开这条 0.1.13 已经停手的路：三个前提同时变了。
+          #   ① 登记接口换成 -addGestureRecognizer:withType: ——
+          #      真机探针（Aevon(75)）只测过 toDisplayWithIdentity:（two:1/acq 位），
+          #      这个带 type 的重载从未验证；Triggr（iOS 15–18）用的正是它。
+          #   ② 识别器换成 UIScreenEdgePanGestureRecognizer（私有 init，type=2）——
+          #      系统自己的边缘识别器，从边缘落手就进入判定，失败由 UIKit 归还，
+          #      不需要「扣住 began 再整段补投」（0.1.19 判定不可做的那条死路）。
+          #   ③ 触摸策略回到 UIKit 默认（cancelsTouchesInView=YES / delaysTouchesBegan=NO），
+          #      即 Apple 给左缘返回手势用的那套：先给 App began，识别成功再 cancel。
+          #
+          # 本段只保证「这版确实编进去了、回退路径还在」，不保证真机上一定生效。
+          grep -q 'Sources/AevonSysEdgeShim.m' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::AevonSysEdgeShim.m 没进 Makefile（等于没编进去）"; exit 1; }
+          grep -q 'Sources/AevonSysEdgeV213.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::AevonSysEdgeV213.swift 没进 Makefile"; exit 1; }
+          for s in AevonSysEdgeV213 AevonSysEdgeWithTypeV213 AevonSysEdgeAllowTypeV213 \
+                   AevonSysEdgePrivInitV213 AevonSysEdgeRegionV213; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.2.13 标记 $s 未编入"; exit 1; }
+          done
+          # 接口名必须真的编进二进制（NSSelectorFromString 的字面量在 __cstring）
+          for sel in 'addGestureRecognizer:withType:' 'addGestureRecognizer:toDisplayWithIdentity:' \
+                     'initWithTarget:action:type:options:' '_setEdgeRegionSize:' \
+                     '_isGestureWithTypeAllowed:' '_shouldEnableSystemGestureWithType:'; do
+            strings "$DYLIB" | grep -q "$sel" \
+              || { echo "::error::V0.2.13 缺接口 $sel"; exit 1; }
+          done
+          # 触摸策略必须是 UIKit 默认值；绝不许再出现「手动延迟 began」那套
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            | grep -q 'delaysTouchesBegan = false' \
+            || { echo "::error::新通道又去延迟 began 了 —— 会退回 0.1.13 的补投死路"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            | grep -q 'cancelsTouchesInView = true' \
+            || { echo "::error::cancelsTouchesInView 不是 true —— App 那条触摸不会被取消，圆盘动 App 也动"; exit 1; }
+          # 判向失败必须主动 Failed 归还（这是「右缘竖滑照样滚屏」的唯一保证）。
+          # 注意不能写成 `gesture.state = .failed` —— Swift 侧 state 只读，必须走 ObjC 垫片。
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            | grep -q 'AevonSysEdgeForceFail(gesture)' \
+            || { echo "::error::判为纵向时不 Failed —— 右缘竖滑会被我们扣住"; exit 1; }
+          grep -q 'void AevonSysEdgeForceFail' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeShim.m" \
+            || { echo "::error::ForceFail 垫片被删（Swift 无处可写 state）"; exit 1; }
+          # 回退必须可用（用户明确要求：不行就回到 0.2.12 的方案）
+          grep -q 'SysEdgeEnabled' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::Root.plist 缺 SysEdgeEnabled 开关（用户无法一键回退）"; exit 1; }
+          grep -q 'AevonSysEdgeV213.shared.install()' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
+            || { echo "::error::新通道没有被安装（启动流程里没调 install）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
+            || { echo "::error::老通道停手标记丢失 —— 回退路径断了"; exit 1; }
+          echo "V0.2.13 校验: 系统手势 withType 接口 + 私有 init + UIKit 默认触摸策略 + 纵向 Failed 归还 + 一键回退 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

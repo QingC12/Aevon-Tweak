@@ -135,6 +135,24 @@ private func installExperimentalHooks() {
     AevonSystemGestureV105.shared.install()
 
     /*
+     * ⑦-2 V0.2.13（AevonSysEdgeV213）：右缘呼出**再试一次系统手势管线**。
+     *
+     * 与上面 0.1.5~0.1.13 那条的本质区别（那次失败的前提本轮全部变了）：
+     *   · 登记接口换成本轮才发现的 `-addGestureRecognizer:withType:` ——
+     *     真机探针（Aevon(75)）只测过 toDisplayWithIdentity:，这个带 type 的重载
+     *     **从未验证过**，而 Triggr（iOS 15–18）用的正是它；
+     *   · 识别器换成 `UIScreenEdgePanGestureRecognizer`（私有 init，type=2）——
+     *     它是系统自己的边缘识别器，从边缘落手就进入判定，失败时由 UIKit 归还触摸，
+     *     不需要我们再「补投」任何一帧（0.1.19 判定补投不可做的那条死路）；
+     *   · 触摸开关回到 UIKit 默认（delaysTouchesBegan=NO / cancelsTouchesInView=YES），
+     *     也就是 Apple 给左缘返回手势用的那套。
+     *
+     * 任何一步失败都只记日志、什么都不做 —— 右缘继续由全局通道 + 热区负责，
+     * 行为与 0.2.12 完全一致。可用设置里的「右缘系统手势通道」一键关掉。
+     */
+    AevonSysEdgeV213.shared.install()
+
+    /*
      * ⑧ V0.1.7（AevonProbeV107）：运行时探针。六组一次装齐，8 秒后开始、组间隔 0.8 秒：
      *    P1 系统手势管线 / P2 识别器宿主 / P3 桌面图标启动链 /
      *    P4 事件路由延迟层 / P5 场景与浮窗 / P6 配置快照。

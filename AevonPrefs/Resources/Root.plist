@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.12（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
+			<string>Aevon 0.2.13（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -100,6 +100,28 @@
 			<string>旧机制（默认关）：把上面的接管带扩到右缘 44pt × 整屏高，屏幕上半部的右缘也能呼出。
 
 一般不要开 —— 上半屏右侧全是返回、菜单、关闭这类按钮，接管之后它们会点不到。只有你习惯在屏幕上半部右缘呼出时才打开。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>SysEdgeEnabled</string>
+			<key>label</key>
+			<string>右缘系统手势通道</string>
+			<key>infoText</key>
+			<string>V0.2.13 新增（默认开）。把「右缘左滑呼圆盘」交给 SpringBoard 的**系统手势管线**，和系统自己的「左缘返回 / 底部上滑」同等待遇。
+
+它与旧通道的根本区别：
+· 旧通道在 SpringBoard 里丢事件，只丢得掉 SpringBoard 那一份 —— App 手里那份照旧，所以会「圆盘出来了、App 也跟着滚」；
+· 系统手势通道一旦判定成功，App 那条触摸由系统**真正取消**，App 不会动。
+
+代价（必然取舍，不是 bug）：右缘最外侧一圈（默认 30pt）里的触摸会先给 App 再被取消，正常点击无感；但如果你发现某个 App 贴右边缘的按钮/滑动失灵，先把这个开关关掉对比一下。
+
+关掉 = 完全回到 0.2.12 的行为（全局通道 + 热区），随时可退。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
