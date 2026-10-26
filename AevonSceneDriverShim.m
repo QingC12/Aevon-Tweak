@@ -62,6 +62,15 @@ __attribute__((used)) static const char AevonSceneRouteV235Marker[] = "AevonScen
  * 有 manifest 的单场景 App UIKit 同样只认主场景、第二场景连接照拒。
  * 分流细判：只有多场景 App 才走自建场景，其余一律旧路径。 */
 __attribute__((used)) static const char AevonSceneRouteV236Marker[] = "AevonSceneRouteV236";
+/* V0.2.37（AevonSceneRouteV237）：0.2.36 真机翻车 —— Sileo/Filza/抖音/微信的
+ * manifest 里 UIApplicationSupportsMultipleScenes=YES（Xcode 模板常见）骗过了
+ * 细判，仍走自建场景黑屏。App 侧 scene 探针实锤权威判型：
+ *   delegate 实现 configurationForConnecting（设置）→ 显示成功；
+ *   delegate 未实现 = 老式 AppDelegate 自动桥接（Sileo/Filza）→ 连接必拒。
+ * SB 侧创建前近似：manifest 里必须真的写了 scene delegate 类名
+ * （UISceneConfigurations…UISceneDelegateClassName 或 UIApplicationSceneDelegateClassName）
+ * —— 老式 App 的 manifest 就算写满 supportsMultipleScenes 也没有这些键。 */
+__attribute__((used)) static const char AevonSceneRouteV237Marker[] = "AevonSceneRouteV237";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -546,6 +555,29 @@ NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
         id manifest = info[@"UIApplicationSceneManifest"];
         if (manifest == nil) { return 0; }
         if (![manifest isKindOfClass:[NSDictionary class]]) { return 1; }
+        // V0.2.37（AevonSceneRouteV237）：manifest 里必须真的写了 scene delegate
+        // 类名 —— 老式 AppDelegate 自动桥接的 App（Sileo/Filza/抖音/微信，App 侧
+        // 探针实锤「未实现 configurationForConnecting」）manifest 就算写满
+        // UIApplicationSupportsMultipleScenes=YES 第二场景连接也必拒。
+        BOOL hasDelegate = NO;
+        id configs = ((NSDictionary *)manifest)[@"UISceneConfigurations"];
+        if ([configs isKindOfClass:[NSDictionary class]]) {
+            for (id arr in ((NSDictionary *)configs).allValues) {
+                if (![arr isKindOfClass:[NSArray class]]) { continue; }
+                for (id item in (NSArray *)arr) {
+                    if ([item isKindOfClass:[NSDictionary class]]
+                        && ((NSDictionary *)item)[@"UISceneDelegateClassName"] != nil) {
+                        hasDelegate = YES;
+                        break;
+                    }
+                }
+                if (hasDelegate) { break; }
+            }
+        }
+        if (!hasDelegate && ((NSDictionary *)manifest)[@"UIApplicationSceneDelegateClassName"] != nil) {
+            hasDelegate = YES;
+        }
+        if (!hasDelegate) { return 1; } /* 老式自动桥接 → App 端必拒 → 旧路径 */
         // V0.2.36（AevonSceneRouteV236）：细判 UIApplicationSupportsMultipleScenes。
         id multi = ((NSDictionary *)manifest)[@"UIApplicationSupportsMultipleScenes"];
         if ([multi isKindOfClass:[NSNumber class]]) { return [multi boolValue] ? 2 : 1; }

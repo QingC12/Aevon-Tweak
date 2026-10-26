@@ -2056,6 +2056,21 @@ jobs:
           grep -q 'AevonSceneRouteV236' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧缺单场景分流分支"; exit 1; }
           echo "V0.2.36 校验: 分流细判（多场景才自建，单场景回旧路径）已就位"
+          # ── V0.2.37 校验（AevonSceneRouteV237）：权威判据 = manifest 真写 scene
+          # delegate 类名。0.2.36 真机翻车：Sileo/Filza/抖音/微信 manifest 写
+          # supportsMultipleScenes=YES 骗过细判仍黑屏（App 侧探针实锤 delegate
+          # 未实现 configurationForConnecting = 老式自动桥接必拒）。只加不改。
+          for s in AevonSceneRouteV237; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.37 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'UISceneDelegateClassName' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺 scene delegate 类名判据"; exit 1; }
+          grep -q 'UIApplicationSceneDelegateClassName' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺老式 manifest scene delegate 键判据"; exit 1; }
+          grep -q 'AevonSceneRouteV237' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺老式自动桥接分流注释锚"; exit 1; }
+          echo "V0.2.37 校验: scene delegate 类名判据（老式自动桥接回旧路径）已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

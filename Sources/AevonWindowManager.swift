@@ -158,11 +158,11 @@ enum AevonWindowManager {
             if sceneSupport == 0 {
                 AevonLog.info("[场景] 分流：\(bundleID) 无 scene manifest（老式单场景 App，UIKit 只认主场景）→ 全屏接管旧路径（AevonSceneRouteV235）")
             } else if sceneSupport == 1 {
-                // V0.2.36（AevonSceneRouteV236）：0.2.35 真机矩阵 —— Sileo/抖音/微信
-                // 有 manifest 仍黑屏（App 端拒连），Gmail/GitHub/贴吧纯净版全通。
-                // iOS 文档缺省 UIApplicationSupportsMultipleScenes=NO：单场景 manifest
-                // App 的 UIKit 只认主场景，第二场景连接照拒 → 一律旧路径。
-                AevonLog.info("[场景] 分流：\(bundleID) manifest 单场景（UIApplicationSupportsMultipleScenes 未开）→ 全屏接管旧路径（AevonSceneRouteV236）")
+                // V0.2.37（AevonSceneRouteV237）：0.2.36 翻车 —— Sileo/Filza/抖音/
+                // 微信 manifest 写了 supportsMultipleScenes=YES 骗过细判仍黑屏。
+                // App 侧探针实锤：delegate 未实现 configurationForConnecting =
+                // 老式自动桥接必拒。SB 侧近似 = manifest 无真 scene delegate 类名。
+                AevonLog.info("[场景] 分流：\(bundleID) 无多场景呈现（老式 AppDelegate 自动桥接 / 未开多场景）→ 全屏接管旧路径（AevonSceneRouteV236 AevonSceneRouteV237）")
             } else if AevonPrefs.bool("SelfBuiltScene", default: true) {
                 let size = AevonWindowView.plannedContentSize()
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`

@@ -56,15 +56,14 @@ BOOL AevonSelfSceneContentAlive(id scene);
 /// "fg=? cs=? layers=? dr=? idle=?"（全 @try，取不到写 "?"），供日志判黑在哪一层。
 NSString *AevonSelfSceneDebugState(id scene);
 
-/// V0.2.35/36（AevonSceneRouteV235/236）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
-/// 查 LSApplicationProxy 的 Info.plist 有无 UIApplicationSceneManifest，并细判
-/// UIApplicationSupportsMultipleScenes（iOS 文档缺省 NO —— 0.2.35 真机：Sileo/
-/// 抖音/微信有 manifest 仍被拒，Gmail/GitHub/贴吧纯净版多场景 App 全通）：
-///   返回 2 = 多场景 App（UIApplicationSupportsMultipleScenes=YES）→ 自建场景可走；
-///   返回 1 = 有 manifest 但单场景（键缺失或 NO）→ 走旧路径；
-///   返回 0 = 无 manifest（老式单场景 App，UIKit 自动桥接只认主场景，自建场景
-///           连接被 App 端拒绝 —— 0.2.34 真机实锤 + FrontBoardAppLauncher README
-///           同款已知限制"Single-scene apps may not work yet"）；
+/// V0.2.35/36/37（AevonSceneRouteV235/236/237）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
+/// 查 LSApplicationProxy 的 Info.plist，三档细判（0.2.37 权威判据 = App 侧 scene
+/// 探针实锤：delegate 实现 configurationForConnecting 才会接受第二场景连接；
+/// manifest 里写没写 UIApplicationSupportsMultipleScenes 都不算数 —— Sileo/Filza
+/// 写了 YES 照样黑屏，因为 delegate 是老式自动桥接）：
+///   返回 2 = manifest 带真 scene delegate 类名 + 多场景 → 自建场景可走；
+///   返回 1 = 有 manifest 但无 scene delegate 类名（老式自动桥接）或单场景 → 旧路径；
+///   返回 0 = 无 manifest（老式单场景 App）→ 走旧路径；
 ///   返回 -1 = 探测不到（proxy nil / 类缺失），调用方按 2 处理（保持旧版行为）。
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
 
