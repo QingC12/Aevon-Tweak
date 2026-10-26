@@ -461,6 +461,57 @@ enum AevonEdgeEntry {
     /// 最近一次边缘触摸的位置（窗口坐标），圆盘唤出时从这里接手那根手指
     private static var lastTouchPoint: CGPoint = .zero
 
+    // MARK: - V0.2.10（AevonAppBlindHoldV210）App 侧在场判定
+    //
+    // Aevon(96) 09:49:09 抖音铁证：起手 → 判向成立 → 呼出圆盘，整条触摸里**没有**
+    // `rightedgebegan`，我们自己的诊断行写着「本指无 App 侧起手痕迹（>2s 无让路）」。
+    // 那根手指在 App 进程里从未被取消，圆盘一滑动抖音就跟着滚 —— 这就是「偶尔还会触发」。
+    //
+    // backboardd 双投已定论（0.2.0）：SB 侧在 sendEvent 层丢事件，只丢 SB 自己那一份，
+    // App 那份碰不到；所以**事后无法补救**，只能在呼盘之前确认「这一侧到底在不在」。
+    /// 最近一次收到 App 侧任何信号（appready / began / fail / trigger）的时刻。
+    private static var appSideSignalAt: CFTimeInterval = 0
+    /// 前台 App 换人的时刻（由 0.2 秒轮询比对 bundleID 得出）。
+    private static var foregroundChangedAt: CFTimeInterval = 0
+    /// 上一次看到的前台 bundleID
+    private static var lastForegroundBundle = ""
+    /// 盲期拒呼日志限频
+    private static var blindHoldLoggedAt: CFTimeInterval = 0
+    /// 新前台 App 多久没给信号就认定为「盲期」（超过就放弃守门，当作未注入 App 处理）。
+    private static let blindGateWindow: CFTimeInterval = 3.0
+
+    /// App 侧发来任何信号 → 记「这一侧在场」。四个通知回调都调它。
+    static func noteAppSideAlive() {
+        appSideSignalAt = CACurrentMediaTime()
+    }
+
+    /// 前台 App 换人（0.2 秒轮询里比对）。
+    private static func noteForegroundChange() {
+        let bundle = AevonEntryHost.currentForegroundBundleID
+        guard bundle != lastForegroundBundle else { return }
+        lastForegroundBundle = bundle
+        foregroundChangedAt = CACurrentMediaTime()
+    }
+
+    /// 现在这台前台 App 是不是「App 侧还没就位」的盲期。
+    ///
+    /// 判据三条，缺一不可：
+    ///   ① 前台确实有 App（桌面永远不是盲期，桌面没有 App 进程要抢触摸）；
+    ///   ② 换前台还不到盲期窗口（超过就说明这一侧可能根本没注入，守门会变成永久失效）；
+    ///   ③ 这任前台**还没有任何** App 侧信号 —— `appSideSignalAt < foregroundChangedAt`
+    ///      就是「上次信号发生在换前台之前」，等价于「这任一次都没响过」。
+    private static func appSideIsBlind() -> Bool {
+        // App 侧总开关被用户关掉时，这条守门必须让开 —— 那一侧本来就不会有任何信号，
+        // 再守下去等于把「App 前台呼盘」整个功能关死（那是用户的选择，不是故障）。
+        guard AevonPrefs.bool("AppSideEnabled", default: true) else { return false }
+        guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
+        let bundle = AevonEntryHost.currentForegroundBundleID
+        guard !bundle.isEmpty else { return false }
+        let now = CACurrentMediaTime()
+        guard now - foregroundChangedAt < blindGateWindow else { return false }
+        return appSideSignalAt < foregroundChangedAt
+    }
+
     /// 手势条是否已挂上（不代表手势一定能触发，触发靠系统触摸分发）
     static var isVisible: Bool { return strip != nil }
 
@@ -577,6 +628,14 @@ enum AevonEdgeEntry {
                                            "com.aevon.rightedgefail" as CFString,
                                            nil,
                                            .deliverImmediately)
+            // V0.2.10（AevonAppBlindHoldV210）：App 侧挂载成功 / 回到前台就广播这条 ——
+            // SB 收到才认为「这一侧的识别器在」，之前一律按盲期处理（不呼盘）。
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                           nil,
+                                           aevonAppReadyHandler,
+                                           "com.aevon.appready" as CFString,
+                                           nil,
+                                           .deliverImmediately)
             AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26 AevonGuardCleanupV102）")
             AevonLog.info("[边缘] 已监听 App 侧右缘判向通知（rightedgetrigger）（AevonAppTriggerBridgeV201）")
         }
@@ -591,6 +650,12 @@ enum AevonEdgeEntry {
             // 旧版这里还顺手 AevonRingStore.invalidateCache()，0.2 秒一次跨进程重读
             // 导致圆盘 App 数与排序漂移（Aevon(24)），已删除。列表只在设置页广播时刷新。
             checkTriggerZoneChange()
+            // V0.2.10（AevonAppBlindHoldV210）：顺手盯前台 App 换人 —— 换成新 App 的
+            // 头几秒里，App 侧的识别器可能还没挂上，那几秒不许呼盘。
+            noteForegroundChange()
+            // V0.2.10（AevonGeomOverlayV210）：触发区 / 接管带的可视化跟着滑条走。
+            checkPreviewRequest()
+            AevonGeometryOverlay.sync()
             // V0.1.17（AevonDeadManV117）：死手开关跟着这条 0.2 秒轮询走 ——
             // 接管状态一旦泄漏，最多 1 秒余量 + 4 秒 pressLimit 就会自动释放，
             // 不会再出现「整块屏幕点不动、只能卸载」的局面。
@@ -690,13 +755,28 @@ enum AevonEdgeEntry {
         }
     }
 
+    /// V0.2.10（AevonGeomPreviewLiveV210）：设置页进「细节调整」时写一个时间戳，
+    /// 这里看到数值变大就亮一次 —— 用户一进页面就知道两块区域现在在哪。
+    private static func checkPreviewRequest() {
+        let request = AevonPrefs.double("AevonPreviewReq", default: 0)
+        guard request > lastPreviewRequest else { return }
+        lastPreviewRequest = request
+        AevonGeometryOverlay.preview()
+    }
+
     /// 指纹变了就重排触发条（幂等；没变什么都不做）
-    static func checkTriggerZoneChange() {
-        let signature = AevonTriggerZone.signature()
+    static func checkTriggerZoneChange() {        let signature = AevonTriggerZone.signature()
         if signature != zoneSignature {
+            let isFirstZone = zoneSignature.isEmpty
             zoneSignature = signature
             refreshLayoutIfNeeded(logChange: true)
             syncGuardConfig()
+            // V0.2.10（AevonGeomPreviewLiveV210）：用户刚拖了热区滑条 → 立刻把两块
+            // 矩形亮出来 3 秒。启动时第一次建指纹不算「用户改动」，不弹（否则每次
+            // 注销都会在屏幕上闪一块色板）。
+            if !isFirstZone {
+                AevonGeometryOverlay.preview()
+            }
         }
         // V0.1.16（AevonBandIndicatorV116）：右缘带的宽度 / 高度 / 可视化开关变了要立刻重画 ——
         // 否则用户得注销才能看到新范围，而这一版的重点恰恰是「让他能看见那条带」。
@@ -707,7 +787,8 @@ enum AevonEdgeEntry {
             rightEdgeSignature = bandSignatureNow
             AevonSystemGestureV105.refreshBandIndicator()
             if !isFirst {
-                AevonLog.info("[右缘] 配置已更新：\(AevonRightEdge.summary(in: UIScreen.main.bounds))，可视化=\(AevonRightEdge.showBand ? "开" : "关")（AevonBandIndicatorV116）")
+                AevonGeometryOverlay.preview()
+                AevonLog.info("[右缘] 配置已更新：\(AevonRightEdge.summary(in: UIScreen.main.bounds))，可视化=\(AevonRightEdge.showBand ? "开" : "关")（AevonBandIndicatorV116 AevonGeomPreviewLiveV210）")
             }
         }
         // V0.1.19（AevonPanicHintV119）：用户重新打开「右缘接管带」→ 清掉「被急救关掉」的标记，
@@ -734,6 +815,9 @@ enum AevonEdgeEntry {
 
     private static var zoneTimer: Timer?
     private static var zoneSignature = ""
+    /// V0.2.10（AevonGeomPreviewLiveV210）：设置页「请亮一下」的一次性请求戳，
+    /// 数值变大就 preview 一次（进页面写时间戳，比 Darwin 通知多一个「是谁」的语义）。
+    private static var lastPreviewRequest: Double = 0
     /// V0.1.16：右缘带（宽度 / 高度 / 可视化开关）的指纹，用于 0.2 秒轮询里发现改动后重画
     private static var rightEdgeSignature = ""
     private static var prefsObserverInstalled = false
@@ -756,6 +840,21 @@ enum AevonEdgeEntry {
         // 圆盘盖在正在打开的浮窗上。appedge 主通道不受影响。
         if source == "global", now < selectionCoolUntil {
             AevonLog.info("[右缘] 刚选中开窗（1.5s 冷静期）→ 全局兜底不触发（AevonSelectionCoolV208）")
+            return
+        }
+        // V0.2.10（AevonAppBlindHoldV210）：App 侧不在场（刚切到这台 App、识别器还没挂上）
+        // → 这次不呼盘。
+        //
+        // 为什么必须放弃而不是「先开出来再说」：Aevon(96) 09:49:09 抖音那一次，SB 判向
+        // 成立照常呼盘，但 App 侧从头到尾没发过 began —— App 手里那份触摸从未被取消，
+        // 用户滑动圆盘时抖音跟着滚。事后没有任何手段补（SB 丢事件只丢自己那份）。
+        // 代价明说：刚启动 / 刚切过来的 App 上，头一两秒划右缘可能不弹盘，再划一次就有。
+        if source == "global", appSideIsBlind() {
+            if now - blindHoldLoggedAt > 1.0 {
+                blindHoldLoggedAt = now
+                let spent = CACurrentMediaTime() - foregroundChangedAt
+                AevonLog.info("[右缘] App 侧盲期：前台 \(AevonEntryHost.currentForegroundBundleID) 切上来 \(String(format: "%.1f", spent))s 还没广播 appready（识别器未挂上）→ 本次不呼盘，避免圆盘与 App 抢同一根手指（AevonAppBlindHoldV210 AevonAppReadyV210）")
+            }
             return
         }
         guard now - lastTriggerAt > 0.6 else { return }
@@ -1920,7 +2019,10 @@ enum AevonEdgeEntry {
         AevonNotifySetRing(1)
         postRingState("com.aevon.ringopen")
         if source == "global" || source == "appedge" {
-            AevonLog.info("[圆盘] 已接管该手指的触摸（App 不会再跟着滚动）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102 AevonEdgeAdoptV207）")
+            // V0.2.10（AevonAppBlindHoldV210）：这句话以前无条件写「App 不会再跟着滚动」，
+            // Aevon(96) 证明它在 App 侧缺位时是假的 —— 现在按实际在场情况自述。
+            let sideAlive = CACurrentMediaTime() - appSideSignalAt < 2.0
+            AevonLog.info("[圆盘] 已接管该手指的触摸（App 侧在场=\(sideAlive ? "是 · 它那份已被合法 touchesCancelled，App 不会跟着滚" : "否 · 只挡住 SB 那份，App 仍持有自己那份，本轮可能同时响应")）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102 AevonEdgeAdoptV207 AevonAppBlindHoldV210）")
         }
     }
 
@@ -2124,6 +2226,7 @@ private func aevonAppTriggerHandler(_ center: CFNotificationCenter?,
                                     _ object: UnsafeRawPointer?,
                                     _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
+        AevonEdgeEntry.noteAppSideAlive()
         AevonEdgeEntry.attemptTrigger("App 侧右缘判向成立（App 触摸已被合法取消）", source: "appedge")
     }
 }
@@ -2135,6 +2238,7 @@ private func aevonAppEdgeBeganHandler(_ center: CFNotificationCenter?,
                                       _ object: UnsafeRawPointer?,
                                       _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
+        AevonEdgeEntry.noteAppSideAlive()
         AevonEdgeEntry.yieldGlobalChannelToAppSide()
     }
 }
@@ -2147,7 +2251,23 @@ private func aevonAppEdgeFailHandler(_ center: CFNotificationCenter?,
                                      _ object: UnsafeRawPointer?,
                                      _ userInfo: CFDictionary?) {
     DispatchQueue.main.async {
+        AevonEdgeEntry.noteAppSideAlive()
         AevonEdgeEntry.appEdgeFailUntil = CACurrentMediaTime() + 1.5
+    }
+}
+
+/// V0.2.10（AevonAppBlindHoldV210）：App 侧挂载成功 / 回到前台的通告。
+///
+/// 这条通知是「盲期守门」的唯一解药：收到它，SB 才知道这一侧的识别器真的在，
+/// 后面几秒才允许在这台 App 上呼盘。App 侧在 installWithAttempt 成功处与
+/// handleBecomeActive 各发一次，覆盖冷启动与热切换两条路径。
+private func aevonAppReadyHandler(_ center: CFNotificationCenter?,
+                                  _ observer: UnsafeMutableRawPointer?,
+                                  _ name: CFNotificationName?,
+                                  _ object: UnsafeRawPointer?,
+                                  _ userInfo: CFDictionary?) {
+    DispatchQueue.main.async {
+        AevonEdgeEntry.noteAppSideAlive()
     }
 }
 

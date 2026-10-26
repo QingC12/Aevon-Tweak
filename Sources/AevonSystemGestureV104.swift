@@ -92,62 +92,31 @@ final class AevonGestureBandView: UIView {
 ///
 /// 它只是**看一眼用的**：告诉用户「带在这里、多宽、多高」。真正的接管逻辑与它无关。
 enum AevonBandHint {
-    private static weak var box: UIView?
-    private static weak var edge: UIView?
-    private static var hideToken = 0
+    /// 调色板 / 尺寸 / 层叠全部搬到 `AevonGeometryOverlay` 了（V0.2.10）。
+    ///
+    /// 为什么合并：接管带和呼出热区现在都要看得见，两套各自维护的视图会在同一位置
+    /// 叠两层半透明色块（越叠越深，用户会以为「颜色深浅代表强度」）。现在只有一层，
+    /// 由 `AevonGeometryOverlay` 统一画两块矩形 —— 它同样没有任何 `draw` 重写，
+    /// 只改 `frame` / `layer.borderWidth` / `backgroundColor`。
 
-    /// 显示一次提示条，`duration` 秒后自动隐藏。
+    /// 显示一段时间（设置里改了宽度 / 带高 / 可视化开关 → 3 秒预览）。
     static func show(duration: CFTimeInterval) {
-        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
-        guard let root = AevonEntryHost.activeRoot, root.bounds.width > 1 else { return }
-        let band = AevonRightEdge.band(in: root.bounds)
-        guard band.width > 1, band.height > 1 else { return }
-
-        let fill: UIView
-        let line: UIView
-        if let existing = box, existing.superview === root, let existingLine = edge {
-            fill = existing
-            line = existingLine
-        } else {
-            box?.removeFromSuperview()
-            fill = UIView()
-            fill.isUserInteractionEnabled = false
-            fill.backgroundColor = UIColor(red: 0.20, green: 0.70, blue: 1.0, alpha: 0.18)
-            line = UIView()
-            line.isUserInteractionEnabled = false
-            line.backgroundColor = UIColor(white: 1.0, alpha: 0.60)
-            fill.addSubview(line)
-            root.addSubview(fill)
-            box = fill
-            edge = line
-        }
-        fill.frame = band
-        line.frame = CGRect(x: 0, y: 0, width: 1, height: band.height)
-        fill.isHidden = false
-
-        hideToken += 1
-        let token = hideToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-            guard token == hideToken else { return }
-            box?.isHidden = true
-        }
+        AevonGeometryOverlay.preview(duration: duration)
     }
 
-    /// 设置里改了宽度 / 带高 / 可视化开关 → 直接给 3 秒预览。
+    /// 配置变了 → 立刻按最新偏好重排（常开模式下会保持可见）。
     static func refresh() {
-        show(duration: 3.0)
+        AevonGeometryOverlay.sync()
     }
 
-    /// 接管成功闪一下（只把底色提亮再落下，0.35 秒后自动隐藏）。
+    /// 接管成功闪一下（接管带边框加粗 0.35 秒）。
     static func flash() {
-        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
-        show(duration: 0.35)
+        AevonGeometryOverlay.flashBand()
     }
 
-    /// 圆盘起来 / 容器搬家时把提示条收掉，别和圆盘叠在一起。
+    /// 圆盘起来 / 容器搬家时把提示收掉，别和圆盘叠在一起。
     static func hideNow() {
-        hideToken += 1
-        box?.isHidden = true
+        AevonGeometryOverlay.hideNow()
     }
 }
 

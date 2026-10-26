@@ -144,6 +144,16 @@ final class AevonRingMenu: UIView {
     private let dimView = UIView()
     private let trackLayer = CAShapeLayer()
     private let centerButton = UIButton(type: .custom)
+    // V0.2.10（AevonRingHubV210）：圆心外面加两层「底盘」。
+    //
+    // 用户 Aevon(96)：「美化一下圆盘中间的应用选择器面板」。原来圆心就是一个孤零零的
+    // 蓝色圆浮在图标中间，和内圈 62pt 的轨道之间空出一大块，看着像没画完。
+    // 现在补两层同心圆盘（外层 92、内层 70，都是白色的 6~7% 填充 + 1pt 微光描边），
+    // 圆心按钮本身改成渐变蓝、按下 / 旋转时整组一起换色 —— 变成「枢纽」而不是「一个按钮」。
+    // 两层都 `isUserInteractionEnabled = false`，绝不参与触摸判定（命中仍走几何距离）。
+    private let hubPlate = UIView()
+    private let hubInner = UIView()
+    private let centerGradient = CAGradientLayer()
 
     private var icons: [AevonRingIcon] = []
     private var iconRadii: [CGFloat] = []
@@ -221,13 +231,35 @@ final class AevonRingMenu: UIView {
         trackLayer.lineWidth = 1.5
         layer.addSublayer(trackLayer)
 
+        // V0.2.10（AevonRingHubV210）：圆心底盘（两层同心圆，纯图层，不参与触摸）
+        hubPlate.isUserInteractionEnabled = false
+        hubPlate.backgroundColor = UIColor(white: 1.0, alpha: 0.07)
+        hubPlate.layer.borderWidth = 1.0
+        hubPlate.layer.borderColor = UIColor(white: 1.0, alpha: 0.13).cgColor
+        addSubview(hubPlate)
+
+        hubInner.isUserInteractionEnabled = false
+        hubInner.backgroundColor = UIColor(white: 1.0, alpha: 0.05)
+        hubInner.layer.borderWidth = 1.0
+        hubInner.layer.borderColor = UIColor(white: 1.0, alpha: 0.10).cgColor
+        addSubview(hubInner)
+
         // V0.0.25：圆心只留四宫格图标，不再有任何文字
         // V0.0.26：底部提示文字也一并移除 —— 屏幕上不再出现任何说明文字，
         //          后续用「选中动画」表达状态（用户 Aevon(19) 要求）
 
         centerButton.frame = CGRect(x: 0, y: 0, width: AevonRingMenu.centerSize, height: AevonRingMenu.centerSize)
-        centerButton.backgroundColor = UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
+        // V0.2.10（AevonRingHubV210）：填充改渐变（底色交给 CAGradientLayer，按钮自身透明）
+        centerButton.backgroundColor = .clear
         centerButton.layer.cornerRadius = AevonRingMenu.centerSize / 2
+        centerGradient.cornerRadius = AevonRingMenu.centerSize / 2
+        centerGradient.startPoint = CGPoint(x: 0.18, y: 0.02)
+        centerGradient.endPoint = CGPoint(x: 0.82, y: 1.0)
+        centerGradient.colors = [
+            UIColor(red: 0.30, green: 0.66, blue: 1.00, alpha: 0.98).cgColor,
+            UIColor(red: 0.07, green: 0.36, blue: 0.88, alpha: 0.98).cgColor
+        ]
+        centerButton.layer.insertSublayer(centerGradient, at: 0)
         centerButton.layer.shadowColor = UIColor.black.cgColor
         centerButton.layer.shadowOpacity = 0.45
         centerButton.layer.shadowRadius = 12
@@ -264,6 +296,16 @@ final class AevonRingMenu: UIView {
         ringCenter = CGPoint(x: bounds.midX, y: bounds.height * AevonRingMenu.verticalRatio)
 
         centerButton.center = ringCenter
+        centerGradient.frame = centerButton.bounds
+
+        // V0.2.10（AevonRingHubV210）：两层底盘跟着圆心走，尺寸固定（92 / 70），
+        // 内层离圆心按钮留 11pt，外层离内圈轨道（62pt 半径）留 4pt —— 视觉上「贴着内圈」。
+        hubPlate.bounds = CGRect(x: 0, y: 0, width: 92, height: 92)
+        hubPlate.center = ringCenter
+        hubPlate.layer.cornerRadius = 46
+        hubInner.bounds = CGRect(x: 0, y: 0, width: 70, height: 70)
+        hubInner.center = ringCenter
+        hubInner.layer.cornerRadius = 35
     }
 
     /// 圆的可用最大半径：不超出左右边界，也不顶到状态栏 / 底部
@@ -461,12 +503,23 @@ final class AevonRingMenu: UIView {
         trackLayer.opacity = 0
         centerButton.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
         centerButton.alpha = 0
+        // V0.2.10（AevonRingHubV210）：底盘比按钮早一点淡入、放大到位，视觉上「按钮从盘里长出来」
+        hubPlate.alpha = 0
+        hubInner.alpha = 0
+        hubPlate.transform = CGAffineTransform(scaleX: 0.55, y: 0.55)
+        hubInner.transform = CGAffineTransform(scaleX: 0.70, y: 0.70)
 
         UIView.animate(withDuration: 0.16, animations: {
             self.dimView.alpha = 1
             self.centerButton.alpha = 1
             self.centerButton.transform = .identity
         })
+        UIView.animate(withDuration: 0.26, delay: 0.02, options: [.curveEaseOut], animations: {
+            self.hubPlate.alpha = 1
+            self.hubInner.alpha = 1
+            self.hubPlate.transform = .identity
+            self.hubInner.transform = .identity
+        }, completion: nil)
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = 1
@@ -521,6 +574,8 @@ final class AevonRingMenu: UIView {
         UIView.animate(withDuration: 0.18, animations: {
             self.alpha = 0
             self.centerButton.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
+            self.hubPlate.alpha = 0
+            self.hubInner.alpha = 0
         }, completion: { _ in
             self.removeFromSuperview()
         })
@@ -755,9 +810,17 @@ final class AevonRingMenu: UIView {
             centerButton.setImage(symbol, for: .normal)
         }
         centerButton.tintColor = .white
-        centerButton.backgroundColor = rotating
-            ? UIColor(red: 0.10, green: 0.72, blue: 0.60, alpha: 0.96)
-            : UIColor(red: 0.10, green: 0.48, blue: 0.95, alpha: 0.96)
+        // V0.2.10（AevonRingHubV210）：底色改由渐变层承担，这里换的是渐变的两个端点。
+        let top = rotating
+            ? UIColor(red: 0.26, green: 0.88, blue: 0.74, alpha: 0.98)
+            : UIColor(red: 0.30, green: 0.66, blue: 1.00, alpha: 0.98)
+        let bottom = rotating
+            ? UIColor(red: 0.05, green: 0.52, blue: 0.44, alpha: 0.98)
+            : UIColor(red: 0.07, green: 0.36, blue: 0.88, alpha: 0.98)
+        centerGradient.colors = [top.cgColor, bottom.cgColor]
+        hubInner.layer.borderColor = (rotating
+            ? UIColor(red: 0.25, green: 0.92, blue: 0.78, alpha: 0.40).cgColor
+            : UIColor(white: 1.0, alpha: 0.10).cgColor)
         centerButton.layer.shadowColor = (rotating
             ? UIColor(red: 0.20, green: 0.95, blue: 0.80, alpha: 1.0)
             : UIColor.black).cgColor

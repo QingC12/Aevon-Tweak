@@ -796,3 +796,26 @@ __attribute__((used)) static const char AevonFloatStandDownV209Marker[] = "Aevon
 __attribute__((used)) static const char AevonFloatPassV209Marker[] = "AevonFloatPassV209";
 __attribute__((used)) static const char AevonDeskEdgePullV209Marker[] = "AevonDeskEdgePullV209";
 __attribute__((used)) static const char AevonPrefsInfoV209Marker[] = "AevonPrefsInfoV209";
+
+/* ── V0.2.10（Aevon(96) 判读）：本版标记 ──
+ * 用户四条诉求：①圆盘滑动时偶尔还会带动全屏 App；②设置里 ⓘ 离开关太近容易误触；
+ * ③美化圆盘中间的应用选择器面板；④触发区 / 接管带要看得见、能改、拖动滑条实时跟随。
+ * 每条修复各配一条 used 常量，保证日志文案以后被改写时 CI 断言不会假红：
+ *   AevonAppBlindHoldV210  = App 侧盲期（识别器未挂上）时拒绝呼盘，杜绝「圆盘 + App 双响应」
+ *   AevonAppReadyV210      = App 侧挂载 / 回前台广播 appready，SB 据此解除盲期
+ *   AevonAppMountFastV210  = App 侧挂载提速（0.6s+1.0s 改 0.12s + 0.2s×80 重试）
+ *   AevonPrefsInfoPosV210  = 设置页 ⓘ 从「贴开关左侧」改到「开关名字正后方」
+ *   AevonRingHubV210       = 圆盘心圆加两层底盘 + 渐变蓝，不再是孤零零一个圆
+ *   AevonPickerBeautyV210  = 应用选择面板改毛玻璃 + 22 圆角 + 圆形关闭键
+ *   AevonGeomOverlayV210   = 触发区（青）/ 接管带（橙）两块实时预览框
+ *   AevonGeomPreviewLiveV210 = 拖滑条 / 进页面即亮，尺寸标签跟着手指变
+ * （AevonAppReadyV210 / AevonAppMountFastV210 在 AevonApp.dylib 里另一份，
+ *  这里只钉主插件 Aevon.dylib。） */
+__attribute__((used)) static const char AevonAppBlindHoldV210Marker[] = "AevonAppBlindHoldV210";
+__attribute__((used)) static const char AevonAppReadyV210Marker[] = "AevonAppReadyV210";
+__attribute__((used)) static const char AevonAppMountFastV210Marker[] = "AevonAppMountFastV210";
+__attribute__((used)) static const char AevonPrefsInfoPosV210Marker[] = "AevonPrefsInfoPosV210";
+__attribute__((used)) static const char AevonRingHubV210Marker[] = "AevonRingHubV210";
+__attribute__((used)) static const char AevonPickerBeautyV210Marker[] = "AevonPickerBeautyV210";
+__attribute__((used)) static const char AevonGeomOverlayV210Marker[] = "AevonGeomOverlayV210";
+__attribute__((used)) static const char AevonGeomPreviewLiveV210Marker[] = "AevonGeomPreviewLiveV210";

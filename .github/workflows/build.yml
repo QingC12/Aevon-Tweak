@@ -1273,6 +1273,47 @@ jobs:
           [ "$UA_LABEL" -eq 0 ] || { echo "::error::Root.plist 还有超长开关名（0.2.9 已改短名 + ⓘ）"; exit 1; }
           echo "V0.2.9 校验: 手势条退出命中链 + 浮窗全放行 + 桌面贴边横拉 + App 侧斜向兜底 + 设置页 ⓘ 已就位"
 
+          # ---- V0.2.10（Aevon(96) 判读）：盲期守门 + ⓘ 移位 + 面板美化 + 区域实时预览 ----
+          grep -q 'AevonAppBlindHoldV210' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::App 侧盲期守门被删 —— 冷启动 App 上圆盘会与 App 抢同一根手指（偶发带动 App 复发）"; exit 1; }
+          grep -q 'appSideIsBlind' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::盲期判据 appSideIsBlind 丢失"; exit 1; }
+          grep -q 'aevonAppReadyHandler' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::SB 侧没有监听 appready —— 盲期一旦进入就再也解不开，右缘等于废掉"; exit 1; }
+          grep -q 'com.aevon.appready' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧不再广播 appready —— 盲期守门会把每次呼盘都拦下"; exit 1; }
+          grep -q 'AevonAppMountFastV210' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧挂载提速被改回慢速（0.6s+1.0s）—— 盲期又会拉长到 2 秒以上"; exit 1; }
+          grep -q 'AevonAppBlindHoldV210' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::V210 标记未收容进 AevonAssertionShim.m（改文案就会让历史串消失）"; exit 1; }
+          grep -q 'AevonPrefsInfoPosV210' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::设置页 ⓘ 仍在贴开关摆放（Aevon(96) 截图里的误触会复发）"; exit 1; }
+          grep -q 'sizeThatFits' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::ⓘ 没有按文字实际宽度定位 —— 又会退化成猜开关宽度"; exit 1; }
+          grep -q 'AevonRingHubV210' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::圆盘心圆底盘/渐变被删"; exit 1; }
+          grep -q 'AevonPickerBeautyV210' "$GITHUB_WORKSPACE/Sources/AevonAppPickerView.swift" \
+            || { echo "::error::应用选择面板美化被删"; exit 1; }
+          grep -q 'AevonGeomOverlayV210' "$GITHUB_WORKSPACE/Sources/AevonGeometryOverlay.swift" \
+            || { echo "::error::触发区/接管带预览层文件缺失"; exit 1; }
+          grep -q 'AevonGeometryOverlay.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::AevonGeometryOverlay.swift 没进 Makefile 源码表（会空引用编译失败）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonGeometryOverlay.swift" \
+            | grep -q 'override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { return nil }' \
+            || { echo "::error::预览层不再屏蔽命中测试 —— 两块色板会吃掉右缘触摸"; exit 1; }
+          grep -q 'AevonGeomPreviewLiveV210' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::拖动滑条实时预览的逻辑被删"; exit 1; }
+          grep -q 'AevonPreviewReq' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::进页面亮一次预览的请求键没写（用户看不到两块区域在哪）"; exit 1; }
+          grep -q '<string>显示区域预览</string>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::Root.plist 的「显示区域预览」开关不见了"; exit 1; }
+          BAND_LABEL="$(grep -c '>显示接管带<' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}' || true)"
+          BAND_LABEL="${BAND_LABEL:-0}"
+          [ "$BAND_LABEL" -eq 0 ] || { echo "::error::还有旧的「显示接管带」标签（0.2.10 已改成「显示区域预览」）"; exit 1; }
+          INFO_COUNT2="$(grep -c 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
+          [ "$INFO_COUNT2" -ge 11 ] || { echo "::error::Root.plist 的开关说明不足 11 条（实际 $INFO_COUNT2）"; exit 1; }
+          echo "V0.2.10 校验: 盲期守门 + appready + 挂载提速 + ⓘ 移到名字后 + 心圆底盘 + 面板毛玻璃 + 区域实时预览 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

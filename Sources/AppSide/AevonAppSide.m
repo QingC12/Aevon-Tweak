@@ -108,6 +108,9 @@ __attribute__((used)) static const char AevonAppTwoFrameV205Marker[] = "AevonApp
 __attribute__((used)) static const char AevonAppFailNotifyV206Marker[] = "AevonAppFailNotifyV206";
 /* V0.2.7 挂载重试加宽（Aevon(93)：QQ 冷启动 ~3s 才有 keyWindow，旧 4 次重试撑不过） */
 __attribute__((used)) static const char AevonAppMountRetryV207Marker[] = "AevonAppMountRetryV207";
+/* V0.2.10 盲期（Aevon(96) 抖音第 8 次：App 侧未挂载时 SB 照旧呼盘 → App 跟着滚） */
+__attribute__((used)) static const char AevonAppReadyV210Marker[] = "AevonAppReadyV210";
+__attribute__((used)) static const char AevonAppMountFastV210Marker[] = "AevonAppMountFastV210";
 
 #pragma mark - 日志
 
@@ -336,6 +339,25 @@ static void AevonAppPostRightEdgeBegan(void) {
 static void AevonAppPostRightEdgeFail(void) {
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                                          CFSTR("com.aevon.rightedgefail"),
+                                         NULL, NULL, true);
+}
+
+/* V0.2.10（AevonAppReadyV210）：「App 侧已就位」广播。
+ *
+ * Aevon(96) 09:49:09 铁证（抖音冷启动，落点 418,777 距右缘 11pt）：
+ *   `[右缘] 起手 … 归口=右缘接管带·在带内·按下即接管（第 8 次）`
+ *   → `[右缘] 判向成立 → 呼出圆盘`
+ *   → `[右缘] 诊断：前台 App=com.ss.iphone.ugc.Aweme，本指无 App 侧起手痕迹（>2s 无让路）`
+ * 也就是说：那一秒里 App 侧识别器**还没挂上**，App 手里那份触摸从头到尾没被取消，
+ * 圆盘一滑动，抖音就跟着滚 —— 这就是「偶尔还是会触发」的全部来源。
+ *
+ * SB 侧没有办法事后夺走 App 已经拿到的触摸（backboardd 双投，sendEvent 只影响 SB 那份），
+ * 所以唯一诚实的修法是：**呼盘之前先确认 App 侧在不在**。挂载成功即刻、以及每次前台
+ * 激活都广播一次本通知，SB 收到就把当前前台 App 记为「在场」；不在场时宁可这次不呼盘，
+ * 也绝不出现「圆盘出来了 + App 也在动」的双响应。 */
+static void AevonAppPostReady(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.aevon.appready"),
                                          NULL, NULL, true);
 }
 
@@ -768,13 +790,12 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
                                                  name:UIApplicationDidBecomeActiveNotification
                                                object:nil];
 
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        __strong typeof(weakSelf) self_ = weakSelf;
-        if (self_ == nil) { return; }
-        [self_ installWithAttempt:1];
-    });
+    /* V0.2.10（AevonAppMountFastV210）：这里原来是**固定等 1 秒**再第一次尝试挂载，
+     * 叠加构造阶段那 0.6 秒，冷启动 App 的盲期长达 1.6 秒起步 —— Aevon(96) 抖音
+     * 1.8 秒时用户已经在划右缘了，识别器还没挂上，于是「圆盘 + App 同时响应」。
+     * 现在改成立刻试一次（keyWindow 通常已经有了），失败交给 0.2 秒一次的快速重试。
+     * 挂载本身只是 addGestureRecognizer，代价可以忽略，不需要用时间换稳定。 */
+    [self installWithAttempt:1];
 }
 
 - (void)handleBecomeActive {
@@ -786,6 +807,10 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
             AevonAppLog(@"识别器已改挂到新窗口 %@（尺寸 %.0fx%.0f）",
                         NSStringFromClass([window class]), window.bounds.size.width, window.bounds.size.height);
         }
+        /* V0.2.10（AevonAppReadyV210）：每次回到前台都重发一次「在场」。
+         * 热启动（App 本来就在后台跑着）不会重新挂载，只靠挂载时那一次广播的话，
+         * SB 切回来会以为这一侧是盲的，白白丢掉第一个手势。 */
+        AevonAppPostReady();
         return;
     }
     [self installWithAttempt:1];
@@ -802,17 +827,18 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
         /* V0.2.7（AevonAppMountRetryV207）：Aevon(93) 实测 QQ 冷启动 ~3 秒后才有可用
          * keyWindow，旧上限 4 次（1+2+3 秒）撑不过启动窗口 —— 用户在 QQ 划右缘时
          * 识别器还没挂上 = App 侧全盲，global 兜底呼盘 + QQ 跟着动。
-         * 改成 0.5 秒间隔 × 40 次（20 秒窗口），盖住最慢的冷启动。 */
-        if (attempt < 40) {
+         * V0.2.10（AevonAppMountFastV210）：间隔 0.5s → **0.2s**、上限 40 → 80 次
+         * （仍是 16 秒窗口）。盲期越短，「圆盘和 App 抢同一根手指」的窗口就越小。 */
+        if (attempt < 80) {
             __weak typeof(self) weakSelf = self;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) self_ = weakSelf;
                 if (self_ == nil) { return; }
                 [self_ installWithAttempt:attempt + 1];
             });
         } else {
-            AevonAppLog(@"20 秒内始终取不到 keyWindow → 放弃挂载（App 侧保持只加载不动作）");
+            AevonAppLog(@"16 秒内始终取不到 keyWindow → 放弃挂载（App 侧保持只加载不动作）");
         }
         return;
     }
@@ -835,7 +861,11 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
     [window addGestureRecognizer:_gesture];
 
     _installed = YES;
-    AevonAppLog(@"识别器已挂载：窗口=%@ 尺寸=%.0fx%.0f 带宽=%.0f 带高=%.0f%% 模式=真接管（delaysTouchesBegan=YES cancelsTouchesInView=YES，判向失败整段补投）（AevonAppTakeoverV201）",
+    /* V0.2.10（AevonAppReadyV210）：挂载成功 → 立刻告诉 SpringBoard「这一侧在场」。
+     * SB 收到后才允许在这台 App 上呼盘；没有这条信号的 App 会被当成盲期而放弃呼盘
+     * （宁可少呼一次，也绝不让圆盘和 App 同时响应同一根手指）。 */
+    AevonAppPostReady();
+    AevonAppLog(@"识别器已挂载：窗口=%@ 尺寸=%.0fx%.0f 带宽=%.0f 带高=%.0f%% 模式=真接管（delaysTouchesBegan=YES cancelsTouchesInView=YES，判向失败整段补投；已广播 appready）（AevonAppTakeoverV201 AevonAppReadyV210 AevonAppMountFastV210）",
                 NSStringFromClass([window class]), screen.width, screen.height,
                 _bandWidth, _heightPercent);
 }
@@ -856,7 +886,10 @@ static void AevonAppSideEntry(void) {
             /* SpringBoard 自己有一套（主插件），这里绝不能再开一份 */
             if ([gAevonAppBundleID isEqualToString:@"com.apple.springboard"]) { return; }
 
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+            /* V0.2.10（AevonAppMountFastV210）：0.6 秒 → 0.12 秒。
+             * 这一秒级等待原本是为了「别在 App 启动路径上抢主线程」，但真正要做的
+             * 只有取 keyWindow + addGestureRecognizer 两件事，等 0.6 秒纯属白送盲期。 */
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 @try {
                     [[AevonAppSide sharedInstance] start];

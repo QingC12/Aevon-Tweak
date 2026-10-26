@@ -24,6 +24,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonBootstrap.swift \
     Sources/AevonEntryHost.swift \
     Sources/AevonEdgeEntry.swift \
+    Sources/AevonGeometryOverlay.swift \
     Sources/AevonSystemGestureV104.swift \
     Sources/AevonProbeV107.swift \
     Sources/AevonProbeP7V114.swift \

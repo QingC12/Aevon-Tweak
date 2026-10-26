@@ -523,6 +523,19 @@ static char AevonSliderTagKey;
     [self aevonHookSliders];
     [self aevonSyncAllSliders];
     AevonLogPrefsSync();
+    /* V0.2.10（AevonGeomPreviewLiveV210）：一进「细节调整」页就请 SpringBoard 把
+     * 触发区 / 接管带亮 3 秒 —— 用户不用先拖滑条才知道这两块现在长什么样。
+     * 走一次性请求键（写当前时间戳），SB 侧看到数值变大就 preview 一次；
+     * 不用 Darwin 通知是因为它无载荷，SB 分不清「滑条动了一下」和「刚进页面」。 */
+    @try {
+        CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
+        double stamp = [[NSDate date] timeIntervalSince1970];
+        CFPreferencesSetAppValue(CFSTR("AevonPreviewReq"),
+                                 (__bridge CFPropertyListRef)@(stamp),
+                                 domain);
+        CFPreferencesAppSynchronize(domain);
+    } @catch (NSException *exception) {
+    }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -584,11 +597,33 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             if (created.superview != cell) { [cell addSubview:created]; }
             button = created;
         }
-        /* 紧贴开关左侧摆放（开关宽约 51pt，右侧留 10pt 边距） */
+        /* V0.2.10（AevonPrefsInfoPosV210）：从「紧贴开关左侧」改到「开关名字正后方」。
+         *
+         * Aevon(96) 截图 IMG_1701：ⓘ 和 UISwitch 的圆角轨道几乎贴在一起（只差 8pt），
+         * 拇指想拨开关时很容易点到 ⓘ。根源是我把位置写成「从右边数第 51+26+8 个像素」，
+         * 那是**猜**开关宽度，实际 UISwitch 在不同系统版本上更宽，于是两者压在一起。
+         *
+         * 现在改成按**文字实际宽度**定位：ⓘ 跟在名字后面 6pt，离右侧开关永远 ≥12pt。
+         * 名字都是短词（4~7 个字），所以 ⓘ 落在行中间偏左 —— 既是用户原话「开关名字后面
+         * 添加圆圈叹号」的字面意思，也彻底消除了误触。 */
         CGFloat side = 26.0;
+        CGFloat labelRight = 16.0;
+        @try {
+            UILabel *text = [cell respondsToSelector:@selector(textLabel)] ? cell.textLabel : nil;
+            if (text != nil && text.text.length > 0) {
+                CGSize fit = [text sizeThatFits:CGSizeMake(CGFLOAT_MAX, text.bounds.size.height)];
+                CGFloat shown = MIN(fit.width, text.bounds.size.width);
+                if (shown > 1.0) { labelRight = CGRectGetMinX(text.frame) + shown; }
+            }
+        } @catch (NSException *exception) {
+            labelRight = 16.0;
+        }
+        /* 右侧留够：开关约 51pt + 右边距 10pt + 与 ⓘ 之间的 12pt 空隙 */
+        CGFloat ceiling = cell.bounds.size.width - 51.0 - 10.0 - 12.0 - side;
+        CGFloat x = MIN(labelRight + 6.0, MAX(16.0, ceiling));
         CGRect frame = button.frame;
         frame.size = CGSizeMake(side, side);
-        frame.origin.x = MAX(24.0, cell.bounds.size.width - 51.0 - side - 8.0);
+        frame.origin.x = x;
         frame.origin.y = (cell.bounds.size.height - side) * 0.5;
         button.frame = frame;
         button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;

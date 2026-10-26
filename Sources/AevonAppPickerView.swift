@@ -17,6 +17,10 @@ private struct AevonAppSection {
 final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelegate {
     private let dimView = UIView()
     private let panel = UIView()
+    /// V0.2.10（AevonPickerBeautyV210）：面板底改成毛玻璃 + 半透明深色叠加。
+    /// 原来是一块纯色 #1C1C1E，压在圆盘 / 桌面上像贴了一张纸；现在能透出背景的
+    /// 一点点颜色和亮度，圆角也收到 22（原来是 16，直角感重）。
+    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
@@ -45,23 +49,35 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         addSubview(dimView)
         dimView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(closeTapped)))
 
-        panel.backgroundColor = UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
-        panel.layer.cornerRadius = 16
+        panel.backgroundColor = UIColor(red: 0.10, green: 0.10, blue: 0.12, alpha: 0.82)
+        panel.layer.cornerRadius = 22
+        panel.layer.cornerCurve = .continuous
+        panel.layer.borderWidth = 0.5
+        panel.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
         panel.clipsToBounds = true
         addSubview(panel)
 
+        // 毛玻璃垫在最底层；它不接触摸（否则会挡住 table 的行选中）
+        blurView.isUserInteractionEnabled = false
+        panel.addSubview(blurView)
+
         titleLabel.text = "选择要浮窗打开的 App"
         titleLabel.textColor = .white
-        titleLabel.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
+        titleLabel.font = UIFont.systemFont(ofSize: 18, weight: .semibold)
         panel.addSubview(titleLabel)
 
-        subtitleLabel.textColor = UIColor(white: 0.65, alpha: 1.0)
+        subtitleLabel.textColor = UIColor(white: 0.62, alpha: 1.0)
         subtitleLabel.font = UIFont.systemFont(ofSize: 12, weight: .regular)
         panel.addSubview(subtitleLabel)
 
-        closeButton.setTitle("关闭", for: .normal)
-        closeButton.setTitleColor(UIColor(red: 0.35, green: 0.62, blue: 1.0, alpha: 1.0), for: .normal)
-        closeButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        // V0.2.10（AevonPickerBeautyV210）：关闭按钮改成右上角圆形 ✕（系统符号），
+        // 比原来那行蓝色「关闭」文字更像面板自己的把手，也不会和标题抢视线。
+        let closeConfig = UIImage.SymbolConfiguration(pointSize: 13, weight: .bold)
+        closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: closeConfig), for: .normal)
+        closeButton.setTitle(nil, for: .normal)
+        closeButton.tintColor = UIColor(white: 0.93, alpha: 1.0)
+        closeButton.backgroundColor = UIColor(white: 1.0, alpha: 0.12)
+        closeButton.layer.cornerRadius = 15
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         panel.addSubview(closeButton)
 
@@ -75,13 +91,16 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         panel.addSubview(openEmptyLabel)
 
         table.backgroundColor = .clear
-        table.separatorColor = UIColor(white: 0.22, alpha: 1.0)
+        table.separatorColor = UIColor(white: 1.0, alpha: 0.10)
         table.dataSource = self
         table.delegate = self
-        table.rowHeight = 54
-        table.sectionIndexColor = UIColor(white: 0.55, alpha: 1.0)
+        table.rowHeight = 60
+        // V0.2.10（AevonPickerBeautyV210）：分隔线从文字开头起画（图标左边留白），
+        // 视觉上和系统的设置列表一致，不再是「一条横贯整行的白线」。
+        table.separatorInset = UIEdgeInsets(top: 0, left: 66, bottom: 0, right: 16)
+        table.sectionIndexColor = UIColor(white: 0.62, alpha: 1.0)
         table.sectionIndexBackgroundColor = .clear
-        table.sectionIndexTrackingBackgroundColor = UIColor(white: 0.2, alpha: 0.6)
+        table.sectionIndexTrackingBackgroundColor = UIColor(white: 1.0, alpha: 0.10)
         panel.addSubview(table)
 
         emptyLabel.text = apps.isEmpty
@@ -114,10 +133,11 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
                              y: (bounds.height - height) / 2,
                              width: width,
                              height: height)
+        blurView.frame = panel.bounds
 
-        titleLabel.frame = CGRect(x: 18, y: 12, width: width - 100, height: 22)
-        subtitleLabel.frame = CGRect(x: 18, y: 34, width: width - 100, height: 16)
-        closeButton.frame = CGRect(x: width - 76, y: 10, width: 60, height: 40)
+        titleLabel.frame = CGRect(x: 20, y: 14, width: width - 74, height: 22)
+        subtitleLabel.frame = CGRect(x: 20, y: 38, width: width - 74, height: 16)
+        closeButton.frame = CGRect(x: width - 46, y: 14, width: 30, height: 30)
         let hasOpen = !chips.isEmpty
         openScroll.isHidden = !hasOpen
         openEmptyLabel.isHidden = hasOpen
@@ -168,8 +188,12 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
     private func makeChip(title: String, bundleID: String) -> UIView {
         let width = chipWidth(for: title)
         let chip = UIView(frame: CGRect(x: 0, y: 0, width: width, height: dimHeight))
-        chip.backgroundColor = UIColor(white: 0.20, alpha: 1.0)
+        // V0.2.10（AevonPickerBeautyV210）：胶囊改成半透明白（原来是不透明灰），
+        // 压在毛玻璃上才有「玻璃上的小标签」质感。
+        chip.backgroundColor = UIColor(white: 1.0, alpha: 0.14)
         chip.layer.cornerRadius = dimHeight / 2
+        chip.layer.borderWidth = 0.5
+        chip.layer.borderColor = UIColor(white: 1.0, alpha: 0.10).cgColor
 
         let name = UIButton(type: .system, primaryAction: UIAction(title: title) { [weak self] _ in
             AevonLog.info("[面板] 置顶已开窗口 \(bundleID)")
@@ -286,17 +310,19 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         guard section < sections.count else { return nil }
         let container = UIView()
-        container.backgroundColor = UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
-        let label = UILabel(frame: CGRect(x: 16, y: 2, width: 60, height: 16))
+        // V0.2.10（AevonPickerBeautyV210）：分组标题原来刷了一块不透明深色条，
+        // 压在毛玻璃上像补丁；改成透明，只留小号字母。
+        container.backgroundColor = .clear
+        let label = UILabel(frame: CGRect(x: 20, y: 4, width: 60, height: 16))
         label.text = sections[section].letter
-        label.textColor = UIColor(white: 0.55, alpha: 1.0)
-        label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = UIColor(white: 0.60, alpha: 1.0)
+        label.font = UIFont.systemFont(ofSize: 12, weight: .bold)
         container.addSubview(label)
         return container
     }
 
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        return 20
+        return 22
     }
 
     func sectionIndexTitles(for tableView: UITableView) -> [String]? {
@@ -321,17 +347,17 @@ final class AevonAppPickerView: UIView, UITableViewDataSource, UITableViewDelega
         guard let entry = entry(at: indexPath) else { return cell }
         cell.backgroundColor = .clear
         // V0.0.22：每一行显示 App 原生图标（取不到时返回 nil，自动退回纯文字）
-        cell.imageView?.image = AevonAppIcon.image(bundleID: entry.bundleID, size: 34)
+        cell.imageView?.image = AevonAppIcon.image(bundleID: entry.bundleID, size: 38)
         cell.imageView?.contentMode = .scaleAspectFit
         cell.textLabel?.text = entry.name
         cell.textLabel?.textColor = .white
         cell.textLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
         cell.detailTextLabel?.text = entry.bundleID
-        cell.detailTextLabel?.textColor = UIColor(white: 0.55, alpha: 1.0)
+        cell.detailTextLabel?.textColor = UIColor(white: 0.50, alpha: 1.0)
         cell.detailTextLabel?.font = UIFont.systemFont(ofSize: 11)
         cell.selectionStyle = .default
         let selected = UIView()
-        selected.backgroundColor = UIColor(white: 0.25, alpha: 1.0)
+        selected.backgroundColor = UIColor(white: 1.0, alpha: 0.12)
         cell.selectedBackgroundView = selected
 
         // V0.0.30：面板只有单窗模式 —— 已开窗的 App 显示「已开」标签
