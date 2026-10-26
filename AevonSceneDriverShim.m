@@ -16,6 +16,7 @@
 
 typedef id (*AevonSDIdFn0)(id, SEL);
 typedef id (*AevonSDIdFn1)(id, SEL, id);
+typedef id (*AevonSDIdFn2)(id, SEL, id, id);
 typedef void (*AevonSDVoidFn0)(id, SEL);
 typedef void (*AevonSDVoidFnBool1)(id, SEL, BOOL);
 typedef void (*AevonSDVoidFnInt1)(id, SEL, NSInteger);
@@ -85,116 +86,116 @@ static id AevonSDAppProcessHandle(NSString *bundleID) {
     return nil;
 }
 
+static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,
+                                    NSString * __autoreleasing *outSceneID,
+                                    NSString * __autoreleasing *outErr);
+
 id AevonSelfSceneCreate(NSString *bundleID, double w, double h,
                         NSString * __autoreleasing *outSceneID,
                         NSString * __autoreleasing *outErr) {
-    NSString *step = @"";
     @try {
-        if (outErr) { *outErr = nil; }
-        if (outSceneID) { *outSceneID = nil; }
-        if (bundleID.length == 0) { step = @"bundleID-empty"; goto fail; }
-        if (w < 50 || h < 50) { step = @"size-invalid"; goto fail; }
-
-        // ── 1. 运行中 App 的进程身份（clientIdentity 必须指向已存在的进程）──
-        step = @"process-handle";
-        id handle = AevonSDAppProcessHandle(bundleID);
-        if (handle == nil) { step = @"app-not-running"; goto fail; }
-        id processIdentity = nil;
-        for (NSString *key in @[@"identity", @"processIdentity"]) {
-            @try { processIdentity = [handle valueForKey:key]; } @catch (NSException *exception) { processIdentity = nil; }
-            if (processIdentity != nil) break;
-        }
-        if (processIdentity == nil) { step = @"process-identity"; goto fail; }
-
-        // ── 2. 场景管理器 ──
-        step = @"fb-manager";
-        id manager = AevonSDClassFactory(@"FBSceneManager", @"sharedInstance");
-        if (manager == nil) { step = @"fb-manager-nil"; goto fail; }
-
-        // ── 3. 唯一身份（绝不与主场景 sceneID:<bid>-default 撞，round7 教训）──
-        step = @"identity";
-        NSString *sceneID = [NSString stringWithFormat:@"sceneID:com.aevon.float-%@", bundleID];
-
-        // 遗留场景先销毁（respring 后我们没来得及收尾的情况）
-        SEL sceneByIdSel = NSSelectorFromString(@"sceneWithIdentifier:");
-        if ([manager respondsToSelector:sceneByIdSel]) {
-            id leftover = ((AevonSDIdFn1)objc_msgSend)(manager, sceneByIdSel, sceneID);
-            if (leftover != nil) {
-                SEL destroySel = NSSelectorFromString(@"destroyScene:withTransitionContext:");
-                if ([manager respondsToSelector:destroySel]) {
-                    ((AevonSDIdFn1)objc_msgSend)(manager, destroySel, sceneID, nil);
-                }
-            }
-        }
-
-        // ── 4. 场景定义（identity / clientIdentity / specification）──
-        step = @"definition";
-        id definition = AevonSDClassFactory(@"FBSMutableSceneDefinition", @"definition");
-        if (definition == nil) { step = @"definition-nil"; goto fail; }
-        id sceneIdentity = AevonSDClassFactory1(@"FBSSceneIdentity",
-                                                @"identityForIdentifier:", sceneID);
-        if (sceneIdentity == nil) { step = @"scene-identity-nil"; goto fail; }
-        AevonSDSetObject(definition, "identity", sceneIdentity);
-        id clientIdentity = AevonSDClassFactory1(@"FBSSceneClientIdentity",
-                                                 @"identityForProcessIdentity:", processIdentity);
-        if (clientIdentity == nil) { step = @"client-identity-nil"; goto fail; }
-        AevonSDSetObject(definition, "clientIdentity", clientIdentity);
-        id specification = AevonSDClassFactory(@"UIApplicationSceneSpecification", @"specification");
-        if (specification == nil) { step = @"specification-nil"; goto fail; }
-        AevonSDSetObject(definition, "specification", specification);
-
-        // ── 5. 初始参数：settings 画布 ★创建时烙定（真重排的立身之本）──
-        step = @"parameters";
-        id parameters = AevonSDClassFactory1(@"FBSMutableSceneParameters",
-                                             @"parametersForSpecification:", specification);
-        if (parameters == nil) { step = @"parameters-nil"; goto fail; }
-
-        Class settingsCls = NSClassFromString(@"UIMutableApplicationSceneSettings");
-        if (settingsCls == nil) { step = @"settings-class-nil"; goto fail; }
-        id settings = [[settingsCls alloc] init];
-
-        AevonSDSetBool(settings, "canShowAlerts", YES);
-        // dc 母本 = 主屏 dc（iOS 17 无 setter，创建期由系统拷贝 —— ScreenCore/Mango 同款）
-        SEL dcSel = NSSelectorFromString(@"displayConfiguration");
-        if ([UIScreen.mainScreen respondsToSelector:dcSel]) {
-            id dc = ((AevonSDIdFn0)objc_msgSend)(UIScreen.mainScreen, dcSel);
-            AevonSDSetObject(settings, "displayConfiguration", dc);
-        }
-        AevonSDSetBool(settings, "foreground", YES);            // 后台场景不渲染（round6 根因之一）
-        AevonSDSetRect(settings, "frame", CGRectMake(0, 0, w, h)); // ★ 画布 = 浮窗尺寸
-        AevonSDSetInt(settings, "interfaceOrientation", 1);      // Portrait
-        AevonSDSetInt(settings, "level", 1);
-        AevonSDSetObject(settings, "persistenceIdentifier", NSUUID.UUID.UUIDString);
-        AevonSDSetBool(settings, "statusBarDisabled", YES);      // 非原生窗（参考实现同款）
-        AevonSDSetInsets(settings, "peripheryInsets", UIEdgeInsetsZero);
-        AevonSDSetInsets(settings, "safeAreaInsetsPortrait", UIEdgeInsetsZero);
-        AevonSDSetObject(parameters, "settings", settings);
-
-        Class clientCls = NSClassFromString(@"UIMutableApplicationSceneClientSettings");
-        if (clientCls != nil) {
-            id clientSettings = [[clientCls alloc] init];
-            AevonSDSetInt(clientSettings, "interfaceOrientation", 1);
-            AevonSDSetInt(clientSettings, "statusBarStyle", 0);
-            AevonSDSetObject(parameters, "clientSettings", clientSettings);
-        }
-
-        // ── 6. 创建场景 ──
-        step = @"create-scene";
-        SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
-        if (![manager respondsToSelector:createSel]) { step = @"create-sel-missing"; goto fail; }
-        id scene = ((AevonSDIdFn1)objc_msgSend)(manager, createSel, definition, parameters);
-        if (scene == nil) { step = @"scene-nil"; goto fail; }
-
-        if (outSceneID) { *outSceneID = sceneID; }
-        return scene;
-
-    fail:
-        if (outErr) { *outErr = step; }
-        return nil;
+        return AevonSelfSceneCreateInner(bundleID, w, h, outSceneID, outErr);
     } @catch (NSException *exception) {
         if (outErr) { *outErr = [NSString stringWithFormat:@"exception:%@", exception.name]; }
         return nil;
     }
+}
+
+/// 创建主体（ARC 下 goto 跨 __strong 局部变量初始化是编译错误 —— 全部 early-return）。
+static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,
+                                    NSString * __autoreleasing *outSceneID,
+                                    NSString * __autoreleasing *outErr) {
+    if (outErr) { *outErr = nil; }
+    if (outSceneID) { *outSceneID = nil; }
+    if (bundleID.length == 0) { if (outErr) { *outErr = @"bundleID-empty"; } return nil; }
+    if (w < 50 || h < 50) { if (outErr) { *outErr = @"size-invalid"; } return nil; }
+
+    // ── 1. 运行中 App 的进程身份（clientIdentity 必须指向已存在的进程）──
+    id handle = AevonSDAppProcessHandle(bundleID);
+    if (handle == nil) { if (outErr) { *outErr = @"app-not-running"; } return nil; }
+    id processIdentity = nil;
+    for (NSString *key in @[@"identity", @"processIdentity"]) {
+        @try { processIdentity = [handle valueForKey:key]; } @catch (NSException *exception) { processIdentity = nil; }
+        if (processIdentity != nil) break;
+    }
+    if (processIdentity == nil) { if (outErr) { *outErr = @"process-identity"; } return nil; }
+
+    // ── 2. 场景管理器 ──
+    id manager = AevonSDClassFactory(@"FBSceneManager", @"sharedInstance");
+    if (manager == nil) { if (outErr) { *outErr = @"fb-manager-nil"; } return nil; }
+
+    // ── 3. 唯一身份（绝不与主场景 sceneID:<bid>-default 撞，round7 教训）──
+    NSString *sceneID = [NSString stringWithFormat:@"sceneID:com.aevon.float-%@", bundleID];
+
+    // 遗留场景先销毁（respring 后我们没来得及收尾的情况）
+    SEL sceneByIdSel = NSSelectorFromString(@"sceneWithIdentifier:");
+    if ([manager respondsToSelector:sceneByIdSel]) {
+        id leftover = ((AevonSDIdFn1)objc_msgSend)(manager, sceneByIdSel, sceneID);
+        if (leftover != nil) {
+            SEL destroySel = NSSelectorFromString(@"destroyScene:withTransitionContext:");
+            if ([manager respondsToSelector:destroySel]) {
+                ((AevonSDIdFn2)objc_msgSend)(manager, destroySel, sceneID, nil);
+            }
+        }
+    }
+
+    // ── 4. 场景定义（identity / clientIdentity / specification）──
+    id definition = AevonSDClassFactory(@"FBSMutableSceneDefinition", @"definition");
+    if (definition == nil) { if (outErr) { *outErr = @"definition-nil"; } return nil; }
+    id sceneIdentity = AevonSDClassFactory1(@"FBSSceneIdentity",
+                                            @"identityForIdentifier:", sceneID);
+    if (sceneIdentity == nil) { if (outErr) { *outErr = @"scene-identity-nil"; } return nil; }
+    AevonSDSetObject(definition, "identity", sceneIdentity);
+    id clientIdentity = AevonSDClassFactory1(@"FBSSceneClientIdentity",
+                                             @"identityForProcessIdentity:", processIdentity);
+    if (clientIdentity == nil) { if (outErr) { *outErr = @"client-identity-nil"; } return nil; }
+    AevonSDSetObject(definition, "clientIdentity", clientIdentity);
+    id specification = AevonSDClassFactory(@"UIApplicationSceneSpecification", @"specification");
+    if (specification == nil) { if (outErr) { *outErr = @"specification-nil"; } return nil; }
+    AevonSDSetObject(definition, "specification", specification);
+
+    // ── 5. 初始参数：settings 画布 ★创建时烙定（真重排的立身之本）──
+    id parameters = AevonSDClassFactory1(@"FBSMutableSceneParameters",
+                                         @"parametersForSpecification:", specification);
+    if (parameters == nil) { if (outErr) { *outErr = @"parameters-nil"; } return nil; }
+
+    Class settingsCls = NSClassFromString(@"UIMutableApplicationSceneSettings");
+    if (settingsCls == nil) { if (outErr) { *outErr = @"settings-class-nil"; } return nil; }
+    id settings = [[settingsCls alloc] init];
+
+    AevonSDSetBool(settings, "canShowAlerts", YES);
+    // dc 母本 = 主屏 dc（iOS 17 无 setter，创建期由系统拷贝 —— ScreenCore/Mango 同款）
+    SEL dcSel = NSSelectorFromString(@"displayConfiguration");
+    if ([UIScreen.mainScreen respondsToSelector:dcSel]) {
+        id dc = ((AevonSDIdFn0)objc_msgSend)(UIScreen.mainScreen, dcSel);
+        AevonSDSetObject(settings, "displayConfiguration", dc);
+    }
+    AevonSDSetBool(settings, "foreground", YES);            // 后台场景不渲染（round6 根因之一）
+    AevonSDSetRect(settings, "frame", CGRectMake(0, 0, w, h)); // ★ 画布 = 浮窗尺寸
+    AevonSDSetInt(settings, "interfaceOrientation", 1);      // Portrait
+    AevonSDSetInt(settings, "level", 1);
+    AevonSDSetObject(settings, "persistenceIdentifier", NSUUID.UUID.UUIDString);
+    AevonSDSetBool(settings, "statusBarDisabled", YES);      // 非原生窗（参考实现同款）
+    AevonSDSetInsets(settings, "peripheryInsets", UIEdgeInsetsZero);
+    AevonSDSetInsets(settings, "safeAreaInsetsPortrait", UIEdgeInsetsZero);
+    AevonSDSetObject(parameters, "settings", settings);
+
+    Class clientCls = NSClassFromString(@"UIMutableApplicationSceneClientSettings");
+    if (clientCls != nil) {
+        id clientSettings = [[clientCls alloc] init];
+        AevonSDSetInt(clientSettings, "interfaceOrientation", 1);
+        AevonSDSetInt(clientSettings, "statusBarStyle", 0);
+        AevonSDSetObject(parameters, "clientSettings", clientSettings);
+    }
+
+    // ── 6. 创建场景 ──
+    SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
+    if (![manager respondsToSelector:createSel]) { if (outErr) { *outErr = @"create-sel-missing"; } return nil; }
+    id scene = ((AevonSDIdFn2)objc_msgSend)(manager, createSel, definition, parameters);
+    if (scene == nil) { if (outErr) { *outErr = @"scene-nil"; } return nil; }
+
+    if (outSceneID) { *outSceneID = sceneID; }
+    return scene;
 }
 
 BOOL AevonSelfSceneResize(id scene, double w, double h) {
@@ -229,7 +230,7 @@ BOOL AevonSelfSceneDestroy(id scene) {
         if (manager == nil || sceneID.length == 0) return NO;
         SEL destroySel = NSSelectorFromString(@"destroyScene:withTransitionContext:");
         if (![manager respondsToSelector:destroySel]) return NO;
-        ((AevonSDIdFn1)objc_msgSend)(manager, destroySel, sceneID, nil);
+        ((AevonSDIdFn2)objc_msgSend)(manager, destroySel, sceneID, nil);
         return YES;
     } @catch (NSException *exception) {
         return NO;
