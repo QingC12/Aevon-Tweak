@@ -6,6 +6,9 @@
 void AevonPrefSetBool(NSString *key, BOOL value);
 void AevonPrefSetInt(NSString *key, NSInteger value);
 void AevonPrefSetDouble(NSString *key, double value);
+/// V0.2.9（AevonFloatStandDownV209）：字符串写入（浮窗里装的是哪个 App，App 侧要能读到）。
+/// 传 nil / 空串等价于删除该键 —— App 侧读到空串就知道「我不在浮窗里」。
+void AevonPrefSetString(NSString *key, NSString *value);
 
 @interface AevonAssertionShim : NSObject
 + (void)acquireKeepAliveForPID:(int)pid;

@@ -1239,6 +1239,40 @@ jobs:
             || { echo "::error::桌面呼盘收养指的吞摸豁免被删 —— 桌面翻页会卡在半路（began 后断流同款）"; exit 1; }
           echo "V0.2.8 校验: 桌面热区观察放行 + 收养指吞摸豁免 + 收起即断触摸 + 选中 1.5s 冷静期 已就位"
 
+          # ---- V0.2.9（Aevon(95) 判读）：手势条退出命中链 + 浮窗/桌面全放行 + 设置页 ⓘ ----
+          grep -q 'AevonStripNoHitV209' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::手势条 hitTest 退出被删 —— 右下角又会连 began 都收不到（桌面划不动/点不动复发）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {' \
+            || { echo "::error::手势条 hitTest 覆写丢失"; exit 1; }
+          grep -q 'AevonFloatStandDownV209' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::浮窗按桌面处理的判定被删 —— 浮窗开着时右缘接管带会吞掉浮窗内容"; exit 1; }
+          grep -q 'AevonWindowManager.openBundleID != nil' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::appForeground 没有排除浮窗态"; exit 1; }
+          grep -q 'AevonFloatPassV209' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::浮窗落点直通被删 —— 落在浮窗上的触摸会被判成边缘手势"; exit 1; }
+          grep -q 'AevonDeskEdgePullV209' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::桌面贴边横拉判据被删 —— 桌面每次翻页都会弹圆盘"; exit 1; }
+          grep -q 'stronglyHorizontal' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::桌面横拉「很横」判据丢失（翻页与呼盘分不开）"; exit 1; }
+          grep -q 'AevonFloatStandDownV209' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::开窗/关窗没有写 AevonFloatBundle —— App 侧读不到浮窗态"; exit 1; }
+          grep -q 'AevonFloatBundle' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺浮窗退让判定 —— 浮窗内滑动会被扣 begun"; exit 1; }
+          grep -q 'AevonAppAnyMoveFailV209' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺「任何方向过 10pt 立刻失败」兜底 —— 斜向滑动会卡到抬手"; exit 1; }
+          grep -q '0.8 \* NSEC_PER_SEC' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::卡死自愈没收到 0.8s —— 扣住事件最长仍会卡 1.5 秒"; exit 1; }
+          grep -q 'AevonPrefsInfoV209' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::设置页 ⓘ 说明按钮被删 —— 开关名字会退回一堵墙"; exit 1; }
+          grep -q 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::设置页没读 infoText"; exit 1; }
+          INFO_COUNT="$(grep -c 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
+          [ "$INFO_COUNT" -ge 10 ] || { echo "::error::Root.plist 的开关说明不足 10 条（实际 $INFO_COUNT）"; exit 1; }
+          UA_LABEL="$(grep -c '<string>App 进程右缘接管' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
+          [ "$UA_LABEL" -eq 0 ] || { echo "::error::Root.plist 还有超长开关名（0.2.9 已改短名 + ⓘ）"; exit 1; }
+          echo "V0.2.9 校验: 手势条退出命中链 + 浮窗全放行 + 桌面贴边横拉 + App 侧斜向兜底 + 设置页 ⓘ 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

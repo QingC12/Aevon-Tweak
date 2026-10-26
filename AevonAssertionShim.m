@@ -192,6 +192,23 @@ void AevonPrefSetDouble(NSString *key, double value) {
     }
 }
 
+void AevonPrefSetString(NSString *key, NSString *value) {
+    @try {
+        if (key.length == 0) { return; }
+        if (value.length == 0) {
+            /* 空串 = 没有浮窗：直接删键，比写一个空字符串更干净（App 侧读到的就是 nil） */
+            CFPreferencesSetAppValue((CFStringRef)key, NULL, AevonPrefsAppID());
+        } else {
+            CFPreferencesSetAppValue((CFStringRef)key,
+                                     (__bridge CFPropertyListRef)value,
+                                     AevonPrefsAppID());
+        }
+        CFPreferencesAppSynchronize(AevonPrefsAppID());
+    } @catch (NSException *exception) {
+        // 偏好写入失败不影响主流程
+    }
+}
+
 void AevonPrefSetInt(NSString *key, NSInteger value) {
     @try {
         CFPreferencesSetAppValue((CFStringRef)key,
@@ -762,3 +779,20 @@ __attribute__((used)) static const char AevonPanicThreeFingerV117Marker[] = "Aev
 __attribute__((used)) static const char AevonRightEdgeDefaultV118Marker[] = "AevonRightEdgeDefaultV118";
 __attribute__((used)) static const char AevonRightEdgeMissHintV118Marker[] = "AevonRightEdgeMissHintV118";
 __attribute__((used)) static const char AevonRightEdgeWidenV118Marker[] = "AevonRightEdgeWidenV118";
+
+/* ── V0.2.9（Aevon(95) 判读）：本版标记 ──
+ * 用户主诉①「桌面和悬浮内的 APP 都无法滑动，只能点击」；②「设置里的开关注释不清晰，
+ * 简化名字 + 加圆圈叹号点开看详细说明」。四条修复各配一条 used 常量，保证
+ * 即使以后有人把日志文案改掉，CI 的二进制断言也不会假红：
+ *   AevonStripNoHitV209     = 手势条退出命中测试（右下角 18x260 不再抢触摸）
+ *   AevonFloatStandDownV209 = 浮窗开着按桌面处理 + App 侧浮窗内整体退让
+ *   AevonFloatPassV209      = 落在浮窗上的触摸整个交回浮窗
+ *   AevonDeskEdgePullV209   = 桌面呼盘收紧成「贴边横拉」，把翻页让出来
+ *   AevonPrefsInfoV209      = 设置页开关行内 ⓘ（点开弹完整说明）
+ * （App 侧那两条 AevonAppAnyMoveFailV209 / AevonFloatStandDownV209 在 AevonApp.dylib 里，
+ *  文末这几条只钉主插件 Aevon.dylib。） */
+__attribute__((used)) static const char AevonStripNoHitV209Marker[] = "AevonStripNoHitV209";
+__attribute__((used)) static const char AevonFloatStandDownV209Marker[] = "AevonFloatStandDownV209";
+__attribute__((used)) static const char AevonFloatPassV209Marker[] = "AevonFloatPassV209";
+__attribute__((used)) static const char AevonDeskEdgePullV209Marker[] = "AevonDeskEdgePullV209";
+__attribute__((used)) static const char AevonPrefsInfoV209Marker[] = "AevonPrefsInfoV209";

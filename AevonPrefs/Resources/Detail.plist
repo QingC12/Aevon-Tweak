@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>圆盘 App</string>
 			<key>footerText</key>
-			<string>圆盘里放哪些 App、按什么顺序排，都在这里改。进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入（最多 36 个）。改完立即生效，下次呼出圆盘就是新顺序。</string>
+			<string>圆盘里放哪些 App、按什么顺序排，都在这里改。进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入（最多 36 个）。改完立即生效。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -24,39 +24,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>① 触发位置（底边锚定）</string>
+			<string>① 触发区：宽度</string>
 			<key>footerText</key>
-			<string>触发区底边在屏幕高度的百分比。100% = 区底边永远贴住屏幕底部 —— 这时候无论怎么改「触发高度」，触发条都贴底不动，只会向上伸展。拖动时屏幕右侧的触发条实时跟随。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSliderCell</string>
-			<key>key</key>
-			<string>RingTriggerY</string>
-			<key>label</key>
-			<string>触发位置：0% = 区底边在屏顶，100% = 区底边贴屏底</string>
-			<key>minValue</key>
-			<integer>0</integer>
-			<key>maxValue</key>
-			<integer>100</integer>
-			<!-- V0.0.29：PSSliderCell 只认 min/max（不是 minValue/maxValue），
-			     缺了这两个键滑杆量程会退化成默认 0~1，一拖就写回 0.x -->
-			<key>min</key>
-			<integer>0</integer>
-			<key>max</key>
-			<integer>100</integer>
-			<key>default</key>
-			<integer>75</integer>
-			<key>footerText</key>
-			<string>触发区底边落在屏幕高度的百分比，默认 75。拉到 100 就是贴底（最顺手）；拖动时触发条实时跟手。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>② 触发宽度（横向）</string>
-			<key>footerText</key>
-			<string>热区从屏幕右边缘往左有多宽（pt）。数值越小越不容易误触，但也越难划出；默认 48，建议范围 30~60。拖动时触发条会实时变粗 / 变细。</string>
+			<string>热区贴右边缘有多厚（pt）。越小越不容易误触，也越难划出；默认 48，建议 30~60。拖动时屏幕上的触发条会实时变粗变细。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -64,7 +34,7 @@
 			<key>key</key>
 			<string>RingTriggerWidth</string>
 			<key>label</key>
-			<string>触发宽度：贴着右边缘的厚度（pt）</string>
+			<string>热区宽度</string>
 			<key>minValue</key>
 			<integer>18</integer>
 			<key>maxValue</key>
@@ -75,16 +45,40 @@
 			<integer>140</integer>
 			<key>default</key>
 			<integer>48</integer>
-			<key>footerText</key>
-			<string>热区从右边缘往左有多厚。数值越小越不容易误触，也越难划出；默认 48，建议 30~60。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>③ 触发高度（纵向）</string>
+			<string>② 触发区：底边位置</string>
 			<key>footerText</key>
-			<string>热区从底边向上伸展的高度（pt）。数值越大，能呼出圆盘的纵向范围越大；底边位置由「触发位置」决定，位置拉到 100% 时改高度永远贴底。默认 320（约屏幕 1/3），建议 240~420。</string>
+			<string>热区底边落在屏幕高度的百分比。100% = 底边贴住屏幕底部（最顺手），此时改高度只会往上长。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>key</key>
+			<string>RingTriggerY</string>
+			<key>label</key>
+			<string>热区底边位置（屏高 %）</string>
+			<key>minValue</key>
+			<integer>0</integer>
+			<key>maxValue</key>
+			<integer>100</integer>
+			<key>min</key>
+			<integer>0</integer>
+			<key>max</key>
+			<integer>100</integer>
+			<key>default</key>
+			<integer>75</integer>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>③ 触发区：高度</string>
+			<key>footerText</key>
+			<string>热区从底边向上伸展的高度（pt）。越大能呼出的纵向范围越大；默认 320（约屏高 1/3），建议 240~420。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -92,7 +86,7 @@
 			<key>key</key>
 			<string>RingTriggerHeight</string>
 			<key>label</key>
-			<string>触发高度：热区从底边向上的总高度（pt）</string>
+			<string>热区高度（pt）</string>
 			<key>minValue</key>
 			<integer>80</integer>
 			<key>maxValue</key>
@@ -103,20 +97,18 @@
 			<integer>900</integer>
 			<key>default</key>
 			<integer>320</integer>
-			<key>footerText</key>
-			<string>热区纵向总长，默认 320。拖动时触发条会实时变长 / 变短（贴底时只向上长）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>如果触发条位置乱了，点下面按钮一键恢复：位置 75%、宽 48pt、高 320pt（底边语义）。</string>
+			<string>触发条位置乱了？点下面按钮一键恢复：宽 48pt / 底边 75% / 高 320pt。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>恢复默认触发区域（75% / 48pt / 320pt）</string>
+			<string>恢复默认触发区（48pt / 75% / 320pt）</string>
 			<key>action</key>
 			<string>aevonResetTriggerZone</string>
 		</dict>
@@ -124,9 +116,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>④ 右缘接管带（0.1.15 新增，0.1.18 调宽）</string>
+			<string>④ 右缘接管带几何</string>
 			<key>footerText</key>
-			<string>全屏 App 里，屏幕右缘有一条「按下即接管」的带：手指落进去就归圆盘，向左滑 30pt 呼出，App 连 began 都收不到，所以绝不会被带起来。代价是这条带里 App 自己的轻点 / 右滑 / 贴边滚动也归我们 —— 这是整指接管的物理代价。0.1.18 起默认 46pt × 下半 60%：你上一版实测的四个落点距右缘 12 / 19 / 25 / 42pt，46pt 能盖住其中 3 个（只缺 y=80 那个高度外），而调小到 17pt 一个都盖不住。宽度滑条下限 24pt —— 再小就等于「设了也没用」。</string>
+			<string>只有一级页那个「右缘接管带」开关打开时才有意义：决定那条带多宽、覆盖多高。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -134,7 +126,7 @@
 			<key>key</key>
 			<string>RightEdgeWidth</string>
 			<key>label</key>
-			<string>右缘带宽度：从右边缘往左有多厚（pt）</string>
+			<string>接管带宽度（pt）</string>
 			<key>minValue</key>
 			<integer>24</integer>
 			<key>maxValue</key>
@@ -146,7 +138,7 @@
 			<key>default</key>
 			<integer>46</integer>
 			<key>footerText</key>
-			<string>默认 46（最大）。想保住抖音右侧的点赞 / 评论 / 收藏按钮，可以调到 24~32：代价是起手必须更贴边，落点在 32pt 外就呼不出。拿不准就用默认 46 —— 日志会告诉你落点距边多少 pt，抬手时还会直接给一句「把带宽调到 ≥Npt」。</string>
+			<string>默认 46（最大）。你实测的四个落点距右缘 12 / 19 / 25 / 42pt —— 46pt 能盖住其中 3 个；调到 24~32 可以保住抖音右侧的点赞 / 评论 / 收藏按钮，代价是起手必须更贴边。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -154,7 +146,7 @@
 			<key>key</key>
 			<string>RightEdgeHeight</string>
 			<key>label</key>
-			<string>右缘带高度：占屏高的百分比（从底边往上）</string>
+			<string>接管带高度（屏高 %）</string>
 			<key>minValue</key>
 			<integer>40</integer>
 			<key>maxValue</key>
@@ -166,7 +158,7 @@
 			<key>default</key>
 			<integer>60</integer>
 			<key>footerText</key>
-			<string>默认 60 = 只覆盖下半屏（y 从屏高 40% 到底部），上半屏右侧完全不受影响。拉到 100 就是整条右缘都能呼出，代价是顶部右侧按钮也点不到。急救：任何界面三根手指同时按下 = 立刻释放全部接管并关掉右缘接管，不用卸载。</string>
+			<string>默认 60 = 只覆盖下半屏（从屏高 40% 到底部），上半屏右侧完全不受影响。拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。急救：三根手指同时按下 = 立刻释放全部接管并关掉接管带。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -178,9 +170,11 @@
 			<key>key</key>
 			<string>RightEdgeShowBand</string>
 			<key>label</key>
-			<string>显示右缘接管带（测试用）：画出真实范围，接管时闪一下</string>
-			<key>footerText</key>
-			<string>0.1.17 改版：不再是常驻绘制（0.1.16 的全屏自绘会在真机上卡死整个屏幕，已整块删除）。现在是「按需提示条」——拖上面两个滑条、或打开这个开关时出现 3 秒，接管成功闪 0.35 秒，之后自动消失。淡蓝色块就是可接管的范围，最左边那条竖线就是「手指要落在它右边才算」。它不接触摸、不参与布局，看不到它也不影响功能。</string>
+			<string>显示接管带</string>
+			<key>infoText</key>
+			<string>测试用。打开它、或拖动上面两个滑条时，屏幕上会闪 3 秒淡蓝色提示块，标出接管带的真实范围（最左边那条竖线就是「手指要落在它右边才算」）；每次接管成功再闪 0.35 秒后自动消失。
+
+只是绘制：不接触摸、不参与布局，看不见它也不影响功能。</string>
 		</dict>
 	</array>
 	<key>title</key>

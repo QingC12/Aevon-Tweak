@@ -256,6 +256,38 @@ static BOOL AevonAppPrefBool(NSString *key, BOOL fallback) {
     return result;
 }
 
+/* V0.2.9（AevonFloatStandDownV209）：读字符串（当前浮窗里装的是哪个 App）。
+ * 沙盒里读 com.Aevon 域这条路 AppSideEnabled / 带宽已经走了好几版（真机验证过），
+ * 读不到就是空串 —— 等价「没有浮窗」，识别器按常态工作。 */
+static NSString *AevonAppPrefString(NSString *key) {
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                        CFSTR("com.Aevon"));
+    if (value == NULL) { return @""; }
+    NSString *result = @"";
+    if (CFGetTypeID(value) == CFStringGetTypeID()) {
+        result = [NSString stringWithString:(__bridge NSString *)value];
+    }
+    CFRelease(value);
+    return result;
+}
+
+/* 本进程是否正被装在浮窗里。
+ *
+ * Aevon(95) 主诉「悬浮内的 APP 无法滑动，只能点击」的结构性来源：
+ * 浮窗里跑的是真实 App 场景，但它被缩到 289x626 摆在屏幕上某处 ——
+ * 此时「屏幕右缘 46pt」根本不代表用户想呼盘，只代表他手指落在浮窗右侧。
+ * 我们却照旧扣住 began（delaysTouchesBegan）判向，斜向滑动又判不出结果，
+ * 于是 App 直到抬手都拿不到事件 → 页面纹丝不动，只有点击（抬手时补投）还活。
+ * 判据由 SpringBoard 写进偏好域（开窗写 bundleID、关窗删键），这里只读。 */
+static BOOL AevonAppInFloatingWindow(void) {
+    NSString *bundle = AevonAppPrefString(@"AevonFloatBundle");
+    if (bundle.length == 0) { return NO; }
+    NSString *mine = [[NSBundle mainBundle] bundleIdentifier];
+    if (mine.length == 0) { mine = gAevonAppBundleID; }
+    if (mine.length == 0) { return NO; }
+    return [bundle isEqualToString:mine];
+}
+
 static double AevonAppPrefDouble(NSString *key, double fallback) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
                                                         CFSTR("com.Aevon"));
@@ -354,6 +386,20 @@ shouldReceiveTouch:(UITouch *)touch {
     BOOL edgeEnabled = AevonAppPrefBool(@"EdgeGestureEnabled", YES);
     if (!enabled || !edgeEnabled) { return NO; }
 
+    /* V0.2.9（AevonFloatStandDownV209）：装进浮窗时整体退让。
+     * 浮窗的「右边缘」不是屏幕右边缘，用户在那里滑是在滚内容，不是呼盘。
+     * 退让 = 一根手指都不接收 → delaysTouchesBegan / cancelsTouchesInView 全部不生效，
+     * 滑动与点击原样归 App。 */
+    if (AevonAppInFloatingWindow()) {
+        static CFAbsoluteTime lastFloatLog = 0;
+        CFAbsoluteTime nowFloat = CFAbsoluteTimeGetCurrent();
+        if (nowFloat - lastFloatLog > 3.0) {
+            lastFloatLog = nowFloat;
+            AevonAppLog(@"浮窗模式：本 App 正装在浮窗里 → 右缘判向整体退让（不扣 began、不建失败要求，滑动/点击全归自己）（AevonFloatStandDownV209）");
+        }
+        return NO;
+    }
+
     UIWindow *window = touch.window;
     if (window == nil) { return NO; }
     CGSize screen = window.bounds.size;
@@ -402,6 +448,9 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     /* 开关每帧现读（恒假开关纪律）：关了绝不设失败要求，App 手感原样 */
     if (!AevonAppPrefBool(@"AppSideEnabled", YES) ||
         !AevonAppPrefBool(@"EdgeGestureEnabled", YES)) { return NO; }
+    /* V0.2.9（AevonFloatStandDownV209）：浮窗里绝不建失败要求 ——
+     * 建了就等于「滚动 pan 必须等我们判完才能开始」，而浮窗里我们不想判。 */
+    if (AevonAppInFloatingWindow()) { return NO; }
     /* 只压平移/轻扫类；点按/长按不压（按钮、键盘、菜单不受影响） */
     if (![otherGestureRecognizer isKindOfClass:[UIPanGestureRecognizer class]] &&
         ![otherGestureRecognizer isKindOfClass:[UISwipeGestureRecognizer class]]) { return NO; }
@@ -451,15 +500,18 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     AevonAppPostRightEdgeBegan();
     /* V0.2.3（AevonAppStuckGuardV203）卡死自愈：Aevon(89) 里 4 根手指 began 扣住后
      * 连 moved / cancelled / ended 全都没有（序列疑似在系统层被断流）。
-     * 1.5s 未判定就主动 Failed —— 手势不再持有任何东西，App 侧零残留；
-     * 若序列其实活着（用户慢启动），Failed 会整段补投，轻点/长按只晚 1.5s。 */
+     * 未判定就主动 Failed —— 手势不再持有任何东西，App 侧零残留；
+     * 若序列其实活着（用户慢启动），Failed 会整段补投，轻点 / 长按只晚这一小段。
+     * V0.2.9（AevonAppAnyMoveFailV209）：1.5s → **0.8s**。扣住的代价是「这段时间
+     * App 收不到任何事件」，用户感知成「页面不动」；0.8s 仍留足真机判向时间
+     * （正常判定在 1~2 帧 ≈ 30ms 内完成），同时把最坏情况的手感损失砍掉近一半。 */
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf == nil || strongSelf.decided || !strongSelf.claimed) { return; }
         strongSelf.decided = YES;
-        AevonAppLog(@"卡死自愈：began 扣住 1.5s 未判定（无移动帧也无取消，序列疑似在系统层中断）→ 主动 Failed 整段放行（AevonAppStuckGuardV203）");
+        AevonAppLog(@"卡死自愈：began 扣住 0.8s 未判定（无移动帧也无取消，序列疑似在系统层中断）→ 主动 Failed 整段放行（AevonAppStuckGuardV203 AevonAppAnyMoveFailV209）");
         AevonAppPostRightEdgeFail();
         strongSelf.state = UIGestureRecognizerStateFailed;
     });
@@ -517,6 +569,22 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
     if (fabs(dy) >= 8.0 && fabs(dy) > fabs(dx) * 1.2) {
         self.decided = YES;
         AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 纵向滚动，整段补投（AevonAppDirectionV201 AevonAppFailNotifyV206）", dx, dy);
+        AevonAppPostRightEdgeFail();
+        self.state = UIGestureRecognizerStateFailed;
+        return;
+    }
+    /* V0.2.9（AevonAppAnyMoveFailV209）：**任何方向走过 10pt 仍未判成立 → 立刻失败放行**。
+     *
+     * Aevon(95) 主诉「只能点击、不能滑动」的最后一环就在这里：
+     * 斜向滑动（例如 dx=-12 dy=-10）既不满足「横向 ≥ 纵向×1.2」（判成立），
+     * 也不满足「纵向 > 横向×1.2」（判失败）—— 于是**一直不判定**。
+     * began 被 delaysTouchesBegan 扣在 UIKit 手势环境里，App 直到抬手
+     * （或 0.8 秒自愈）之前什么事件都收不到，表现就是「页面纹丝不动，只能点」。
+     * 现在只要总位移 ≥10pt 且没判成横向，一律失败 —— 失败会立刻把 began +
+     * 全部累积 moved 按序补投，App 只晚一两帧，滚动完整跟手。 */
+    if (fabs(dx) >= 10.0 || fabs(dy) >= 10.0) {
+        self.decided = YES;
+        AevonAppLog(@"判向失败：dx=%.0f dy=%.0f → 斜向/方向未定但已过 10pt，立刻整段补投（AevonAppAnyMoveFailV209 AevonAppFailNotifyV206）", dx, dy);
         AevonAppPostRightEdgeFail();
         self.state = UIGestureRecognizerStateFailed;
         return;

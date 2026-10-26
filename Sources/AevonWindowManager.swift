@@ -163,6 +163,10 @@ enum AevonWindowManager {
             currentView = windowView
             currentBundleID = bundleID
             lastOpenedAt = CACurrentMediaTime()
+            // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
+            // App 侧识别器读它 —— 等于自己的 bundleID 就整体退让（不扣 began、不建失败要求），
+            // 浮窗内的滑动才不会被右缘判向延迟到抬手。
+            AevonPrefs.set("AevonFloatBundle", bundleID)
 
             // presenter 激活后画面是异步出来的，由承载器自己探测首帧
             sceneHost.startSyncing()
@@ -240,6 +244,9 @@ enum AevonWindowManager {
         guard let windowView = currentView, currentBundleID == bundleID else { return }
         currentView = nil
         currentBundleID = nil
+        // V0.2.9（AevonFloatStandDownV209）：浮窗没了 → 清掉「浮窗里装的是谁」，
+        // App 侧识别器立刻恢复常态（空串 = 不在浮窗里）。
+        AevonPrefs.set("AevonFloatBundle", "")
         windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
         if !releaseOnly {

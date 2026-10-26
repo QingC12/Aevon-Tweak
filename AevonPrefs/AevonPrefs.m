@@ -285,6 +285,14 @@ static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle, NSString *plist
             if (![key isKindOfClass:[NSString class]] || key.length == 0) continue;
             id def = item[@"default"];
             id spec = AevonNewSwitch(label, target, key, def);
+            /* V0.2.9（AevonPrefsInfoV209）：开关的详细说明。
+             * 放进 specifier 的 infoText 属性 —— 列表渲染时由
+             * -tableView:willDisplayCell:forRowAtIndexPath: 在开关左侧补一个 ⓘ 按钮，
+             * 点它弹 UIAlertController。开关名字本身只留短词。 */
+            id info = item[@"infoText"];
+            if (spec != nil && [info isKindOfClass:[NSString class]] && [info length] > 0) {
+                AevonSetProperty(spec, info, @"infoText");
+            }
             if (spec != nil) [result addObject:spec];
         } else if ([cell isEqualToString:@"PSSliderCell"] || [cell isEqualToString:@"PSTSliderCell"]) {
             NSString *key = item[@"key"];
@@ -423,6 +431,10 @@ static NSArray *AevonBuildFallbackDetail(id target) {
 #pragma mark - 控制器
 
 @interface AevonRootListController : PSListController
+/* V0.2.9（AevonPrefsInfoV209）：开关行内的 ⓘ 按钮与说明弹窗。
+ * 声明在接口里，避免 @selector 在定义之前被用到时触发 -Wundeclared-selector（本工程 -Werror）。 */
+- (void)aevonInfoTapped:(UIButton *)sender;
+- (void)aevonPresentInfo:(NSString *)info title:(NSString *)title;
 @end
 
 @implementation AevonRootListController
@@ -516,6 +528,125 @@ static char AevonSliderTagKey;
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self aevonHookSliders];
+}
+
+#pragma mark - V0.2.9：开关行内 ⓘ（点开就是完整说明）
+
+/* 说明按钮与说明文本的关联键（cell → 按钮，按钮 → 文本） */
+static char AevonInfoButtonKey;
+static char AevonInfoTextKey;
+
+/*
+ * 用户 Aevon(95) 的原话：「设置中的开关注释并不清晰，可以简化开关名字，
+ * 然后开关名字后面添加圆圈叹号，点击会出现开关的详细注释」。
+ *
+ * 做法：开关名字只留短词（「边缘呼出」「App 内右缘接管」…），
+ * 完整说明放进 Root.plist 的 infoText 键；列表渲染时在开关左边补一个系统自带的
+ * 「ⓘ」（UIButtonTypeInfoLight，圆圈里一个 i），点它弹一个 UIAlertController。
+ *
+ * 为什么不写在 label 里：之前十几个开关的 label 是一整段 300 字的说明，设置页看起来
+ * 像一堵墙 —— 名字找不着、说明也读不完。为什么不给 PSSwitchCell 加 accessory：
+ * 那个位置被 UISwitch 占着，硬塞会把开关挤没。
+ *
+ * 安全约束：所有 runtime 取值都走 @try；拿不到 specifier / infoText 就什么都不加
+ * （退回「只有短名字」的原生样子，绝不空白、绝不崩）。
+ */
+- (void)tableView:(UITableView *)tableView
+  willDisplayCell:(UITableViewCell *)cell
+forRowAtIndexPath:(NSIndexPath *)indexPath {
+    [super tableView:tableView willDisplayCell:cell forRowAtIndexPath:indexPath];
+    @try {
+        id spec = nil;
+        SEL specSelector = @selector(specifier);
+        if ([cell respondsToSelector:specSelector]) {
+            typedef id (*SpecFn)(id, SEL);
+            SpecFn fn = (SpecFn)[cell methodForSelector:specSelector];
+            if (fn != NULL) { spec = fn(cell, specSelector); }
+        }
+        NSString *info = AevonGetProperty(spec, @"infoText");
+        if (![info isKindOfClass:[NSString class]] || info.length == 0) { return; }
+
+        UIButton *button = objc_getAssociatedObject(cell, &AevonInfoButtonKey);
+        if (button == nil) {
+            /* 圆圈里一个 i（UIButtonTypeInfoLight）—— 就是用户说的「圆圈叹号」 */
+            UIButton *created = [UIButton buttonWithType:UIButtonTypeInfoLight];
+            created.tintColor = [UIColor secondaryLabelColor];
+            [created addTarget:self
+                        action:@selector(aevonInfoTapped:)
+              forControlEvents:UIControlEventTouchUpInside];
+            objc_setAssociatedObject(cell, &AevonInfoButtonKey, created, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (created.superview != cell) { [cell addSubview:created]; }
+            button = created;
+        }
+        /* 紧贴开关左侧摆放（开关宽约 51pt，右侧留 10pt 边距） */
+        CGFloat side = 26.0;
+        CGRect frame = button.frame;
+        frame.size = CGSizeMake(side, side);
+        frame.origin.x = MAX(24.0, cell.bounds.size.width - 51.0 - side - 8.0);
+        frame.origin.y = (cell.bounds.size.height - side) * 0.5;
+        button.frame = frame;
+        button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        /* cell 会被复用，文案每次刷新 */
+        objc_setAssociatedObject(button, &AevonInfoTextKey, info, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (NSException *exception) {
+        /* 说明按钮加不上就不加，设置页照常可用 */
+    }
+}
+
+- (void)aevonInfoTapped:(UIButton *)sender {
+    if (sender == nil) { return; }
+    NSString *info = objc_getAssociatedObject(sender, &AevonInfoTextKey);
+    if (![info isKindOfClass:[NSString class]] || info.length == 0) { return; }
+
+    /* 标题取开关自己的名字（往上找承载它的 cell） */
+    NSString *title = @"开关说明";
+    @try {
+        UIView *node = sender.superview;
+        while (node != nil && ![node isKindOfClass:[UITableViewCell class]]) {
+            node = node.superview;
+        }
+        if (node != nil && [node respondsToSelector:@selector(specifier)]) {
+            SEL specSelector = @selector(specifier);
+            typedef id (*SpecFn)(id, SEL);
+            SpecFn fn = (SpecFn)[node methodForSelector:specSelector];
+            if (fn != NULL) {
+                id spec = fn(node, specSelector);
+                id label = AevonGetProperty(spec, @"label");
+                if ([label isKindOfClass:[NSString class]] && [label length] > 0) {
+                    title = (NSString *)label;
+                }
+            }
+        }
+    } @catch (NSException *exception) {
+    }
+    /* 点击 ⓘ 不该顺带切换开关，也不该让这一行变成选中态 */
+    @try {
+        UIView *node = sender.superview;
+        UITableViewCell *hostCell = nil;
+        if ([node isKindOfClass:[UITableViewCell class]]) { hostCell = (UITableViewCell *)node; }
+        while (node != nil && ![node isKindOfClass:[UITableView class]]) { node = node.superview; }
+        if ([node isKindOfClass:[UITableView class]] && hostCell != nil) {
+            NSIndexPath *path = [(UITableView *)node indexPathForCell:hostCell];
+            if (path != nil) { [(UITableView *)node deselectRowAtIndexPath:path animated:NO]; }
+        }
+    } @catch (NSException *exception) {
+    }
+    [self aevonPresentInfo:info title:title];
+}
+
+- (void)aevonPresentInfo:(NSString *)info title:(NSString *)title {
+    if (self.presentedViewController != nil) { return; }
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                   message:info
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"知道了"
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    @try {
+        [self presentViewController:alert animated:YES completion:nil];
+        NSLog(@"[Aevon] 开关说明已弹出：%@（AevonPrefsInfoV209）", title);
+    } @catch (NSException *exception) {
+    }
 }
 
 /* 递归找所有 UISlider（PSSliderCell 内部的控件），每个只挂一次 valueChanged */

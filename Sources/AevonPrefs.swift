@@ -46,6 +46,14 @@ enum AevonPrefs {
         return defaultValue
     }
 
+    /// V0.2.9（AevonFloatStandDownV209）：读取字符串；没有该键时返回空串。
+    /// 目前只有一个用途：SB 把「浮窗里装的 App」写进 `AevonFloatBundle`，
+    /// App 侧读到等于自己的 bundleID 就整体退让（不扣 began、不建失败要求）。
+    static func string(_ key: String) -> String {
+        if let text = rawValue(key) as? String { return text }
+        return ""
+    }
+
     /// 写入布尔值并立即同步（经 Objective-C 垫片调用 CFPreferences）。
     static func set(_ key: String, _ value: Bool) {
         AevonPrefSetBool(key, value)
@@ -59,5 +67,10 @@ enum AevonPrefs {
     /// 写入浮点并立即同步（V0.0.30：触发区底边语义迁移用）。
     static func set(_ key: String, _ value: Double) {
         AevonPrefSetDouble(key, value)
+    }
+
+    /// V0.2.9（AevonFloatStandDownV209）：写入字符串并立即同步；空串 = 删除该键。
+    static func set(_ key: String, _ value: String) {
+        AevonPrefSetString(key, value)
     }
 }

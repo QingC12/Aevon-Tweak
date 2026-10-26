@@ -272,6 +272,37 @@ final class AevonEdgeStripView: UIView {
         AevonLog.info("[边缘] 触发条颜色已随系统外观切换（\(isDarkAppearance ? "深色 → 灰白" : "浅色 → 黑灰")）（AevonStripAdaptiveTintV26）")
     }
 
+    /// V0.2.9（AevonStripNoHitV209）：**手势条永不参与命中测试**。
+    ///
+    /// Aevon(95) 铁证（22:36:43.398）：
+    ///   `[边缘] 入口窗口收到触摸 (x=422, y=801，宽容区内=是)` →
+    ///   `[边缘] 窗口层已接管边缘触摸（兜底判定生效）` →
+    ///   `[边缘] 手势区收到触摸 (条内 x=10, y=130)`。
+    /// 也就是说：这根触摸在 **UIKit 命中测试** 阶段就被这条 18×260 的条子接走了。
+    /// 入口窗口 level=10000000（比桌面 SBHomeScreenWindow 高得多），
+    /// 条子一旦命中，桌面 / 浮窗内容 **连 began 都收不到** —— 点击与左右滑动同时死。
+    /// 0.2.8 让全局通道「只观察不吞」是对的，但没堵住这条更早的物理通道，
+    /// 所以「桌面右下角划不动、点不动」照旧（用户 Aevon(95) 主诉）。
+    ///
+    /// 现在触发只走 `UIApplication -sendEvent:` 全局通道（它在命中测试之前拿到事件，
+    /// 与条子无关；Aevon(95) 22:36:43 的 `桌面热区左扫成立 dx=-36` 就是它算出来的），
+    /// 条子退回**纯视觉**：看得见、摸不到、不占触摸。`isUserInteractionEnabled`
+    /// 也不再是开关 —— 圆盘收起时会把它设回 true，那会把这条死路重新接上。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        return nil
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        return false
+    }
+
+    /// 触摸流入口保留但永不触发（`hitTest` 恒 nil），只用于记录一次「有人想走旧路」。
+    /// 这样若将来有人在别处重新让它可命中，日志里会立刻暴露。
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        AevonLog.info("[边缘] 手势条收到触摸（V0.2.9 起条子不参与命中，此路径应永不出现 —— 出现了就是有人把它接回命中链）（AevonStripNoHitV209）")
+    }
+
     /// 热区矩形（逻辑坐标，来自设置项）。三个通道共用同一个计算，避免「设置里调了但实际没变」。
     static func bandRect(in bounds: CGRect) -> CGRect {
         return AevonTriggerZone.rect(in: bounds)
@@ -1236,7 +1267,34 @@ enum AevonEdgeEntry {
             // 18pt 窄带就完全不接管，抖音照收整条左滑。外扩只在 **App 前台** 生效
             // （桌面仍按原热区，避免右侧桌面图标点不动）。
             let zone = AevonTriggerZone.rect(in: screen)
-            let appForeground = AevonEntryHost.mountedInAppScene
+            // V0.2.9（AevonFloatStandDownV209）：**浮窗开着时一律按「桌面」处理**。
+            //
+            // 根因（Aevon(95) 主诉「桌面和悬浮内的 APP 都无法滑动，只能点击」）：
+            // `mountedInAppScene` 只回答「容器挂在 App 画面容器上了吗」。浮窗也是把 App 场景
+            // 呈现出来，容器同样会被搬到 `SBDeviceApplicationSceneViewController.view` 上 ——
+            // 于是「桌面上开着一个浮窗」被误判成「App 前台」：
+            //   · 热区走 `接管=是（热区最高优先级）` 整指吞掉；
+            //   · 右缘 46pt 接管带（要求 appForeground=true）跟着一起生效；
+            //   两者一开，浮窗里的内容和浮窗底下的桌面在那两个区域全瞎：
+            //   点击、滑动一律收不到 began。
+            // 判据换成 `AevonWindowManager.openBundleID`：有浮窗 = 没有全屏 App = 桌面模式。
+            // （从桌面点图标把 App 全屏打开时浮窗会自动关，所以「无浮窗」等价于「真全屏 App」。）
+            let floatUp = AevonWindowManager.openBundleID != nil
+            let appForeground = AevonEntryHost.mountedInAppScene && !floatUp
+            // V0.2.9（AevonFloatPassV209）：落在浮窗上的触摸**整个**交回浮窗。
+            //
+            // 浮窗里跑的是真实 App 场景，它自己最清楚要不要滚；边缘手势在浮窗里没有意义
+            // （浮窗的右边缘不是屏幕右边缘）。所以这里既不接管也不吞，连「观察」都不做 ——
+            // 只登记一个位置给日志用，然后立刻返回。
+            if floatUp, AevonEntryHost.pointHitsFloatingWindow(at: point) {
+                lastTouchPoint = point
+                let nowFloat = CACurrentMediaTime()
+                if nowFloat - globalLastLogAt > 2.0 {
+                    globalLastLogAt = nowFloat
+                    AevonLog.info("[边缘] 触摸落在浮窗上 (x=\(Int(point.x)), y=\(Int(point.y))) → 整个交回浮窗（不接管、不吞、不判向）（AevonFloatPassV209 AevonFloatStandDownV209）")
+                }
+                return
+            }
             // V0.1.3（AevonTakeoverBandV103）：App 前台时接管带 = **右缘整条 × 全屏高**。
             //
             // 归档(13) 实锤：0.1.2 的接管带只是把底部热区四周外扩 18pt（纵向仍在 653~932），
@@ -1476,12 +1534,28 @@ enum AevonEdgeEntry {
             if touchID == deskZoneTouchID {
                 let zdx = point.x - deskZoneStart.x
                 let zdy = point.y - deskZoneStart.y
-                if !deskZoneFired, zdx <= -AevonEdgeStripView.swipeDistance, abs(zdx) >= abs(zdy) * 0.7 {
-                    deskZoneFired = true
-                    deskZoneAdoptedTouchID = touchID   // 吞摸豁免：后续帧照常给桌面（AevonDeskZoneObserveV208）
-                    lastTouchPoint = point
-                    AevonLog.info("[右缘] 桌面热区左扫成立 dx=\(Int(zdx)) dy=\(Int(zdy)) → 呼出圆盘（桌面整段放行，页面会跟走约30pt）（AevonDeskZoneObserveV208）")
-                    attemptTrigger("桌面热区左滑 \(Int(zdx))pt", source: "global")
+                // V0.2.9（AevonDeskEdgePullV209）：桌面呼盘收紧成「贴边横拉」，把翻页让出来。
+                //
+                // 桌面翻页本身就是「从右下角向左滑」—— 和呼盘是同一个手势。
+                // 0.2.8 只把「按下即吞」去掉、判据仍是「左扫 ≥30pt」，结果桌面能滑了，
+                // 但每次翻页都会顺手弹出圆盘。这里加两把尺子，让两者分得开：
+                //   · 起手必须**贴边**（距右缘 ≤12pt）：翻页是从页面中间起手的；
+                //   · 必须**很横**（|dx| ≥ |dy|×1.6）：拇指翻页天然带弧线，横竖比压不到 1.6。
+                // 判据不成立时我们什么都不做 —— 这根手指照旧属于桌面（本来就没吞）。
+                let startGap = screen.width - deskZoneStart.x
+                let edgePull = startGap <= 12
+                let stronglyHorizontal = abs(zdx) >= abs(zdy) * 1.6
+                if !deskZoneFired, zdx <= -AevonEdgeStripView.swipeDistance, stronglyHorizontal {
+                    if !edgePull {
+                        deskZoneFired = true     // 只报一次，避免逐帧刷屏
+                        AevonLog.info("[右缘] 桌面左扫 dx=\(Int(zdx)) dy=\(Int(zdy)) 但起手距右缘 \(Int(startGap))pt > 12pt → 判定为桌面翻页，不呼盘（AevonDeskEdgePullV209）")
+                    } else {
+                        deskZoneFired = true
+                        deskZoneAdoptedTouchID = touchID   // 吞摸豁免：后续帧照常给桌面（AevonDeskZoneObserveV208）
+                        lastTouchPoint = point
+                        AevonLog.info("[右缘] 桌面贴边横拉成立 dx=\(Int(zdx)) dy=\(Int(zdy)) 距右缘 \(Int(startGap))pt → 呼出圆盘（桌面整段放行，页面会跟走）（AevonDeskZoneObserveV208 AevonDeskEdgePullV209）")
+                        attemptTrigger("桌面热区左滑 \(Int(zdx))pt", source: "global")
+                    }
                 }
             }
             // V0.2.7（AevonEdgeAdoptV207）：圆盘展开但这根手指 SB 侧没登记过（起手在

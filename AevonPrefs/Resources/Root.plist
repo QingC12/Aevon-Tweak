@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.8（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 右下角热区左滑 / 全屏 App 右缘左滑呼出圆盘 → 点图标开浮窗；桌面上只会有一个浮窗，再点别的 App 会直接换成它。顶边双击恢复默认大小与位置。从桌面点图标把浮窗里的 App 全屏打开时，浮窗会自动关闭（不再残留黑窗）。0.2.8 依据 Aevon(94) 日志与你反馈的「桌面无法操作」：根因是桌面右下角热区「按下即吞」—— 0.2.8 起桌面热区只观察不吞，轻点 / 纵向滑动整段放行（dock、翻页全部恢复），看清向左横扫 30pt 才呼出圆盘；代价是呼盘那一下桌面页面会跟走约 30pt 再被圆盘盖住（你已拍板接受）。App 前台路径完全不动。同版加固：圆盘收起瞬间就断触摸（防动画期残留挡桌面）、选中开窗后 1.5 秒内全局兜底不再呼盘、右缘带接管日志带「App前台」判定值便于归因。提示：测试时若呼盘不跟手，注意 SB 侧「右缘接管带」开关是否被三指急救长按关掉了（日志会有记录）——App 侧接管不受它影响。日志：/var/mobile/Aevon.log。</string>
+			<string>Aevon 0.2.9（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -23,6 +23,9 @@
 			<string>Enabled</string>
 			<key>label</key>
 			<string>启用插件</string>
+			<key>infoText</key>
+			<string>总开关。关掉后不创建入口窗口、不挂任何识别器：桌面上没有手势条，也不响应任何边缘手势。首次安装后打开这个开关，然后注销（或重启桌面）才生效。
+它管的是「有没有 Aevon 这个人」，下面那些开关管的是「它怎么动」。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -34,7 +37,14 @@
 			<key>key</key>
 			<string>EdgeGestureEnabled</string>
 			<key>label</key>
-			<string>边缘左滑呼出圆盘（热区 + 全屏 App 右缘）</string>
+			<string>边缘呼出</string>
+			<key>infoText</key>
+			<string>整套「边缘呼出圆盘」的总闸，同时管三条通道：
+① 桌面 / 浮窗上的右下角热区（观察 + 桌面贴边横拉 30pt 才呼盘，轻点与翻页一律放行）；
+② 全屏 App 里 App 进程内的右缘判向（见下面「App 内右缘接管」）；
+③ SpringBoard 侧的兜底通道（见下面「右缘接管带」）。
+
+关掉它 = 上述全部停手（桌面和 App 的触摸完全回到系统原生状态，只是呼不出圆盘）。排查「某个触摸异常是不是 Aevon 引起的」时，先关这个最快。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -46,7 +56,15 @@
 			<key>key</key>
 			<string>AppSideEnabled</string>
 			<key>label</key>
-			<string>App 进程右缘接管（0.2.7 全 App，默认开）：右缘判定搬进每个 App 自己的进程，判向「权威 + 双向回传」—— 判向成立（向左滑 8pt 横向占优，两帧确认）时 App 物理上无法滚动并呼出圆盘；判向失败（纵向滚动 / 向右扫 / 轻点）时 App 照常放行，且回传给 SpringBoard：1.5 秒内全局兜底通道不再呼盘。0.2.7 修复 Aevon(93) 反馈的两个残留：① 圆盘偶尔「卡住不动」——起手点在接管带内但不在 SB 热区时，呼盘后那根手指的移动/抬手送不进圆盘，现在会自动收养那根手指继续喂圆盘（跟手 / 悬停 / 松手在图标上直接开窗照旧）；② 冷启动的 App（如刚点开的 QQ）前几秒识别器还没挂上，App 侧全盲——挂载重试从 4 次加宽到 0.5 秒 × 40 次（20 秒窗口），并且兜底呼盘遇到「App 侧无起手痕迹」时会在日志点名前台 App。覆盖全部 App；金融 App 内置排除；其他 App 可用 com.Aevon 域 AppSideExcludePrefixes 排除。代价：带内轻点延迟到抬手生效。急救：三指同时按下 = 立刻放行全部触摸</string>
+			<string>App 内右缘接管</string>
+			<key>infoText</key>
+			<string>把右缘判向搬进每个 App 自己的进程（0.2.7 起全 App，默认开）：
+· 全屏 App 里从屏幕右缘向左滑 8pt 且横向占优 → 圆盘呼出，同时 App 的这根触摸被合法取消，页面物理上不会跟着动；
+· 纵向滚动 / 向右扫 / 轻点 → 立刻放行，App 照常操作，只晚一两帧；
+· 三个方向都判不出来但已经走过 10pt → 立刻放行（0.2.9 新增，修「只能点不能滑」）；
+· 装进浮窗的 App 整体退让，一根手指都不碰（0.2.9 新增）。
+
+代价：右缘 46pt 带内的轻点会延迟到抬手才生效。金融类 App（建行/工行/招行/云闪付/支付宝）已内置排除；其它 App 可在 com.Aevon 域用 AppSideExcludePrefixes 排除。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -58,19 +76,14 @@
 			<key>key</key>
 			<string>RightEdgeTakeover</string>
 			<key>label</key>
-			<string>右缘接管带（0.1.17 起默认关，要用请自己打开）：全屏 App 内，屏幕右缘一条带按下即接管，向左滑 30pt 呼出圆盘，App 连 began 都收不到，所以绝不会跟着动。0.1.18 起默认宽 46pt、覆盖下半 60% 高度（按你实测的四个落点定的，4 个里能盖住 3 个），可在「细节调整」里往小调，最小 24pt。代价：这条带里 App 自己的轻点 / 右滑 / 贴边滚动也归我们（这是「整指接管」的物理代价，不是 bug）。急救：任何界面三根手指同时按下 = 立刻释放全部接管并把这个开关关掉，不用卸载</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>RightEdgeShowBand</string>
-			<key>label</key>
-			<string>显示右缘接管带（0.1.17 改版，测试用，默认关）：不再是常驻绘制，改为「按需提示条」——拖宽度 / 高度滑条或打开这个开关时出现 3 秒，接管成功闪 0.35 秒，然后自动消失。淡蓝色块就是可接管范围，最左边那条竖线就是「手指要落在它右边才算」。它不接触摸、不参与布局，看不见它也不影响功能</string>
+			<string>右缘接管带</string>
+			<key>infoText</key>
+			<string>SpringBoard 侧的兜底通道（0.1.17 起默认关，一般用不到）：
+全屏 App 里，屏幕右缘 46pt 宽 × 下半 60% 高这一块「按下即整指接管」，向左滑 30pt 呼盘。
+
+它比 App 侧更狠 —— App 连 began 都收不到，所以绝不会跟着动；但同一块区域里 App 自己的轻点 / 右滑 / 贴边滚动也一并归我们（整指接管的物理代价，不是 bug）。只有在 App 侧接管不生效（比如某个 App 没注入成功）时，才需要把它打开兜底。
+
+急救：任何界面三根手指同时按下 = 立刻释放全部接管并把它关掉，不用卸载。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -82,7 +95,27 @@
 			<key>key</key>
 			<string>BandTakeoverFromBegan</string>
 			<key>label</key>
-			<string>右缘全域接管（旧机制，默认关）：把接管带扩到右缘 44pt × 整屏高，连上半屏也能呼出。一般不用开 —— 上面那条带已经覆盖下半屏；只有你要在屏幕上半部右缘呼出时才打开</string>
+			<string>右缘全域接管</string>
+			<key>infoText</key>
+			<string>旧机制（默认关）：把上面的接管带扩到右缘 44pt × 整屏高，屏幕上半部的右缘也能呼出。
+
+一般不要开 —— 上半屏右侧全是返回、菜单、关闭这类按钮，接管之后它们会点不到。只有你习惯在屏幕上半部右缘呼出时才打开。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>RightEdgeShowBand</string>
+			<key>label</key>
+			<string>显示接管带</string>
+			<key>infoText</key>
+			<string>测试用（默认关）。打开它、或在「细节调整」里拖带宽/带高滑条时，屏幕上会出现 3 秒淡蓝色提示块，标出接管带的真实范围；每次接管成功再闪 0.35 秒后自动消失。
+
+它只是一层绘制：不接触摸、不参与布局，看不见它也不影响功能。（0.1.16 的全屏常驻绘制会在真机上卡死整屏，已整块删除。）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -94,7 +127,11 @@
 			<key>key</key>
 			<string>TouchEnabled</string>
 			<key>label</key>
-			<string>浮窗内可直接触摸操作（关掉=内容不接收触摸，防止点穿到下面的 App。窗口拖动 / 关闭 / 缩放照常，改动立即生效）</string>
+			<string>浮窗内可触摸</string>
+			<key>infoText</key>
+			<string>浮窗里的 App 能不能接收触摸。关掉后浮窗内容变成「只显示、不响应」，用来防止点击穿透到下面的桌面；窗口拖动、关闭、缩放不受影响，改动立即生效。
+
+正常情况下保持打开 —— 关掉后浮窗里的 App 就只能看了。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -106,7 +143,11 @@
 			<key>key</key>
 			<string>SwitcherLongPress</string>
 			<key>label</key>
-			<string>多任务卡片长按开窗（实验）</string>
+			<string>多任务卡片开窗</string>
+			<key>infoText</key>
+			<string>实验功能（默认关）：在多任务（后台卡片）界面长按某张卡片，直接把它变成浮窗，省掉「回桌面呼圆盘找图标」两步。
+
+不稳定，可能和系统自己的卡片手势打架，出问题就关掉它。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -119,6 +160,10 @@
 			<string>CrashGuard</string>
 			<key>label</key>
 			<string>开机崩溃保护</string>
+			<key>infoText</key>
+			<string>启动过程中捕获 Aevon 自身引起的异常，直接跳过本次初始化，避免 SpringBoard 反复崩溃（俗称「卡开机」）。
+
+默认开，建议一直保持。它只保护 Aevon 自己的帧，别的插件崩溃不会触发它。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -130,7 +175,11 @@
 			<key>key</key>
 			<string>LogEnabled</string>
 			<key>label</key>
-			<string>写日志文件（/var/mobile/Aevon.log）</string>
+			<string>写运行日志</string>
+			<key>infoText</key>
+			<string>把运行日志写到 /var/mobile/Aevon.log（Filza 里能看）。
+
+排查问题时必须开着 —— 日志只保留最近约 100 秒，用完就会被新内容截断，所以出问题后要尽快导出。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -142,7 +191,11 @@
 			<key>key</key>
 			<string>ProbeV107</string>
 			<key>label</key>
-			<string>运行时探针（排错用，每次启动跑一轮六组）</string>
+			<string>运行时探针</string>
+			<key>infoText</key>
+			<string>每次 SpringBoard 启动跑一轮只读探针：类表、窗口栈、识别器宿主、宿主审计等，各打一行日志。
+
+只读、不改任何状态，排错时非常有用（右键的很多结论都是它给的）。日常可以关掉，能少写几十行日志。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -150,7 +203,7 @@
 			<key>label</key>
 			<string>细节调整</string>
 			<key>footerText</key>
-			<string>触发条位置 / 宽度 / 高度、圆盘 App 编辑等细节调整都在二级页（AevonDetailPageV30）。</string>
+			<string>热区位置 / 宽度 / 高度、右缘接管带的宽与高、圆盘里放哪些 App，都在二级页。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
