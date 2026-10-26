@@ -503,9 +503,16 @@ jobs:
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'static let defaultWidth: Double = 46' \
             || { echo "::error::右缘默认宽度不是 46pt（Aevon(85) 实测 28pt 只覆盖 1/4 落点）"; exit 1; }
+          # 最小宽度的**纪律升级**（V0.2.11 / Aevon(97)）：0.1.18 把下限钉在 24pt，
+          # 理由是「8~23pt 属于必然落空区间」。但用户明确要求滑条能继续调小
+          # （「橙色接管带的高度和宽度调节存在固定数值，无法继续降低」）——
+          # 默认值仍必须 46（上面一条钉着），滑条下限改为 8。
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            | grep -q 'static let minWidth: Double = 24' \
-            || { echo "::error::右缘最小宽度不是 24pt（8pt 属于必然落空区间）"; exit 1; }
+            | grep -q 'static let minWidth: Double = 8' \
+            || { echo "::error::右缘最小宽度不是 8pt（用户要求可继续调小）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'static let minHeightPercent: Double = 6' \
+            || { echo "::error::带高下限不是 6%（用户要求可继续调低）"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'static let defaultHeightPercent: Double = 60' \
             || { echo "::error::右缘默认高度占比不是 60%（应当只覆盖下半屏）"; exit 1; }
