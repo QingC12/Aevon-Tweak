@@ -157,7 +157,11 @@ void AevonNotifySetRing(int on) {
  * App 侧静默落回 fallback 46pt×60%（用户实际设的是 8pt×28%），屏幕中部右缘
  * 左滑全部误呼圆盘、App 触摸还被合法取消。修法 = SB 把真实几何写进 notify 状态
  * （沙盒 App 必可读，bit39 圆盘位已验证多年），App 侧只认它、读不到一律 fail-closed。
- * bit48-55 = 带宽 pt（0 = 未发布），bit56-63 = 带高 %（0 = 未发布）。 */
+ * bit48-55 = 带宽 pt（0 = 未发布），bit56-63 = 带高 %（0 = 未发布）。
+ * used 常量是 CI strings 检查的锚点 —— C 函数名不在 section 内容里，
+ * strings 抓不到符号名（run 40281434515 的教训）。 */
+__attribute__((used)) static const char AevonGeomPublishV220Marker[] =
+    "AevonNotifySetBand AevonAppGeomNotifyV220";
 void AevonNotifySetBand(double w, double h) {
     @try {
         int token = AevonNotifyZoneToken();

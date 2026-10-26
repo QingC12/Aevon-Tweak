@@ -171,6 +171,12 @@ __attribute__((used)) static const char AevonAppRingCloseReleaseV211Marker[] = "
 __attribute__((used)) static const char AevonAppNoBlockIdleV211Marker[] = "AevonAppNoBlockIdleV211";
 /* V0.2.12（历史串只加不能改）：Aevon(98) 事故的收尾判据 —— 圆盘状态位轮询 */
 __attribute__((used)) static const char AevonAppRingGoneGuardV212Marker[] = "AevonAppRingGoneGuardV212";
+/* V0.2.20（Aevon(105) 判读）：几何只认共享内存 + 读不到 fail-closed。
+ * 标记必须是 ASCII used 常量 —— 只写在 ObjC 中文日志字面量里的标记落在
+ * __ustring（UTF-16），CI 的 strings 对它检测不稳定（run 40281434515 实锤：
+ * 日志字面量里的 AevonAppGeomNotifyV220 查不到，断言误报缺标记）。 */
+__attribute__((used)) static const char AevonAppGeomNotifyV220Marker[] = "AevonAppGeomNotifyV220";
+__attribute__((used)) static const char AevonAppGeomFailClosedV220Marker[] = "AevonAppGeomFailClosedV220";
 
 #pragma mark - 日志
 
