@@ -2001,6 +2001,27 @@ jobs:
           grep -q 'application:configurationForConnectingSceneSession:options:' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧缺 configurationForConnecting 拦截"; exit 1; }
           echo "V0.2.33 校验: clientIdentity 双路线 + auditToken 注册 + App 侧 scene 探针 已就位"
+          # ── V0.2.34 校验（AevonSelfSceneTakeoverV234 / AevonAppSceneTakeoverV234）：
+          # 窗口搬家（单场景 App 黑屏根治）。只加不改。
+          for s in AevonAppSceneTakeoverV234; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.34 App 侧缺标记 $s"; exit 1; }
+          done
+          for s in AevonSelfSceneTakeoverV234; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.34 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'com.aevon.selfscene.created' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::SB 侧缺创建广播"; exit 1; }
+          grep -q 'com.aevon.selfscene.destroyed' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::SB 侧缺销毁前广播"; exit 1; }
+          grep -q 'setWindowScene' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺 setWindowScene 搬家"; exit 1; }
+          grep -q 'AevonAppSceneTakeoverRestore' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺搬回逻辑"; exit 1; }
+          grep -q 'SceneWindowTakeover' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺搬家开关"; exit 1; }
+          echo "V0.2.34 校验: 窗口搬家（创建/销毁广播 + setWindowScene 搬入搬出 + 开关）已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

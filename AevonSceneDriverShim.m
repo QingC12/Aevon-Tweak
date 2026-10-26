@@ -39,6 +39,11 @@ __attribute__((used)) static const char AevonSelfSceneFixV229Marker[] = "AevonSe
 __attribute__((used)) static const char AevonSelfSceneRBSV230Marker[] = "AevonSelfSceneRBSV230";
 __attribute__((used)) static const char AevonSelfScenePidV231Marker[] = "AevonSelfScenePidV231";
 __attribute__((used)) static const char AevonSelfSceneFGV232Marker[] = "AevonSelfSceneFGV232";
+/* V0.2.34（AevonSelfSceneTakeoverV234）：创建成功/销毁前发 Darwin 通知
+ * （com.aevon.selfscene.created / .destroyed），App 侧据以把主 UIWindow
+ * setWindowScene 搬入/搬出自建场景 —— 单场景 App 不为第二场景建 window
+ * 是黑屏直接原因（0.2.33 真机判型），窗口搬家是根治刀。 */
+__attribute__((used)) static const char AevonSelfSceneTakeoverV234Marker[] = "AevonSelfSceneTakeoverV234";
 __attribute__((used)) static const char AevonForegroundProbeV232Marker[] = "AevonForegroundProbeV232";
 /* V0.2.33（Aevon(8) 日志：系统 App 显示、第三方 Sileo 黑屏，SB 侧链路完全一致）：
  * clientIdentity 换 FrontBoardAppLauncher（LiveContainer 同作者、SB 内呈现任意 App）
@@ -307,6 +312,13 @@ static id AevonSelfSceneCreateInner(NSString *bundleID, NSInteger pidHint, doubl
     id scene = ((AevonSDIdFn2)objc_msgSend)(manager, createSel, definition, parameters);
     if (scene == nil) { if (outErr) { *outErr = @"scene-nil"; } return nil; }
 
+    // V0.2.34（AevonSelfSceneTakeoverV234）：广播创建成功。App 侧收到后开始
+    // 轮询 connectedScenes，发现自建场景就把主 UIWindow 搬过来（单场景 App
+    // 不会为第二场景建 window —— 0.2.33 真机判型：这是黑屏的直接原因）。
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.aevon.selfscene.created"),
+                                         NULL, NULL, true);
+
     if (outSceneID) { *outSceneID = sceneID; }
     return scene;
 }
@@ -343,7 +355,22 @@ BOOL AevonSelfSceneDestroy(id scene) {
         if (manager == nil || sceneID.length == 0) return NO;
         SEL destroySel = NSSelectorFromString(@"destroyScene:withTransitionContext:");
         if (![manager respondsToSelector:destroySel]) return NO;
-        ((AevonSDIdFn2)objc_msgSend)(manager, destroySel, sceneID, nil);
+
+        // V0.2.34（AevonSelfSceneTakeoverV234）：销毁前先广播，让 App 侧把
+        // 搬进自建场景的主 UIWindow 搬回主场景，再延迟销毁 —— 不给时间的话
+        // window 会挂在已断开的场景上，App 回前台就是黑屏。
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFSTR("com.aevon.selfscene.destroyed"),
+                                             NULL, NULL, true);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            @try {
+                SEL destroySel2 = NSSelectorFromString(@"destroyScene:withTransitionContext:");
+                if ([manager respondsToSelector:destroySel2]) {
+                    ((AevonSDIdFn2)objc_msgSend)(manager, destroySel2, sceneID, nil);
+                }
+            } @catch (NSException *exception) { /* 销毁失败不影响关窗主链 */ }
+        });
         return YES;
     } @catch (NSException *exception) {
         return NO;

@@ -187,6 +187,14 @@ __attribute__((used)) static const char AevonAppGeomFailClosedV220Marker[] = "Ae
  *   Q2 场景生命周期事件走到了哪一步（UISceneWillConnect/DidActivate/DidDisconnect）。 */
 __attribute__((used)) static const char AevonAppSceneProbeV233Marker[] = "AevonAppSceneProbeV233";
 __attribute__((used)) static const char AevonAppSceneSwizzleV233Marker[] = "AevonAppSceneSwizzleV233";
+/* V0.2.34（AevonSelfSceneTakeoverV234 / AevonAppSceneTakeoverV234，0.2.33 真机判型）：
+ * 单场景 App 不为第二场景建 window 是黑屏直接原因。对策 = App 侧收到
+ * com.aevon.selfscene.created 后轮询 connectedScenes，发现自建 UIWindowScene：
+ *   - App 已为它建了 window（多场景支持，如设置/GitHub）→ 不动，原路径工作；
+ *   - 没建（单场景 App）→ 把主 UIWindow setWindowScene 搬进自建场景 +
+ *     frame = 画布（scene.coordinateSpace.bounds），画面立刻出现在浮窗；
+ * 收到 selfscene.destroyed → 搬回主场景（否则 window 挂在断开场景上 = 回前台黑屏）。 */
+__attribute__((used)) static const char AevonAppSceneTakeoverV234Marker[] = "AevonAppSceneTakeoverV234";
 
 #pragma mark - 日志
 
@@ -432,6 +440,193 @@ static void AevonAppSceneInstallObservers(void) {
     } @catch (NSException *exception) {
         AevonAppLog(@"scene 通知观察安装异常：%@（不影响宿主）", exception.reason ?: @"未知");
     }
+}
+
+/* V0.2.34 窗口搬家（AevonAppSceneTakeoverV234）。
+ *
+ * 0.2.33 真机判型（Aevon(9)）：设置/GitHub 成功、BatteryInfo/Filza/抖音/Sileo 黑屏，
+ * 而 SB 侧取证串四者完全一致 —— 黑屏与否取决于 App 端是否为第二场景建了 window：
+ * 多场景感知 App（设置/GitHub）自己给自建场景建了 window → 有画面；
+ * 单场景 App（绝大多数第三方）不为第二场景建 window → 黑。
+ *
+ * 修复 = 窗口搬家：收到 com.aevon.selfscene.created 后轮询 connectedScenes
+ * 发现自建 UIWindowScene，若 App 没为它建 window，就把主 UIWindow
+ * setWindowScene 搬进自建场景 + frame = 画布（公开 API，可逆）；
+ * 收到 com.aevon.selfscene.destroyed（SB 销毁场景前 0.35s 广播）立即搬回，
+ * 否则 window 挂在已断开的场景上，App 回前台就是黑屏。
+ * App 已自建 window（多场景支持）时绝不搬家，原路径照常工作。
+ * 开关：com.Aevon 域 SceneWindowTakeover（无键=开）。 */
+
+static BOOL gAevonAppTakeoverActive = NO;      /* 轮询进行中（防重入） */
+static BOOL gAevonAppTakeoverMoved = NO;       /* 已完成搬家（window 在自建场景里） */
+static __weak UIWindow *gAevonAppTakeoverWindow = nil;
+static __weak UIWindowScene *gAevonAppOriginalScene = nil;
+static CGRect gAevonAppOriginalFrame = CGRectZero;
+
+/* 在 connectedScenes 里找 Aevon 自建场景（description 含前缀即命中）。
+ * 返回 UIWindowScene；找不到返回 nil。 */
+static UIWindowScene *AevonAppSceneFindOurs(void) {
+    @try {
+        UIApplication *app = [UIApplication sharedApplication];
+        NSSet *sessions = [app valueForKey:@"connectedScenes"];
+        if (sessions == nil) { return nil; }
+        for (id session in sessions) {
+            id scene = nil;
+            @try { scene = [session valueForKey:@"scene"]; } @catch (NSException *e) { scene = nil; }
+            if (scene == nil) { continue; }
+            if (AevonAppSceneIsOurs(scene)) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    return (UIWindowScene *)scene;
+                }
+            }
+        }
+    } @catch (NSException *exception) { /* 只读，任何异常都吞 */ }
+    return nil;
+}
+
+/* 搬家：把主 window（所有非自建场景里 frame 最大的 UIWindow）搬进自建场景。
+ * 返回 YES = 终态（搬完 / 多场景支持 / 异常），NO = 本轮未定（启动早期，继续等）。 */
+static BOOL AevonAppSceneTakeoverMove(UIWindowScene *oursScene) {
+    if (gAevonAppTakeoverMoved) { return YES; }
+
+    /* 多场景 App 已为自建场景建了 window → 原路径工作，不搬家 */
+    NSArray *oursWindows = nil;
+    @try { oursWindows = [oursScene valueForKey:@"windows"]; } @catch (NSException *e) { oursWindows = nil; }
+    if (oursWindows.count > 0) {
+        AevonAppLog(@"窗口搬家：App 已为自建场景建了 %lu 个 window（多场景支持）→ 不搬家，原路径工作（AevonAppSceneTakeoverV234）",
+                    (unsigned long)oursWindows.count);
+        return YES;
+    }
+
+    /* 找主 window：遍历所有场景，取非自建场景里 frame 最大的 UIWindow */
+    UIWindow *main = nil;
+    CGRect mainFrame = CGRectZero;
+    @try {
+        NSSet *sessions = [[UIApplication sharedApplication] valueForKey:@"connectedScenes"];
+        for (id session in sessions) {
+            id scene = nil;
+            @try { scene = [session valueForKey:@"scene"]; } @catch (NSException *e) { scene = nil; }
+            if (scene == nil || ![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+            if (AevonAppSceneIsOurs(scene)) { continue; }
+            NSArray *windows = nil;
+            @try { windows = [scene valueForKey:@"windows"]; } @catch (NSException *e) { windows = nil; }
+            for (UIWindow *w in windows) {
+                if (![w isKindOfClass:[UIWindow class]]) { continue; }
+                CGFloat area = w.frame.size.width * w.frame.size.height;
+                if (main == nil || area > mainFrame.size.width * mainFrame.size.height) {
+                    main = w;
+                    mainFrame = w.frame;
+                }
+            }
+        }
+    } @catch (NSException *exception) { main = nil; }
+    if (main == nil) {
+        AevonAppLog(@"窗口搬家：自建场景已连上但找不到主 window（启动早期，等下一轮）（AevonAppSceneTakeoverV234）");
+        return NO;
+    }
+
+    CGRect canvas = oursScene.coordinateSpace.bounds;
+    @try {
+        gAevonAppOriginalScene = main.windowScene;
+        gAevonAppOriginalFrame = main.frame;
+        CGRect before = main.frame;
+        [main setWindowScene:oursScene];
+        main.frame = canvas;
+        gAevonAppTakeoverWindow = main;
+        gAevonAppTakeoverMoved = YES;
+        AevonAppLog(@"窗口搬家：主 window 已搬入自建场景（frame %@ → %@）（AevonAppSceneTakeoverV234）",
+                    NSStringFromCGRect(before), NSStringFromCGRect(main.frame));
+    } @catch (NSException *exception) {
+        AevonAppLog(@"窗口搬家异常：%@（不影响宿主）（AevonAppSceneTakeoverV234）", exception.reason ?: @"未知");
+        return YES;
+    }
+    return YES;
+}
+
+/* 搬回：SB 销毁自建场景前 0.35s 广播，把 window 搬回主场景原位。 */
+static void AevonAppSceneTakeoverRestore(void) {
+    if (!gAevonAppTakeoverMoved) { return; }
+    UIWindow *w = gAevonAppTakeoverWindow;
+    UIWindowScene *origin = gAevonAppOriginalScene;
+    gAevonAppTakeoverMoved = NO;
+    if (w == nil || origin == nil) { return; }
+    @try {
+        CGRect target = gAevonAppOriginalFrame;
+        [w setWindowScene:origin];
+        w.frame = target;
+        AevonAppLog(@"窗口搬回：主 window 已搬回原场景（frame %@）（AevonAppSceneTakeoverV234）",
+                    NSStringFromCGRect(target));
+    } @catch (NSException *exception) {
+        AevonAppLog(@"窗口搬回异常：%@（AevonAppSceneTakeoverV234）", exception.reason ?: @"未知");
+    }
+}
+
+/* 轮询：0.5s × 16 次（8 秒覆盖 SB 创建场景 + App 端连接全过程）。
+ * 找到自建场景 → 搬家（或判定多场景支持）→ 停；
+ * 超时未找到 → 记「自建场景未达 App 端」，这是连接被 App 端拒绝的证据。 */
+static NSInteger gAevonAppTakeoverTick = 0;
+static void AevonAppSceneTakeoverPollReset(void) { gAevonAppTakeoverTick = 0; }
+static void AevonAppSceneTakeoverPoll(void) {
+    gAevonAppTakeoverTick += 1;
+    NSInteger tick = gAevonAppTakeoverTick;
+    UIWindowScene *ours = AevonAppSceneFindOurs();
+    if (ours != nil) {
+        AevonAppLog(@"窗口搬家：自建场景已连上 App 端（第 %ld 次探测）（AevonAppSceneTakeoverV234）", (long)tick);
+        BOOL settled = AevonAppSceneTakeoverMove(ours);
+        if (settled) {
+            gAevonAppTakeoverActive = NO;
+            return;
+        }
+        /* 未定态（启动早期）：继续轮询等主 window 出现 */
+    }
+    if (tick >= 16) {
+        AevonAppLog(@"窗口搬家：8 秒内自建场景未连上 App 端（connectedScenes 无自建场景）= 连接被 App 端 UIKit 拒绝（AevonAppSceneTakeoverV234）");
+        gAevonAppTakeoverActive = NO;
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (gAevonAppTakeoverActive) { AevonAppSceneTakeoverPoll(); }
+    });
+}
+
+/* Darwin 通知回调（C 上下文，只派发不干活）。 */
+static void AevonAppSceneTakeoverNotify(CFNotificationCenterRef center,
+                                        void *observer,
+                                        CFStringRef name,
+                                        const void *object,
+                                        CFDictionaryRef userInfo) {
+    if (name == NULL) { return; }
+    NSString *n = [NSString stringWithString:(__bridge NSString *)name];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([n isEqualToString:@"com.aevon.selfscene.created"]) {
+            if (!AevonAppPrefBool(@"SceneWindowTakeover", YES)) {
+                AevonAppLog(@"窗口搬家：SceneWindowTakeover=关，只记录不搬（AevonAppSceneTakeoverV234）");
+                return;
+            }
+            if (gAevonAppTakeoverActive || gAevonAppTakeoverMoved) { return; }
+            gAevonAppTakeoverActive = YES;
+            AevonAppSceneTakeoverPollReset();
+            AevonAppSceneTakeoverPoll();
+        } else if ([n isEqualToString:@"com.aevon.selfscene.destroyed"]) {
+            AevonAppSceneTakeoverRestore();
+        }
+    });
+}
+
+static void AevonAppSceneTakeoverInstall(void) {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL,
+                                    AevonAppSceneTakeoverNotify,
+                                    CFSTR("com.aevon.selfscene.created"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL,
+                                    AevonAppSceneTakeoverNotify,
+                                    CFSTR("com.aevon.selfscene.destroyed"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
 }
 
 /* 本进程是否正被装在浮窗里。
@@ -1103,6 +1298,9 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
      * （幂等，装过即止）。探针对非 Aevon 场景零输出零改动。 */
     AevonAppSceneInstallObservers();
     AevonAppSceneSwizzleConnecting([[UIApplication sharedApplication] delegate]);
+    /* V0.2.34（AevonAppSceneTakeoverV234）：窗口搬家（单场景 App 黑屏根治）。
+     * 只收 Darwin 通知动作，平时零开销；SceneWindowTakeover 键可关（无键=开）。 */
+    AevonAppSceneTakeoverInstall();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         AevonAppSceneSwizzleConnecting([[UIApplication sharedApplication] delegate]);
