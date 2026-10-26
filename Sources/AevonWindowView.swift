@@ -66,8 +66,9 @@ final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
 
-    /// 内容区宽高比（宽 ÷ 高）。V0.2.21（AevonFloat53V221）：固定 5:3，不再锁屏幕比例。
-    static let contentAspect: CGFloat = 5.0 / 3.0
+    /// 内容区宽高比（宽 ÷ 高）。V0.2.22（AevonFloat53PortraitV222）：5:3 = 高5:宽3（竖窗）。
+    /// Aevon(106) 用户纠偏：0.2.21 曾按「宽:高」做成 1.667 横长条，实为竖窗 0.6。
+    static let contentAspect: CGFloat = 3.0 / 5.0
 
     private static let minContentWidth: CGFloat = 240
     private static let cornerRadius: CGFloat = 12
@@ -97,9 +98,10 @@ final class AevonWindowView: UIView {
     private var isLiveResizing = false
     /// 边条长按拖动进行中（V0.2.21，AevonFloatBarLongPressV221）
     private var isBarHoldMoving = false
-    /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
+    /// 上一次真正应用过的内容区尺寸与 X/Y 缩放系数（缓存，用来跳过无变化的布局）
     private var lastClipSize: CGSize = .zero
-    private var lastAppliedScale: CGFloat = 0
+    private var lastAppliedScaleX: CGFloat = 0
+    private var lastAppliedScaleY: CGFloat = 0
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
@@ -162,7 +164,8 @@ final class AevonWindowView: UIView {
         installOutsideGestureHandles(width: restored.width, height: restored.height)
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏 + 外侧手势区，内容比例固定 5:3（AevonFloat53V221），"
+            + "（无标题栏 + 外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
+            + "内容自适应拉伸铺满无黑边（AevonFloatStretchFillV222），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
@@ -171,11 +174,11 @@ final class AevonWindowView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// 无记忆时的默认几何：宽 80% 屏宽（5:3 → 高约 48% 屏高），顶边 10% 屏高，水平居中。
+    /// 无记忆时的默认几何：宽 62% 屏宽（5:3 竖窗 → 高约 48% 屏高），顶边 10% 屏高，水平居中。
     private static func defaultFrame() -> CGRect {
         let screen = UIScreen.main.bounds
         let aspect = contentAspect
-        let width = max(minContentWidth, min(screen.width * 0.80,
+        let width = max(minContentWidth, min(screen.width * 0.62,
                                              (screen.height * 0.92) * aspect))
         let height = width / aspect
         return CGRect(x: (screen.width - width) / 2.0,
@@ -220,34 +223,38 @@ final class AevonWindowView: UIView {
         return false
     }
 
-    /// 把整屏尺寸的容器等比放进内容区（V0.2.21 letterbox）。
+    /// 把整屏尺寸的容器**拉伸铺满**内容区（V0.2.22，AevonFloatStretchFillV222）。
     ///
-    /// V0.2.21（AevonFloat53V221）：内容区是 5:3、App 画面是竖屏整屏，比例不再相等，
-    /// 改用 **min**（装得下为准）+ 居中 —— 整块内容连顶栏/底栏一起完整可见，
-    /// 空出的两侧是 contentClip 的深色底（letterbox），绝不裁切画面。
+    /// Aevon(106) 用户定档：内容自适应铺满、不允许黑边 —— 采用 MilkyWayReborn
+    /// `MWWindowView layoutSubviews` 的默认模式：X/Y 各自独立缩放
+    /// （scaleX = 窗宽/屏宽，scaleY = 窗高/屏高），整块画面正好铺满窗口，
+    /// 顶栏/底栏完整、两侧无 letterbox。比例差（3:5 窗 vs 屏幕原生比例）
+    /// 由画面横向轻微拉伸消化，与 MilkyWay 默认行为一致。
     private func applyContentScale() {
         let screen = UIScreen.main.bounds.size
         guard screen.width > 0, screen.height > 0,
               contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
 
-        let scale = min(contentClip.bounds.width / screen.width,
-                        contentClip.bounds.height / screen.height)
+        let scaleX = contentClip.bounds.width / screen.width
+        let scaleY = contentClip.bounds.height / screen.height
 
         let clipSize = contentClip.bounds.size
         if abs(clipSize.width - lastClipSize.width) < 0.01,
            abs(clipSize.height - lastClipSize.height) < 0.01,
-           abs(scale - lastAppliedScale) < 0.0001 {
+           abs(scaleX - lastAppliedScaleX) < 0.0001,
+           abs(scaleY - lastAppliedScaleY) < 0.0001 {
             return
         }
         lastClipSize = clipSize
-        lastAppliedScale = scale
+        lastAppliedScaleX = scaleX
+        lastAppliedScaleY = scaleY
 
         let container = sceneHost.container
         container.layer.anchorPoint = .zero
         container.bounds = CGRect(origin: .zero, size: screen)
-        container.transform = CGAffineTransform(scaleX: scale, y: scale)
-        container.layer.position = CGPoint(x: (clipSize.width - screen.width * scale) / 2.0,
-                                           y: (clipSize.height - screen.height * scale) / 2.0)
+        container.transform = CGAffineTransform(scaleX: scaleX, y: scaleY)
+        // 拉伸后恰好铺满，无需居中偏移
+        container.layer.position = .zero
     }
 
     // MARK: - 外侧手势区（V0.0.37，AevonSthenoEdgeBarV37）
@@ -523,7 +530,7 @@ final class AevonWindowView: UIView {
         transform = CGAffineTransform(scaleX: factor, y: factor)
     }
 
-    /// 只有「宽度」一个自由度：高度 = 宽度 ÷ 5:3 比例（AevonFloat53V221）。
+    /// 只有「宽度」一个自由度：高度 = 宽度 × 5/3（高:宽 = 5:3，AevonFloat53V221）。
     /// 横向按 dx（拖左角反向），纵向按 dy（拖顶角反向）；
     /// 角块横竖都在动，取变化更明显的那个方向，斜拖也跟手，拖不出细长条。
     private func clampedCornerWidth(dx: CGFloat, dy: CGFloat, base: CGRect,
