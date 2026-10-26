@@ -953,3 +953,6 @@ __attribute__((used)) static const char AevonFloatBarLongPressV221Marker[] = "Ae
 __attribute__((used)) static const char AevonFloatBarHoldV221Marker[] = "AevonFloatBarHoldV221";
 __attribute__((used)) static const char AevonFloatBottomDblCloseV221Marker[] = "AevonFloatBottomDblCloseV221";
 __attribute__((used)) static const char AevonRestoreDefaultV101RetiredMarker[] = "AevonRestoreDefaultV101";
+/* V0.2.23（Aevon(107)）：AevonFloatStretchFillV222 退休收容 —— X/Y 独立拉伸把字体压扁，
+ * 改回等比底对齐（AevonFloatBottomFitV223）；CI 历史串只加不能改。 */
+__attribute__((used)) static const char AevonFloatStretchFillV222RetiredMarker[] = "AevonFloatStretchFillV222";

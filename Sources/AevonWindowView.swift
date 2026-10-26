@@ -22,8 +22,6 @@ enum AevonFloatGrab {
     case bar(UIRectEdge)
     /// 外角块 → 从对角缩放
     case corner(UIRectEdge)
-    /// 右上角悬浮 ✕ → 关闭
-    case close
 }
 
 /// 单个 App 的浮窗外壳：纯内容（无标题栏）+ 右上悬浮 ✕ + 贴窗外边缘的手势区。
@@ -73,16 +71,20 @@ final class AevonWindowView: UIView {
     private static let minContentWidth: CGFloat = 240
     private static let cornerRadius: CGFloat = 12
     /// 外侧手势区厚度（边条）与外角块边长（pt）。Stheno 的 edgeWidth 同位概念。
-    static let barThickness: CGFloat = 18
-    static let cornerSize: CGFloat = 34
+    /// V0.2.23（AevonFloatWideGripV223）：Aevon(107) 反馈「不容易触发」，18/34 → 26/44。
+    static let barThickness: CGFloat = 26
+    static let cornerSize: CGFloat = 44
 
+    /// 顶部留白栏高度（pt，AevonFloatTopBarV223）
+    static let topBarHeight: CGFloat = 28
     /// 全局唯一的偏好域，和设置面板共用
     private static let prefsSuite = "com.Aevon"
     /// Stheno 式全局几何记忆键（medusaFrameLast 对应物）
     private static let frameMemoryKey = "MedusaFrameLast"
 
     private let contentClip = UIView()
-    private let closeButton = UIButton(type: .system)
+    /// V0.2.23（AevonFloatTopBarV223）：顶部留白装饰栏（✕ 已移除，底边双击=唯一关闭手势）
+    private let topBar = UIView()
     private let hintLabel = UILabel()
 
     private var moveOriginFrame: CGRect = .zero
@@ -98,10 +100,9 @@ final class AevonWindowView: UIView {
     private var isLiveResizing = false
     /// 边条长按拖动进行中（V0.2.21，AevonFloatBarLongPressV221）
     private var isBarHoldMoving = false
-    /// 上一次真正应用过的内容区尺寸与 X/Y 缩放系数（缓存，用来跳过无变化的布局）
+    /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
     private var lastClipSize: CGSize = .zero
-    private var lastAppliedScaleX: CGFloat = 0
-    private var lastAppliedScaleY: CGFloat = 0
+    private var lastAppliedScale: CGFloat = 0
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
@@ -149,23 +150,25 @@ final class AevonWindowView: UIView {
             }
         }
 
-        // 右上角悬浮 ✕（Stheno 无标题栏方案的关闭出口）
-        closeButton.frame = CGRect(x: restored.width - 40, y: 6, width: 30, height: 30)
-        closeButton.setTitle("✕", for: .normal)
-        closeButton.setTitleColor(.white, for: .normal)
-        closeButton.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        closeButton.backgroundColor = UIColor(white: 0.10, alpha: 0.55)
-        closeButton.layer.cornerRadius = 15
-        closeButton.autoresizingMask = [.flexibleLeftMargin]
-        closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        addSubview(closeButton)
+        // V0.2.23（AevonFloatTopBarV223）：顶部留白栏 —— ✕ 已随底边双击关闭一起移除，
+        // 但顶部保留一条空白装饰栏，窗口观感更标准；它压在内容顶层，
+        // 被盖住的只是本来就要裁掉的顶部溢出区，不损失可见内容。
+        topBar.frame = CGRect(x: 0, y: 0, width: restored.width, height: AevonWindowView.topBarHeight)
+        topBar.autoresizingMask = [.flexibleWidth]
+        topBar.backgroundColor = UIColor(white: 0.10, alpha: 0.55)
+        topBar.layer.cornerRadius = AevonWindowView.cornerRadius
+        topBar.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        topBar.isUserInteractionEnabled = false
+        addSubview(topBar)
 
         // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.21 起只剩下角块 + 底/左/右边条）
         installOutsideGestureHandles(width: restored.width, height: restored.height)
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏 + 外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
-            + "内容自适应拉伸铺满无黑边（AevonFloatStretchFillV222），"
+            + "（外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
+            + "内容等比适配·底对齐·顶部裁切（AevonFloatBottomFitV223），"
+            + "手势区加宽 26/44（AevonFloatWideGripV223），"
+            + "顶部留白栏·✕移除（AevonFloatTopBarV223），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
@@ -223,38 +226,36 @@ final class AevonWindowView: UIView {
         return false
     }
 
-    /// 把整屏尺寸的容器**拉伸铺满**内容区（V0.2.22，AevonFloatStretchFillV222）。
+    /// 把整屏尺寸的容器**等比缩放、底部对齐**放进内容区（V0.2.23，AevonFloatBottomFitV223）。
     ///
-    /// Aevon(106) 用户定档：内容自适应铺满、不允许黑边 —— 采用 MilkyWayReborn
-    /// `MWWindowView layoutSubviews` 的默认模式：X/Y 各自独立缩放
-    /// （scaleX = 窗宽/屏宽，scaleY = 窗高/屏高），整块画面正好铺满窗口，
-    /// 顶栏/底栏完整、两侧无 letterbox。比例差（3:5 窗 vs 屏幕原生比例）
-    /// 由画面横向轻微拉伸消化，与 MilkyWay 默认行为一致。
+    /// Aevon(107) 用户定档：0.2.22 的 X/Y 独立拉伸把字体压扁了，改回**等比**；
+    /// 5:3 竖窗比屏幕原生比例矮胖，等比装下宽度后高度必然溢出 —— 溢出部分
+    /// 从**顶部裁掉**（状态栏方向），底部与左右两侧保证完整：
+    ///   · scale = 窗宽 ÷ 屏宽（宽度精确铺满 → 左右零裁切、零变形）；
+    ///   · 底边对齐（position.y = 窗高 − 屏高×scale）→ 底栏永远可见；
+    ///   · 顶部超出部分被 contentClip 裁掉（用户明确允许）。
     private func applyContentScale() {
         let screen = UIScreen.main.bounds.size
         guard screen.width > 0, screen.height > 0,
               contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
 
-        let scaleX = contentClip.bounds.width / screen.width
-        let scaleY = contentClip.bounds.height / screen.height
+        let scale = contentClip.bounds.width / screen.width
 
         let clipSize = contentClip.bounds.size
         if abs(clipSize.width - lastClipSize.width) < 0.01,
            abs(clipSize.height - lastClipSize.height) < 0.01,
-           abs(scaleX - lastAppliedScaleX) < 0.0001,
-           abs(scaleY - lastAppliedScaleY) < 0.0001 {
+           abs(scale - lastAppliedScale) < 0.0001 {
             return
         }
         lastClipSize = clipSize
-        lastAppliedScaleX = scaleX
-        lastAppliedScaleY = scaleY
+        lastAppliedScale = scale
 
         let container = sceneHost.container
         container.layer.anchorPoint = .zero
         container.bounds = CGRect(origin: .zero, size: screen)
-        container.transform = CGAffineTransform(scaleX: scaleX, y: scaleY)
-        // 拉伸后恰好铺满，无需居中偏移
-        container.layer.position = .zero
+        container.transform = CGAffineTransform(scaleX: scale, y: scale)
+        // 宽度恰好铺满（x=0），底边对齐（顶部溢出被裁）
+        container.layer.position = CGPoint(x: 0, y: clipSize.height - screen.height * scale)
     }
 
     // MARK: - 外侧手势区（V0.0.37，AevonSthenoEdgeBarV37）
@@ -363,11 +364,6 @@ final class AevonWindowView: UIView {
         guard let parent = superview else { return nil }
         let local = convert(layerPoint, from: parent)
 
-        // ✕ 先判：它压在窗内右上，若被边条帧盖住会误判成拖动
-        if !closeButton.isHidden, closeButton.alpha > 0.01,
-           closeButton.frame.insetBy(dx: -8, dy: -8).contains(local) {
-            return .close
-        }
         for handle in subviews.compactMap({ $0 as? AevonEdgeHandleView }) {
             guard !handle.isHidden, handle.alpha > 0.01 else { continue }
             if handle.frame.contains(local) {
@@ -396,8 +392,6 @@ final class AevonWindowView: UIView {
             let ay: CGFloat = edges.contains(.top) ? 1.0
                 : (edges.contains(.bottom) ? 0.0 : 0.5)
             beginLiveResize(anchor: CGPoint(x: ax, y: ay))
-        case .close:
-            activeGrab = grab
         }
         parent.bringSubviewToFront(self)
     }
@@ -410,8 +404,6 @@ final class AevonWindowView: UIView {
             applyBarMove(to: layerPoint)
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
-        case .close:
-            break
         }
     }
 
@@ -427,13 +419,6 @@ final class AevonWindowView: UIView {
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
             finishEdgeResize()
-        case .close:
-            guard commit, let parent = superview else { return }
-            let local = convert(layerPoint, from: parent)
-            if !closeButton.isHidden,
-               closeButton.frame.insetBy(dx: -8, dy: -8).contains(local) {
-                closeTapped()
-            }
         }
     }
 
@@ -454,8 +439,6 @@ final class AevonWindowView: UIView {
                 frame = resizeOriginFrame
                 setNeedsLayout()
             }
-        case .close:
-            break
         }
     }
 

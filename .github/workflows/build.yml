@@ -1784,8 +1784,8 @@ jobs:
           done
           grep -q 'contentAspect: CGFloat = 3.0 / 5.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::内容区比例不是 3:5 竖窗（5:3 = 高5:宽3，Aevon(106) 纠偏）"; exit 1; }
-          grep -q 'CGAffineTransform(scaleX: scaleX, y: scaleY)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::内容必须 X/Y 独立拉伸铺满（无黑边，AevonFloatStretchFillV222）"; exit 1; }
+          grep -q 'CGAffineTransform(scaleX: scale, y: scale)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::内容必须等比缩放（底对齐，AevonFloatBottomFitV223）"; exit 1; }
           grep -q 'minimumPressDuration = 0.3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::边条长按 0.3s 拖动未实现"; exit 1; }
           grep -q 'floatBarHoldDelay: CFTimeInterval = 0.3' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
@@ -1806,6 +1806,23 @@ jobs:
           grep -q 'min(contentClip.bounds.width' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::letterbox min 等比缩放不许回潮（用户要求无黑边自适应）"; exit 1; }
           echo "V0.2.22 校验: 竖窗 3:5 + 拉伸铺满（MilkyWay 模式）已就位"
+
+          # ---- V0.2.23（Aevon(107) 定档）：等比底对齐（顶部裁切）+ 手势区加宽 + 顶部留白栏去✕
+          for s in AevonFloatBottomFitV223 AevonFloatWideGripV223 AevonFloatTopBarV223; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::浮窗 0.2.23 缺标记 $s"; exit 1; }
+          done
+          grep -q 'CGAffineTransform(scaleX: scaleX' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::X/Y 独立拉伸不许回潮（字体压扁，0.2.23 已改等比）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'closeButton' \
+            && { echo "::error::顶部 ✕ 不许回潮（底边双击=唯一关闭手势，0.2.23 已移除）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'case close' \
+            && { echo "::error::.close 抓取分支不许回潮"; exit 1; }
+          grep -q 'barThickness: CGFloat = 26' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::手势区未加宽（26/44）"; exit 1; }
+          grep -q 'topBarHeight: CGFloat = 28' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::顶部留白栏未实现"; exit 1; }
+          echo "V0.2.23 校验: 等比底对齐 + 手势区 26/44 + 顶部留白栏 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

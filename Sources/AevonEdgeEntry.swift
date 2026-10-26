@@ -2172,9 +2172,6 @@ enum AevonEdgeEntry {
         case .corner:
             hit.window.grabBegin(hit.grab, at: hit.layerPoint)
             AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
-        case .close:
-            hit.window.grabBegin(hit.grab, at: hit.layerPoint)
-            AevonLog.info("[窗口] 全局通道命中关闭钮（AevonFloatGlobalV41）")
         }
         return true
     }
@@ -2246,8 +2243,6 @@ enum AevonEdgeEntry {
             // 记一次双击候选：只有「手柄上的轻点」才算，✕ 不算
             if let grab = floatGrab, win != nil {
                 switch grab {
-                case .close:
-                    break
                 case .bar, .corner:
                     floatLastTapAt = CACurrentMediaTime()
                     floatLastTapPoint = point
