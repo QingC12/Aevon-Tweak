@@ -56,13 +56,16 @@ BOOL AevonSelfSceneContentAlive(id scene);
 /// "fg=? cs=? layers=? dr=? idle=?"（全 @try，取不到写 "?"），供日志判黑在哪一层。
 NSString *AevonSelfSceneDebugState(id scene);
 
-/// V0.2.35（AevonSceneRouteV235）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
-/// 查 LSApplicationProxy 的 Info.plist 有无 UIApplicationSceneManifest：
-///   返回 1 = 有 manifest（scene App，UIKit 会为自建场景建 session → 自建场景可走）；
+/// V0.2.35/36（AevonSceneRouteV235/236）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
+/// 查 LSApplicationProxy 的 Info.plist 有无 UIApplicationSceneManifest，并细判
+/// UIApplicationSupportsMultipleScenes（iOS 文档缺省 NO —— 0.2.35 真机：Sileo/
+/// 抖音/微信有 manifest 仍被拒，Gmail/GitHub/贴吧纯净版多场景 App 全通）：
+///   返回 2 = 多场景 App（UIApplicationSupportsMultipleScenes=YES）→ 自建场景可走；
+///   返回 1 = 有 manifest 但单场景（键缺失或 NO）→ 走旧路径；
 ///   返回 0 = 无 manifest（老式单场景 App，UIKit 自动桥接只认主场景，自建场景
 ///           连接被 App 端拒绝 —— 0.2.34 真机实锤 + FrontBoardAppLauncher README
 ///           同款已知限制"Single-scene apps may not work yet"）；
-///   返回 -1 = 探测不到（proxy nil / 类缺失），调用方按 1 处理（保持 0.2.34 行为）。
+///   返回 -1 = 探测不到（proxy nil / 类缺失），调用方按 2 处理（保持旧版行为）。
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
 
 /// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段

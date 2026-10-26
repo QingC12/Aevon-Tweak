@@ -56,6 +56,12 @@ __attribute__((used)) static const char AevonSelfSceneAuditV233Marker[] = "Aevon
  * 参照项目 README 同样标注 "Single-scene apps may not work yet" —— 路线已知限制，
  * 不是我们接错线）。修法 = 创建前分流：无 scene manifest 的 App 直接走全屏接管旧路径。 */
 __attribute__((used)) static const char AevonSceneRouteV235Marker[] = "AevonSceneRouteV235";
+/* V0.2.36（AevonSceneRouteV236）：0.2.35 真机矩阵 —— 成功（设置/GitHub/Gmail/
+ * 贴吧纯净版/WPForumClient）vs 黑屏（Sileo/抖音/微信，全被 0.2.35 判「有 manifest」
+ * 走了自建场景）。iOS 文档语义：UIApplicationSupportsMultipleScenes 缺省 NO，
+ * 有 manifest 的单场景 App UIKit 同样只认主场景、第二场景连接照拒。
+ * 分流细判：只有多场景 App 才走自建场景，其余一律旧路径。 */
+__attribute__((used)) static const char AevonSceneRouteV236Marker[] = "AevonSceneRouteV236";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -514,7 +520,15 @@ NSString *AevonSelfSceneDebugState(id scene) {
  * UIKit 的规则：Info.plist 有 UIApplicationSceneManifest = scene 生命周期 App，
  * 自建场景的连接请求会进 App 端 UIKit 正常建 session（设置/GitHub/Safari 实证）；
  * 无 manifest = 老式单场景 App，UIKit 自动桥接只认主场景，第二场景连接被拒
- * （0.2.34 真机：Sileo connectedScenes 8 秒无自建场景）。 */
+ * （0.2.34 真机：Sileo connectedScenes 8 秒无自建场景）。
+ *
+ * V0.2.36（AevonSceneRouteV236）细判一档：0.2.35 真机显示「有 manifest」不够——
+ * UIApplicationSupportsMultipleScenes 缺省 NO，单场景 manifest App（Sileo/抖音/
+ * 微信）第二场景连接同样被拒。返回值语义：
+ *   2 = 多场景 App（UIApplicationSupportsMultipleScenes=YES）→ 可走自建场景
+ *   1 = 有 manifest 但单场景（键缺失或为 NO）→ 走旧路径
+ *   0 = 无 manifest（老式 App）→ 走旧路径
+ *  -1 = 取证失败（proxy/info 拿不到）→ 由调用方保守处理 */
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
     @try {
         if (bundleID.length == 0) { return -1; }
@@ -529,7 +543,20 @@ NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
             info = ((AevonSDIdFn0)objc_msgSend)(proxy, infoSel);
         }
         if (info == nil) { return -1; }
-        return (info[@"UIApplicationSceneManifest"] != nil) ? 1 : 0;
+        id manifest = info[@"UIApplicationSceneManifest"];
+        if (manifest == nil) { return 0; }
+        if (![manifest isKindOfClass:[NSDictionary class]]) { return 1; }
+        // V0.2.36（AevonSceneRouteV236）：细判 UIApplicationSupportsMultipleScenes。
+        id multi = ((NSDictionary *)manifest)[@"UIApplicationSupportsMultipleScenes"];
+        if ([multi isKindOfClass:[NSNumber class]]) { return [multi boolValue] ? 2 : 1; }
+        if ([multi isKindOfClass:[NSString class]]) {
+            NSString *s = (NSString *)multi;
+            BOOL yes = [s caseInsensitiveCompare:@"YES"] == NSOrderedSame
+                    || [s caseInsensitiveCompare:@"true"] == NSOrderedSame
+                    || [s isEqualToString:@"1"];
+            return yes ? 2 : 1;
+        }
+        return 1; /* 键缺失 = iOS 文档缺省 NO = 单场景 */
     } @catch (NSException *exception) {
         return -1;
     }

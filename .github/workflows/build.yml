@@ -2043,6 +2043,19 @@ jobs:
           grep -q 'AevonAppSceneTakeoverAmbientPoll' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧缺安静轮询兜底"; exit 1; }
           echo "V0.2.35 校验: 创建前分流 + 连接取证 + 安静轮询兜底 已就位"
+          # ── V0.2.36 校验（AevonSceneRouteV236）：分流细判。
+          # 0.2.35 真机矩阵：Sileo/抖音/微信「有 manifest」仍黑屏（App 端拒连），
+          # Gmail/GitHub/贴吧纯净版多场景 App 全通 → 只有
+          # UIApplicationSupportsMultipleScenes=YES 才走自建场景。只加不改。
+          for s in AevonSceneRouteV236; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.36 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'UIApplicationSupportsMultipleScenes' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺多场景细判"; exit 1; }
+          grep -q 'AevonSceneRouteV236' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺单场景分流分支"; exit 1; }
+          echo "V0.2.36 校验: 分流细判（多场景才自建，单场景回旧路径）已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
