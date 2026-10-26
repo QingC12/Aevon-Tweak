@@ -67,9 +67,20 @@ NSString *AevonSelfSceneDebugState(id scene);
 ///   返回 -1 = 探测不到（proxy nil / 类缺失），调用方按 2 处理（保持旧版行为）。
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
 
-/// V0.2.38（AevonSceneRouteV238）：分流取证 —— 把 AevonSelfSceneAppSceneSupport
-/// 链路每一段拼串（lsCls/proxySel/proxy/infoSel/info/manifest/mKeys/configs/
-/// legacyDel/multi），一回真机日志定 -1 断点。全只读，返回串仅供日志。
+/// V0.2.39（AevonSceneRouteV239）：创建前分流判据 —— 主路线换 SB 内部数据源。
+/// 0.2.38 取证实锤：LSApplicationProxy.infoDictionary 在 roothide SB 进程调用即抛
+/// NSInvalidArgumentException，黑屏组与成功组三版全 -1（同路），分流从未生效。
+/// 新主路线 = SBApplicationController.sharedInstance → applicationWithBundleIdentifier:
+/// （AevonAppInfo 已验证同款链路）→ SBApplication 的 sceneSpecification /
+/// applicationSceneSpecification（选择子探测），SB 自己解析好的 manifest：
+///   返回 2 = spec 非 nil（SB 认为它是 scene App）→ 自建场景可走；
+///   返回 0 = spec 为 nil（老式 App，Sileo/Filza 类）→ 走旧路径；
+///   返回 -1 = 链路断点 → 调用方保守走旧路径（白名单制）。
+NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
+
+/// V0.2.39（AevonSceneRouteV239）：分流取证 —— 双路线各段拼串 + 异常 reason。
+/// A 路线 = SBApplication sceneSpecification；B 路线 = bundleURL 直读 Info.plist
+/// （infoDictionary 抛异常的备选，只取证）。返回串仅供日志。
 NSString *AevonSelfSceneRouteDump(NSString *bundleID);
 
 /// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段

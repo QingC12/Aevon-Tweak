@@ -163,6 +163,10 @@ enum AevonWindowManager {
             // 历史判据（AevonSceneRouteV235 / AevonSceneRouteV236 / AevonSceneRouteV237）：
             // 0=无 manifest；1=有 manifest 单场景或无 scene delegate 类名；
             // 2=manifest 带真 scene delegate 类名 + 多场景。
+            // V0.2.39（AevonSceneRouteV239）：0.2.38 取证实锤 infoDictionary 在
+            // roothide SB 进程调用即抛 NSInvalidArgumentException（三版全 -1 同路，
+            // 0.2.38 白名单制因此全回退）。主路线换 SBApplication.sceneSpecification
+            // （SB 自己解析的 manifest，AevonAppInfo 已验证链路），Swift 判据不变。
             let routeDump = AevonSelfSceneRouteDump(bundleID)
             let sceneSupport = AevonSelfSceneAppSceneSupport(bundleID)
             if sceneSupport != 2 {

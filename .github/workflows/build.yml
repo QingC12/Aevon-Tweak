@@ -2084,6 +2084,22 @@ jobs:
           grep -q 'AevonSceneRouteV238' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧缺白名单制分流"; exit 1; }
           echo "V0.2.38 校验: 白名单制（只有确证 2 才自建）+ 分流取证 已就位"
+          # ── V0.2.39 校验（AevonSceneRouteV239）：主路线换 SBApplication。
+          # 0.2.38 取证实锤：LSApplicationProxy.infoDictionary 在 roothide SB 进程
+          # 调用即抛 NSInvalidArgumentException → 三版全 -1 → 0.2.38 白名单制全回退。
+          # 主路线换 SBApplication.sceneSpecification（AevonAppInfo 已验证同款链路）。
+          # 只加不改。
+          for s in AevonSceneRouteV239; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.39 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'sceneSpecification' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺 SBApplication sceneSpecification 判据"; exit 1; }
+          grep -q 'applicationWithBundleIdentifier' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺已验证 SBApplicationController 链路"; exit 1; }
+          grep -q 'AevonSceneRouteV239' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺 V239 分流注释锚"; exit 1; }
+          echo "V0.2.39 校验: SBApplication sceneSpecification 主路线 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

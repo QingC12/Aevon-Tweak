@@ -79,6 +79,14 @@ __attribute__((used)) static const char AevonSceneRouteV237Marker[] = "AevonScen
  * ① 白名单制：只有确证 2 才自建，-1 从「维持自建」改「保守旧路径」；
  * ② AevonSelfSceneRouteDump 把链路每一段拼串打进日志，一回定终判。 */
 __attribute__((used)) static const char AevonSceneRouteV238Marker[] = "AevonSceneRouteV238";
+/* V0.2.39（AevonSceneRouteV239）：0.2.38 取证实锤 —— LSApplicationProxy.infoDictionary
+ * 在 roothide SB 进程调用即抛 NSInvalidArgumentException（proxy 在、选择子响应、
+ * 调用就炸），三版黑屏组与成功组全部 -1 同路，分流从未生效；0.2.38 白名单制把
+ * -1 全挡旧路径 = 真重排全部回退（用户实测）。主路线换 SB 内部数据源：
+ * SBApplicationController.sharedInstance → applicationWithBundleIdentifier:
+ * （AevonAppInfo 已验证同款链路）→ SBApplication 的 sceneSpecification ——
+ * SB 自己解析好的 manifest，老式 App 为 nil，与 roothide 文件系统补丁无关。 */
+__attribute__((used)) static const char AevonSceneRouteV239Marker[] = "AevonSceneRouteV239";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -533,122 +541,140 @@ NSString *AevonSelfSceneDebugState(id scene) {
     }
 }
 
-/* V0.2.35（AevonSceneRouteV235）：创建前分流判据。
- * UIKit 的规则：Info.plist 有 UIApplicationSceneManifest = scene 生命周期 App，
- * 自建场景的连接请求会进 App 端 UIKit 正常建 session（设置/GitHub/Safari 实证）；
- * 无 manifest = 老式单场景 App，UIKit 自动桥接只认主场景，第二场景连接被拒
- * （0.2.34 真机：Sileo connectedScenes 8 秒无自建场景）。
+/* V0.2.35~38 历史（AevonSceneRouteV235/236/237/238）：LSApplicationProxy 路线三连翻车。
+ * 0.2.38 取证实锤：proxy 拿到了、infoDictionary respondsToSelector=ok，但**调用即抛
+ * NSInvalidArgumentException**（roothide SB 进程）→ 三版黑屏组与成功组**全部 -1**，
+ * 分流从未生效（0.2.38 白名单制把 -1 全挡旧路径 = 全部回退整屏，用户实测）。
  *
- * V0.2.36（AevonSceneRouteV236）细判一档：0.2.35 真机显示「有 manifest」不够——
- * UIApplicationSupportsMultipleScenes 缺省 NO，单场景 manifest App（Sileo/抖音/
- * 微信）第二场景连接同样被拒。返回值语义：
- *   2 = 多场景 App（UIApplicationSupportsMultipleScenes=YES）→ 可走自建场景
- *   1 = 有 manifest 但单场景（键缺失或为 NO）→ 走旧路径
- *   0 = 无 manifest（老式 App）→ 走旧路径
- *  -1 = 取证失败（proxy/info 拿不到）→ 由调用方保守处理 */
+ * V0.2.39（AevonSceneRouteV239）：主路线换 SB 自己解析好的 manifest ——
+ * SBApplicationController.sharedInstance → applicationWithBundleIdentifier:
+ * （AevonAppInfo 已验证同款链路，实例方法勿发类上）→ SBApplication 的
+ * sceneSpecification / applicationSceneSpecification（选择子探测，两个名字都试）。
+ * SB 内部数据源，roothide 无关；老式 App（Sileo/Filza）spec 为 nil。
+ * 返回值语义：
+ *   2 = SB 认为它是 scene App（spec 非 nil）→ 可走自建场景
+ *   0 = spec 为 nil（老式 App）→ 走旧路径
+ *  -1 = 链路断点（controller/app nil 或选择子全缺）→ 保守走旧路径（Swift 侧白名单制） */
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
     @try {
         if (bundleID.length == 0) { return -1; }
-        Class lsCls = NSClassFromString(@"LSApplicationProxy");
-        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
-        if (lsCls == nil || ![(id)lsCls respondsToSelector:proxySel]) { return -1; }
-        id proxy = ((AevonSDIdFn1)objc_msgSend)((id)lsCls, proxySel, bundleID);
-        if (proxy == nil) { return -1; }
-        NSDictionary *info = nil;
-        SEL infoSel = NSSelectorFromString(@"infoDictionary");
-        if ([proxy respondsToSelector:infoSel]) {
-            info = ((AevonSDIdFn0)objc_msgSend)(proxy, infoSel);
+        Class ctlCls = NSClassFromString(@"SBApplicationController");
+        if (ctlCls == nil) { return -1; }
+        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+        if (![(id)ctlCls respondsToSelector:sharedSel]) { return -1; }
+        id controller = ((AevonSDIdFn0)objc_msgSend)((id)ctlCls, sharedSel);
+        if (controller == nil) { return -1; }
+        SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+        if (![controller respondsToSelector:appSel]) { return -1; }
+        id app = ((AevonSDIdFn1)objc_msgSend)(controller, appSel, bundleID);
+        if (app == nil) { return -1; }
+        for (NSString *selName in @[@"sceneSpecification", @"applicationSceneSpecification"]) {
+            SEL sel = NSSelectorFromString(selName);
+            if (![app respondsToSelector:sel]) { continue; }
+            id spec = ((AevonSDIdFn0)objc_msgSend)(app, sel);
+            return (spec != nil) ? 2 : 0;
         }
-        if (info == nil) { return -1; }
-        id manifest = info[@"UIApplicationSceneManifest"];
-        if (manifest == nil) { return 0; }
-        if (![manifest isKindOfClass:[NSDictionary class]]) { return 1; }
-        // V0.2.37（AevonSceneRouteV237）：manifest 里必须真的写了 scene delegate
-        // 类名 —— 老式 AppDelegate 自动桥接的 App（Sileo/Filza/抖音/微信，App 侧
-        // 探针实锤「未实现 configurationForConnecting」）manifest 就算写满
-        // UIApplicationSupportsMultipleScenes=YES 第二场景连接也必拒。
-        BOOL hasDelegate = NO;
-        id configs = ((NSDictionary *)manifest)[@"UISceneConfigurations"];
-        if ([configs isKindOfClass:[NSDictionary class]]) {
-            for (id arr in ((NSDictionary *)configs).allValues) {
-                if (![arr isKindOfClass:[NSArray class]]) { continue; }
-                for (id item in (NSArray *)arr) {
-                    if ([item isKindOfClass:[NSDictionary class]]
-                        && ((NSDictionary *)item)[@"UISceneDelegateClassName"] != nil) {
-                        hasDelegate = YES;
-                        break;
-                    }
-                }
-                if (hasDelegate) { break; }
-            }
-        }
-        if (!hasDelegate && ((NSDictionary *)manifest)[@"UIApplicationSceneDelegateClassName"] != nil) {
-            hasDelegate = YES;
-        }
-        if (!hasDelegate) { return 1; } /* 老式自动桥接 → App 端必拒 → 旧路径 */
-        // V0.2.36（AevonSceneRouteV236）：细判 UIApplicationSupportsMultipleScenes。
-        id multi = ((NSDictionary *)manifest)[@"UIApplicationSupportsMultipleScenes"];
-        if ([multi isKindOfClass:[NSNumber class]]) { return [multi boolValue] ? 2 : 1; }
-        if ([multi isKindOfClass:[NSString class]]) {
-            NSString *s = (NSString *)multi;
-            BOOL yes = [s caseInsensitiveCompare:@"YES"] == NSOrderedSame
-                    || [s caseInsensitiveCompare:@"true"] == NSOrderedSame
-                    || [s isEqualToString:@"1"];
-            return yes ? 2 : 1;
-        }
-        return 1; /* 键缺失 = iOS 文档缺省 NO = 单场景 */
+        return -1; /* 两个选择子 SBApplication 上都不在 */
     } @catch (NSException *exception) {
         return -1;
     }
 }
 
-/* V0.2.38（AevonSceneRouteV238）：分流取证 —— 把 AevonSelfSceneAppSceneSupport
- * 链路每一段（lsCls/proxySel/proxy/infoSel/info/manifest 及其键）拼串打进日志，
- * 一回真机日志定 -1 断在哪。全只读，不改分流行为。 */
+/* V0.2.39（AevonSceneRouteV239）：分流取证 —— 双路线各段拼串 + 异常 reason。
+ * A 路线 = SBApplication.sceneSpecification（新主路线）；
+ * B 路线 = LSApplicationProxy.bundleURL → 直接读 Info.plist 文件
+ *   （infoDictionary 抛异常的备选，本轮只取证不判分）。 */
 NSString *AevonSelfSceneRouteDump(NSString *bundleID) {
-    NSMutableString *out = [NSMutableString stringWithString:@"route: "];
+    NSMutableString *out = [NSMutableString stringWithString:@"route2: "];
     @try {
         [out appendFormat:@"bid=%@ ", bundleID.length ? @"ok" : @"empty"];
-        Class lsCls = NSClassFromString(@"LSApplicationProxy");
-        [out appendFormat:@"lsCls=%@ ", lsCls ? @"ok" : @"nil"];
-        if (!lsCls) { return out; }
-        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
-        BOOL resp = [(id)lsCls respondsToSelector:proxySel];
-        [out appendFormat:@"proxySel=%@ ", resp ? @"ok" : @"no"];
-        if (!resp) { return out; }
-        id proxy = ((AevonSDIdFn1)objc_msgSend)((id)lsCls, proxySel, bundleID);
-        [out appendFormat:@"proxy=%@ ", proxy ? NSStringFromClass([proxy class]) : @"nil"];
-        if (!proxy) { return out; }
-        SEL infoSel = NSSelectorFromString(@"infoDictionary");
-        BOOL iresp = [proxy respondsToSelector:infoSel];
-        [out appendFormat:@"infoSel=%@ ", iresp ? @"ok" : @"no"];
-        if (!iresp) { return out; }
-        NSDictionary *info = ((AevonSDIdFn0)objc_msgSend)(proxy, infoSel);
-        [out appendFormat:@"info=%@ keys=%lu ",
-            info ? NSStringFromClass([info class]) : @"nil",
-            info ? (unsigned long)[info count] : (unsigned long)0];
-        if (!info) { return out; }
-        id manifest = info[@"UIApplicationSceneManifest"];
-        [out appendFormat:@"manifest=%@ ", manifest ? NSStringFromClass([manifest class]) : @"nil"];
-        if ([manifest isKindOfClass:[NSDictionary class]]) {
-            NSString *mKeys = [((NSDictionary *)manifest).allKeys componentsJoinedByString:@","];
-            [out appendFormat:@"mKeys=%@ ", mKeys];
-            id configs = ((NSDictionary *)manifest)[@"UISceneConfigurations"];
-            [out appendFormat:@"configs=%@ ", configs ? NSStringFromClass([configs class]) : @"nil"];
-            if ([configs isKindOfClass:[NSDictionary class]]) {
-                NSString *cKeys = [((NSDictionary *)configs).allKeys componentsJoinedByString:@","];
-                [out appendFormat:@"cKeys=%@ ", cKeys];
+        /* A 路线：SBApplication（V0.2.39 主路线） */
+        Class ctlCls = NSClassFromString(@"SBApplicationController");
+        [out appendFormat:@"ctlCls=%@ ", ctlCls ? @"ok" : @"nil"];
+        if (!ctlCls) { return out; }
+        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+        if (![(id)ctlCls respondsToSelector:sharedSel]) { [out appendString:@"shared=no "]; return out; }
+        id controller = ((AevonSDIdFn0)objc_msgSend)((id)ctlCls, sharedSel);
+        [out appendFormat:@"ctl=%@ ", controller ? @"ok" : @"nil"];
+        if (!controller) { return out; }
+        SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+        if (![controller respondsToSelector:appSel]) { [out appendString:@"appSel=no "]; return out; }
+        id app = ((AevonSDIdFn1)objc_msgSend)(controller, appSel, bundleID);
+        [out appendFormat:@"sbApp=%@ ", app ? NSStringFromClass([app class]) : @"nil"];
+        if (!app) { return out; }
+        for (NSString *selName in @[@"sceneSpecification", @"applicationSceneSpecification"]) {
+            SEL sel = NSSelectorFromString(selName);
+            if (![app respondsToSelector:sel]) { [out appendFormat:@"%@=no ", selName]; continue; }
+            id spec = ((AevonSDIdFn0)objc_msgSend)(app, sel);
+            [out appendFormat:@"%@=%@ ", selName, spec ? NSStringFromClass([spec class]) : @"nil"];
+            if (spec != nil) {
+                @try {
+                    id del = [spec valueForKey:@"delegateClassName"];
+                    id multi = [spec valueForKey:@"supportsMultipleScenes"];
+                    [out appendFormat:@"del=%@ multi=%@ ",
+                        del ?: (id)@"nil",
+                        ([multi isKindOfClass:[NSNumber class]]
+                            ? (((NSNumber *)multi).boolValue ? @"YES" : @"NO") : (id)@"nil")];
+                } @catch (NSException *e2) {
+                    [out appendFormat:@"specKVC=%@(%@) ", e2.name, e2.reason ?: @"-"];
+                }
             }
-            id legacyDel = ((NSDictionary *)manifest)[@"UIApplicationSceneDelegateClassName"];
-            id multi = ((NSDictionary *)manifest)[@"UIApplicationSupportsMultipleScenes"];
-            [out appendFormat:@"legacyDel=%@ multi=%@ ",
-                legacyDel ? @"yes" : @"no",
-                [multi isKindOfClass:[NSNumber class]] ? (((NSNumber *)multi).boolValue ? @"YES" : @"NO")
-                                                      : (id)@"nil"];
+        }
+        /* B 路线：bundleURL → Info.plist 文件（只取证） */
+        Class lsCls = NSClassFromString(@"LSApplicationProxy");
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        if (lsCls && [(id)lsCls respondsToSelector:proxySel]) {
+            @try {
+                id proxy = ((AevonSDIdFn1)objc_msgSend)((id)lsCls, proxySel, bundleID);
+                [out appendFormat:@"proxy=%@ ", proxy ? @"ok" : @"nil"];
+                if (proxy) {
+                    SEL urlSel = NSSelectorFromString(@"bundleURL");
+                    if ([proxy respondsToSelector:urlSel]) {
+                        id u = ((AevonSDIdFn0)objc_msgSend)(proxy, urlSel);
+                        [out appendFormat:@"bundleURL=%@ ", u ?: (id)@"nil"];
+                        if ([u isKindOfClass:[NSURL class]]) {
+                            NSURL *plURL = [(NSURL *)u URLByAppendingPathComponent:@"Info.plist"];
+                            NSDictionary *pl = [NSDictionary dictionaryWithContentsOfURL:plURL];
+                            [out appendFormat:@"plist=%@(%lu) ", pl ? @"ok" : @"nil",
+                                pl ? (unsigned long)[pl count] : (unsigned long)0];
+                            if (pl) {
+                                id manifest = pl[@"UIApplicationSceneManifest"];
+                                [out appendFormat:@"plistManifest=%@ ", manifest ? @"yes" : @"nil"];
+                                if ([manifest isKindOfClass:[NSDictionary class]]) {
+                                    NSDictionary *md = (NSDictionary *)manifest;
+                                    [out appendFormat:@"mKeys=%@ ",
+                                        [md.allKeys componentsJoinedByString:@","]];
+                                    id configs = md[@"UISceneConfigurations"];
+                                    if ([configs isKindOfClass:[NSDictionary class]]) {
+                                        BOOL sceneDel = NO;
+                                        for (id arr in ((NSDictionary *)configs).allValues) {
+                                            if (![arr isKindOfClass:[NSArray class]]) { continue; }
+                                            for (id item in (NSArray *)arr) {
+                                                if ([item isKindOfClass:[NSDictionary class]]
+                                                    && ((NSDictionary *)item)[@"UISceneDelegateClassName"] != nil) {
+                                                    sceneDel = YES;
+                                                    break;
+                                                }
+                                            }
+                                            if (sceneDel) { break; }
+                                        }
+                                        [out appendFormat:@"sceneDel=%@ ", sceneDel ? @"yes" : @"no"];
+                                    }
+                                    [out appendFormat:@"uiSceneDel=%@ uiMulti=%@ ",
+                                        md[@"UIApplicationSceneDelegateClassName"] ? @"yes" : @"no",
+                                        md[@"UIApplicationSupportsMultipleScenes"] ?: (id)@"nil"];
+                                }
+                            }
+                        }
+                    } else { [out appendString:@"bundleURL=no "]; }
+                }
+            } @catch (NSException *e3) {
+                [out appendFormat:@"LS=%@(%@) ", e3.name, e3.reason ?: @"-"];
+            }
         }
         return out;
     } @catch (NSException *exception) {
-        [out appendFormat:@"EXC=%@ ", exception.name];
+        [out appendFormat:@"EXC=%@(%@) ", exception.name, exception.reason ?: @"-"];
         return out;
     }
 }
