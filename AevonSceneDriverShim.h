@@ -55,3 +55,17 @@ BOOL AevonSelfSceneContentAlive(id scene);
 /// V0.2.32（AevonForegroundProbeV232）：只读取证串
 /// "fg=? cs=? layers=? dr=? idle=?"（全 @try，取不到写 "?"），供日志判黑在哪一层。
 NSString *AevonSelfSceneDebugState(id scene);
+
+/// V0.2.35（AevonSceneRouteV235）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
+/// 查 LSApplicationProxy 的 Info.plist 有无 UIApplicationSceneManifest：
+///   返回 1 = 有 manifest（scene App，UIKit 会为自建场景建 session → 自建场景可走）；
+///   返回 0 = 无 manifest（老式单场景 App，UIKit 自动桥接只认主场景，自建场景
+///           连接被 App 端拒绝 —— 0.2.34 真机实锤 + FrontBoardAppLauncher README
+///           同款已知限制"Single-scene apps may not work yet"）；
+///   返回 -1 = 探测不到（proxy nil / 类缺失），调用方按 1 处理（保持 0.2.34 行为）。
+NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
+
+/// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段
+/// （client / clientPort，全 @try，取不到写 nil），区分「FB 层就没客户端」与
+/// 「App 端 UIKit 拒绝」。返回串仅供日志。
+NSString *AevonSelfSceneConnectionState(id scene);

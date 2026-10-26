@@ -2022,6 +2022,27 @@ jobs:
           grep -q 'SceneWindowTakeover' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧缺搬家开关"; exit 1; }
           echo "V0.2.34 校验: 窗口搬家（创建/销毁广播 + setWindowScene 搬入搬出 + 开关）已就位"
+          # ── V0.2.35 校验（AevonSceneRouteV235 / AevonAppTakeoverAmbientV235）：
+          # 创建前分流（无 scene manifest → 旧路径）+ 连接取证 + 安静轮询兜底。只加不改。
+          for s in AevonSceneRouteV235; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.35 SB 侧缺标记 $s"; exit 1; }
+          done
+          for s in AevonAppTakeoverAmbientV235; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.35 App 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'AevonSelfSceneAppSceneSupport' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺 scene manifest 分流判据"; exit 1; }
+          grep -q 'UIApplicationSceneManifest' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺 manifest 读取"; exit 1; }
+          grep -q 'AevonSelfSceneConnectionState' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺连接取证"; exit 1; }
+          grep -q 'AevonSceneRouteV235' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺分流调用"; exit 1; }
+          grep -q 'AevonAppSceneTakeoverAmbientPoll' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺安静轮询兜底"; exit 1; }
+          echo "V0.2.35 校验: 创建前分流 + 连接取证 + 安静轮询兜底 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

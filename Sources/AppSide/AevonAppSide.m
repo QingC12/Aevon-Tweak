@@ -629,6 +629,38 @@ static void AevonAppSceneTakeoverInstall(void) {
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 }
 
+/* V0.2.35（AevonAppTakeoverAmbientV235）：安静轮询兜底。
+ * 0.2.34 真机疑点：created 通知只有 Sileo 进程触发了轮询，设置/BatteryInfo 进程
+ * 无声无息（同一段注册代码、同样的主线程注册，通知没进回调 —— 送达不可靠）。
+ * 修法 = 不把鸡蛋放通知一个篮子：每 1 秒看一眼 connectedScenes，
+ *   · 发现自建场景且还没搬 → 走与通知相同的 takeover 入口（防重入已有）；
+ *   · 已搬但场景消失（destroyed 广播丢失）→ 搬回。
+ * 平时零日志零动作（KVC 枚举两个场景，每秒一次，成本可忽略）。 */
+__attribute__((used)) static const char AevonAppTakeoverAmbientV235Marker[] = "AevonAppTakeoverAmbientV235";
+
+static void AevonAppSceneTakeoverAmbientPoll(void) {
+    @try {
+        if (!gAevonAppTakeoverActive && !gAevonAppTakeoverMoved) {
+            UIWindowScene *ours = AevonAppSceneFindOurs();
+            if (ours != nil) {
+                AevonAppLog(@"窗口搬家：安静轮询发现自建场景（created 通知未达兜底）（AevonAppTakeoverAmbientV235）");
+                gAevonAppTakeoverActive = YES;
+                AevonAppSceneTakeoverPollReset();
+                AevonAppSceneTakeoverPoll();
+            }
+        } else if (gAevonAppTakeoverMoved && AevonAppSceneFindOurs() == nil) {
+            AevonAppLog(@"窗口搬家：自建场景已消失（destroyed 通知未达兜底）→ 搬回（AevonAppTakeoverAmbientV235）");
+            AevonAppSceneTakeoverRestore();
+        }
+    } @catch (NSException *exception) {
+        /* 只读轮询，任何异常都吞 */
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonAppSceneTakeoverAmbientPoll();
+    });
+}
+
 /* 本进程是否正被装在浮窗里。
  * Aevon(95) 主诉「悬浮内的 APP 无法滑动，只能点击」的结构性来源：
  * 浮窗里跑的是真实 App 场景，但它被缩到 289x626 摆在屏幕上某处 ——
@@ -1301,6 +1333,12 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
     /* V0.2.34（AevonAppSceneTakeoverV234）：窗口搬家（单场景 App 黑屏根治）。
      * 只收 Darwin 通知动作，平时零开销；SceneWindowTakeover 键可关（无键=开）。 */
     AevonAppSceneTakeoverInstall();
+    /* V0.2.35（AevonAppTakeoverAmbientV235）：安静轮询兜底（通知送达不可靠）。
+     * 延迟 2 秒再起：躲开启动最忙段。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonAppSceneTakeoverAmbientPoll();
+    });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         AevonAppSceneSwizzleConnecting([[UIApplication sharedApplication] delegate]);

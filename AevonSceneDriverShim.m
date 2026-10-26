@@ -50,6 +50,12 @@ __attribute__((used)) static const char AevonForegroundProbeV232Marker[] = "Aevo
  * 的 identityForBundleID: 路线 + FBProcessManager registerProcessForAuditToken:。 */
 __attribute__((used)) static const char AevonSelfSceneBundleIDV233Marker[] = "AevonSelfSceneBundleIDV233";
 __attribute__((used)) static const char AevonSelfSceneAuditV233Marker[] = "AevonSelfSceneAuditV233";
+/* V0.2.35（AevonSceneRouteV235）：0.2.34 真机判读 —— scene 感知 App（设置/GitHub/Safari）
+ * 自建场景全通；老式单场景 App（Sileo）App 端 connectedScenes 8 秒无自建场景 =
+ * 连接被 App 端 UIKit 拒绝（创建链与 LiveContainer/FrontBoardAppLauncher 逐字段一致，
+ * 参照项目 README 同样标注 "Single-scene apps may not work yet" —— 路线已知限制，
+ * 不是我们接错线）。修法 = 创建前分流：无 scene manifest 的 App 直接走全屏接管旧路径。 */
+__attribute__((used)) static const char AevonSceneRouteV235Marker[] = "AevonSceneRouteV235";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -498,6 +504,61 @@ NSString *AevonSelfSceneDebugState(id scene) {
                 } else { [out appendString:@" layers=?"]; }
             } else { [out appendString:@" layers=?"]; }
         } else { [out appendString:@" layers=?"]; }
+        return out;
+    } @catch (NSException *exception) {
+        return @"exception";
+    }
+}
+
+/* V0.2.35（AevonSceneRouteV235）：创建前分流判据。
+ * UIKit 的规则：Info.plist 有 UIApplicationSceneManifest = scene 生命周期 App，
+ * 自建场景的连接请求会进 App 端 UIKit 正常建 session（设置/GitHub/Safari 实证）；
+ * 无 manifest = 老式单场景 App，UIKit 自动桥接只认主场景，第二场景连接被拒
+ * （0.2.34 真机：Sileo connectedScenes 8 秒无自建场景）。 */
+NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
+    @try {
+        if (bundleID.length == 0) { return -1; }
+        Class lsCls = NSClassFromString(@"LSApplicationProxy");
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        if (lsCls == nil || ![(id)lsCls respondsToSelector:proxySel]) { return -1; }
+        id proxy = ((AevonSDIdFn1)objc_msgSend)((id)lsCls, proxySel, bundleID);
+        if (proxy == nil) { return -1; }
+        NSDictionary *info = nil;
+        SEL infoSel = NSSelectorFromString(@"infoDictionary");
+        if ([proxy respondsToSelector:infoSel]) {
+            info = ((AevonSDIdFn0)objc_msgSend)(proxy, infoSel);
+        }
+        if (info == nil) { return -1; }
+        return (info[@"UIApplicationSceneManifest"] != nil) ? 1 : 0;
+    } @catch (NSException *exception) {
+        return -1;
+    }
+}
+
+/* V0.2.35（AevonSceneRouteV235）：连接取证（只读）。
+ * client = FBSceneClient（App 端接上后非空）；clientPort 同理。
+ * 分流误判的 App（有 manifest 仍被拒）靠这串定界：FB 层就没客户端 vs App 端拒。 */
+NSString *AevonSelfSceneConnectionState(id scene) {
+    @try {
+        if (scene == nil) { return @"scene-nil"; }
+        NSMutableString *out = [NSMutableString string];
+        for (NSString *key in @[@"client", @"clientPort"]) {
+            id v = nil;
+            @try { v = [scene valueForKey:key]; } @catch (NSException *e) { v = nil; }
+            NSString *desc = @"nil";
+            if ([v isKindOfClass:[NSString class]]) {
+                desc = v;
+            } else if (v != nil) {
+                SEL pidSel = NSSelectorFromString(@"pid");
+                if ([v respondsToSelector:pidSel]) {
+                    desc = [NSString stringWithFormat:@"<%@ pid=%ld>",
+                            NSStringFromClass([v class]), (long)((NSInteger (*)(id, SEL))objc_msgSend)(v, pidSel)];
+                } else {
+                    desc = NSStringFromClass([v class]);
+                }
+            }
+            [out appendFormat:@"%@=%@ ", key, desc];
+        }
         return out;
     } @catch (NSException *exception) {
         return @"exception";

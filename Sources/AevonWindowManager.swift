@@ -148,7 +148,16 @@ enum AevonWindowManager {
             var hostScene: AnyObject = scene
             var usedSelfScene = false
             var selfSceneIDOut: NSString?
-            if AevonPrefs.bool("SelfBuiltScene", default: true) {
+            // V0.2.35（AevonSceneRouteV235）：创建前分流。
+            // 0.2.34 真机实锤：scene 感知 App（设置/GitHub/Safari）自建场景全通；
+            // 老式单场景 App（Sileo）App 端 connectedScenes 8 秒无自建场景 = 连接被
+            // App 端 UIKit 拒绝（创建链与开源参照逐字段一致，FrontBoardAppLauncher
+            // README 同款已知限制）。无 scene manifest 的 App 直接走全屏接管旧路径：
+            // 不自建、不广播、不进 8 秒黑窗 —— 画面即刻出现（0.2.27 行为）。
+            let sceneSupport = AevonSelfSceneAppSceneSupport(bundleID)
+            if sceneSupport == 0 {
+                AevonLog.info("[场景] 分流：\(bundleID) 无 scene manifest（老式单场景 App，UIKit 只认主场景）→ 全屏接管旧路径（AevonSceneRouteV235）")
+            } else if AevonPrefs.bool("SelfBuiltScene", default: true) {
                 let size = AevonWindowView.plannedContentSize()
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`
                 // 刚拉起的进程，processHandle 可能还没在 SBApplication 上登记好
@@ -195,6 +204,17 @@ enum AevonWindowManager {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                             let ok = AevonSelfSceneReassertForeground(hostScene)
                             AevonLog.info("[场景] 重申自建场景前台（+\(delay)s，\(ok ? "已提交" : "失败")）（AevonSelfSceneFGV232）")
+                        }
+                    }
+                    // V0.2.35（AevonSceneRouteV235）：连接取证（只读）。
+                    // client 非空 = App 端已连上 FB 层；恒空 = 分流误判（有 manifest
+                    // 仍被拒）或连接更早环节被卡 —— 下一版按这串定界。弱引用：场景
+                    // 先销毁时自动跳过，绝不摸悬挂对象。
+                    for delay in [1.5, 3.5] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak hostScene] in
+                            guard let hs = hostScene else { return }
+                            let state = AevonSelfSceneConnectionState(hs)
+                            AevonLog.info("[场景] 连接取证（+\(delay)s）：\(state)（AevonSceneRouteV235）")
                         }
                     }
                 } else {
