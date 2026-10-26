@@ -14,6 +14,7 @@
  *   ScreenCore SCSystemSceneDriver（创建时烙 dc）、Aevon P0 探测（六项判据全通）。
  */
 
+typedef NSInteger (*AevonSDIntFn0)(id, SEL);
 typedef id (*AevonSDIdFn0)(id, SEL);
 typedef id (*AevonSDIdFn1)(id, SEL, id);
 typedef id (*AevonSDIdFn2)(id, SEL, id, id);
@@ -28,6 +29,7 @@ typedef void (*AevonSDVoidFnBlock1)(id, SEL, void (^)(id));
 __attribute__((used)) static const char AevonSelfSceneV228Marker[] = "AevonSelfSceneV228";
 __attribute__((used)) static const char AevonSelfSceneFallbackV228Marker[] = "AevonSelfSceneFallbackV228";
 __attribute__((used)) static const char AevonSelfSceneFixV229Marker[] = "AevonSelfSceneFixV229";
+__attribute__((used)) static const char AevonSelfSceneRBSV230Marker[] = "AevonSelfSceneRBSV230";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -74,15 +76,25 @@ static void AevonSDSetObject(id obj, const char *prop, id v) {
     if ([obj respondsToSelector:sel]) ((AevonSDIdFn1)objc_msgSend)(obj, sel, v);
 }
 
-/// KVC 取运行中 App 的进程句柄（SBApplication.processHandle）。
+/// 取运行中 App 的进程句柄（clientIdentity 用的 identity 载体）。
 ///
 /// V0.2.29 修复（AevonSelfSceneFixV229，0.2.28 真机 step=app-not-running 实锤）：
 /// `applicationWithBundleIdentifier:` 是 SBApplicationController 的 **实例方法**，
-/// 旧代码用 AevonSDClassFactory1 把它发给 **类** —— respondsToSelector 查的是类方法表，
-/// 永远失败 → 返回 nil → 误报「App 没在跑」。工程内所有成功路径
-/// （AevonAppInfo / AevonAppList）都是 `+sharedInstance` 拿实例再对实例发消息，
-/// 此处对齐。step 串细分，便于下轮日志直接定位。
+/// 必须先 +sharedInstance 再对实例发消息（发类上 = respondsToSelector 查类方法表必失败）。
+///
+/// V0.2.30（AevonSelfSceneRBSV230，0.2.29 真机实锤）：路线 A 的 KVC processHandle
+/// 在 iOS 17.3.1 上**永远取不到**——进程跑了 9 秒 + 前台（com.apple.Preferences pid=68619）
+/// 仍 process-handle-nil。改用 LiveContainer AppSceneViewController.m（2025-05 版）
+/// 的 iOS 17 主通路（源码逐行对照）：
+///   RBSProcessPredicate *p = [RBSProcessPredicate predicateMatchingIdentifier:@(pid)];
+///   RBSProcessHandle   *h = [RBSProcessHandle handleForPredicate:p error:nil];
+///   → identityForProcessIdentity:h.identity
+/// 路线 A 保留为第一路（老系统可能还有），路线 B 是 iOS 17 正解。
+/// 注：LiveContainer 还调 FBProcessManager registerProcessForAuditToken:，
+/// 那是因为它自己 spawn 的进程 FrontBoard 不认识；我们的 App 是 FrontBoard 正常
+/// 拉起的，SB 的 FBProcessManager 本来就管理着它，无需注册。
 static id AevonSDAppProcessHandle(NSString *bundleID, NSString * __autoreleasing *outStep) {
+    // ── 路线 A：SBApplication.processHandle（老通路）──
     id controller = AevonSDClassFactory(@"SBApplicationController", @"sharedInstance");
     if (controller == nil) { if (outStep) { *outStep = @"controller-nil"; } return nil; }
     SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
@@ -94,8 +106,33 @@ static id AevonSDAppProcessHandle(NSString *bundleID, NSString * __autoreleasing
         @try { handle = [app valueForKey:key]; } @catch (NSException *exception) { handle = nil; }
         if (handle != nil) return handle;
     }
+
+    // 默认结论：两条路线都没拿到句柄（0.2.29 step 串保留，Swift 侧按此重试）
     if (outStep) { *outStep = @"process-handle-nil"; }
-    return nil;
+
+    // ── 路线 B：pid → RBSProcessPredicate → RBSProcessHandle（iOS 17 主通路）──
+    NSInteger pid = 0;
+    SEL pidSel = NSSelectorFromString(@"pid");
+    if ([app respondsToSelector:pidSel]) {
+        pid = ((AevonSDIntFn0)objc_msgSend)(app, pidSel);
+    }
+    if (pid <= 0) { if (outStep) { *outStep = @"pid-nil"; } return nil; }
+
+    Class predCls = NSClassFromString(@"RBSProcessPredicate");
+    Class handleCls = NSClassFromString(@"RBSProcessHandle");
+    SEL predSel = NSSelectorFromString(@"predicateMatchingIdentifier:");
+    if (predCls == nil || handleCls == nil || ![predCls respondsToSelector:predSel]) {
+        if (outStep) { *outStep = @"rb-predicate-missing"; } return nil;
+    }
+    id predicate = ((AevonSDIdFn1)objc_msgSend)(predCls, predSel, @(pid));
+    if (predicate == nil) { if (outStep) { *outStep = @"rb-predicate-nil"; } return nil; }
+    SEL handleSel = NSSelectorFromString(@"handleForPredicate:error:");
+    if (![handleCls respondsToSelector:handleSel]) {
+        if (outStep) { *outStep = @"rb-handle-sel-missing"; } return nil;
+    }
+    id handle = ((AevonSDIdFn2)objc_msgSend)(handleCls, handleSel, predicate, nil);
+    if (handle == nil) { if (outStep) { *outStep = @"rb-handle-nil"; } return nil; }
+    return handle;
 }
 
 static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,

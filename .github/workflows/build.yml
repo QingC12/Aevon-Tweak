@@ -1928,6 +1928,25 @@ jobs:
             || { echo "::error::冷启动短重试缺失"; exit 1; }
           echo "V0.2.29 校验: sharedInstance 实例路径 + step 细分 + 短重试 已就位"
 
+          # ---- V0.2.30：进程身份加 RBSProcessHandle 通路（LiveContainer iOS 17 主通路）
+          for s in AevonSelfSceneRBSV230; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.30 缺标记 $s"; exit 1; }
+          done
+          grep -q 'RBSProcessPredicate' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::RBSProcessPredicate 通路缺失（iOS 17 主通路）"; exit 1; }
+          grep -q 'handleForPredicate:error:' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::RBSProcessHandle 构建缺失"; exit 1; }
+          grep -q 'predicateMatchingIdentifier:' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::predicateMatchingIdentifier: 缺失"; exit 1; }
+          grep -q 'process-handle-nil' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.29 step 串被删（历史断言，只加不改）"; exit 1; }
+          grep -q 'pid-nil' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::重试条件未覆盖 pid-nil"; exit 1; }
+          grep -q 'rb-handle-nil' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::重试条件未覆盖 rb-handle-nil"; exit 1; }
+          echo "V0.2.30 校验: RBS 进程身份通路 + 双路线兜底 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

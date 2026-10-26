@@ -152,8 +152,9 @@ enum AevonWindowManager {
                 let size = AevonWindowView.plannedContentSize()
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`
                 // 刚拉起的进程，processHandle 可能还没在 SBApplication 上登记好
-                // （step=app-object-nil / process-handle-nil）→ 短重试等登记，
-                // 共 4 次尝试 × 0.3s；其余 step 串不重试（重试也不会好）。
+                // → 短重试等登记，共 4 次尝试 × 0.3s；其余 step 串不重试（重试也不会好）。
+                // V0.2.30（AevonSelfSceneRBSV230）：路线 B（RBSProcessHandle）后，
+                // 可重试串补 pid-nil / rb-handle-nil（RunningBoard 登记也有冷启动期）。
                 var created: AnyObject? = nil
                 var errOut: NSString? = nil
                 for attempt in 1...4 {
@@ -162,7 +163,9 @@ enum AevonWindowManager {
                                                    &selfSceneIDOut, &errOut) as AnyObject?
                     if created != nil { break }
                     let step = errOut as String? ?? "?"
-                    if attempt < 4 && (step == "app-object-nil" || step == "process-handle-nil") {
+                    let retryable = step == "app-object-nil" || step == "process-handle-nil"
+                        || step == "pid-nil" || step == "rb-handle-nil"
+                    if attempt < 4 && retryable {
                         AevonLog.info("[场景] 自建场景重试 \(attempt)/3（step=\(step)，等进程登记）（AevonSelfSceneRetryV229）")
                         Thread.sleep(forTimeInterval: 0.3)
                     } else {
