@@ -13,6 +13,7 @@ TWEAK_NAME = Aevon AevonApp
 
 Aevon_FILES = AevonAssertionShim.m \
     AevonPresenterShim.m \
+    AevonSceneDriverShim.m \
     Sources/AevonSceneHook.m \
     Sources/AevonProbeSupport.m \
     Sources/AevonTouchHook.m \

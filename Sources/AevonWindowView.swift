@@ -62,7 +62,10 @@ enum AevonFloatGrab {
 ///   pan 仍保留，作为该通道不可用时的桌面兜底（通道接管时会吞掉事件，不会双触发）。
 final class AevonWindowView: UIView {
     let bundleID: String
-    private let sceneHost: AevonSceneHost
+    /// V0.2.28（AevonSelfSceneV228）：可变 —— 自建场景 8 秒无首帧时整体换成主场景承载。
+    private var sceneHost: AevonSceneHost
+    /// 自建场景回退看门狗（8 秒无首帧 → 换主场景，单场景 App 可能拒绝连接第二个场景）
+    private var selfSceneFallbackTimer: Timer?
 
     /// 内容区宽高比（宽 ÷ 高）。V0.2.22（AevonFloat53PortraitV222）：5:3 = 高5:宽3（竖窗）。
     /// Aevon(106) 用户纠偏：0.2.21 曾按「宽:高」做成 1.667 横长条，实为竖窗 0.6。
@@ -143,12 +146,17 @@ final class AevonWindowView: UIView {
         contentClip.addSubview(hintLabel)
 
         sceneHost.onFirstContent = { [weak self] in
-            DispatchQueue.main.async {
-                self?.hintLabel.isHidden = true
-                // V0.2.27（AevonFloatSnapCacheV227）：首帧到达后空闲预抓快照，
-                // 之后的缩放手势落指即用缓存图（零同步渲染）
-                self?.scheduleSnapshotRecapture()
+            self?.handleFirstContent()
+        }
+
+        // V0.2.28（AevonSelfSceneV228）：自建场景看门狗 —— 单场景 App 可能拒绝连接
+        // 第二个场景（FrontBoardAppLauncher known issue），8 秒无首帧自动回退主场景承载。
+        if sceneHost.isSelfBuilt {
+            let timer = Timer(timeInterval: 8.0, repeats: false) { [weak self] _ in
+                self?.fallbackToPrimarySceneIfEmpty()
             }
+            RunLoop.main.add(timer, forMode: .common)
+            selfSceneFallbackTimer = timer
         }
 
         // V0.2.24（AevonFloatTopBarV223 退休）：顶部留白栏整体移除 —— Aevon(108) 实测
@@ -222,6 +230,53 @@ final class AevonWindowView: UIView {
         return CGRect(x: (screen.width - width) / 2.0,
                       y: max(24, screen.height * 0.10),
                       width: width, height: height)
+    }
+
+    /// V0.2.28（AevonSelfSceneV228）：自建场景的画布尺寸 = 开窗时的内容区尺寸
+    /// （恢复几何或默认）。开窗瞬间用它烙定场景画布，与窗口 1:1。
+    static func plannedContentSize() -> CGSize {
+        let restored = rememberedFrame(fallback: defaultFrame())
+        return CGSize(width: restored.width, height: restored.height)
+    }
+
+    /// 首帧到达（主场景 / 自建场景共用）。
+    private func handleFirstContent() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hintLabel.isHidden = true
+            // V0.2.28：自建场景等到首帧 = 真重排成立的硬证据，看门狗使命完成
+            if self.sceneHost.isSelfBuilt {
+                self.selfSceneFallbackTimer?.invalidate()
+                self.selfSceneFallbackTimer = nil
+            }
+            // V0.2.27（AevonFloatSnapCacheV227）：首帧到达后空闲预抓快照，
+            // 之后的缩放手势落指即用缓存图（零同步渲染）
+            self.scheduleSnapshotRecapture()
+        }
+    }
+
+    /// V0.2.28（AevonSelfSceneFallbackV228）：自建场景 8 秒无首帧 →
+    /// 销毁自建场景，换成主场景全屏接管承载（0.2.27 形态）—— 绝不黑屏。
+    private func fallbackToPrimarySceneIfEmpty() {
+        selfSceneFallbackTimer = nil
+        guard let host = sceneHost, host.isSelfBuilt, !host.hasContent else { return }
+        AevonLog.warn("[场景] 自建场景 8 秒无首帧 → 回退全屏接管路径（AevonSelfSceneFallbackV228）")
+        guard let primary = AevonSceneHelper.scene(for: bundleID),
+              let newHost = AevonSceneHost(scene: primary,
+                                           sceneID: (AevonRuntime.send(primary, Selector(("identifier"))) as? String) ?? "",
+                                           bundleID: bundleID) else {
+            AevonLog.warn("[场景] 回退失败：主场景或承载不可用，保持现状（AevonSelfSceneFallbackV228）")
+            return
+        }
+        let old = sceneHost
+        sceneHost = newHost
+        old.container.removeFromSuperview()
+        old.invalidate()   // 含自建场景 destroyScene
+        contentClip.insertSubview(newHost.container, belowSubview: hintLabel)
+        newHost.onFirstContent = { [weak self] in self?.handleFirstContent() }
+        applyContentLayout()
+        newHost.startSyncing()
+        AevonLog.info("[场景] 已切换到主场景承载（回退完成）（AevonSelfSceneFallbackV228）")
     }
 
     override func layoutSubviews() {
@@ -708,6 +763,11 @@ final class AevonWindowView: UIView {
         frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
         setNeedsLayout()
         persistFrame()
+        // V0.2.28（AevonSelfSceneV228）：自建场景 → 提交新画布 = App 按新尺寸真重排
+        // （这是缩放的根治：不再是整屏渲染缩放，而是 App 原生布局到新尺寸）。
+        if sceneHost.isSelfBuilt {
+            sceneHost.resizeCanvasTo(width: width, height: height)
+        }
         // V0.2.27（AevonFloatSnapCacheV227）：尺寸已提交，旧快照作废，空闲后重抓
         cachedSnapshotImage = nil
         scheduleSnapshotRecapture(after: 0.8)
@@ -762,6 +822,8 @@ final class AevonWindowView: UIView {
     func teardown() {
         // 关窗前把最终位置记下来
         persistFrame()
+        selfSceneFallbackTimer?.invalidate()
+        selfSceneFallbackTimer = nil
         // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
         // NSInternalInconsistencyException: Must be invalidated before deallocating
         sceneHost.onFirstContent = nil

@@ -28,6 +28,9 @@ final class AevonSceneHost {
     let scene: AnyObject
     let sceneID: String
     let bundleID: String
+    /// V0.2.28（AevonSelfSceneV228）：true = 自建场景（P1 自建场景路线）。
+    /// 自建场景上 settings 写入是受支持通路（画布可改 = 真重排），关闭时要 destroyScene。
+    let isSelfBuilt: Bool
 
     /// 屏幕尺寸的普通容器；浮窗只对它做等比缩放，不改它的尺寸。
     let container: UIView
@@ -43,7 +46,8 @@ final class AevonSceneHost {
     private var ticks = 0
     private var invalidated = false
 
-    init?(scene: AnyObject, sceneID: String, bundleID: String) {
+    init?(scene: AnyObject, sceneID: String, bundleID: String, isSelfBuilt: Bool = false) {
+        self.isSelfBuilt = isSelfBuilt
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
         // 用同一个 id 会撞车。
         let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))"
@@ -82,7 +86,7 @@ final class AevonSceneHost {
         host.addSubview(view)
         self.container = host
 
-        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")）")
+        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")\(isSelfBuilt ? "，自建场景（AevonSelfSceneV228）" : "")）"))
 
         // 激活 presenter 之后再把场景推一次前台：只有场景处于前台，App 才会持续渲染。
         AevonSceneHelper.setForeground(scene, true)
@@ -180,7 +184,22 @@ final class AevonSceneHost {
         invalidated = true
         onFirstContent = nil
         teardownPresenter()
+        // V0.2.28（AevonSelfSceneV228）：自建场景必须 destroyScene 收尾，
+        // 否则 respring 后 FBSceneManager 里残留同名场景（创建前会先销毁遗留，但别依赖它）。
+        if isSelfBuilt {
+            let destroyed = AevonSelfSceneDestroy(scene)
+            AevonLog.info("[场景] 自建场景已销毁（\(destroyed ? "成功" : "失败")）（AevonSelfSceneV228）")
+        }
         AevonLog.info("[场景] 已释放 presenter（\(bundleID)）")
+    }
+
+    /// V0.2.28（AevonSelfSceneV228）：改自建场景画布 = 真重排
+    /// （updateSettingsWithBlock 内 frame = 0,0,w×h，App 随之重新布局）。
+    /// 仅 isSelfBuilt 时有效；调用时机 = 缩放抬手提交真实 frame 后（一次一调，天然单飞）。
+    func resizeCanvasTo(width: CGFloat, height: CGFloat) {
+        guard isSelfBuilt, !invalidated else { return }
+        let ok = AevonSelfSceneResize(scene, Double(width), Double(height))
+        AevonLog.info("[场景] 画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")）（AevonSelfSceneV228）")
     }
 
     private func teardownPresenter() {

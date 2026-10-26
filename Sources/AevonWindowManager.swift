@@ -139,7 +139,31 @@ enum AevonWindowManager {
                 return
             }
 
-            AevonSceneHelper.setForeground(scene, true)
+            // ── V0.2.28（AevonSelfSceneV228，P1 概念验证）────────────────────
+            // 自建场景路线：创建时烙定画布（LiveContainer / FrontBoardAppLauncher 链，
+            // 真机 P0 探测 AevonPiPProbeV226 六项判据全通；V63/V64/V87 已证明
+            // 「接管已有全屏场景后改尺寸」永不重排，创建时烙定是唯一通路）。
+            // 成功 → 用自建场景承载（App 按浮窗尺寸原生重排，内容 1:1）；
+            // 失败 → 原全屏接管路径原样兜底，行为与 0.2.27 完全一致。
+            var hostScene: AnyObject = scene
+            var usedSelfScene = false
+            var selfSceneIDOut: NSString?
+            if AevonPrefs.bool("SelfBuiltScene", default: true) {
+                let size = AevonWindowView.plannedContentSize()
+                var errOut: NSString?
+                let created = AevonSelfSceneCreate(bundleID as NSString,
+                                                   Double(size.width), Double(size.height),
+                                                   &selfSceneIDOut, &errOut) as AnyObject?
+                if let created = created {
+                    hostScene = created
+                    usedSelfScene = true
+                    AevonLog.info("[场景] 自建场景已创建：bundleID=\(bundleID) 画布=\(Int(size.width))x\(Int(size.height)) sceneID=\(selfSceneIDOut as String? ?? "?")（AevonSelfSceneV228）")
+                } else {
+                    AevonLog.warn("[场景] 自建场景创建失败（step=\(errOut as String? ?? "?")）→ 回退全屏接管路径（AevonSelfSceneV228）")
+                }
+            }
+
+            AevonSceneHelper.setForeground(hostScene, true)
 
             // 关键：`launchApplicationWithIdentifier:suspended:` 拉起的进程是挂起态，
             // 挂起的进程不会渲染 —— 必须显式恢复执行，否则 presenter 永远拿不到首帧。
@@ -148,9 +172,13 @@ enum AevonWindowManager {
                 AevonLog.info("[窗口] 已恢复 \(bundleID) 进程执行（pid=\(pid)）")
             }
 
-            let sceneIdentifier = (AevonRuntime.send(scene, Selector(("identifier"))) as? String) ?? sceneID ?? ""
-            guard let sceneHost = AevonSceneHost(scene: scene, sceneID: sceneIdentifier, bundleID: bundleID) else {
+            let sceneIdentifier = usedSelfScene
+                ? ((selfSceneIDOut as String?) ?? "sceneID:com.aevon.float-\(bundleID)")
+                : ((AevonRuntime.send(scene, Selector(("identifier"))) as? String) ?? sceneID ?? "")
+            guard let sceneHost = AevonSceneHost(scene: hostScene, sceneID: sceneIdentifier,
+                                                 bundleID: bundleID, isSelfBuilt: usedSelfScene) else {
                 AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
+                if usedSelfScene { _ = AevonSelfSceneDestroy(hostScene) }
                 AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: sceneID)
                 completion?(false)
                 return

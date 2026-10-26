@@ -22,6 +22,22 @@ enum AevonSceneHelper {
 
     // MARK: - 查找 FBScene
 
+    /// V0.2.28（AevonSelfSceneV228）：自建场景的标识前缀。
+    /// `scene(for:)` **永不返回**自建场景 —— 保活 / 前台控制 / 回退必须始终作用在
+    /// 主场景上；自建场景由 AevonSceneDriverShim 创建、承载器直接持有引用，
+    /// 它的标识里含 bundleID，不加排除的话 `contains` 匹配会把它误当成主场景。
+    static let selfScenePrefix = "sceneID:com.aevon.float-"
+
+    static func isSelfSceneIdentifier(_ sid: String) -> Bool {
+        sid.hasPrefix(selfScenePrefix)
+    }
+
+    private static func isSelfScene(_ scene: AnyObject) -> Bool {
+        if let sid = AevonRuntime.send(scene, Selector(("identifier"))) as? String,
+           isSelfSceneIdentifier(sid) { return true }
+        return false
+    }
+
     static func scene(for identifier: String) -> AnyObject? {
         guard !identifier.isEmpty else { return nil }
         guard let manager = sceneManager() else { return nil }
@@ -29,8 +45,10 @@ enum AevonSceneHelper {
         // 策略 1：管理器自身的场景字典
         for name in ["_scenesByID", "_scenes"] {
             if let dict = AevonRuntime.ivarObject(manager, name) as? [String: AnyObject] {
-                if let scene = dict[identifier] { return scene }
-                for (key, value) in dict where key.contains(identifier) { return value }
+                if let scene = dict[identifier], !isSelfScene(scene) { return scene }
+                for (key, value) in dict where key.contains(identifier) {
+                    if !isSelfScene(value) { return value }
+                }
             }
         }
 
@@ -38,8 +56,10 @@ enum AevonSceneHelper {
         if let workspace = AevonRuntime.ivarObject(manager, "_workspace") {
             for name in ["_allScenesByID", "_scenesByIdentifier", "_scenesByID"] {
                 if let dict = AevonRuntime.ivarObject(workspace, name) as? [String: AnyObject] {
-                    if let scene = dict[identifier] { return scene }
-                    for (key, value) in dict where key.contains(identifier) { return value }
+                    if let scene = dict[identifier], !isSelfScene(scene) { return scene }
+                    for (key, value) in dict where key.contains(identifier) {
+                        if !isSelfScene(value) { return value }
+                    }
                 }
             }
         }
@@ -54,6 +74,7 @@ enum AevonSceneHelper {
                 scenes = set.allObjects as? [AnyObject] ?? []
             }
             for scene in scenes {
+                if isSelfScene(scene) { continue }
                 if let sid = AevonRuntime.send(scene, Selector(("identifier"))) as? String,
                    sid.contains(identifier) {
                     return scene
@@ -92,9 +113,11 @@ enum AevonSceneHelper {
             if let dict = value as? [String: AnyObject] {
                 for (key, candidate) in dict {
                     guard key.contains(identifier) else { continue }
+                    if isSelfScene(candidate) { continue }
                     if candidate.responds(to: Selector(("layerManager"))) { return candidate }
                     if candidate.responds(to: Selector(("scene"))),
                        let scene = AevonRuntime.send(candidate, Selector(("scene"))) {
+                        if isSelfScene(scene) { continue }
                         return scene
                     }
                 }
