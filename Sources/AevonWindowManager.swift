@@ -150,10 +150,25 @@ enum AevonWindowManager {
             var selfSceneIDOut: NSString?
             if AevonPrefs.bool("SelfBuiltScene", default: true) {
                 let size = AevonWindowView.plannedContentSize()
-                var errOut: NSString?
-                let created = AevonSelfSceneCreate(bundleID,
+                // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`
+                // 刚拉起的进程，processHandle 可能还没在 SBApplication 上登记好
+                // （step=app-object-nil / process-handle-nil）→ 短重试等登记，
+                // 共 4 次尝试 × 0.3s；其余 step 串不重试（重试也不会好）。
+                var created: AnyObject? = nil
+                var errOut: NSString? = nil
+                for attempt in 1...4 {
+                    created = AevonSelfSceneCreate(bundleID,
                                                    Double(size.width), Double(size.height),
                                                    &selfSceneIDOut, &errOut) as AnyObject?
+                    if created != nil { break }
+                    let step = errOut as String? ?? "?"
+                    if attempt < 4 && (step == "app-object-nil" || step == "process-handle-nil") {
+                        AevonLog.info("[场景] 自建场景重试 \(attempt)/3（step=\(step)，等进程登记）（AevonSelfSceneRetryV229）")
+                        Thread.sleep(forTimeInterval: 0.3)
+                    } else {
+                        break
+                    }
+                }
                 if let created = created {
                     hostScene = created
                     usedSelfScene = true

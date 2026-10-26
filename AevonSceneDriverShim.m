@@ -27,6 +27,7 @@ typedef void (*AevonSDVoidFnBlock1)(id, SEL, void (^)(id));
 /// CI 标记锚（used 常量；ObjC used 常量是 strings 检查的最可靠载体）
 __attribute__((used)) static const char AevonSelfSceneV228Marker[] = "AevonSelfSceneV228";
 __attribute__((used)) static const char AevonSelfSceneFallbackV228Marker[] = "AevonSelfSceneFallbackV228";
+__attribute__((used)) static const char AevonSelfSceneFixV229Marker[] = "AevonSelfSceneFixV229";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -74,15 +75,26 @@ static void AevonSDSetObject(id obj, const char *prop, id v) {
 }
 
 /// KVC 取运行中 App 的进程句柄（SBApplication.processHandle）。
-static id AevonSDAppProcessHandle(NSString *bundleID) {
-    id app = AevonSDClassFactory1(@"SBApplicationController",
-                                  @"applicationWithBundleIdentifier:", bundleID);
-    if (app == nil) return nil;
+///
+/// V0.2.29 修复（AevonSelfSceneFixV229，0.2.28 真机 step=app-not-running 实锤）：
+/// `applicationWithBundleIdentifier:` 是 SBApplicationController 的 **实例方法**，
+/// 旧代码用 AevonSDClassFactory1 把它发给 **类** —— respondsToSelector 查的是类方法表，
+/// 永远失败 → 返回 nil → 误报「App 没在跑」。工程内所有成功路径
+/// （AevonAppInfo / AevonAppList）都是 `+sharedInstance` 拿实例再对实例发消息，
+/// 此处对齐。step 串细分，便于下轮日志直接定位。
+static id AevonSDAppProcessHandle(NSString *bundleID, NSString * __autoreleasing *outStep) {
+    id controller = AevonSDClassFactory(@"SBApplicationController", @"sharedInstance");
+    if (controller == nil) { if (outStep) { *outStep = @"controller-nil"; } return nil; }
+    SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+    if (![controller respondsToSelector:appSel]) { if (outStep) { *outStep = @"app-sel-missing"; } return nil; }
+    id app = ((AevonSDIdFn1)objc_msgSend)(controller, appSel, bundleID);
+    if (app == nil) { if (outStep) { *outStep = @"app-object-nil"; } return nil; }
     for (NSString *key in @[@"processHandle", @"_processHandle"]) {
         id handle = nil;
         @try { handle = [app valueForKey:key]; } @catch (NSException *exception) { handle = nil; }
         if (handle != nil) return handle;
     }
+    if (outStep) { *outStep = @"process-handle-nil"; }
     return nil;
 }
 
@@ -111,8 +123,9 @@ static id AevonSelfSceneCreateInner(NSString *bundleID, double w, double h,
     if (w < 50 || h < 50) { if (outErr) { *outErr = @"size-invalid"; } return nil; }
 
     // ── 1. 运行中 App 的进程身份（clientIdentity 必须指向已存在的进程）──
-    id handle = AevonSDAppProcessHandle(bundleID);
-    if (handle == nil) { if (outErr) { *outErr = @"app-not-running"; } return nil; }
+    NSString *handleStep = nil;
+    id handle = AevonSDAppProcessHandle(bundleID, &handleStep);
+    if (handle == nil) { if (outErr) { *outErr = handleStep ?: @"app-not-running"; } return nil; }
     id processIdentity = nil;
     for (NSString *key in @[@"identity", @"processIdentity"]) {
         @try { processIdentity = [handle valueForKey:key]; } @catch (NSException *exception) { processIdentity = nil; }
