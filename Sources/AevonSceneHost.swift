@@ -86,7 +86,7 @@ final class AevonSceneHost {
         host.addSubview(view)
         self.container = host
 
-        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")\(isSelfBuilt ? "，自建场景（AevonSelfSceneV228）" : "")）"))
+        AevonLog.info("[场景] presenter 已激活（presenter=\(AevonRuntime.className(presenter) ?? "?")，视图=\(AevonRuntime.className(view) ?? "?")，场景 \(sceneID)，触摸=\(interactive ? "开" : "关")\(isSelfBuilt ? "，自建场景（AevonSelfSceneV228）" : "")）")
 
         // 激活 presenter 之后再把场景推一次前台：只有场景处于前台，App 才会持续渲染。
         AevonSceneHelper.setForeground(scene, true)

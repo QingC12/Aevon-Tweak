@@ -29,7 +29,8 @@
 /// 创建自建场景（画布 w×h）。成功返回 FBScene，*outSceneID 写场景标识；
 /// 失败返回 nil，*outErr 写失败步骤（英文短串，调用方进 Aevon 日志）。
 id AevonSelfSceneCreate(NSString *bundleID, double w, double h,
-                        NSString **outSceneID, NSString **outErr);
+                        NSString * __autoreleasing *outSceneID,
+                        NSString * __autoreleasing *outErr);
 
 /// 已建场景改画布（真重排：updateSettingsWithBlock 内 frame = 0,0,w×h 且 foreground=YES）。
 /// 返回 YES = 已提交。

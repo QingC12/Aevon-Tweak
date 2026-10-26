@@ -86,7 +86,8 @@ static id AevonSDAppProcessHandle(NSString *bundleID) {
 }
 
 id AevonSelfSceneCreate(NSString *bundleID, double w, double h,
-                        NSString **outSceneID, NSString **outErr) {
+                        NSString * __autoreleasing *outSceneID,
+                        NSString * __autoreleasing *outErr) {
     NSString *step = @"";
     @try {
         if (outErr) { *outErr = nil; }

@@ -259,7 +259,8 @@ final class AevonWindowView: UIView {
     /// 销毁自建场景，换成主场景全屏接管承载（0.2.27 形态）—— 绝不黑屏。
     private func fallbackToPrimarySceneIfEmpty() {
         selfSceneFallbackTimer = nil
-        guard let host = sceneHost, host.isSelfBuilt, !host.hasContent else { return }
+        let host = sceneHost
+        guard host.isSelfBuilt, !host.hasContent else { return }
         AevonLog.warn("[场景] 自建场景 8 秒无首帧 → 回退全屏接管路径（AevonSelfSceneFallbackV228）")
         guard let primary = AevonSceneHelper.scene(for: bundleID),
               let newHost = AevonSceneHost(scene: primary,

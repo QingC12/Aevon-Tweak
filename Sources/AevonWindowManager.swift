@@ -151,7 +151,7 @@ enum AevonWindowManager {
             if AevonPrefs.bool("SelfBuiltScene", default: true) {
                 let size = AevonWindowView.plannedContentSize()
                 var errOut: NSString?
-                let created = AevonSelfSceneCreate(bundleID as NSString,
+                let created = AevonSelfSceneCreate(bundleID,
                                                    Double(size.width), Double(size.height),
                                                    &selfSceneIDOut, &errOut) as AnyObject?
                 if let created = created {
