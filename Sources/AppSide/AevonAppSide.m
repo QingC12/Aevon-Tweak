@@ -461,7 +461,7 @@ static BOOL gAevonAppTakeoverActive = NO;      /* 轮询进行中（防重入）
 static BOOL gAevonAppTakeoverMoved = NO;       /* 已完成搬家（window 在自建场景里） */
 static __weak UIWindow *gAevonAppTakeoverWindow = nil;
 static __weak UIWindowScene *gAevonAppOriginalScene = nil;
-static CGRect gAevonAppOriginalFrame = {0.0, 0.0, 0.0, 0.0};   /* CGRectZero 在部分 clang 下不是编译期常量 */
+static CGRect gAevonAppOriginalFrame = {{0.0, 0.0}, {0.0, 0.0}};   /* 显式零 rect（-Wmissing-braces） */
 
 /* 在 connectedScenes 里找 Aevon 自建场景（description 含前缀即命中）。
  * 返回 UIWindowScene；找不到返回 nil。 */
