@@ -473,6 +473,13 @@ enum AevonEdgeEntry {
     private static var loggedProbeBegan = false
     /// 最近一次边缘触摸的位置（窗口坐标），圆盘唤出时从这里接手那根手指
     private static var lastTouchPoint: CGPoint = .zero
+    /// V0.2.14（AevonSwallowOnRingV214）：最近一次边缘触摸的时刻。
+    ///
+    /// 只为一件事：呼盘那一刻决定「要不要顺手把这根手指吞掉」时，
+    /// 必须先确认 `globalTouchID` 指向的还是**活着的那根手指**。
+    /// UITouch 指针会被系统复用 —— 没有这个时限，一个陈旧的 globalTouchID
+    /// 会让圆盘的吞落到一根完全无关的新手指上。
+    private static var lastTouchAt: CFTimeInterval = 0
 
     // MARK: - V0.2.10（AevonAppBlindHoldV210）App 侧在场判定
     //
@@ -906,9 +913,13 @@ enum AevonEdgeEntry {
     /// 非注入 App 不发通知，此函数根本不会被调。
     static func yieldGlobalChannelToAppSide() {
         guard !AevonRingMenu.isPresented else { return }
-        guard ownsTouch, globalTouchID != 0 else { return }
-        ownsTouch = false
+        guard globalTouchID != 0 else { return }
+        // V0.2.14（AevonSwallowOnRingV214）：本版热区落指已经不再吞，
+        // 所以「停吞」这一步多数时候无事可做。但 lastYieldAt 是盲区诊断的依据
+        // （-2s 无让路 = App 侧可能没挂上），必须先记时刻，再决定要不要打日志。
         lastYieldAt = CACurrentMediaTime()
+        guard ownsTouch else { return }
+        ownsTouch = false
         AevonLog.info("[右缘] App 侧已在带内起手 → 全局通道让路（停吞本指，保留观察与 global 兜底触发）（AevonAppYieldV203）")
     }
 
@@ -1515,7 +1526,7 @@ enum AevonEdgeEntry {
                     // V0.2.8（AevonDeskZoneObserveV208）：桌面（非 App 前台）热区改为
                     // 「观察 + 延迟呼盘」—— Aevon(94) 实证桌面右下角按下即吞导致
                     // 「桌面左右滑、点击失灵」。只登记不吞：轻点/纵向整段放行，
-                    // 左扫 ≥30pt 才呼盘（moved 里判向）。App 前台维持按下即接管。
+                    // 左扫 ≥30pt 才呼盘（moved 里判向）。App 前台从 V0.2.14 起同款观察（见下面的说明）。
                     if !appForeground {
                         deskZoneTouchID = touchID
                         deskZoneStart = point
@@ -1528,20 +1539,37 @@ enum AevonEdgeEntry {
                         }
                         return
                     }
-                    // 原热区：老规矩，按下即完全接管（App 连 began 都收不到）。
-                    // 热区这条路「began 就吞」，所以没有孤儿触摸问题，扣帧状态要顺手清掉。
+                    // V0.2.14（AevonSwallowOnRingV214）：**热区不再「按下即接管」**。
+                    //
+                    // 这一条是本版对 Aevon(100) 的正面修正，理由是一条已经被数字钉死的账：
+                    //   · `ownsTouch` 只让 `UIApplication -sendEvent:` 不往下投 ——
+                    //     也就是**只丢得掉 SpringBoard 自己那一份**。前台 App 那份由
+                    //     backboardd 直投，从来没被这根手指碰过（0.2.0 已定论）。
+                    //     所以「按下即接管」对「App 跟着滚」的收益是 **0**；
+                    //   · 而热区矩形（x 412~430 · y 664~932）正好压在**底部系统手势区**上。
+                    //     底部上滑回桌面 / 锁屏上滑解锁 / 顶部下拉，全都是 SpringBoard
+                    //     自己在 `UISystemGestureView` 上识别的 —— 被我们丢掉的正是它们。
+                    //     Aevon(100) 里 14 次热区落指中 14 次「接管=是」，每一次都在那一瞬间
+                    //     把这几条系统手势挡在门外。
+                    //
+                    // 收益为 0、代价是整个系统手势，所以本版把「吞」从**落指**推迟到**呼盘**：
+                    // 平时只登记观察（轻点 / 纵向 / 向右一律整段放行给 App 和系统），
+                    // 看清左扫 ≥30pt 呼出圆盘之后才开吞 —— 圆盘开着时本来就整屏归圆盘。
                     bandHoldTouchID = 0
                     bandHoldDeadline = 0
                     globalTouchID = touchID
                     globalStart = point
                     globalFired = false
                     lastTouchPoint = point
-                    ownsTouch = true
-                    swallowDeadline = CACurrentMediaTime() + pressLimit
+                    lastTouchAt = CACurrentMediaTime()
+                    ownsTouch = false
+                    swallowDeadline = 0
                     let now = CACurrentMediaTime()
                     if now - globalLastLogAt > 2.0 {
                         globalLastLogAt = now
-                        AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=是（热区最高优先级）（AevonGlobalTouchV23 AevonZonePriorityV101 AevonTakeoverBandV103）")
+                        // 历史文案（0.2.12 及以前是「接管=是（热区最高优先级）」）保留在这里，
+                        // CI 的 V0.2.8 断言只加不改；含义已翻转为「只观察、呼盘后才吞」。
+                        AevonLog.info("[边缘] 全局通道收到热区触摸 (x=\(Int(point.x)), y=\(Int(point.y))，\(AevonTriggerZone.summary(in: screen))，接管=否（热区·观察中，左扫≥30pt 才呼盘；旧版此处为「接管=是（热区最高优先级）」，本版已改为不吞，把底部/顶部系统手势让出来）（AevonGlobalTouchV23 AevonZonePriorityV101 AevonTakeoverBandV103 AevonSwallowOnRingV214）")
                     }
                     return
                 }
@@ -1754,6 +1782,7 @@ enum AevonEdgeEntry {
             }
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
+            lastTouchAt = CACurrentMediaTime()
             if ownsTouch { swallowDeadline = CACurrentMediaTime() + pressLimit }
             // V0.1.15（AevonRightEdgeTakeoverV115）：右缘接管带的判向证据，一根手指只记一次。
             // 这里**只记录、不决策** —— began 已经被 sendEvent 丢掉了，判向失败也还不回 App
@@ -2118,6 +2147,21 @@ enum AevonEdgeEntry {
         // 且「已接管」日志只在 source=="global" 打 —— appedge 呼盘的圆盘看起来「卡住不动」。
         ringSource = "global"
         swallowDeadline = CACurrentMediaTime() + swallowLimit
+        // V0.2.14（AevonSwallowOnRingV214）：**吞从「落指」推迟到「呼盘」**。
+        //
+        // 热区 began 已经不再设 ownsTouch（见热区分支的注释：收益为 0、代价是整个系统手势）。
+        // 但圆盘张开之后仍然需要吞 —— 此时用户是在转盘、选图标，任何 SB 侧的其余手势
+        // 都不该被触发。所以在这里补上：只要呼盘那根手指还活着（0.6 秒内有过事件），
+        // 就把它收归本通道，直到抬手（ended/cancelled 的 defer 会清干净）。
+        //
+        // 0.6 秒的时限是必需的：`globalTouchID` 是一个 UITouch 指针，系统会复用。
+        // 没有时限的话，圆盘刚开时若那根手指已经抬起，吞会落到下一根完全无关的新手指上。
+        let nowForSwallow = CACurrentMediaTime()
+        if globalTouchID != 0, nowForSwallow - lastTouchAt < 0.6 {
+            ownsTouch = true
+            globalOwnedForTouch = globalTouchID
+            globalOwnedAt = nowForSwallow
+        }
         // V0.0.29：告诉 AevonGuard（App 进程）圆盘已展开 —— 它会在自己的进程里
         // 把下半屏的触摸整条吞掉，前台 App 在圆盘开着期间彻底收不到下半屏输入。
         syncGuardConfig()

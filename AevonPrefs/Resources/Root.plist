@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.13（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
+			<string>Aevon 0.2.14（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -105,23 +105,21 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>SysEdgeEnabled</string>
 			<key>label</key>
-			<string>右缘系统手势通道</string>
+			<string>右缘系统手势通道（实验）</string>
 			<key>infoText</key>
-			<string>V0.2.13 新增（默认开）。把「右缘左滑呼圆盘」交给 SpringBoard 的**系统手势管线**，和系统自己的「左缘返回 / 底部上滑」同等待遇。
+			<string>V0.2.14 起默认**关**。这是 0.2.13 的试验通道，留在这里只为了取证与将来再试。
 
-它与旧通道的根本区别：
-· 旧通道在 SpringBoard 里丢事件，只丢得掉 SpringBoard 那一份 —— App 手里那份照旧，所以会「圆盘出来了、App 也跟着滚」；
-· 系统手势通道一旦判定成功，App 那条触摸由系统**真正取消**，App 不会动。
+0.2.13 的真机数据（2 分 34 秒、15 次呼盘）：这条通道呼盘 **0 次**；识别器只 began 过 1 次，并且在 began 上扣了 **2.03 秒**才失败 —— 那 2 秒里它是 SpringBoard 眼里的「进行中的系统手势」，顶部下拉 / 底部上滑都要排在它后面。判向时它给出的位移是 dx=-421 dy=-796（屏幕只有 430x932，手指根本走不出这个数），读数不可信。
 
-代价（必然取舍，不是 bug）：右缘最外侧一圈（默认 30pt）里的触摸会先给 App 再被取消，正常点击无感；但如果你发现某个 App 贴右边缘的按钮/滑动失灵，先把这个开关关掉对比一下。
+有一条结论值得记住：`addGestureRecognizer:withType:` 这个接口在 iOS 17.3.1 上是**通的**（登记成功、识别器真的收到了触摸）。以后要继续研究，打开这个开关就能复现这一次的取证日志。
 
-关掉 = 完全回到 0.2.12 的行为（全局通道 + 热区），随时可退。</string>
+关着的时候右缘由「App 侧识别器 + 全局兜底」负责，也就是 0.2.12 那条已经跑通的路径。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

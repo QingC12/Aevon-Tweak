@@ -37,10 +37,31 @@ final class AevonSysEdgeV213: NSObject {
     private var installedLogged = false
     private var fired = false
     private var tracking = false
+    /// V0.2.14：began 那一帧的落点。判向一律用**自己记的位移**，不用 `translation(in:)`。
+    /// Aevon(100) 实测 `translation(in:)` 在这个私有 init 造出来的识别器上给出
+    /// dx=-421 dy=-796（屏幕只有 430x932，手指不可能走出这个位移），读数完全不可用。
+    private var beganPoint: CGPoint = .zero
+    /// V0.2.14：began 之后的「必须尽快定向」看门狗。
+    /// Aevon(100) 12:10:59.792 began → 12:11:01.827 才 Failed，中间 2.03 秒一直挂在 began 上；
+    /// 那 2 秒里它是 SpringBoard 眼里的「进行中的系统手势」，别的系统手势全被它挡着。
+    private var guardWork: DispatchWorkItem?
+    /// began 后允许多久完成定向。0.12 秒 ≈ 7 帧，足够看清方向；超过就必须 Failed 归还。
+    private let begunBudget: Double = 0.12
 
     /// 是否启用：关掉即整条通道不装（右缘回到 0.2.12 的老通道）。
+    ///
+    /// V0.2.14：**默认翻转为关**。Aevon(100) 的真机数据（2 分 34 秒、15 次呼盘）：
+    ///   · 本通道呼盘 **0 次**（`来源 systemedge` = 0；12 次 appedge + 3 次 global）；
+    ///   · 识别器只 began 过 1 次，并在 began 里**扣了 2.03 秒**才 Failed；
+    ///   · began 落点 (390,778) 距右缘 40pt —— 远超设定的 30pt 边缘区，
+    ///     说明 `edges` / `_setEdgeRegionSize:` 对私有 init 造出来的这个识别器并不成立；
+    ///   · 判向时 `translation(in:)` 给出 dx=-421 dy=-796（手指根本到不了的值），读数不可用。
+    ///
+    /// 结论：`addGestureRecognizer:withType:` 这个接口在 17.3.1 上是**通的**（登记成功、
+    /// 识别器真的收到触摸），但用它来抢右缘这只手，比它带来的干扰更贵。
+    /// 保留实现与开关，默认关；以后要再研究，打开就能复现这次的取证。
     private var enabled: Bool {
-        return AevonPrefs.bool("SysEdgeEnabled", default: true)
+        return AevonPrefs.bool("SysEdgeEnabled", default: false)
     }
 
     /// 边缘区宽度（pt）。**默认 30**：
@@ -72,6 +93,7 @@ final class AevonSysEdgeV213: NSObject {
     // MARK: - 安装
 
     func install(attempt: Int = 0) {
+        if attempt == 0 { Self.migrateOffOnceV214() }
         guard enabled else {
             if attempt == 0 {
                 AevonLog.info("[系统手势] 已关闭（SysEdgeEnabled=否），右缘走全局通道老路（AevonSysEdgeV213）")
@@ -142,21 +164,25 @@ final class AevonSysEdgeV213: NSObject {
     @objc private func handle(_ gesture: UIPanGestureRecognizer) {
         guard enabled else { return }
 
-        let translation = gesture.translation(in: nil)
+        // V0.2.14：位移用自己记的 began 落点算，**不再读 `translation(in:)`**。
+        // 理由见 `beganPoint` 的注释（那个读数在私有 init 的识别器上不可信）。
         let point = gesture.location(in: nil)
+        let dx = point.x - beganPoint.x
+        let dy = point.y - beganPoint.y
 
         switch gesture.state {
         case .began:
             fired = false
             tracking = true
+            beganPoint = point
             AevonLog.info("[系统手势] 边缘识别器 began，落点 (\(Int(point.x)),\(Int(point.y)))（AevonSysEdgeV213）")
+            startBegunGuard()
 
         case .changed:
             // 判向：向左（负 dx）且横向明显大于纵向。
             // 纵向 / 斜向 → 立刻 Failed，把触摸还给 App —— 这是「右缘竖滑照样滚屏」的保证。
-            let dx = translation.x
-            let dy = translation.y
             if abs(dy) > abs(dx), abs(dy) >= 6 {
+                cancelBegunGuard()
                 AevonSysEdgeForceFail(gesture)
                 tracking = false
                 AevonLog.info("[系统手势] 判为纵向（dx=\(Int(dx)) dy=\(Int(dy))）→ Failed 归还 App（AevonSysEdgeV213）")
@@ -164,6 +190,7 @@ final class AevonSysEdgeV213: NSObject {
             }
             if !fired, dx <= -distance, abs(dx) >= abs(dy) * slopeRatio {
                 fired = true
+                cancelBegunGuard()
                 AevonLog.info("[系统手势] 判向成立 dx=\(Int(dx)) dy=\(Int(dy)) 落点 (\(Int(point.x)),\(Int(point.y))) → 呼圆盘（AevonSysEdgeV213）")
                 AevonEdgeEntry.triggerFromSystemGesture(point: point)
                 return
@@ -174,6 +201,7 @@ final class AevonSysEdgeV213: NSObject {
             }
 
         case .ended, .recognized:
+            cancelBegunGuard()
             tracking = false
             if fired, let ring = AevonRingMenu.presented {
                 ring.remoteEnded(at: point, source: "systemedge")
@@ -181,6 +209,7 @@ final class AevonSysEdgeV213: NSObject {
             fired = false
 
         case .cancelled:
+            cancelBegunGuard()
             tracking = false
             if fired, let ring = AevonRingMenu.presented {
                 ring.remoteCancelled(source: "systemedge")
@@ -188,12 +217,52 @@ final class AevonSysEdgeV213: NSObject {
             fired = false
 
         case .failed:
+            cancelBegunGuard()
             tracking = false
             fired = false
 
         default:
             break
         }
+    }
+
+    // MARK: - began 看门狗（V0.2.14 / AevonSysEdgeBegunBudgetV214）
+
+    /// began 之后 0.12 秒还没定向 → 主动 Failed。
+    ///
+    /// 这是本版对 Aevon(100) 那次 2.03 秒长扣的直接修补：识别器挂在 began 上时，
+    /// SpringBoard 会认为「有一个系统手势正在进行」，同时期的顶部下拉 / 底部上滑
+    /// 就都排在它后面。0.12 秒到期无条件归还，宁可漏一次呼盘，也不让系统手势被挡。
+    private func startBegunGuard() {
+        cancelBegunGuard()
+        let work = DispatchWorkItem { [weak self] in
+            guard let strongSelf = self else { return }
+            guard let target = strongSelf.recognizer else { return }
+            guard strongSelf.tracking, !strongSelf.fired else { return }
+            strongSelf.tracking = false
+            AevonSysEdgeForceFail(target)
+            AevonLog.info("[系统手势] began 后 \(Int(strongSelf.begunBudget * 1000))ms 未定向 → 主动 Failed 归还（AevonSysEdgeV213 AevonSysEdgeBegunBudgetV214）")
+        }
+        guardWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + begunBudget, execute: work)
+    }
+
+    private func cancelBegunGuard() {
+        guardWork?.cancel()
+        guardWork = nil
+    }
+
+    // MARK: - 老用户一次性迁移（V0.2.14 / AevonSysEdgeOffMigrateV214）
+
+    /// 0.2.13 的默认值是「开」，装过那版的设备里这个键可能已经被写成年 true。
+    /// 只改代码里的 default 只影响「从没写过这个键」的设备 —— 老用户必须写盘一次。
+    /// 与 0.1.18 抬带宽、0.1.17 复位是同一种做法：标记键 + 一次性写盘。
+    private static func migrateOffOnceV214() {
+        let marker = "SysEdgeOffMigratedV214"
+        if AevonPrefs.bool(marker, default: false) { return }
+        AevonPrefs.set("SysEdgeEnabled", false)
+        AevonPrefs.set(marker, true)
+        AevonLog.info("[系统手势] 老用户一次性迁移：SysEdgeEnabled → 关（0.2.13 默认开，本版默认关）（AevonSysEdgeOffMigrateV214）")
     }
 
     // MARK: - 诊断
@@ -207,7 +276,7 @@ final class AevonSysEdgeV213: NSObject {
     /// 一行自述，给 P6 配置快照用。
     func summary() -> String {
         if recognizer == nil {
-            return AevonPrefs.bool("SysEdgeEnabled", default: true)
+            return AevonPrefs.bool("SysEdgeEnabled", default: false)
                 ? "未装（造不出识别器或管理器未就绪）"
                 : "已关闭"
         }
