@@ -1288,7 +1288,7 @@ jobs:
             || { echo "::error::V210 标记未收容进 AevonAssertionShim.m（改文案就会让历史串消失）"; exit 1; }
           grep -q 'AevonPrefsInfoPosV210' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
             || { echo "::error::设置页 ⓘ 仍在贴开关摆放（Aevon(96) 截图里的误触会复发）"; exit 1; }
-          grep -q 'sizeThatFits' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+          grep -q 'sizeWithAttributes' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
             || { echo "::error::ⓘ 没有按文字实际宽度定位 —— 又会退化成猜开关宽度"; exit 1; }
           grep -q 'AevonRingHubV210' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::圆盘心圆底盘/渐变被删"; exit 1; }

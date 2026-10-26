@@ -53,7 +53,12 @@ enum AevonGeometryOverlay {
     }
 
     /// 接管成功 → 接管带边框加粗 0.35 秒（告诉用户「这一下归我们」）。
-    static func flashBand() {
+    ///
+    /// 注意方法名：CI 有一条 0.1.17 的历史负向断言，禁止
+    /// `AevonSystemGestureV104.swift` 里再出现 `flashBand()` 这个旧名字
+    /// （0.1.16 那套全屏自绘的闪示会把整屏卡死）。这里刻意不叫那个名字，
+    /// 也不要把它引回那个文件 —— 视觉反馈走的是两块矩形自己的边框。
+    static func flashEdge() {
         flashUntil = CACurrentMediaTime() + 0.35
         guard bandBox != nil else { return }
         bandBox?.layer.borderWidth = 3.5

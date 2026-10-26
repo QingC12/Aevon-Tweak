@@ -611,9 +611,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         @try {
             UILabel *text = [cell respondsToSelector:@selector(textLabel)] ? cell.textLabel : nil;
             if (text != nil && text.text.length > 0) {
-                CGSize fit = [text sizeThatFits:CGSizeMake(CGFLOAT_MAX, text.bounds.size.height)];
-                CGFloat shown = MIN(fit.width, text.bounds.size.width);
-                if (shown > 1.0) { labelRight = CGRectGetMinX(text.frame) + shown; }
+                /* 用「字号 + 文字」直接量宽，**不依赖 textLabel 当前的 frame 宽度**：
+                 * willDisplayCell 这一刻单元格可能还没布局，frame 宽度是旧的甚至为 0，
+                 * 拿它当依据会把 ⓘ 甩回行首、压在第一个字上。 */
+                UIFont *font = text.font ?: [UIFont systemFontOfSize:17.0];
+                CGFloat textWidth = ceil([text.text sizeWithAttributes:@{NSFontAttributeName: font}].width);
+                CGFloat left = CGRectGetMinX(text.frame);
+                if (left < 1.0 || left > cell.bounds.size.width) { left = 16.0; }
+                labelRight = left + textWidth;
             }
         } @catch (NSException *exception) {
             labelRight = 16.0;

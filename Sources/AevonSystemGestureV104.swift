@@ -111,7 +111,7 @@ enum AevonBandHint {
 
     /// 接管成功闪一下（接管带边框加粗 0.35 秒）。
     static func flash() {
-        AevonGeometryOverlay.flashBand()
+        AevonGeometryOverlay.flashEdge()
     }
 
     /// 圆盘起来 / 容器搬家时把提示收掉，别和圆盘叠在一起。
