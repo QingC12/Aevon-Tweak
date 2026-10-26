@@ -285,28 +285,37 @@ final class AevonEdgeStripView: UIView {
         AevonLog.info("[边缘] 触发条颜色已随系统外观切换（\(isDarkAppearance ? "深色 → 灰白" : "浅色 → 黑灰")）（AevonStripAdaptiveTintV26）")
     }
 
-    /// V0.2.9（AevonStripNoHitV209）：**手势条永不参与命中测试**。
+    /// 手势条与触摸的关系，这一段被改过两次，两次的原因正好相反 ——
     ///
-    /// Aevon(95) 铁证（22:36:43.398）：
+    /// **V0.2.9（AevonStripNoHitV209）→ 恒 nil**：Aevon(95) 22:36:43.398 的铁证是
     ///   `[边缘] 入口窗口收到触摸 (x=422, y=801，宽容区内=是)` →
     ///   `[边缘] 窗口层已接管边缘触摸（兜底判定生效）` →
     ///   `[边缘] 手势区收到触摸 (条内 x=10, y=130)`。
-    /// 也就是说：这根触摸在 **UIKit 命中测试** 阶段就被这条 18×260 的条子接走了。
-    /// 入口窗口 level=10000000（比桌面 SBHomeScreenWindow 高得多），
-    /// 条子一旦命中，桌面 / 浮窗内容 **连 began 都收不到** —— 点击与左右滑动同时死。
-    /// 0.2.8 让全局通道「只观察不吞」是对的，但没堵住这条更早的物理通道，
-    /// 所以「桌面右下角划不动、点不动」照旧（用户 Aevon(95) 主诉）。
+    /// 这根触摸在 **UIKit 命中测试** 阶段就被 18×260 的条子接走了；入口窗口
+    /// level=10000000 压过 SBHomeScreenWindow，于是桌面**连 began 都收不到** ——
+    /// 右下角点击与左右滑动同时死。当时的选择是「条子退回纯视觉，呼盘改走
+    /// `sendEvent` 全局通道」。
     ///
-    /// 现在触发只走 `UIApplication -sendEvent:` 全局通道（它在命中测试之前拿到事件，
-    /// 与条子无关；Aevon(95) 22:36:43 的 `桌面热区左扫成立 dx=-36` 就是它算出来的），
-    /// 条子退回**纯视觉**：看得见、摸不到、不占触摸。`isUserInteractionEnabled`
-    /// 也不再是开关 —— 圆盘收起时会把它设回 true，那会把这条死路重新接上。
+    /// **V0.2.15（AevonDeskStripHitV215）→ 桌面上重新可命中**：那条全局通道的代价
+    /// 后来被证明更大。`ownsTouch` 只让 `UIApplication -sendEvent:` 不往下投，
+    /// 而桌面翻页 / Dock / 图标全是 SpringBoard 自己的视图 —— 吞一次就把整个桌面
+    /// 连同系统手势一起吞掉（Aevon(101) 12:31:18~12:31:30 十二秒单指全死，
+    /// 只有三指能穿过去）。
+    ///
+    /// 关键差别在于「桌面没有第二个进程」：条子在桌面上自己接下触摸，桌面从头到尾
+    /// 就收不到这根手指 —— 不需要吞、不需要补投、不需要任何状态机。
+    /// （Pullover-X 就是这个结构：一个真实可见、能摸到的手柄。）
+    ///
+    /// App 前台绝不允许命中：那里有 App 进程直投的一份触摸，条子接了也没用
+    /// （App 照样滚），只会白丢 SpringBoard 这份。App 内的呼盘由 App 侧识别器负责。
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        return nil
+        guard AevonEdgeEntry.isPureDesktop else { return nil }
+        return super.hitTest(point, with: event)
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        return false
+        guard AevonEdgeEntry.isPureDesktop else { return false }
+        return bounds.contains(point)
     }
 
     /// 原来的 touchesBegan / touchesMoved（下方「触摸（不使用手势识别器）」一节）保持不变 ——
@@ -497,6 +506,8 @@ enum AevonEdgeEntry {
     private static var lastForegroundBundle = ""
     /// 盲期拒呼日志限频
     private static var blindHoldLoggedAt: CFTimeInterval = 0
+    /// V0.2.15：全局通道呼盘被拦下的日志限频
+    private static var globalGateLoggedAt: CFTimeInterval = 0
     /// 新前台 App 多久没给信号就认定为「盲期」（超过就放弃守门，当作未注入 App 处理）。
     private static let blindGateWindow: CFTimeInterval = 3.0
 
@@ -568,9 +579,10 @@ enum AevonEdgeEntry {
         AevonEdgeEntry.startTriggerZoneWatch()
         let rootBounds = root.bounds
         AevonLog.info("[边缘] 手势条已挂到入口窗口（\(Int(view.frame.width))x\(Int(view.frame.height))，原点 \(Int(view.frame.minX)),\(Int(view.frame.minY))，根视图 \(Int(rootBounds.width))x\(Int(rootBounds.height))，热区 \(AevonTriggerZone.summary(in: rootBounds))，触发=左滑≥\(Int(AevonEdgeStripView.swipeDistance))pt）（AevonEdgeTouch AevonTriggerZoneV25 AevonRingListLiveV27 AevonAppGuardSideV27 AevonSwipeOnlyV38）")
-        // V0.2.9（AevonStripNoHitV209）：条子从这一版起只是「看得见的那条淡色线」，
-        // 命中测试永远拿不到它 —— 桌面/浮窗在右下角那块重新变回正常的触摸区域。
-        AevonLog.info("[边缘] 手势条只做显示：hitTest 恒 nil，不参与命中测试，呼盘改由全局通道判定（AevonStripNoHitV209）")
+        // V0.2.9（AevonStripNoHitV209）→ V0.2.15（AevonDeskStripHitV215）：
+        // 条子在**桌面裸态**重新参与命中（自己接住触摸＝桌面收不到，见类头注释），
+        // App 前台与浮窗仍然恒 nil。全局通道那一套吞摸本版已整体下线。
+        AevonLog.info("[边缘] 手势条：桌面裸态可命中（自己接触摸，桌面不参与），App/浮窗恒 nil；SB 侧吞摸已下线（AevonStripNoHitV209 AevonDeskStripHitV215 AevonNoSBSwallowV215）")
 
         // 圆盘的默认内容：首次使用时用应用列表预填，保证呼出不是空盘
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -845,10 +857,38 @@ enum AevonEdgeEntry {
     private static var rightEdgeSignature = ""
     private static var prefsObserverInstalled = false
 
+    /// V0.2.15（AevonDeskStripHitV215）：真正的「桌面裸态」——没有全屏 App、也没有浮窗。
+    ///
+    /// 只在这里允许手势条自己接触摸。判据沿用 0.2.9 定下的那一对：
+    ///   · `openBundleID != nil` → 有浮窗（浮窗里跑的是真实 App 场景，右边缘不是屏幕右边缘）；
+    ///   · `mountedInAppScene`   → 容器挂在 App 画面容器上（全屏 App 或浮窗都算）。
+    /// 两者都为假才是「桌面上什么都没有」。
+    static var isPureDesktop: Bool {
+        if AevonWindowManager.openBundleID != nil { return false }
+        return !AevonEntryHost.mountedInAppScene
+    }
+
     /// 统一触发入口（手势条 / 窗口层兜底 / 识别器都走这里），带 0.6 秒去重。
     /// `source` 决定后续触摸流转发给圆盘时走哪条通道（圆盘只认最先来的那条）。
     static func attemptTrigger(_ reason: String, source: String) {
         let now = CACurrentMediaTime()
+        // V0.2.15（AevonNoSBSwallowV215）：`global` 这条来源整体下线。
+        //
+        // Aevon(101) 的账：全屏 App 里「圆盘出来、页面也跟着动」由 App 侧识别器解决，
+        // SB 侧无论吞不吞都改变不了 App 那一份（backboardd 双投）；而 SB 侧吞的代价是
+        // 桌面翻页 / Dock / 图标一起摸不动 —— 12:31:18~12:31:30 那 12 秒整机单指全死，
+        // 只有三指能穿过去（三指事件 swallowCount < active 不吞），就是这条留下的。
+        //
+        // 现在 SB 侧呼盘只剩两条合法入口：
+        //   · `strip`  —— 桌面手势条自己被命中（它拿到了触摸，桌面本来就收不到）；
+        //   · `appedge`/`systemgesture` —— App 进程内识别器成立后通知过来。
+        if source == "global" {
+            if now - globalGateLoggedAt > 2.0 {
+                globalGateLoggedAt = now
+                AevonLog.info("[右缘] 全局通道呼盘已下线（本版起 SB 侧不再吞摸，桌面翻页/系统手势恢复；桌面呼盘请用右侧手势条）（AevonNoSBSwallowV215）")
+            }
+            return
+        }
         // V0.2.6（AevonEdgeFailGateV206）：App 侧刚判过「失败」（纵向滚动/向右扫）→
         // global 兜底在这根手指上必须闭嘴。Aevon(92) 铁证：16 次让路里 8 次兜底呼盘
         // 发生在 App 已判失败之后（兜底只看 dx=-30，不看纵向），App 那份照滚 =
@@ -973,10 +1013,14 @@ enum AevonEdgeEntry {
             // 圆盘已展开：这根手指继续驱动圆盘（旋转 / 选定 / 松手开窗）
             if let ring = AevonRingMenu.presented {
                 switch phase {
-                case .began: ring.beginRemoteTracking(at: point, source: "window")
-                case .moved: ring.remoteMoved(to: point, source: "window")
-                case .ended: ring.remoteEnded(at: point, source: "window")
-                case .cancelled: ring.remoteCancelled(source: "window")
+                // V0.2.15（AevonDeskStripHitV215）：来源统一成 "strip" ——
+                // 桌面手势条从本版起真的能被命中，探针与条子会在同一根手指上
+                // 各收到一次事件。两处若用不同 source，圆盘只认先来的那个，
+                // 另一条喂进去的移动会被丢掉 → 圆盘不动 / 松手选不中。
+                case .began: ring.beginRemoteTracking(at: point, source: "strip")
+                case .moved: ring.remoteMoved(to: point, source: "strip")
+                case .ended: ring.remoteEnded(at: point, source: "strip")
+                case .cancelled: ring.remoteCancelled(source: "strip")
                 default: break
                 }
                 return
@@ -1009,7 +1053,7 @@ enum AevonEdgeEntry {
                 let dx = point.x - start.x
                 let dy = point.y - start.y
                 if dx <= -AevonEdgeStripView.swipeDistance, abs(dx) >= abs(dy) * 0.7 {
-                    attemptTrigger("窗口层左滑 \(Int(dx))pt", source: "window")
+                    attemptTrigger("窗口层左滑 \(Int(dx))pt", source: "strip")
                 }
             default:
                 probeStart = nil
@@ -2157,7 +2201,11 @@ enum AevonEdgeEntry {
         // 0.6 秒的时限是必需的：`globalTouchID` 是一个 UITouch 指针，系统会复用。
         // 没有时限的话，圆盘刚开时若那根手指已经抬起，吞会落到下一根完全无关的新手指上。
         let nowForSwallow = CACurrentMediaTime()
-        if globalTouchID != 0, nowForSwallow - lastTouchAt < 0.6 {
+        // V0.2.15（AevonNoSBSwallowV215）：吞摸下线后这里不再登记接管。
+        // 登记了也没人执行（`shouldSwallowGlobalTouch` 已经恒 false），
+        // 反而会让自愈巡检每次多打一条「接管状态未正常归还」的假告警。
+        if AevonPrefs.bool("SBSwallow", default: false),
+           globalTouchID != 0, nowForSwallow - lastTouchAt < 0.6 {
             ownsTouch = true
             globalOwnedForTouch = globalTouchID
             globalOwnedAt = nowForSwallow
@@ -2173,8 +2221,10 @@ enum AevonEdgeEntry {
         if source == "global" || source == "appedge" {
             // V0.2.10（AevonAppBlindHoldV210）：这句话以前无条件写「App 不会再跟着滚动」，
             // Aevon(96) 证明它在 App 侧缺位时是假的 —— 现在按实际在场情况自述。
+            // V0.2.15（AevonNoSBSwallowV215）：SB 侧吞摸已下线，这里只剩「指针归圆盘」，
+            // 不再代表「事件被丢」—— 文字跟着改，别让日志继续替旧机制作证。
             let sideAlive = CACurrentMediaTime() - appSideSignalAt < 2.0
-            AevonLog.info("[圆盘] 已接管该手指的触摸（App 侧在场=\(sideAlive ? "是 · 它那份已被合法 touchesCancelled，App 不会跟着滚" : "否 · 只挡住 SB 那份，App 仍持有自己那份，本轮可能同时响应")）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102 AevonEdgeAdoptV207 AevonAppBlindHoldV210）")
+            AevonLog.info("[圆盘] 指针已交给圆盘（SB 侧吞摸本版已下线，不再丢事件；App 侧在场=\(sideAlive ? "是 · 它那份已由 App 内识别器合法取消" : "否 · App 那份未取消，可能出现同时响应")）（AevonRingSwallowV24 AevonRingHalfGuardV29 AevonRingFullSwallowV102 AevonEdgeAdoptV207 AevonAppBlindHoldV210 AevonNoSBSwallowV215）")
         }
     }
 
@@ -2298,6 +2348,26 @@ enum AevonEdgeEntry {
         // 这一行就是「结构上不可能卡死」的全部：只要圆盘不在场，ownsTouch / globalTouchID
         // 会被当场清零，后面所有分支都不可能再对任何手指返回 true。
         healGlobalTakeoverIfNeeded()
+        // V0.2.15（AevonNoSBSwallowV215）：整条「SB 侧吞摸」链路焊死在关。
+        //
+        // 为什么是「焊死」而不是「删掉」：CI 里压着 0.1.12 ~ 0.2.14 二十多条历史断言
+        // （扣帧判据、抬手放行、自愈标记…），删代码等于把那些防线连同证据一起抹掉。
+        // 焊在入口等价于删除运行行为，但每一版留下的判据还查得回去。
+        //
+        // 只留一条：**浮窗拖拽**。浮窗是 SpringBoard 自己的窗口，拖它的时候底下桌面
+        // 也会跟着动，这一条必须吞。其余的（热区整指、右缘接管带、圆盘接管、收养指）
+        // 全部不再生效 —— 它们的收益只存在于「App 收不到这根手指」，而这一条
+        // 从来就不成立（backboardd 双投给 App 一份，SB 吞不到）。
+        //
+        // 开关是运行期读的（不是 `static let false`），所以不会被编译器折叠掉；
+        // 没有界面入口，默认关，需要复现老问题时才用 `defaults write com.Aevon SBSwallow -bool YES`。
+        if !AevonPrefs.bool("SBSwallow", default: false) {
+            if floatGestureActive, touchID == floatTouchID,
+               CACurrentMediaTime() <= floatDeadline {
+                return true
+            }
+            return false
+        }
         // V0.2.8（AevonDeskZoneObserveV208）：桌面热区呼盘的收养指 —— 吞摸豁免。
         // 这根手指 began 就给了桌面，后续帧（含 ended）必须照常投递，
         // 否则桌面翻页卡半路；圆盘只靠观察喂盘，不靠吞。

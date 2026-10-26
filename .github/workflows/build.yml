@@ -1502,6 +1502,31 @@ jobs:
             || { echo "::error::缺 SysEdgeEnabled 一次性关闭迁移（0.2.13 装过的设备会带着 true 升上来）"; exit 1; }
           echo "V0.2.14 校验: 热区改观察（不吞系统手势区）+ 呼盘后才吞（0.6s 时限）+ 系统手势 began 0.12s 看门狗 + 默认关与一次性迁移 已就位"
 
+          # ---- V0.2.15（Aevon(101)）：SB 侧吞摸整条链路下线 ----
+          #
+          # 证据链：
+          #   · 12:31:18~12:31:30 十二秒零触摸日志，但 30 秒一次的窗口栈照常打印 → 主线程活着；
+          #   · 12:31:30 三指急救生效 → 三指事件确实穿过了 sendEvent（swallowCount < active 不吞），
+          #     而单指全被吞 → 桌面翻页 / Dock / 图标一起死。这就是 `ownsTouch` 泄漏的那一类表现；
+          #   · 全屏 App 侧的「圆盘出来、页面不跟滚」是 App 内识别器的功劳
+          #     （12:30:56 / 12:32:55 两次「App 触摸已被合法取消」），跟 SB 吞不吞无关。
+          # 结论：SB 侧吞摸对 App 收益为 0，代价是整个桌面与系统手势 → 焊死。
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'AevonPrefs.bool("SBSwallow", default: false)' \
+            || { echo "::error::SB 侧吞摸没被焊死 —— 桌面会重新出现整机单指失灵"; exit 1; }
+          test "$(grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | grep -c 'AevonNoSBSwallowV215')" -ge 2 \
+            || { echo "::error::V0.2.15 标记不足两处（吞摸焊死 + 全局呼盘下线）"; exit 1; }
+          # 只留浮窗拖拽这一条吞：浮窗是 SB 自己的窗口，不吞会带着桌面一起拖
+          grep -q 'floatGestureActive, touchID == floatTouchID' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::浮窗拖拽的吞摸被一起删了 —— 拖窗会拖着桌面"; exit 1; }
+          # 桌面手势条必须自己就能被命中（不再依赖任何全局通道）
+          test "$(grep -c 'AevonEdgeEntry.isPureDesktop' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
+            || { echo "::error::桌面手势条 hitTest 又变成恒 nil —— 桌面呼盘会彻底消失"; exit 1; }
+          # App 侧必须跟随总开关（Aevon(101) 12:33:08：主开关已关，App 侧还在挂识别器）
+          grep -q 'AevonAppPrefBool(@"Enabled", YES)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧没读总开关 Enabled —— 关了插件 App 里还在接管"; exit 1; }
+          echo "V0.2.15 校验: SB 侧吞摸下线（只留浮窗拖拽）+ 桌面手势条自己接触摸 + App 侧跟随总开关"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

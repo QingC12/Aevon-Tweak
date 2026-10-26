@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.14（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
+			<string>Aevon 0.2.15（arm64e / roothide）。用法：打开「启用插件」→ 注销 → 桌面右下角贴边向左拉（或全屏 App 右缘左滑）呼出圆盘 → 点图标开浮窗。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

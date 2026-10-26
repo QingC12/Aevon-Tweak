@@ -453,6 +453,16 @@ shouldReceiveTouch:(UITouch *)touch {
     BOOL enabled = AevonAppPrefBool(@"AppSideEnabled", YES);
     BOOL edgeEnabled = AevonAppPrefBool(@"EdgeGestureEnabled", YES);
     if (!enabled || !edgeEnabled) { return NO; }
+    /* V0.2.15（AevonAppMasterOffV215）：主开关关掉时，App 侧必须一起退场。
+     *
+     * Aevon(101) 12:33:08 那一屏：SpringBoard 侧已经打出「Aevon 未启用（默认关闭）」，
+     * 但 Spotlight / Filza 里 App 侧识别器照旧挂上、照旧扣 began ——
+     * 因为这里只读了 AppSideEnabled，没读总开关 `Enabled`。
+     * 结果就是「用户以为插件已经关了，App 里的右缘还在接管」。
+     *
+     * fallback 用 YES（读不到就维持原样）：沙盒里读 com.Aevon 偶有失败，
+     * 不能因为一次读不到就把功能判死。 */
+    if (!AevonAppPrefBool(@"Enabled", YES)) { return NO; }
 
     /* V0.2.9（AevonFloatStandDownV209）：装进浮窗时整体退让。
      * 浮窗的「右边缘」不是屏幕右边缘，用户在那里滑是在滚内容，不是呼盘。
