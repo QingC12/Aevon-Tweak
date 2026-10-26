@@ -72,7 +72,9 @@ final class AevonWindowView: UIView {
     private static let cornerRadius: CGFloat = 12
     /// 外侧手势区厚度（边条）与外角块边长（pt）。Stheno 的 edgeWidth 同位概念。
     /// V0.2.23（AevonFloatWideGripV223）：Aevon(107) 反馈「不容易触发」，18/34 → 26/44。
-    static let barThickness: CGFloat = 26
+    /// V0.2.26（AevonFloatSthenoEdgeV226）：26 → 30 —— 对齐 Stheno edgeWidth 默认值
+    /// （GestureBorderWidth，其默认 30pt 用户可调；我们取默认起步）。
+    static let barThickness: CGFloat = 30
     static let cornerSize: CGFloat = 44
     /// V0.2.24（AevonFloatGripOverlapV224）：手柄向窗内压边宽度（pt）——
     /// 边线两侧都算手势区，瞄准边缘的指尖不再滑进 App 内容。
@@ -149,21 +151,61 @@ final class AevonWindowView: UIView {
         // V0.2.24（AevonFloatTopBarV223 退休）：顶部留白栏整体移除 —— Aevon(108) 实测
         // 它盖住内容造成显示异常。顶部不再有任何覆盖物。
 
-        // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.21 起只剩下角块 + 底/左/右边条）
+        // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.26 起 = Stheno 布置：
+        // 顶 / 底两条全宽边条 + 底部两角块，左右边条删除）
         installOutsideGestureHandles(width: restored.width, height: restored.height)
+
+        // V0.2.26（AevonPiPProbeV226）：真重排路线 P0 探测（只读，一次一进程）
+        AevonWindowView.probeSceneRoutesOnce()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
             + "（外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
-            + "内容=App 场景原生 5:3 布局（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
-            + "呈现上下文 resizesHostedContext=开，App 随窗尺寸原生重排，PullOver-X 同款），"
-            + "手势区 26/44+压边10（AevonFloatWideGripV223 AevonFloatGripOverlapV224），"
-            + "缩放全程圆角（AevonFloatRoundResizeV224），"
+            + "内容=整屏场景呈现（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
+            + "真重排唯一通路=自建场景路线，P0 探测 AevonPiPProbeV226），"
+            + "手势区=Stheno 布置 顶/底全宽 30/44+压边10（AevonFloatWideGripV223"
+            + " AevonFloatGripOverlapV224 AevonFloatSthenoEdgeV226），"
+            + "缩放快照冻结（AevonFloatSnapResizeV226）全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    // MARK: - 真重排路线 P0 探测（V0.2.26，AevonPiPProbeV226）
+
+    /// Aevon(1) 定案：SB 侧「事后改场景尺寸」路线已被 0.0.x 档案三重实锤排除
+    /// （V63：dc ivar 直写全链成功 App 仍不重排；V64：FBScene 无 resizesHosted 选择子；
+    /// V87：SBDeviceApplicationSceneEntity 5 个候选 init 全 nil）。
+    /// 剩余唯一通路 = **创建时烙定画布**（Stheno 在用的 FBSceneManager
+    /// `_createSceneWithDefinition:settings:...` 族）或 PiP handle（TrollOpen
+    /// `__pipSceneHandle` / PullOverX video-hosted 轨道）。本探测只读、一次一进程，
+    /// 为下轮 P1 立项钉运行时判据 —— 不改变任何现有行为。
+    private static var didProbeSceneRoutes = false
+    private static func probeSceneRoutesOnce() {
+        guard !didProbeSceneRoutes else { return }
+        didProbeSceneRoutes = true
+        let exception = AevonShieldRun {
+            var parts: [String] = []
+            let fbMethods = AevonMethodNamesForClass("FBSceneManager") ?? []
+            let createWithSettings =
+                "_createSceneWithDefinition:settings:initialClientSettings:transitionContext:fromRemnant:usingClientProvider:completion:"
+            parts.append("FBSceneManager._createScene(带settings)=\(fbMethods.contains(createWithSettings) ? "响应" : "无")")
+            parts.append("createSceneWithDefinition:initialParameters:=\(fbMethods.contains("createSceneWithDefinition:initialParameters:") ? "响应" : "无")")
+            let sbVCMethods = AevonMethodNamesForClass("SBDeviceApplicationSceneViewController") ?? []
+            parts.append("SceneVC.setSceneResizesHostedContext:=\(sbVCMethods.contains("setSceneResizesHostedContext:") ? "响应" : "无")")
+            for name in ["FBSceneHostManager", "SBDeviceApplicationSceneHandle",
+                         "FBSSceneParameters", "FBSMutableSceneDefinition"] {
+                var exists = false
+                AevonShieldRun { exists = NSClassFromString(name) != nil }
+                parts.append("\(name)=\(exists ? "类在" : "无")")
+            }
+            AevonLog.info("[场景] 路线探测：\(parts.joined(separator: " "))（AevonPiPProbeV226）")
+        }
+        if let exception = exception {
+            AevonLog.warn("[场景] 路线探测异常：\(exception)（AevonPiPProbeV226）")
+        }
     }
 
     /// 无记忆时的默认几何：宽 62% 屏宽（5:3 竖窗 → 高约 48% 屏高），顶边 10% 屏高，水平居中。
@@ -228,6 +270,13 @@ final class AevonWindowView: UIView {
     /// resizesHostedContext，App 场景收到不到新尺寸（Aevon(109) 日志：呈现视图 430x932），
     /// 内容仍是全屏渲染被裁。开关已在 AevonPresenterShim 补设（PullOver-X 同款），
     /// 这里改容器 bounds → presentationView（flexible autoresizing）→ App 原生重排全链路才通。
+    ///
+    /// V0.2.26（AevonPiPProbeV226）定论修订：V225 的「开关补上就通」判断**被实锤推翻**
+    /// —— Aevon(1) 日志呈现视图仍 430x932，且 0.0.x 档案（V63/V64/V87）早已证明
+    /// SB 侧事后改场景尺寸不触发 App 重排（resizesHostedContext 的调用对象是 scene
+    /// settings，只在自建场景上有效）。当前内容形态 = 整屏渲染顶左裁切（诚实标注），
+    /// 真重排唯一通路 = 自建场景路线（P0 探测见 probeSceneRoutesOnce）。
+    /// 本函数保持容器 bounds = 窗口尺寸：呈现视图几何跟窗，缩放快照（V226）以此为基。
     private func applyContentLayout() {
         guard contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
         let container = sceneHost.container
@@ -246,32 +295,33 @@ final class AevonWindowView: UIView {
     /// 窗内一个点都不占，App 内容的点击 / 滑动完全不受影响。
     /// 注意：窗口本体 clipsToBounds = false，frame 外的子视图照常参与命中测试。
     ///
-    /// V0.2.21（AevonFloat53V221）手势位只剩五个：
-    ///   · 左下 / 右下外角块 = 缩放（pan 跟手，比例锁 5:3）；
-    ///   · 底 / 左 / 右三条边条 = 长按 0.3s 后拖动移动；
-    ///   · 底部边条另有双击 = 关闭浮窗。
-    /// 顶部条与上角块整体移除 —— 顶部不再有任何手势。
+    /// V0.2.21（AevonFloat53V221）手势位：角块 + 边条；V0.2.24 压边 10pt。
     ///
-    /// V0.2.24（AevonFloatGripOverlapV224）：Aevon(108) 反馈「手势区像在边缘线上而不是
-    /// 窗外紧贴边缘」—— 指尖瞄准边缘时经常落在边线内侧 1~3pt，那一点属于 App 内容。
-    /// 所有手柄**向窗内压边 10pt**（与窗外部分连成一体），边线两侧都算手势区。
+    /// V0.2.26（AevonFloatSthenoEdgeV226）：热区**布置**照抄 Stheno（Aevon(109) 调研定案）——
+    /// 其 GestureIntroduction 原文「手势区域为边缘外侧，竖屏上下横屏左右」：
+    /// 竖屏 = **顶 / 底两条全宽边条**（全宽最好瞄准，左右边条删除）+ 底部两角块
+    /// （Stheno 同款「边角滑动缩放」）。**手势功能保留我们自己的**：
+    /// 边条长按 0.3s = 移动、底边双击 = 关闭、角块 = 缩放（Stheno 的上滑关闭 /
+    /// 双点缩小 / 长按换向不引入）。
     private func installOutsideGestureHandles(width: CGFloat, height: CGFloat) {
         let b = AevonWindowView.barThickness
         let c = AevonWindowView.cornerSize
         let o = AevonWindowView.gripOverlap
         let handles: [(UIRectEdge, CGRect, UIView.AutoresizingMask)] = [
-            // 两个下角块（缩放）：窗外 c + 向窗内压边 o
+            // 两个下角块（缩放）：窗外 c + 向窗内压边 o。
+            // 角块与底边条的 frame **刻意不重叠**（底边条只铺两角块之间）：
+            // 角块后压在窗内边缘 o=10pt 上，边条补足其余全宽 ——
+            // 两类手柄在任意一点都只有一方命中，窗内手势与全局通道不会给出两种答案。
             ([.bottom, .left],  CGRect(x: -c, y: height - o, width: c + o, height: c + o),
              [.flexibleTopMargin]),
             ([.bottom, .right], CGRect(x: width - o, y: height - o, width: c + o, height: c + o),
              [.flexibleLeftMargin, .flexibleTopMargin]),
-            // 三条边条（长按拖动移动）：窗外 b + 向窗内压边 o
-            ([.bottom],         CGRect(x: c, y: height - o, width: max(0, width - 2 * c), height: b + o),
+            // 底边条（长按拖动移动 + 双击关闭）：全宽铺进两角块之间
+            ([.bottom],         CGRect(x: o, y: height - o, width: max(0, width - 2 * o), height: b + o),
              [.flexibleWidth, .flexibleTopMargin]),
-            ([.left],           CGRect(x: -b, y: 0, width: b + o, height: max(0, height - c)),
-             [.flexibleHeight]),
-            ([.right],          CGRect(x: width - o, y: 0, width: b + o, height: max(0, height - c)),
-             [.flexibleLeftMargin, .flexibleHeight]),
+            // 顶边条（长按拖动移动）：全宽，Stheno 竖屏「上下」的另一条
+            ([.top],            CGRect(x: 0, y: -b, width: width, height: b + o),
+             [.flexibleWidth, .flexibleBottomMargin]),
         ]
         for (edges, rect, mask) in handles {
             guard rect.width > 0, rect.height > 0 else { continue }
@@ -419,6 +469,7 @@ final class AevonWindowView: UIView {
         case .corner:
             if isLiveResizing {
                 isLiveResizing = false
+                removeResizeSnapshot()
                 transform = .identity
                 layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
                 frame = resizeOriginFrame
@@ -529,9 +580,15 @@ final class AevonWindowView: UIView {
     /// 进入「实时缩放」：锚点挪到固定点，内部一个属性都不动。
     /// V0.2.24（AevonFloatRoundResizeV224）：Aevon(108) 反馈缩放中四角变直角 ——
     /// 不再临时关圆角/裁剪（圆角全程保持，场景原生布局后离屏合成成本也可控）。
+    /// V0.2.26（AevonFloatSnapResizeV226）：Aevon(1) 反馈缩放依旧卡顿 ——
+    /// 实时内容是跨进程远程图层（整屏 430×932@3x），每帧都被圆角掩膜重采样，
+    /// 这是卡顿的根源。手势开始时把当前画面冻结成一张静态图接管显示
+    /// （PullOverX freezeVideoFrameForInteraction / setInteractiveRenderingPerformanceMode
+    /// 同款），抬手恢复真实内容 —— 逐帧成本从「远程大表面+掩膜」降为「一张本地小图」。
     private func beginLiveResize(anchor: CGPoint) {
         isLiveResizing = true
         resizeAnchor = anchor
+        installResizeSnapshot()
         // 改锚点后必须立刻补位置，否则窗口会跳：position = 固定点在父视图的坐标
         let fixed = CGPoint(x: frame.origin.x + anchor.x * frame.width,
                             y: frame.origin.y + anchor.y * frame.height)
@@ -539,11 +596,49 @@ final class AevonWindowView: UIView {
         layer.position = fixed
     }
 
+    // MARK: - 缩放快照冻结（V0.2.26，AevonFloatSnapResizeV226）
+
+    private var resizeSnapshotView: UIImageView?
+
+    /// 把内容区当前画面冻结成静态图盖在最上层。**不隐藏实时内容** ——
+    /// 若远程图层渲染进上下文失败（跨进程表面不保证可抓），快照就是透明的，
+    /// 底下实时内容照常显示，行为退回 0.2.25 而不会黑屏（结构性兜底）。
+    private func installResizeSnapshot() {
+        guard resizeSnapshotView == nil else { return }
+        let bounds = contentClip.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        var image: UIImage?
+        let exception = AevonShieldRun {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = contentClip.layer.contentsScale
+            let renderer = UIGraphicsImageRenderer(size: bounds.size, format: format)
+            image = renderer.image { ctx in
+                contentClip.layer.render(in: ctx.cgContext)
+            }
+        }
+        guard exception == nil, let image, image.size.width > 1 else { return }
+        let snapshot = UIImageView(image: image)
+        snapshot.frame = contentClip.frame
+        snapshot.contentMode = .scaleToFill
+        snapshot.layer.cornerRadius = AevonWindowView.cornerRadius
+        snapshot.layer.masksToBounds = true
+        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        snapshot.isUserInteractionEnabled = false
+        addSubview(snapshot)
+        resizeSnapshotView = snapshot
+    }
+
+    private func removeResizeSnapshot() {
+        resizeSnapshotView?.removeFromSuperview()
+        resizeSnapshotView = nil
+    }
+
     /// 抬手：把矩阵换成真实 frame，只在这一下做一次完整布局。
     private func finishEdgeResize() {
         guard isLiveResizing else { return }
         let factor = max(0.05, transform.a)
         isLiveResizing = false
+        removeResizeSnapshot()
 
         let anchor = resizeAnchor
         transform = .identity
