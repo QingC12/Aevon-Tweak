@@ -1695,6 +1695,60 @@ jobs:
           done
           echo "V0.2.18 校验: 跳跃 12pt（+50%）+ 放大 1.30 + 阻尼 0.34 + 命中改 bounds + 手指在屏时三个定时器全部让路（只认抬手）已就位"
 
+          # ---- V0.2.19（Aevon(104) 判读）：右缘呼盘必须服从设定热区 ----
+          #
+          # 用户的原话：「为什么现在整个屏幕右侧都能触发手势圆盘，而不是根据我们设定的
+          # 触发热区决定？」
+          #
+          # 日志只给了这一条答案：Aevon(104) 的 16 次系统手势 began，y = 118 / 128 / 183 /
+          # 252 / 259 / 266 / 279 / 292 / 295 / 307 / 360 / 362 / 370 / 417 / 422 / 479 /
+          # 486 / 528 / 530 / 532 / 543 / 754 / 767 / 773 / 795 / 835 —— 从状态栏一路到 Dock。
+          # 用户设的带高是 28%（y ≥ 670），16 次里 12 次在带外仍然呼了盘。
+          # 同批日志里 App 侧识别器是**正确**的（13:49:42.948「起手 (422,532) 距右缘 8pt →
+          # 不接收（y=532 需 ≥670）」），桌面热区条也是正确的（18pt × 267pt，y 664~932）——
+          # 唯独 systemgesture 这条用得最多的通道，判据一直只有 dx / dy，从不看几何。
+          #
+          # 这个闸必须落在 `.began`、且必须在判向之前：带外就立刻 Failed 归还 App，
+          # 连 began 都不扣。如果放在判向里，手势已经被扣住几十毫秒，App 的那几十毫秒就丢了。
+          grep -q 'private static func bandRejectReason(for point: CGPoint) -> String?' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::系统手势通道没有热区闸（AevonSysEdgeBandGateV219）"; exit 1; }
+          BEGAN_LINE="$(grep -n 'case .began:' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | head -1 | cut -d: -f1)"
+          GATE_LINE="$(grep -n 'if let why = Self.bandRejectReason(for: point)' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | head -1 | cut -d: -f1)"
+          DIR_LINE="$(grep -n 'dx <= -distance' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | head -1 | cut -d: -f1)"
+          [ -n "$BEGAN_LINE" ] && [ -n "$GATE_LINE" ] && [ -n "$DIR_LINE" ] \
+            || { echo "::error::找不到 began / 热区闸 / 判向 三个锚点（行号 BEGAN=$BEGAN_LINE GATE=$GATE_LINE DIR=$DIR_LINE）"; exit 1; }
+          [ "$BEGAN_LINE" -lt "$GATE_LINE" ] \
+            || { echo "::error::热区闸不在 .began 分支里（BEGAN=$BEGAN_LINE GATE=$GATE_LINE）"; exit 1; }
+          [ "$GATE_LINE" -lt "$DIR_LINE" ] \
+            || { echo "::error::热区闸在判向之后了（GATE=$GATE_LINE DIR=$DIR_LINE）—— 带外时手势已经被扣住"; exit 1; }
+          # 闸里必须真的做「带顶判定 + Failed + 不扣 tracking」三件事
+          grep -q 'guard point.y < band.minY else { return nil }' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::热区闸没有判带顶（band.minY）"; exit 1; }
+          grep -q 'AevonRightEdge.band(in: bounds)' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::热区闸没有读用户设定的带几何（AevonRightEdge.band）"; exit 1; }
+          # ⛔ 不许用 began 落点去判宽度：Aevon(104) 真实起手距右缘 5~13pt，
+          #   而 began 落点距右缘 20~36pt（手指已经划掉的那段）—— 拿它比带宽，
+          #   8pt 带宽一次都过不了，等于把整条通道判死。
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | grep -q 'let widthLimit'; then
+            echo "::error::热区闸又用 began 落点判宽度了（那是假判据，8pt 带宽会把带内起手也判成带外）"; exit 1
+          fi
+          # 带外不许再指向「右缘接管带」这个 0.2.17 已撤掉的开关
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | grep -q '开关未打开'; then
+            echo "::error::带外落点又提示「开关未打开」了（RightEdgeTakeover 0.2.17 已从设置页撤掉）"; exit 1
+          fi
+          grep -q '带外·不在热区' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::带外落点没有改成如实的「不在热区」自述（AevonMissReasonV219）"; exit 1; }
+          if grep -q '起手应在 App 侧带内' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
+            echo "::error::收养手指的日志又断言「起手应在带内」（带外的呼盘也会打这一行，纯误导）"; exit 1
+          fi
+          for s in AevonSysEdgeBandGateV219 AevonMissReasonV219; do
+            grep -q "$s" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+              || { echo "::error::V0.2.19 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.2.19 标记 $s 未编入二进制"; exit 1; }
+          done
+          echo "V0.2.19 校验: 系统手势通道已在 began 里先验热区高度（band.minY），带外立刻 Failed 归还 App；带外自述不再指向已撤开关"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

@@ -91,6 +91,36 @@ final class AevonSysEdgeV213: NSObject {
     /// 斜率判据：横向必须明显大于纵向（1.2 倍），与 App 侧、SB 热区保持同一套语义。
     private let slopeRatio: CGFloat = 1.2
 
+    // MARK: - 热区几何闸（V0.2.19 / AevonSysEdgeBandGateV219）
+
+    /// 起手点是不是落在用户设定的热区里。返回 nil = 在带内；非 nil = 一句「为什么不在」。
+    ///
+    /// **为什么这个闸必须有**（Aevon(104) 的直接证据）：
+    /// 那 16 次 began 的 y 是 118 / 128 / 183 / 252 / 259 / 266 / 279 / 292 / 295 / 307 /
+    /// 360 / 362 / 370 / 417 / 422 / 479 / 486 / 528 / 530 / 532 / 543 / 754 / 767 / 773 /
+    /// 795 / 835 —— 整条右边缘从状态栏到 Dock 全都在呼盘，16 次里 12 次在带外。
+    /// 用户设定的带高是 28%（y ≥ 670 才该生效）。原因不复杂：
+    /// `edges` 和传给私有 init 的 `edgeRegion` 对这类识别器不成立（0.2.13 已证），
+    /// 系统按「右侧全高 × 约 30pt」喂触摸，而本通道的判据一直只有 dx / dy 两条 ——
+    /// 于是「热区」这个设置对这条**最快、用得最多**的通道完全无效。
+    ///
+    /// **为什么只判高度、不判宽度**：同一次比对里，`[右缘]` 记下的**真实起手**距右缘
+    /// 只有 5 / 6 / 7 / 8 / 9 / 13pt（全部贴边），而识别器 began 落点距右缘 20 / 22 / 23 /
+    /// 24 / 26 / 27 / 28 / 30 / 32 / 33 / 34 / 35 / 36pt —— 差的这 20~36pt 是「从边缘落手
+    /// 到判定 began」之间手指已经划掉的距离，不是起手位置。拿 began 落点去和带宽比，
+    /// 带内的起手会被自己判成带外（8pt 带宽一个都过不了），那是**假判据**。
+    /// 而系统边缘识别器本来只对「从边缘起手」的手势 began，宽度这件事 iOS 已经替我们保证了；
+    /// 带宽滑条真正生效的两处是 App 内识别器（8pt，日志实测精确拒绝）和桌面热区条（18pt）。
+    /// 所以这里只钉高度 —— 那是唯一既能拿到真值、又确实越了界的一项。
+    private static func bandRejectReason(for point: CGPoint) -> String? {
+        let bounds = UIScreen.main.bounds
+        let band = AevonRightEdge.band(in: bounds)
+        guard band.width > 1, band.height > 1 else { return nil }
+        guard point.y < band.minY else { return nil }
+        let needPercent = Int(((bounds.maxY - point.y) / bounds.height * 100).rounded()) + 1
+        return "y=\(Int(point.y)) 在带顶 y=\(Int(band.minY)) 之上，需带高 ≥\(needPercent)%，当前 \(Int(AevonRightEdge.heightPercent))%"
+    }
+
     // MARK: - 安装
 
     func install(attempt: Int = 0) {
@@ -176,6 +206,17 @@ final class AevonSysEdgeV213: NSObject {
             fired = false
             tracking = true
             beganPoint = point
+            // V0.2.19（AevonSysEdgeBandGateV219）：**先验热区，再谈方向**。
+            //
+            // 这一行就是「整个屏幕右侧都能呼盘」的修复点。带外则 tracking 保持 false、
+            // 立刻 Failed —— 连 began 都不扣住，App 那边一根头发都不会少。
+            if let why = Self.bandRejectReason(for: point) {
+                cancelBegunGuard()
+                tracking = false
+                AevonSysEdgeForceFail(gesture)
+                AevonLog.info("[系统手势] 起手在热区外（\(why)）→ Failed 归还 App，不呼盘（AevonSysEdgeV213 AevonSysEdgeBandGateV219）")
+                return
+            }
             AevonLog.info("[系统手势] 边缘识别器 began，落点 (\(Int(point.x)),\(Int(point.y)))（AevonSysEdgeV213）")
             startBegunGuard()
 

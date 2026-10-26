@@ -903,3 +903,12 @@ __attribute__((used)) static const char AevonRingJumpPunchV218Marker[] = "AevonR
 __attribute__((used)) static const char AevonRingHitStableV218Marker[] = "AevonRingHitStableV218";
 __attribute__((used)) static const char AevonRingFingerDownV218Marker[] = "AevonRingFingerDownV218";
 __attribute__((used)) static const char AevonRingCloseOnLiftV218Marker[] = "AevonRingCloseOnLiftV218";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.2.19（Aevon(104) 判读）：右缘呼盘必须服从设定热区
+ *   AevonSysEdgeBandGateV219 = 系统手势通道在 began 里先验热区高度，带外立刻 Failed
+ *                              （Aevon(104) 16 次 began 里 12 次越界，y 从 118 到 835 全屏分布）
+ *   AevonMissReasonV219      = 带外落点不再提示「去设置里打开右缘接管带」（该开关 0.2.17 已撤）
+ * ────────────────────────────────────────────────────────────────── */
+__attribute__((used)) static const char AevonSysEdgeBandGateV219Marker[] = "AevonSysEdgeBandGateV219";
+__attribute__((used)) static const char AevonMissReasonV219Marker[] = "AevonMissReasonV219";

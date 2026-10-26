@@ -193,20 +193,22 @@ enum AevonRightEdge {
         let gap = Int((bounds.maxX - point.x).rounded())
         let needWidth = gap                      // contains 要求 point.x >= r.minX，即 gap <= 带宽
         let needPercent = Int(((bounds.maxY - point.y) / bounds.height * 100).rounded()) + 1
-        // 开关关着时「带内」也进不来 —— 必须先单独判，否则会把它误报成「高度差」
-        // （band 的几何是照样算的，widthShort/heightShort 都为 false，会掉进最后一个分支）。
-        guard enabled else {
-            return "带外·开关未打开（落点距右缘 \(gap)pt，本可在带内；到设置里打开「右缘接管带」即可）"
-        }
+        // V0.2.19（AevonSysEdgeBandGateV219）：这里原来有一条
+        //   `guard enabled else { return "带外·开关未打开（…到设置里打开「右缘接管带」即可）" }`
+        // 而 `enabled` 读的是 `RightEdgeTakeover` —— 那个开关在 0.2.15 随 SB 侧吞摸一起下线、
+        // 0.2.17 从设置页撤掉，代码里恒 false。于是 Aevon(104) 的日志里每一行带外记录
+        // 都变成「去设置里打开一个已经不存在的开关」（13:49:11.663 / 13:49:21.757 等 11 处）。
+        // 带外的真实含义只有一个：这个落点不在你设定的热区里，本次整段交回 App。
+        // 所以这里直接走几何分支，把「差多少」算给用户看。
         let widthShort = point.x < r.minX
         let heightShort = point.y < r.minY
         if widthShort, heightShort {
-            return "带外·宽度和高度都差（距边 \(gap)pt 需 ≥\(needWidth)pt，y=\(Int(point.y)) 需带高 ≥\(needPercent)%；当前 \(Int(width))pt×\(heightPercent)%）"
+            return "带外·不在热区（距右缘 \(gap)pt 需带宽 ≥\(needWidth)pt，y=\(Int(point.y)) 需带高 ≥\(needPercent)%；当前 \(Int(width))pt×\(heightPercent)%）→ 整段交回 App（AevonMissReasonV219）"
         }
         if widthShort {
-            return "带外·宽度差（距边 \(gap)pt，需带宽 ≥\(needWidth)pt，当前 \(Int(width))pt）"
+            return "带外·不在热区（距右缘 \(gap)pt，需带宽 ≥\(needWidth)pt，当前 \(Int(width))pt）→ 整段交回 App（AevonMissReasonV219）"
         }
-        return "带外·高度差（y=\(Int(point.y)) 在带顶 y=\(Int(r.minY)) 之上，需带高 ≥\(needPercent)%，当前 \(Int(heightPercent))%）"
+        return "带外·不在热区（y=\(Int(point.y)) 在带顶 y=\(Int(r.minY)) 之上，需带高 ≥\(needPercent)%，当前 \(Int(heightPercent))%）→ 整段交回 App（AevonMissReasonV219）"
     }
 
     static func signature() -> String {
@@ -1842,7 +1844,7 @@ enum AevonEdgeEntry {
                 globalStart = point
                 globalFired = true          // 收养只喂圆盘，绝不再走触发逻辑
                 lastTouchPoint = point
-                AevonLog.info("[右缘] 收养手指（SB 侧未登记，起手应在 App 侧带内）→ 继续喂圆盘（AevonEdgeAdoptV207）")
+                AevonLog.info("[右缘] 收养手指（这根未经 SB 侧登记，只登记喂圆盘、不吞）→ 继续喂圆盘（AevonEdgeAdoptV207）")
             }
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
