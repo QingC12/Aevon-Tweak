@@ -604,6 +604,29 @@ enum AevonEdgeEntry {
         }
     }
 
+    // MARK: - V0.2.20 右缘带几何发布（AevonAppGeomNotifyV220）
+
+    /// 上次发布到共享内存的几何（变更检测：值没变不写状态位、不 post guardzone）。
+    private static var lastNotifiedBandW: Int = -1
+    private static var lastNotifiedBandH: Int = -1
+
+    /// 把右缘带几何（RightEdgeWidth / RightEdgeHeight，已 clamp）写进 notify(3)
+    /// 共享内存 bit48-63。三个时机调用：SB 加载完成 / 设置变更通知 / 0.2 秒轮询兜底。
+    ///
+    /// 为什么 App 侧不再自己读偏好域：Aevon(105) 铁证 —— 抖音（沙盒最严）读不到
+    /// com.Aevon 域，App 侧静默落回 fallback 46pt×60%，「屏幕 50% 左右呼出圆盘」。
+    /// notify 状态在沙盒 App 里必可读（bit39 圆盘位已验证多年），几何从今天起
+    /// 只认它；App 侧读不到一律 fail-closed（只加载、不接管）。
+    static func syncBandGeometryToNotify() {
+        let w = Int(AevonRightEdge.width.rounded())
+        let h = Int(AevonRightEdge.heightPercent.rounded())
+        guard w >= 1, h >= 1 else { return }
+        guard w != lastNotifiedBandW || h != lastNotifiedBandH else { return }
+        AevonNotifySetBand(Double(w), Double(h))
+        lastNotifiedBandW = w
+        lastNotifiedBandH = h
+    }
+
     // MARK: - 触发区实时生效（V0.0.26）
 
     /// 设置里改完立刻生效的两条通道：
@@ -681,6 +704,9 @@ enum AevonEdgeEntry {
         // V0.0.34：SpringBoard 启动时清一次圆盘状态位 —— 防止 SB 崩溃时圆盘开着、
         // bit39 残留 1，导致前台 App 在下次启动后被 Guard 永久拦截（fail-open 方向）。
         AevonNotifySetRing(0)
+        // V0.2.20（AevonAppGeomNotifyV220）：启动即把右缘带几何发布到共享内存，
+        // App 侧（含沙盒最严的抖音）从这条通道读几何，不再各自读偏好域。
+        syncBandGeometryToNotify()
         let timer = Timer(timeInterval: 0.2, repeats: true) { _ in
             AevonPrefs.synchronize()
             // V0.0.31（AevonRingPinnedV31）：轮询只管触发区指纹 ——
@@ -690,6 +716,9 @@ enum AevonEdgeEntry {
             // V0.2.10（AevonAppBlindHoldV210）：顺手盯前台 App 换人 —— 换成新 App 的
             // 头几秒里，App 侧的识别器可能还没挂上，那几秒不许呼盘。
             noteForegroundChange()
+            // V0.2.20（AevonAppGeomNotifyV220）：几何变更通知万一丢了（设置进程被杀），
+            // 0.2 秒轮询兜底同步（内部有变更检测，值没变不写不 post）。
+            syncBandGeometryToNotify()
             // V0.2.10（AevonGeomOverlayV210）：触发区 / 接管带的可视化跟着滑条走。
             checkPreviewRequest()
             AevonGeometryOverlay.sync()
@@ -2516,6 +2545,8 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         AevonRingStore.refreshFromSettings()
         AevonEdgeEntry.checkTriggerZoneChange()
         AevonEdgeEntry.syncGuardConfig()
+        // V0.2.20（AevonAppGeomNotifyV220）：右缘带宽/带高改了 → 立刻发布到共享内存
+        AevonEdgeEntry.syncBandGeometryToNotify()
     }
 }
 

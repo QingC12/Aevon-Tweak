@@ -32,6 +32,11 @@ int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled)
 /// SpringBoard 在圆盘开 / 关时调用；Guard 每条 sendEvent 直接读共享内存，
 /// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
 void AevonNotifySetRing(int on);
+/// V0.2.20（AevonAppGeomNotifyV220）：右缘带几何 → 共享内存 bit48-63
+/// （48-55 = 带宽 pt，56-63 = 带高 %；0 = 未发布）。读-改-写保留 zone/enabled/ring/版本位。
+/// App 侧只认这里 —— 沙盒 App 读不到 com.Aevon 域（Aevon(105)：抖音按 fallback
+/// 46pt×60% 误判几何，「屏幕 50% 呼出圆盘」），notify 状态是沙盒里验证多年的通道。
+void AevonNotifySetBand(double w, double h);
 /// V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位。返回 1 = 圆盘正展开，0 = 已收起。
 ///
 /// 为什么 App 侧必须能读：Aevon(98) 事故里 App 识别器停在 .began 之后，抬手帧被

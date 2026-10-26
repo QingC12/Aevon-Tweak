@@ -1753,6 +1753,30 @@ jobs:
           done
           echo "V0.2.19 校验: 系统手势通道已在 began 里先验热区高度（band.minY），带外立刻 Failed 归还 App；带外自述不再指向已撤开关"
 
+          # ---- V0.2.20（Aevon(105) 判读）：App 侧几何只认共享内存，读不到 fail-closed ----
+          # 事故：抖音（沙盒最严）读不到 com.Aevon 域的带宽/带高，App 侧静默落回
+          # fallback 46pt×60% —— 用户设 8pt×28% 实际生效 46pt×60%，
+          # 「全屏 App 屏幕 50% 左右呼出圆盘」+ App 纵向滚动被合法取消。
+          # 修法：SB 把几何写进 notify(3) 共享内存 bit48-63（AevonNotifySetBand），
+          # App 侧只读共享内存（AevonAppBandGeometry），读不到一律不挂识别器。
+          strings "$APP_DYLIB" | grep -q 'AevonAppGeomNotifyV220' \
+            || { echo "::error::App 侧缺几何共享内存标记（AevonAppGeomNotifyV220）"; exit 1; }
+          strings "$APP_DYLIB" | grep -q 'AevonAppGeomFailClosedV220' \
+            || { echo "::error::App 侧缺 fail-closed 标记（AevonAppGeomFailClosedV220）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonNotifySetBand' \
+            || { echo "::error::主插件缺几何发布函数（AevonNotifySetBand）—— App 侧将永远拿不到几何"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            | grep -q 'AevonAppBandGeometry' \
+            || { echo "::error::App 侧几何读取函数被删 —— 沙盒 App 将退回猜 fallback 的老路"; exit 1; }
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" | grep -q 'AevonAppPrefDouble'; then
+            echo "::error::App 侧几何不得再读偏好域（0.2.19 前的 fallback 46/60 就是 Aevon(105) 事故根源）"
+            exit 1
+          fi
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            | grep -q 'syncBandGeometryToNotify' \
+            || { echo "::error::SB 侧几何发布函数被删 —— App 侧 fail-closed 将永不挂载"; exit 1; }
+          echo "V0.2.20 校验: 几何走共享内存（bit48-63）+ App 侧 fail-closed（读不到不挂识别器）已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

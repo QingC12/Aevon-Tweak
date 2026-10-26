@@ -16,7 +16,7 @@
  *   版本高 8 位 (>>40) == 0x34、圆盘位 = bit39。
  * 读不到 / 版本位不对一律返回 0（= 认为圆盘已收起）—— 出错方向必须是
  * 「放开 App」，因为「以为圆盘还开着」的代价是整台设备的滚动被压死。 */
-static int AevonAppRingBit(void) {
+static int AevonAppGuardToken(void) {
     static int token = -1;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -24,11 +24,40 @@ static int AevonAppRingBit(void) {
             token = -1;
         }
     });
+    return token;
+}
+
+static int AevonAppRingBit(void) {
+    int token = AevonAppGuardToken();
     if (token < 0) { return 0; }
     uint64_t pack = 0;
     if (notify_get_state(token, &pack) != NOTIFY_STATUS_OK) { return 0; }
     if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
     return (pack & (1ULL << 39)) ? 1 : 0;
+}
+
+/* V0.2.20（AevonAppGeomNotifyV220）：右缘带几何只认 notify(3) 共享内存 bit48-63。
+ *
+ * Aevon(105) 铁证：抖音（沙盒最严）读不到 com.Aevon 域，旧代码静默落回
+ * fallback 46pt×60% —— 用户实际设的是 8pt×28%，结果「屏幕 50% 左右呼出圆盘」，
+ * App 的纵向滚动还被合法取消。「猜出来的大几何」比「没有几何」危险得多：
+ * 它既扩大误呼盘范围，又扩大触摸取消范围。
+ * 现在几何由 SB 发布（AevonNotifySetBand：加载完成 / 设置变更 / 0.2s 轮询兜底），
+ * 这里只读不猜；读不到（token 失效 / 版本位不对 / 值为 0）返回 NO，
+ * 调用方必须 fail-closed：只加载、不挂识别器、一根手指都不接收。
+ * 出错方向必须是「不接管」—— 错几何接管 = 本次事故本体。 */
+static BOOL AevonAppBandGeometry(double *outW, double *outH) {
+    int token = AevonAppGuardToken();
+    if (token < 0) { return NO; }
+    uint64_t pack = 0;
+    if (notify_get_state(token, &pack) != NOTIFY_STATUS_OK) { return NO; }
+    if (((pack >> 40) & 0xFF) != 0x34) { return NO; }
+    double w = (double)((pack >> 48) & 0xFF);
+    double h = (double)((pack >> 56) & 0xFF);
+    if (w < 1.0 || h < 1.0) { return NO; }
+    if (outW != NULL) { *outW = w; }
+    if (outH != NULL) { *outH = h; }
+    return YES;
 }
 
 /*
@@ -322,20 +351,9 @@ static BOOL AevonAppInFloatingWindow(void) {
     return [bundle isEqualToString:mine];
 }
 
-static double AevonAppPrefDouble(NSString *key, double fallback) {
-    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
-                                                        CFSTR("com.Aevon"));
-    if (value == NULL) { return fallback; }
-    double result = fallback;
-    CFTypeID type = CFGetTypeID(value);
-    if (type == CFNumberGetTypeID()) {
-        CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, &result);
-    } else if (type == CFStringGetTypeID()) {
-        result = [(__bridge NSString *)value doubleValue];
-    }
-    CFRelease(value);
-    return result;
-}
+/* V0.2.20：偏好双值读取函数已删除 —— 几何参数（带宽/带高）从今天起只认
+ * 共享内存（AevonAppBandGeometry），沙盒 App 读偏好域猜 fallback 的路彻底封死
+ * （Aevon(105) 事故：抖音按 46pt×60% 误判几何）。布尔开关仍走 AevonAppPrefBool。 */
 
 #pragma mark - 真接管识别器（V0.2.1）
 
@@ -850,6 +868,8 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 - (void)start;
 /* V0.2.11：SpringBoard 收起圆盘 → 本进程收尾识别器（由 Darwin 通知触发） */
 - (void)handleRingClosed;
+/* V0.2.20（AevonAppGeomNotifyV220）：共享内存几何更新 → 重读并热更新识别器 */
+- (void)handleGeometryChanged;
 @end
 
 /* V0.2.11（AevonAppRingCloseReleaseV211）：Darwin 通知回调（C 函数，必须裸类型）。
@@ -864,6 +884,22 @@ static void AevonAppRingCloseCallback(CFNotificationCenterRef center,
     if (side == nil) { return; }
     dispatch_async(dispatch_get_main_queue(), ^{
         [side handleRingClosed];
+    });
+}
+
+/* V0.2.20（AevonAppGeomNotifyV220）：几何发布回调（C 函数，必须裸类型）。
+ * SB 每次写完共享内存几何（加载完成 / 设置变更 / 0.2s 轮询兜底）都 post
+ * `com.aevon.guardzone` —— 这里收到后回主线程重读，设置改完不用重启 App。 */
+static void AevonAppGeometryCallback(CFNotificationCenterRef center,
+                                     void *observer,
+                                     CFNotificationName name,
+                                     const void *object,
+                                     CFDictionaryRef userInfo) {
+    (void)center; (void)name; (void)object; (void)userInfo;
+    AevonAppSide *side = (__bridge AevonAppSide *)observer;
+    if (side == nil) { return; }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [side handleGeometryChanged];
     });
 }
 
@@ -967,20 +1003,21 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
      * Aevon(87) 证明注入/读域/日志通道全通后，真接管就是这个功能的本体。
      * 键从未被写过（日志确认「域里没有这个键」），改默认值不影响任何已写盘设备。 */
     BOOL enabled = AevonAppPrefBool(@"AppSideEnabled", YES);
-    _bandWidth = AevonAppPrefDouble(@"RightEdgeWidth", 46.0);
-    _heightPercent = AevonAppPrefDouble(@"RightEdgeHeight", 60.0);
 
     AevonAppLog(@"0.2.4 App 侧已加载（全 App 白名单+排除表）：进程=%@ pid=%d 系统=%@ 通道=%@（AevonAppAllAppsV204）",
                 gAevonAppBundleID, (int)getpid(),
                 [UIDevice currentDevice].systemVersion ?: @"?",
                 gAevonAppChannel);
 
-    /* 配置读不到时这里会打印 fallback 值 —— 这一行就是 Q2 的答案：
-     * 如果显示「域里没有键」，说明 App 沙盒读不到 com.Aevon，路 B 要换配置通道。 */
+    /* 配置读不到时这里会打印「域里没有这个键」 —— 这一行就是 Q2 的答案（0.2.0 探针遗产）。
+     * V0.2.20（AevonAppGeomNotifyV220）：带宽/带高不再读 com.Aevon 域（沙盒 App 读不到
+     * 就猜 fallback，正是 Aevon(105) 事故根源），只认 SB 发布到共享内存的几何。 */
     CFPropertyListRef rawEnabled = CFPreferencesCopyAppValue(CFSTR("AppSideEnabled"), CFSTR("com.Aevon"));
-    AevonAppLog(@"配置读取：AppSideEnabled=%@（原始值 %@）带宽=%.0f 带高=%.0f%%",
+    BOOL geomOK = AevonAppBandGeometry(&_bandWidth, &_heightPercent);
+    AevonAppLog(@"配置读取：AppSideEnabled=%@（原始值 %@）几何=%@（%.0fpt×%.0f%%，来源=共享内存）（AevonAppGeomNotifyV220）",
                 enabled ? @"开" : @"关",
                 rawEnabled ? @"有" : @"域里没有这个键",
+                geomOK ? @"已发布" : @"未发布",
                 _bandWidth, _heightPercent);
     if (rawEnabled != NULL) { CFRelease(rawEnabled); }
 
@@ -1003,6 +1040,26 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
                                     CFSTR("com.aevon.ringclose"),
                                     NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
+
+    /* V0.2.20（AevonAppGeomNotifyV220）：SB 每次发布几何（含设置变更 / 0.2s 轮询）
+     * 都会 post guardzone —— 在这里跟上，设置里改完带宽/带高不重启动态生效。
+     * SB 写完才 post，读到的一定是新值，零竞态。 */
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    (__bridge const void *)(self),
+                                    AevonAppGeometryCallback,
+                                    CFSTR("com.aevon.guardzone"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+
+    /* V0.2.20（AevonAppGeomFailClosedV220）：几何未发布 → 只加载、不挂识别器。
+     * SB 加载完成时就会发布几何，正常情况下这里永远有值；没有 = SB 侧没在跑
+     * （插件被禁用 / 版本太老），此时 SB 的系统手势通道同样不会呼盘 ——
+     * App 侧保持零动作才是与全局一致的正确姿态。becomeActive 仍会重试挂载，
+     * 万一几何晚到（SB 慢启动）也能自愈。 */
+    if (!geomOK) {
+        AevonAppLog(@"几何未发布（共享内存无带宽/带高）→ fail-closed：只加载、不挂识别器、一根手指都不接收（AevonAppGeomFailClosedV220）");
+        return;
+    }
 
     /* V0.2.10（AevonAppMountFastV210）：这里原来是**固定等 1 秒**再第一次尝试挂载，
      * 叠加构造阶段那 0.6 秒，冷启动 App 的盲期长达 1.6 秒起步 —— Aevon(96) 抖音
@@ -1077,8 +1134,21 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
         return;
     }
 
-    _bandWidth = AevonAppPrefDouble(@"RightEdgeWidth", _bandWidth);
-    _heightPercent = AevonAppPrefDouble(@"RightEdgeHeight", _heightPercent);
+    /* V0.2.20（AevonAppGeomNotifyV220）：挂载前最后一道几何闸。
+     * 几何只认共享内存（start 里已读过一次，这里重读拿最新值）；
+     * 没有 = fail-closed，绝不挂识别器（Aevon(105)：猜出来的 46pt×60% 让抖音
+     * 在屏幕 50% 高度误呼圆盘）。几何晚到时 becomeActive / guardzone 通知会再进来。 */
+    double geomW = 0, geomH = 0;
+    if (!AevonAppBandGeometry(&geomW, &geomH)) {
+        static BOOL geomAbortLogged = NO;
+        if (!geomAbortLogged) {
+            geomAbortLogged = YES;
+            AevonAppLog(@"挂载中止：几何未发布 → fail-closed，只加载、不动作（AevonAppGeomFailClosedV220）");
+        }
+        return;
+    }
+    _bandWidth = geomW;
+    _heightPercent = geomH;
 
     if (_gesture == nil) {
         _gesture = [[AevonAppTakeoverGesture alloc] initWithTarget:nil action:nil];
@@ -1093,9 +1163,30 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
      * SB 收到后才允许在这台 App 上呼盘；没有这条信号的 App 会被当成盲期而放弃呼盘
      * （宁可少呼一次，也绝不让圆盘和 App 同时响应同一根手指）。 */
     AevonAppPostReady();
-    AevonAppLog(@"识别器已挂载：窗口=%@ 尺寸=%.0fx%.0f 带宽=%.0f 带高=%.0f%% 模式=真接管（delaysTouchesBegan=YES cancelsTouchesInView=YES，判向失败整段补投；已广播 appready）（AevonAppTakeoverV201 AevonAppReadyV210 AevonAppMountFastV210）",
+    AevonAppLog(@"识别器已挂载：窗口=%@ 尺寸=%.0fx%.0f 带宽=%.0f 带高=%.0f%%（几何=共享内存）模式=真接管（delaysTouchesBegan=YES cancelsTouchesInView=YES，判向失败整段补投；已广播 appready）（AevonAppTakeoverV201 AevonAppReadyV210 AevonAppMountFastV210 AevonAppGeomNotifyV220）",
                 NSStringFromClass([window class]), screen.width, screen.height,
                 _bandWidth, _heightPercent);
+}
+
+/* V0.2.20（AevonAppGeomNotifyV220）：共享内存几何更新 → 热更新识别器。
+ * 已挂载 → 只改参数；未挂载且几何有效 → 立即尝试挂载（SB 晚发布也能自愈）；
+ * 值没变不写日志（0.2s 轮询兜底会反复 post）。 */
+- (void)handleGeometryChanged {
+    double geomW = 0, geomH = 0;
+    if (!AevonAppBandGeometry(&geomW, &geomH)) { return; }
+    if (_installed) {
+        if (geomW == _bandWidth && geomH == _heightPercent) { return; }
+        AevonAppLog(@"几何更新：%.0fpt×%.0f%% → %.0fpt×%.0f%%（共享内存，热生效）（AevonAppGeomNotifyV220）",
+                    _bandWidth, _heightPercent, geomW, geomH);
+        _bandWidth = geomW;
+        _heightPercent = geomH;
+        if (_gesture != nil) {
+            _gesture.bandWidth = geomW;
+            _gesture.heightPercent = geomH;
+        }
+        return;
+    }
+    [self installWithAttempt:1];
 }
 
 @end

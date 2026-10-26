@@ -152,6 +152,29 @@ void AevonNotifySetRing(int on) {
     }
 }
 
+/* V0.2.20（AevonAppGeomNotifyV220）：右缘带几何 → 共享内存 bit48-63。
+ * Aevon(105) 铁证：抖音读不到 com.Aevon 域的 RightEdgeWidth/RightEdgeHeight，
+ * App 侧静默落回 fallback 46pt×60%（用户实际设的是 8pt×28%），屏幕中部右缘
+ * 左滑全部误呼圆盘、App 触摸还被合法取消。修法 = SB 把真实几何写进 notify 状态
+ * （沙盒 App 必可读，bit39 圆盘位已验证多年），App 侧只认它、读不到一律 fail-closed。
+ * bit48-55 = 带宽 pt（0 = 未发布），bit56-63 = 带高 %（0 = 未发布）。 */
+void AevonNotifySetBand(double w, double h) {
+    @try {
+        int token = AevonNotifyZoneToken();
+        if (token < 0) { return; }
+        uint64_t old = 0;
+        notify_get_state(token, &old);
+        uint64_t pack = (((old >> 40) & 0xFF) == 0x34) ? old : AEVON_NOTIFY_VER;
+        pack &= ~(0xFFULL << 48);
+        pack &= ~(0xFFULL << 56);
+        pack |= (((uint64_t)llround(w)) & 0xFFULL) << 48;
+        pack |= (((uint64_t)llround(h)) & 0xFFULL) << 56;
+        notify_set_state(token, pack);
+        notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
 /* V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位（bit39）。
  *
  * 这是全插件唯一「零时序、零事件依赖」的状态判据：不靠 Darwin 通知送达、
