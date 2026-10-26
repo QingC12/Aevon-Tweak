@@ -554,7 +554,13 @@ static char AevonInfoTextKey;
 - (void)tableView:(UITableView *)tableView
   willDisplayCell:(UITableViewCell *)cell
 forRowAtIndexPath:(NSIndexPath *)indexPath {
-    [super tableView:tableView willDisplayCell:cell forRowAtIndexPath:indexPath];
+    /* 注意：**不调用 super**。
+     * PSListController 继承的是 UIViewController（不是 UITableViewController），
+     * 它自身并没有实现这个方法 —— 调 super 既过不了编译（本工程 -Werror），
+     * 运行时也会 unrecognized selector。单元的显示内容由框架在
+     * cellForRowAtIndexPath / refreshCellContentsWithSpecifier: 里配好，
+     * 这里只负责在它上面补一个 ⓘ 按钮。 */
+    (void)indexPath;
     @try {
         id spec = nil;
         SEL specSelector = @selector(specifier);
