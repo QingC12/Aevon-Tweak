@@ -1527,6 +1527,37 @@ jobs:
             || { echo "::error::App 侧没读总开关 Enabled —— 关了插件 App 里还在接管"; exit 1; }
           echo "V0.2.15 校验: SB 侧吞摸下线（只留浮窗拖拽）+ 桌面手势条自己接触摸 + App 侧跟随总开关"
 
+          # ---- V0.2.16（Aevon(102)）：圆盘指针不再死绑在一条通道上 ----
+          #
+          # 15 次呼盘：`systemgesture` 9 / `appedge` 4 / `strip` 2。
+          # `presentRing` 把圆盘指针绑成呼盘来源的字符串，而 `systemgesture` 这个字符串
+          # 只被 0.1.13 就停手的 `AevonSystemGestureV105` 使用（P7-4「愿接=0」）——
+          # 绑上去就等于绑到一条死通道：
+          #   · 手指继续往圆心滑 → 一条 moved 都进不来，图标不高亮也不旋转 =「选不中」；
+          #   · 抬手 → ended 也进不来 → 指针一直挂着，只能等 1.2 秒超时后由下一次
+          #     触摸（圆盘自己的 touchesBegan）接管 =「必须抬手再摸一次」。
+          grep -q 'AevonRingPointerHandoffV216' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::圆盘缺指针通道交接 —— 呼盘通道一死，手指就再也选不中"; exit 1; }
+          test "$(grep -c 'AevonRingPointerHandoffV216' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift")" -ge 2 \
+            || { echo "::error::V0.2.16 标记不足两处（交接实现 + 交接日志）"; exit 1; }
+          grep -q 'pointerHandoffInterval: CFTimeInterval = 0.12' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::交接阈值不是 0.12s —— 比识别器 Failed 还慢，圆盘会愣一下"; exit 1; }
+          # 死绑门必须消失：moved / ended 一律走 claimPointer
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" | grep -q 'source == pointerSource'; then
+            echo "::error::圆盘又按 source 死绑指针 —— 绑到死通道就等于手指断粮"; exit 1
+          fi
+          # 系统手势喂料方与呼盘方必须是同一个字符串（以前 systemedge / systemgesture 各说各话）
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            | grep -q 'ring.remoteMoved(to: point, source: "systemgesture")' \
+            || { echo "::error::系统手势喂料源名与呼盘源名不一致 —— 圆盘收不到任何移动"; exit 1; }
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | grep -q '"systemedge"'; then
+            echo "::error::又出现 systemedge —— 与呼盘来源 systemgesture 不是同一个字符串"; exit 1
+          fi
+          # 圆盘一开就必须停止判向（否则判成纵向 → Failed → 断粮）
+          grep -q 'if fired, let ring = AevonRingMenu.presented' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::系统手势识别器在圆盘开着时还在判向 —— 会把圆盘的喂料一起判死"; exit 1; }
+          echo "V0.2.16 校验: 圆盘指针通道交接（0.12s 静默可换道）+ 源名统一 + 圆盘开启后只喂指针 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

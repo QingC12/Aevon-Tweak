@@ -179,6 +179,16 @@ final class AevonSysEdgeV213: NSObject {
             startBegunGuard()
 
         case .changed:
+            // V0.2.16（AevonRingPointerHandoffV216）：圆盘一开，这个识别器只剩「喂指针」一个职责。
+            //
+            // Aevon(102) 的账：手指从右缘往圆心（215,699）走，本来就是「左上斜向」，
+            // 而下面那段判向会把它判成纵向 → 主动 Failed → 之后一条 moved / ended 都发不出来。
+            // 9 次 `systemgesture` 呼盘的日志里，紧接着的都是「判为纵向 → Failed」，
+            // 圆盘从那一刻起就断粮 —— 手指继续滑没有任何反应，这就是「选不中图标」。
+            if fired, let ring = AevonRingMenu.presented {
+                ring.remoteMoved(to: point, source: "systemgesture")
+                return
+            }
             // 判向：向左（负 dx）且横向明显大于纵向。
             // 纵向 / 斜向 → 立刻 Failed，把触摸还给 App —— 这是「右缘竖滑照样滚屏」的保证。
             if abs(dy) > abs(dx), abs(dy) >= 6 {
@@ -197,14 +207,16 @@ final class AevonSysEdgeV213: NSObject {
             }
             // 圆盘已出：后续移动直接驱动圆盘跟手 / 旋转，不再走全局通道。
             if fired, let ring = AevonRingMenu.presented {
-                ring.remoteMoved(to: point, source: "systemedge")
+                ring.remoteMoved(to: point, source: "systemgesture")
             }
 
         case .ended, .recognized:
             cancelBegunGuard()
             tracking = false
-            if fired, let ring = AevonRingMenu.presented {
-                ring.remoteEnded(at: point, source: "systemedge")
+            // 圆盘开着就一定要把抬手送到 —— 漏掉这一帧圆盘就收不到 ended，
+            // 只能等 1.2 秒超时后的新触摸，表现就是「必须抬手再摸一次」。
+            if let ring = AevonRingMenu.presented {
+                ring.remoteEnded(at: point, source: "systemgesture")
             }
             fired = false
 
@@ -212,7 +224,7 @@ final class AevonSysEdgeV213: NSObject {
             cancelBegunGuard()
             tracking = false
             if fired, let ring = AevonRingMenu.presented {
-                ring.remoteCancelled(source: "systemedge")
+                ring.remoteCancelled(source: "systemgesture")
             }
             fired = false
 

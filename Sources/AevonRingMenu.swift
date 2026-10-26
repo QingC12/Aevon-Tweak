@@ -138,6 +138,13 @@ final class AevonRingMenu: UIView {
     private static let centerHitRadius: CGFloat = 40
     /// 指针事件中断多久之后允许新手指出手接管（自愈，防止某条通道漏发 ended 把圆盘卡死）
     private static let pointerStaleInterval: CFTimeInterval = 1.2
+    /// 指针**通道**交接阈值（V0.2.16 / AevonRingPointerHandoffV216）。
+    ///
+    /// 与上面那个 1.2 秒不是一回事：1.2 秒管的是「新手指出手」，这里管的是
+    /// 「同一根手指换一条通道继续喂」。用 0.12 秒是因为系统手势识别器判向失败后
+    /// 就再也不投递了（Aevon(102) 里 9 次呼盘全部在 0.1~0.5 秒内 Failed），
+    /// 交接必须比这个快，否则圆盘会明显「愣一下」。
+    private static let pointerHandoffInterval: CFTimeInterval = 0.12
     /// 圆心纵向位置（占屏幕高度比例）
     private static let verticalRatio: CGFloat = 0.75
 
@@ -184,6 +191,8 @@ final class AevonRingMenu: UIView {
     // V0.0.28：统一指针状态（唤出圆盘的那根手指 / 事后新按的手指走同一套逻辑）
     /// 当前指针归属（"" = 没有活动指针）。同一时刻只认一根手指。
     private var pointerSource = ""
+    /// 交接日志限频（AevonRingPointerHandoffV216）
+    private var pointerHandoffLogAt: CFTimeInterval = 0
     private var pointerPoint: CGPoint = .zero
     private var pointerAngle: CGFloat = 0
     private var pointerLastEventAt: CFTimeInterval = 0
@@ -662,6 +671,39 @@ final class AevonRingMenu: UIView {
                CACurrentMediaTime() - pointerLastEventAt < AevonRingMenu.pointerStaleInterval
     }
 
+    /// 这条通道现在能不能代表当前指针；能就直接通过，不能就按静默时长决定要不要交接。
+    ///
+    /// V0.2.16（AevonRingPointerHandoffV216）：**指针不能死绑在一条通道上。**
+    ///
+    /// Aevon(102) 的账（15 次呼盘：`systemgesture` 9 / `appedge` 4 / `strip` 2）：
+    /// 呼盘时把指针绑成呼盘来源的字符串，但 `systemgesture` 那个字符串在这一版**没有
+    /// 任何活着的喂料方** —— 唯一用它的 `AevonSystemGestureV105` 早在 0.1.13 就停手了
+    /// （探针 P7-4 的「愿接=0」就是它）。于是那 9 次呼盘之后：
+    ///   · 手指继续往圆心滑 → 一条 moved 都进不来，图标不高亮也不旋转 = 「选不中」；
+    ///   · 抬手 → ended 也进不来 → 指针一直挂在圆盘上，只能等 1.2 秒超时后
+    ///     由下一次触摸（圆盘自己的 `touchesBegan`）接管 = 「必须抬手再摸一次」。
+    ///
+    /// 现在：原通道静默 ≥0.12 秒就允许另一条通道接手，并**重设角度基线**
+    /// （两条通道报的坐标有差，不重设会被算成一次旋转，圆盘会跳一下）。
+    /// 原通道一直在动就抢不走，所以「同一次滑动被算两遍」的去重语义没丢。
+    private func claimPointer(source: String, at point: CGPoint) -> Bool {
+        let now = CACurrentMediaTime()
+        if pointerSource == source { return true }
+        let silence = now - pointerLastEventAt
+        if !pointerSource.isEmpty, silence < AevonRingMenu.pointerHandoffInterval { return false }
+        let previous = pointerSource
+        pointerSource = source
+        pointerPoint = point
+        pointerAngle = angle(from: ringCenter, to: point)
+        pointerLastEventAt = now
+        if isInsideRingArea(point) { pointerEverInsideRing = true }
+        if !previous.isEmpty, now - pointerHandoffLogAt > 0.5 {
+            pointerHandoffLogAt = now
+            AevonLog.info("[圆盘] 指针通道交接 \(previous) → \(source)（原通道已静默 \(Int(silence * 1000))ms，重设角度基线、不产生旋转）（AevonRingPointerHandoffV216）")
+        }
+        return true
+    }
+
     private func handlePointerBegan(at point: CGPoint, source: String) {
         guard AevonRingMenu.current === self, !isDismissing else { return }
         let now = CACurrentMediaTime()
@@ -685,7 +727,8 @@ final class AevonRingMenu: UIView {
     }
 
     private func handlePointerMoved(to point: CGPoint, source: String) {
-        guard AevonRingMenu.current === self, !isDismissing, source == pointerSource else { return }
+        guard AevonRingMenu.current === self, !isDismissing else { return }
+        guard claimPointer(source: source, at: point) else { return }
         pointerPoint = point
         pointerLastEventAt = CACurrentMediaTime()
         if isInsideRingArea(point) { pointerEverInsideRing = true }
@@ -713,7 +756,8 @@ final class AevonRingMenu: UIView {
     }
 
     private func handlePointerEnded(at point: CGPoint, source: String) {
-        guard AevonRingMenu.current === self, !isDismissing, source == pointerSource else { return }
+        guard AevonRingMenu.current === self, !isDismissing else { return }
+        guard claimPointer(source: source, at: point) else { return }
         cancelCenterHold()
         pointerPoint = point
         if isInsideRingArea(point) { pointerEverInsideRing = true }
@@ -760,7 +804,11 @@ final class AevonRingMenu: UIView {
     }
 
     private func handlePointerCancelled(source: String) {
-        guard source == pointerSource else { return }
+        if source != pointerSource {
+            // 不是当前指针那条通道报的取消：只有原通道已经静默（它死了）才顺手清，
+            // 否则会误清一条还在动的指针。
+            guard CACurrentMediaTime() - pointerLastEventAt >= AevonRingMenu.pointerHandoffInterval else { return }
+        }
         cancelCenterHold()
         clearPointer()
     }
