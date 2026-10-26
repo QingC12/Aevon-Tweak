@@ -631,13 +631,14 @@ NSString *AevonSelfSceneRouteDump(NSString *bundleID) {
         id manifest = info[@"UIApplicationSceneManifest"];
         [out appendFormat:@"manifest=%@ ", manifest ? NSStringFromClass([manifest class]) : @"nil"];
         if ([manifest isKindOfClass:[NSDictionary class]]) {
-            [out appendFormat:@"mKeys=%@ ",
-                [((NSDictionary *)manifest).allKeys componentsJoinedByString:@"," }];
+            NSString *mKeys = [((NSDictionary *)manifest).allKeys componentsJoinedByString:@","];
+            [out appendFormat:@"mKeys=%@ ", mKeys];
             id configs = ((NSDictionary *)manifest)[@"UISceneConfigurations"];
             [out appendFormat:@"configs=%@ ", configs ? NSStringFromClass([configs class]) : @"nil"];
             if ([configs isKindOfClass:[NSDictionary class]]) {
-                [out appendFormat:@"cKeys=%@ ",
-                    [((NSDictionary *)configs).allKeys componentsJoinedByString:@"," ]];}
+                NSString *cKeys = [((NSDictionary *)configs).allKeys componentsJoinedByString:@","];
+                [out appendFormat:@"cKeys=%@ ", cKeys];
+            }
             id legacyDel = ((NSDictionary *)manifest)[@"UIApplicationSceneDelegateClassName"];
             id multi = ((NSDictionary *)manifest)[@"UIApplicationSupportsMultipleScenes"];
             [out appendFormat:@"legacyDel=%@ multi=%@ ",
