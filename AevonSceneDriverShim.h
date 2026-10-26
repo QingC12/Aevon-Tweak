@@ -40,3 +40,18 @@ BOOL AevonSelfSceneResize(id scene, double w, double h);
 /// 销毁自建场景（destroyScene:withTransitionContext:）。
 /// presenter 请先走 AevonPresenterDestroy（deactivate + invalidate）。
 BOOL AevonSelfSceneDestroy(id scene);
+
+/// V0.2.32（AevonSelfSceneFGV232）：重申自建场景前台 —— updateSettings 内
+/// foreground=YES + deactivationReasons=0（LiveContainer #942 同款：FBSSceneObserver
+/// 会优先发 resignActive，必须重申）。只许对自建场景调用；主场景绝不碰。
+BOOL AevonSelfSceneReassertForeground(id scene);
+
+/// V0.2.32（AevonForegroundProbeV232）：真渲染判据（MultiFloat round8 档案）——
+/// contentState==2 或 layerManager.layers 数 > 0。
+/// 结构性子视图（远程表面容器）创建即存在，不能证明 App 真画了（0.2.31 假首帧教训）。
+/// 只许对自建场景调用。
+BOOL AevonSelfSceneContentAlive(id scene);
+
+/// V0.2.32（AevonForegroundProbeV232）：只读取证串
+/// "fg=? cs=? layers=? dr=? idle=?"（全 @try，取不到写 "?"），供日志判黑在哪一层。
+NSString *AevonSelfSceneDebugState(id scene);

@@ -126,6 +126,25 @@ enum AevonSceneHelper {
         return nil
     }
 
+    // MARK: - 自建场景登记（V0.2.32，AevonSelfSceneFGV232）
+
+    /// bundleID → 自建场景（开窗登记、关窗注销）。
+    /// 保活/重申前台必须打在**自建场景**上：scene(for:) 永远排除自建场景，
+    /// 0.2.31 的保活 8 次全打在主场景上 = 和自建场景抢 App 端 activation。
+    private static var selfSceneRegistry: [String: AnyObject] = [:]
+
+    static func registerSelfScene(_ bundleID: String, _ scene: AnyObject) {
+        selfSceneRegistry[bundleID] = scene
+    }
+
+    static func unregisterSelfScene(_ bundleID: String) {
+        selfSceneRegistry.removeValue(forKey: bundleID)
+    }
+
+    static func selfScene(for bundleID: String) -> AnyObject? {
+        return selfSceneRegistry[bundleID]
+    }
+
     // MARK: - 场景前台控制
 
     static func setForeground(_ scene: AnyObject, _ foreground: Bool) {
@@ -164,6 +183,12 @@ enum AevonSceneHelper {
     /// `updateSettings(foreground=true)` —— 那是持续往 FrontBoard 的场景状态机里写东西，
     /// 归档(14) 的 SIGTRAP 就出在这条写入链上。现在只补开窗后的头 8 次（约 6 秒），
     /// 够撑过 presenter 激活那段；之后进程存活交给 RBSAssertion 保活，不再碰场景设置。
+    ///
+    /// V0.2.32（AevonSelfSceneFGV232，0.2.31 真机实锤）：自建场景模式下补前台目标
+    /// 改为**自建场景**（原来 8 次全打主场景 = 与自建场景抢 activation），且自建场景
+    /// 用重申写入（foreground=YES + deactivationReasons=0，LiveContainer #942 同款，
+    /// 对抗 FBSSceneObserver 的 resignActive / SB 重算）。主场景补写保持原样不升级
+    /// ——主场景的 deactivation 状态机绝不碰（归档(14) SIGTRAP 教训）。
     static func startKeepAlive(_ bundleID: String) {
         stopKeepAlive(bundleID)
         var remaining = 8
@@ -176,6 +201,14 @@ enum AevonSceneHelper {
                 return
             }
             remaining -= 1
+            // 自建场景优先；没有自建场景（0.2.27 全屏接管形态）保持主场景原逻辑
+            if let selfScene = self.selfScene(for: bundleID) {
+                let ok = AevonSelfSceneReassertForeground(selfScene)
+                if !ok {
+                    AevonLog.warn("[保活] 自建场景重申前台失败（\(bundleID)）（AevonSelfSceneFGV232）")
+                }
+                return
+            }
             guard let scene = self.scene(for: bundleID) else { return }
             // 先看场景当前的前台标记：已经是前台就什么都不做。
             let settings = AevonRuntime.send(scene, Selector(("settings")))

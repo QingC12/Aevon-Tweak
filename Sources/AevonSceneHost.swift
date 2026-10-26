@@ -45,6 +45,8 @@ final class AevonSceneHost {
     private var probeTimer: Timer?
     private var ticks = 0
     private var invalidated = false
+    /// V0.2.32（AevonForegroundProbeV232）：假首帧只记一次，避免刷屏
+    private var fakeAliveLogged = false
 
     init?(scene: AnyObject, sceneID: String, bundleID: String, isSelfBuilt: Bool = false) {
         self.isSelfBuilt = isSelfBuilt
@@ -114,7 +116,13 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         ticks += 1
 
-        if !hasContent && contentLooksAlive() {
+        if !hasContent && contentLooksAlive() && !contentReallyAlive() && !fakeAliveLogged {
+            fakeAliveLogged = true
+            let probe = isSelfBuilt ? (AevonSelfSceneDebugState(scene) as String) : "-"
+            AevonLog.warn("[场景] 表面结构就绪但 App 内容未渲染（结构性假首帧，继续探测取证）：\(probe)（AevonForegroundProbeV232）")
+        }
+
+        if !hasContent && contentLooksAlive() && contentReallyAlive() {
             hasContent = true
             // 记下呈现视图与首个子视图的实际尺寸：两者比例不一致就说明系统在内部留边
             // （letterbox），那是浮窗缩放怎么调都消不掉的黑边，只能靠场景尺寸解决。
@@ -161,6 +169,15 @@ final class AevonSceneHost {
         return false
     }
 
+    /// V0.2.32（AevonForegroundProbeV232，0.2.31 真机实锤）：结构性子视图创建即存在
+    /// （抖音 4ms 就「首帧已到达」是假首帧——远程表面容器 ≠ App 真画了），
+    /// 自建场景必须再过 round8 判据：contentState==2 或 layerManager.layers>0。
+    /// 主场景承载（0.2.27 全屏接管形态）保持原判定不变。
+    private func contentReallyAlive() -> Bool {
+        guard isSelfBuilt else { return true }
+        return AevonSelfSceneContentAlive(scene)
+    }
+
     // MARK: - 诊断
 
     private func logDiagnostics(_ tag: String) {
@@ -170,11 +187,14 @@ final class AevonSceneHost {
         let running = AevonAppInfo.isRunning(bundleID: bundleID)
         let subviews = presentationView.subviews.count
         let sublayers = presentationView.layer.sublayers?.count ?? 0
+        // V0.2.32（AevonForegroundProbeV232）：自建场景加只读取证串
+        // （fg/cs/layers/dr/idle，round8 判据全上），下轮日志直接判断黑在哪一层。
+        let probe = isSelfBuilt ? " " + (AevonSelfSceneDebugState(scene) as String) : ""
         AevonLog.warn("[诊断] \(tag)无画面：foreground=\(foreground.map { String($0) } ?? "?")"
             + " isActive=\(active.map { String($0) } ?? "?")"
             + " 进程运行=\(running)"
             + " 呈现视图子视图=\(subviews) 子图层=\(sublayers)"
-            + " 视图尺寸=\(Int(presentationView.bounds.width))x\(Int(presentationView.bounds.height))")
+            + " 视图尺寸=\(Int(presentationView.bounds.width))x\(Int(presentationView.bounds.height))\(probe)")
     }
 
     // MARK: - 释放

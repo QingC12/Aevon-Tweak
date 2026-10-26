@@ -1962,6 +1962,27 @@ jobs:
             || { echo "::error::pidHint 来源不是 AevonAppInfo（已验证路径）"; exit 1; }
           echo "V0.2.31 校验: pid 读出链对齐 AevonAppInfo 已就位"
 
+          # ---- V0.2.32：重申前台（LiveContainer #942 同款）+ 真首帧判据（round8）+ 只读取证
+          for s in AevonSelfSceneFGV232 AevonForegroundProbeV232; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.32 缺标记 $s"; exit 1; }
+          done
+          grep -q 'deactivationReasons' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::重申前台缺 deactivationReasons=0（LiveContainer #942）"; exit 1; }
+          grep -q 'contentState' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::真首帧判据缺 contentState（round8）"; exit 1; }
+          grep -q 'registerSelfScene' "$GITHUB_WORKSPACE/Sources/AevonSceneHelper.swift" \
+            || { echo "::error::自建场景登记缺失（保活目标必须切自建场景）"; exit 1; }
+          grep -q 'AevonSelfSceneReassertForeground' "$GITHUB_WORKSPACE/Sources/AevonSceneHelper.swift" \
+            || { echo "::error::保活补写未走重申前台"; exit 1; }
+          grep -q 'AevonSceneHelper.setForeground(scene, false)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::主场景交割（foreground=NO）缺失"; exit 1; }
+          grep -q 'unregisterSelfScene' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::关窗注销自建场景登记缺失"; exit 1; }
+          grep -q 'contentReallyAlive' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::假首帧修正缺失"; exit 1; }
+          echo "V0.2.32 校验: 重申前台 + 真首帧判据 + 只读取证 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

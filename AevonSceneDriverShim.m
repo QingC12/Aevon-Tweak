@@ -31,6 +31,8 @@ __attribute__((used)) static const char AevonSelfSceneFallbackV228Marker[] = "Ae
 __attribute__((used)) static const char AevonSelfSceneFixV229Marker[] = "AevonSelfSceneFixV229";
 __attribute__((used)) static const char AevonSelfSceneRBSV230Marker[] = "AevonSelfSceneRBSV230";
 __attribute__((used)) static const char AevonSelfScenePidV231Marker[] = "AevonSelfScenePidV231";
+__attribute__((used)) static const char AevonSelfSceneFGV232Marker[] = "AevonSelfSceneFGV232";
+__attribute__((used)) static const char AevonForegroundProbeV232Marker[] = "AevonForegroundProbeV232";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -306,5 +308,132 @@ BOOL AevonSelfSceneDestroy(id scene) {
         return YES;
     } @catch (NSException *exception) {
         return NO;
+    }
+}
+
+/*
+ * V0.2.32（AevonSelfSceneFGV232 / AevonForegroundProbeV232，0.2.31 真机实锤）：
+ * 设置/电池数据等「多场景友好」App 真重排成功，抖音/Sileo 等「单场景」App 黑屏
+ * （进程活着、声音在放 = 渲染没停，是自建场景没人画）。
+ *
+ * 两条证据链指向同一个机制：
+ *   ① MultiFloat round8 档案：SB 重算 scene settings 把 foreground 写回 0 →
+ *      contentState 2→0、layers 2→0 → 黑。判据 = contentState==2 / layers>0。
+ *   ② LiveContainer #942：FBSSceneObserver 会优先发 resignActive，需要重申
+ *      settings.foreground = YES + settings.deactivationReasons = 0（源码原文）。
+ * 本版对策（全部只作用于自建场景——自建场景的 settings 写入是受支持通路；
+ * 主场景的 deactivation 状态机仍然绝不碰，归档(14) SIGTRAP 教训）：
+ *   ① AevonSelfSceneReassertForeground：重申前台（保活定时器改打自建场景）；
+ *   ② AevonSelfSceneContentAlive：真首帧判定（结构性子视图 ≠ App 真画了，
+ *      0.2.31 抖音 4ms 就「首帧已到达」是假首帧，把诊断和看门狗全骗停了）；
+ *   ③ AevonSelfSceneDebugState：只读取证串（fg/cs/layers/dr/idle），
+ *      下轮日志直接判断黑在哪一层。
+ */
+
+/// 重申自建场景前台：updateSettings { foreground=YES; deactivationReasons=0; }。
+/// LiveContainer #942 同款；只许对自建场景调用。
+BOOL AevonSelfSceneReassertForeground(id scene) {
+    @try {
+        if (scene == nil) return NO;
+        SEL sel = NSSelectorFromString(@"updateSettingsWithBlock:");
+        if (![scene respondsToSelector:sel]) return NO;
+        ((AevonSDVoidFnBlock1)objc_msgSend)(scene, sel, ^(id settings) {
+            @try {
+                AevonSDSetBool(settings, "foreground", YES);
+                AevonSDSetInt(settings, "deactivationReasons", 0);
+            } @catch (NSException *exception) {
+                // 单项写失败不影响其他
+            }
+        });
+        return YES;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+/// 真渲染判据（round8 档案）：contentState == 2 或 layerManager.layers 数 > 0。
+/// 只许对自建场景调用（主场景保持 0.2.27 判定不变）。
+BOOL AevonSelfSceneContentAlive(id scene) {
+    @try {
+        if (scene == nil) return NO;
+        // contentState：FBScene 只读属性（NSInteger）
+        SEL csSel = NSSelectorFromString(@"contentState");
+        if ([scene respondsToSelector:csSel]) {
+            NSInteger cs = ((AevonSDIntFn0)objc_msgSend)(scene, csSel);
+            if (cs == 2) return YES;
+        }
+        // layerManager.layers：NSArray count
+        SEL lmSel = NSSelectorFromString(@"layerManager");
+        if ([scene respondsToSelector:lmSel]) {
+            id lm = ((AevonSDIdFn0)objc_msgSend)(scene, lmSel);
+            if (lm != nil) {
+                SEL layersSel = NSSelectorFromString(@"layers");
+                if ([lm respondsToSelector:layersSel]) {
+                    id layers = ((AevonSDIdFn0)objc_msgSend)(lm, layersSel);
+                    if ([layers isKindOfClass:[NSArray class]] && [(NSArray *)layers count] > 0) {
+                        return YES;
+                    }
+                }
+            }
+        }
+        return NO;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+/// 只读取证串（全 @try，任何键取不到就 "?"）：
+/// "fg=<0|1|?> cs=<n|?> layers=<n|?> dr=<n|?> idle=<0|1|?>"
+NSString *AevonSelfSceneDebugState(id scene) {
+    @try {
+        if (scene == nil) return @"scene-nil";
+        NSMutableString *out = [NSMutableString string];
+        // foreground
+        id settings = nil;
+        SEL stSel = NSSelectorFromString(@"settings");
+        if ([scene respondsToSelector:stSel]) {
+            settings = ((AevonSDIdFn0)objc_msgSend)(scene, stSel);
+        }
+        if (settings != nil) {
+            SEL fgSel = NSSelectorFromString(@"foreground");
+            if ([settings respondsToSelector:fgSel]) {
+                BOOL fg = ((BOOL (*)(id, SEL))objc_msgSend)(settings, fgSel);
+                [out appendFormat:@"fg=%d", fg ? 1 : 0];
+            } else { [out appendString:@"fg=?"]; }
+            // deactivationReasons / idleModeEnabled
+            SEL drSel = NSSelectorFromString(@"deactivationReasons");
+            if ([settings respondsToSelector:drSel]) {
+                NSInteger dr = ((AevonSDIntFn0)objc_msgSend)(settings, drSel);
+                [out appendFormat:@" dr=%ld", (long)dr];
+            } else { [out appendString:@" dr=?"]; }
+            SEL idleSel = NSSelectorFromString(@"idleModeEnabled");
+            if ([settings respondsToSelector:idleSel]) {
+                BOOL idle = ((BOOL (*)(id, SEL))objc_msgSend)(settings, idleSel);
+                [out appendFormat:@" idle=%d", idle ? 1 : 0];
+            } else { [out appendString:@" idle=?"]; }
+        } else {
+            [out appendString:@"settings-nil"];
+        }
+        // contentState
+        SEL csSel = NSSelectorFromString(@"contentState");
+        if ([scene respondsToSelector:csSel]) {
+            NSInteger cs = ((AevonSDIntFn0)objc_msgSend)(scene, csSel);
+            [out appendFormat:@" cs=%ld", (long)cs];
+        } else { [out appendString:@" cs=?"]; }
+        // layers count
+        SEL lmSel = NSSelectorFromString(@"layerManager");
+        if ([scene respondsToSelector:lmSel]) {
+            id lm = ((AevonSDIdFn0)objc_msgSend)(scene, lmSel);
+            SEL layersSel = NSSelectorFromString(@"layers");
+            if (lm != nil && [lm respondsToSelector:layersSel]) {
+                id layers = ((AevonSDIdFn0)objc_msgSend)(lm, layersSel);
+                if ([layers isKindOfClass:[NSArray class]]) {
+                    [out appendFormat:@" layers=%lu", (unsigned long)[(NSArray *)layers count]];
+                } else { [out appendString:@" layers=?"]; }
+            } else { [out appendString:@" layers=?"]; }
+        } else { [out appendString:@" layers=?"]; }
+        return out;
+    } @catch (NSException *exception) {
+        return @"exception";
     }
 }

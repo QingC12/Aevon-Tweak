@@ -271,6 +271,9 @@ final class AevonWindowView: UIView {
         }
         let old = sceneHost
         sceneHost = newHost
+        // V0.2.32（AevonSelfSceneFGV232）：自建场景随之销毁，保活登记同步注销
+        //（保活目标会自动落回主场景，回到 0.2.27 全屏接管形态）。
+        AevonSceneHelper.unregisterSelfScene(bundleID)
         old.container.removeFromSuperview()
         old.invalidate()   // 含自建场景 destroyScene
         contentClip.insertSubview(newHost.container, belowSubview: hintLabel)

@@ -180,6 +180,23 @@ enum AevonWindowManager {
                     hostScene = created
                     usedSelfScene = true
                     AevonLog.info("[场景] 自建场景已创建：bundleID=\(bundleID) 画布=\(Int(size.width))x\(Int(size.height)) sceneID=\(selfSceneIDOut as String? ?? "?")（AevonSelfSceneV228）")
+                    // ── V0.2.32（AevonSelfSceneFGV232）───────────────────────
+                    // ① 登记自建场景：保活/重申前台从此打在自建场景上
+                    //   （0.2.31 保活 8 次全打主场景 = 与自建场景抢 activation）。
+                    AevonSceneHelper.registerSelfScene(bundleID, hostScene)
+                    // ② 主场景交割：把主场景 foreground 写 NO，App 端 activation
+                    //   唯一落在自建场景（两个 foreground 场景并存 = 单场景 App 把
+                    //   UI 留在主场景，自建场景黑屏）。关窗时恢复（见 close）。
+                    AevonSceneHelper.setForeground(scene, false)
+                    // ③ 三拍重申前台（LiveContainer #942 同款）：FBSSceneObserver 会
+                    //   优先发 resignActive / SB 重算会把 foreground 写回 0（round8
+                    //   档案：cs 2→0、layers 2→0 = 黑），三拍对抗。
+                    for delay in [0.3, 1.2, 3.0] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            let ok = AevonSelfSceneReassertForeground(hostScene)
+                            AevonLog.info("[场景] 重申自建场景前台（+\(delay)s，\(ok ? "已提交" : "失败")）（AevonSelfSceneFGV232）")
+                        }
+                    }
                 } else {
                     AevonLog.warn("[场景] 自建场景创建失败（step=\(errOut as String? ?? "?")）→ 回退全屏接管路径（AevonSelfSceneV228）")
                 }
@@ -200,7 +217,12 @@ enum AevonWindowManager {
             guard let sceneHost = AevonSceneHost(scene: hostScene, sceneID: sceneIdentifier,
                                                  bundleID: bundleID, isSelfBuilt: usedSelfScene) else {
                 AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
-                if usedSelfScene { _ = AevonSelfSceneDestroy(hostScene) }
+                if usedSelfScene {
+                    _ = AevonSelfSceneDestroy(hostScene)
+                    AevonSceneHelper.unregisterSelfScene(bundleID)
+                    // 主场景交割回滚：自建场景没了，主场景重新拿回前台
+                    AevonSceneHelper.setForeground(scene, true)
+                }
                 AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: sceneID)
                 completion?(false)
                 return
@@ -299,6 +321,9 @@ enum AevonWindowManager {
         AevonPrefs.set("AevonFloatBundle", "")
         windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
+        // V0.2.32（AevonSelfSceneFGV232）：自建场景已随 teardown 销毁，登记必须同步
+        // 注销（保活定时器若还查到悬空场景对象会写进已销毁场景）。
+        AevonSceneHelper.unregisterSelfScene(bundleID)
         if !releaseOnly {
             AevonSceneHelper.sleep(bundleID)
         }
