@@ -43,6 +43,14 @@ enum AevonFloatGrab {
 ///     · 右上角悬浮 ✕ ＝ 关闭；
 ///     · 拖到屏幕左右边缘松手自动吸附半屏。
 ///   顶部标题栏（拖动条 + 关闭钮）整条移除（用户要求）。
+/// V0.2.21（AevonFloat53V221，用户定档）：主悬浮窗 5:3 + 手势重做 ——
+///   · 内容区比例**固定 5:3**（不再锁屏幕比例）；App 画面按 **min** 等比缩放居中
+///     （letterbox：整块内容连顶栏/底栏一起完整可见，绝不裁切）；
+///   · 手势全部在窗外：
+///       底部 + 左右三条边条 = **长按 0.3s 后拖动**移动窗口；
+///       左下 / 右下外角块 = 缩放（比例锁 5:3，锚点 = 不动的对边/顶边）；
+///       **底部边条双击 = 关闭浮窗**；右上悬浮 ✕ 保留；
+///       顶部不再有任何手势（顶部双击恢复默认已随本版移除）。
 /// V0.0.37（AevonMedusaFrameV37）：几何记忆改用 Stheno 的方案 ——
 ///   全局一份 `MedusaFrameLast`（left/top/width 三个屏幕百分比，对应 Stheno 的
 ///   medusaFrameLast / _leftPecentLast 体系），所有浮窗共享上次位置与大小；
@@ -58,14 +66,10 @@ final class AevonWindowView: UIView {
     let bundleID: String
     private let sceneHost: AevonSceneHost
 
-    /// 屏幕宽高比（宽 ÷ 高）。内容区始终锁定这个比例。
-    static let contentAspect: CGFloat = {
-        let size = UIScreen.main.bounds.size
-        guard size.width > 0, size.height > 0 else { return 9.0 / 19.5 }
-        return size.width / size.height
-    }()
+    /// 内容区宽高比（宽 ÷ 高）。V0.2.21（AevonFloat53V221）：固定 5:3，不再锁屏幕比例。
+    static let contentAspect: CGFloat = 5.0 / 3.0
 
-    private static let minContentWidth: CGFloat = 150
+    private static let minContentWidth: CGFloat = 240
     private static let cornerRadius: CGFloat = 12
     /// 外侧手势区厚度（边条）与外角块边长（pt）。Stheno 的 edgeWidth 同位概念。
     static let barThickness: CGFloat = 18
@@ -91,6 +95,8 @@ final class AevonWindowView: UIView {
 
     /// 手势进行中（此时只允许改 transform，不允许改 frame）
     private var isLiveResizing = false
+    /// 边条长按拖动进行中（V0.2.21，AevonFloatBarLongPressV221）
+    private var isBarHoldMoving = false
     /// 上一次真正应用过的内容区尺寸与缩放系数（缓存，用来跳过无变化的布局）
     private var lastClipSize: CGSize = .zero
     private var lastAppliedScale: CGFloat = 0
@@ -152,18 +158,11 @@ final class AevonWindowView: UIView {
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         addSubview(closeButton)
 
-        // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（四边条 + 四角块，全部在窗外）
+        // V0.0.37（AevonSthenoEdgeBarV37）：外侧边缘手势区（V0.2.21 起只剩下角块 + 底/左/右边条）
         installOutsideGestureHandles(width: restored.width, height: restored.height)
 
-        // 顶部双击 = 恢复默认大小与位置（V0.1.1 换档已移除，AevonRestoreDefaultV101）
-        for handle in subviews.compactMap({ $0 as? AevonEdgeHandleView }) {
-            let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleBarDoubleTap(_:)))
-            doubleTap.numberOfTapsRequired = 2
-            handle.addGestureRecognizer(doubleTap)
-        }
-
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（无标题栏 + 外侧手势区，比例锁定屏幕 \(String(format: "%.3f", AevonWindowView.contentAspect))，"
+            + "（无标题栏 + 外侧手势区，内容比例固定 5:3（AevonFloat53V221），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
     }
@@ -172,11 +171,11 @@ final class AevonWindowView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// 无记忆时的默认几何：宽 66% 屏宽，顶边 10% 屏高，水平居中。
+    /// 无记忆时的默认几何：宽 80% 屏宽（5:3 → 高约 48% 屏高），顶边 10% 屏高，水平居中。
     private static func defaultFrame() -> CGRect {
         let screen = UIScreen.main.bounds
         let aspect = contentAspect
-        let width = max(minContentWidth, min(screen.width * 0.66,
+        let width = max(minContentWidth, min(screen.width * 0.80,
                                              (screen.height * 0.92) * aspect))
         let height = width / aspect
         return CGRect(x: (screen.width - width) / 2.0,
@@ -221,16 +220,17 @@ final class AevonWindowView: UIView {
         return false
     }
 
-    /// 把整屏尺寸的容器等比铺满内容区。
+    /// 把整屏尺寸的容器等比放进内容区（V0.2.21 letterbox）。
     ///
-    /// 用 max 而不是 min：内容区比例已经锁定成屏幕比例，两者理论相等，
-    /// 取较大的一边可以吃掉浮点误差，绝不会在两侧露出底色（黑边）。
+    /// V0.2.21（AevonFloat53V221）：内容区是 5:3、App 画面是竖屏整屏，比例不再相等，
+    /// 改用 **min**（装得下为准）+ 居中 —— 整块内容连顶栏/底栏一起完整可见，
+    /// 空出的两侧是 contentClip 的深色底（letterbox），绝不裁切画面。
     private func applyContentScale() {
         let screen = UIScreen.main.bounds.size
         guard screen.width > 0, screen.height > 0,
               contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
 
-        let scale = max(contentClip.bounds.width / screen.width,
+        let scale = min(contentClip.bounds.width / screen.width,
                         contentClip.bounds.height / screen.height)
 
         let clipSize = contentClip.bounds.size
@@ -252,31 +252,30 @@ final class AevonWindowView: UIView {
 
     // MARK: - 外侧手势区（V0.0.37，AevonSthenoEdgeBarV37）
 
-    /// 手柄全部挂在窗口 frame **外面**（Stheno：手势区域为边缘外侧）：
-    ///   · 四条边条（单边 → 拖动 = 移动窗口）；
-    ///   · 四个外角块（双边 → 拖动 = 从对角缩放）。
+    /// 手势全部挂在窗口 frame **外面**（Stheno：手势区域为边缘外侧），
     /// 窗内一个点都不占，App 内容的点击 / 滑动完全不受影响。
     /// 注意：窗口本体 clipsToBounds = false，frame 外的子视图照常参与命中测试。
+    ///
+    /// V0.2.21（AevonFloat53V221）手势位只剩五个：
+    ///   · 左下 / 右下外角块 = 缩放（pan 跟手，比例锁 5:3）；
+    ///   · 底 / 左 / 右三条边条 = 长按 0.3s 后拖动移动；
+    ///   · 底部边条另有双击 = 关闭浮窗。
+    /// 顶部条与上角块整体移除 —— 顶部不再有任何手势。
     private func installOutsideGestureHandles(width: CGFloat, height: CGFloat) {
         let b = AevonWindowView.barThickness
         let c = AevonWindowView.cornerSize
         let handles: [(UIRectEdge, CGRect, UIView.AutoresizingMask)] = [
-            // 四个外角块（缩放）
-            ([.top, .left],     CGRect(x: -c, y: -c, width: c, height: c), []),
-            ([.top, .right],    CGRect(x: width, y: -c, width: c, height: c),
-             [.flexibleLeftMargin]),
+            // 两个下角块（缩放）
             ([.bottom, .left],  CGRect(x: -c, y: height, width: c, height: c),
              [.flexibleTopMargin]),
             ([.bottom, .right], CGRect(x: width, y: height, width: c, height: c),
              [.flexibleLeftMargin, .flexibleTopMargin]),
-            // 四条边条（移动）
-            ([.top],            CGRect(x: c, y: -b, width: max(0, width - 2 * c), height: b),
-             [.flexibleWidth]),
+            // 三条边条（长按拖动移动）
             ([.bottom],         CGRect(x: c, y: height, width: max(0, width - 2 * c), height: b),
              [.flexibleWidth, .flexibleTopMargin]),
-            ([.left],           CGRect(x: -b, y: c, width: b, height: max(0, height - 2 * c)),
+            ([.left],           CGRect(x: -b, y: 0, width: b, height: max(0, height - c)),
              [.flexibleHeight]),
-            ([.right],          CGRect(x: width, y: c, width: b, height: max(0, height - 2 * c)),
+            ([.right],          CGRect(x: width, y: 0, width: b, height: max(0, height - c)),
              [.flexibleLeftMargin, .flexibleHeight]),
         ]
         for (edges, rect, mask) in handles {
@@ -286,18 +285,58 @@ final class AevonWindowView: UIView {
             handle.backgroundColor = .clear
             if !mask.isEmpty { handle.autoresizingMask = mask }
             addSubview(handle)
-            let pan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
-            handle.addGestureRecognizer(pan)
+            if handle.isCorner {
+                // 角块 = 缩放：pan 直接跟手
+                let pan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
+                handle.addGestureRecognizer(pan)
+            } else {
+                // 边条 = 长按 0.3s 进入拖动（V0.2.21，AevonFloatBarLongPressV221）。
+                // allowableMovement 放宽到 60pt：按住期间手微微晃动不判失败。
+                let hold = UILongPressGestureRecognizer(target: self,
+                                                        action: #selector(handleOutsideHold(_:)))
+                hold.minimumPressDuration = 0.3
+                hold.allowableMovement = 60
+                handle.addGestureRecognizer(hold)
+            }
+            if edges == .bottom {
+                // 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）
+                let doubleTap = UITapGestureRecognizer(target: self,
+                                                       action: #selector(handleBottomDoubleTap(_:)))
+                doubleTap.numberOfTapsRequired = 2
+                handle.addGestureRecognizer(doubleTap)
+            }
         }
     }
 
-    /// 外侧手势的统一入口：角块 → 缩放；边条 → 移动。
+    /// 外侧手势的统一入口：角块 → 缩放（边条的 pan 已撤，长按走 handleOutsideHold）。
     @objc private func handleOutsidePan(_ gesture: UIPanGestureRecognizer) {
         guard let handle = gesture.view as? AevonEdgeHandleView else { return }
         if handle.isCorner {
             handleCornerResize(gesture, edges: handle.edges)
-        } else {
-            handleBarMove(gesture)
+        }
+    }
+
+    /// 边条长按拖动 = 移动窗口（V0.2.21，AevonFloatBarLongPressV221）。
+    /// 长按 0.3s 进入（.began），之后 .changed 连续跟手，与全局通道共用 applyBarMove。
+    @objc private func handleOutsideHold(_ gesture: UILongPressGestureRecognizer) {
+        guard let superview = superview else { return }
+        let point = gesture.location(in: superview)
+        switch gesture.state {
+        case .began:
+            isBarHoldMoving = true
+            moveOriginFrame = frame
+            moveOriginPoint = point
+            AevonLog.info("[窗口] 长按进入移动（AevonFloatBarLongPressV221）")
+        case .changed:
+            guard isBarHoldMoving else { break }
+            applyBarMove(to: point)
+        case .ended, .cancelled, .failed:
+            guard isBarHoldMoving else { break }
+            isBarHoldMoving = false
+            applyBarMove(to: point)
+            persistFrame()
+        default:
+            break
         }
     }
 
@@ -413,47 +452,20 @@ final class AevonWindowView: UIView {
         }
     }
 
-    /// 顶部双击 = 恢复默认窗口大小与位置（V0.1.1，AevonRestoreDefaultV101）。
-    ///
-    /// 原「双击换档（小窗/大窗）」整体移除：大窗档 94%×88% 近乎铺满整屏，
-    /// 四角缩放手柄被推到屏幕边缘（与系统手势打架、外扩出屏），窗口放大后
-    /// 用户再也无法缩回 —— V0.1.0 实测问题。恢复默认几何是无损出口：
-    /// 任何尺寸/位置一键回「宽 66% 屏宽、顶边 10% 屏高、水平居中」。
-    func restoreDefaultFrame() {
-        guard !isLiveResizing else { return }
-        let target = AevonWindowView.defaultFrame()
-        guard target.width >= AevonWindowView.minContentWidth, target.height > 0 else { return }
-        UIView.animate(withDuration: 0.22,
-                       delay: 0,
-                       options: [UIView.AnimationOptions.beginFromCurrentState, .curveEaseOut]) {
-            self.frame = target
-        } completion: { _ in
-            self.persistFrame()
-        }
-        AevonLog.info("[窗口] 顶部双击 → 恢复默认 \(Int(target.width))x\(Int(target.height)) @(\(Int(target.minX)),\(Int(target.minY)))（AevonRestoreDefaultV101）")
+    /// 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）。
+    /// 原「顶部双击恢复默认大小与位置」随顶部手势区一起移除（0.2.21 用户定档；
+    /// 其 CI 历史串 AevonRestoreDefaultV101 收容在 AevonAssertionShim.m）。
+    @objc private func handleBottomDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, !isLiveResizing, !isBarHoldMoving else { return }
+        guard let handle = gesture.view as? AevonEdgeHandleView,
+              handle.edges == .bottom else { return }
+        AevonLog.info("[窗口] 底边双击 → 关闭浮窗（AevonFloatBottomDblCloseV221）")
+        closeTapped()
     }
 
     // MARK: - 边条移动
 
-    @objc private func handleBarMove(_ gesture: UIPanGestureRecognizer) {
-        guard let superview = superview else { return }
-        let point = gesture.location(in: superview)
-        switch gesture.state {
-        case .began:
-            moveOriginFrame = frame
-            moveOriginPoint = point
-        case .changed:
-            applyBarMove(to: point)
-        case .ended, .cancelled, .failed:
-            applyBarMove(to: point)
-            // V0.1.5（AevonNoSnapV105）：左右吸附移除 —— 松手就停在手指放下的位置。
-            persistFrame()
-        default:
-            break
-        }
-    }
-
-    /// 移动的纯计算部分（V0.0.41 拆出来）：pan 手势与全局通道共用同一套夹边逻辑。
+    /// 移动的纯计算部分（V0.0.41 拆出来）：长按拖动与全局通道共用同一套夹边逻辑。
     private func applyBarMove(to point: CGPoint) {
         let dx = point.x - moveOriginPoint.x
         let dy = point.y - moveOriginPoint.y
@@ -511,7 +523,7 @@ final class AevonWindowView: UIView {
         transform = CGAffineTransform(scaleX: factor, y: factor)
     }
 
-    /// 只有「宽度」一个自由度：高度 = 宽度 ÷ 屏幕比例。
+    /// 只有「宽度」一个自由度：高度 = 宽度 ÷ 5:3 比例（AevonFloat53V221）。
     /// 横向按 dx（拖左角反向），纵向按 dy（拖顶角反向）；
     /// 角块横竖都在动，取变化更明显的那个方向，斜拖也跟手，拖不出细长条。
     private func clampedCornerWidth(dx: CGFloat, dy: CGFloat, base: CGRect,
@@ -583,18 +595,6 @@ final class AevonWindowView: UIView {
         setNeedsLayout()
         persistFrame()
         AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（AevonEdgeResizeV37）")
-    }
-
-    // MARK: - 顶部双击：恢复默认大小与位置（V0.1.1）
-
-    @objc private func handleBarDoubleTap(_ gesture: UITapGestureRecognizer) {
-        guard !isLiveResizing, gesture.state == .ended else { return }
-        // 只认顶部边条：双击放大/换档已移除，其余手柄双击不动作
-        guard let handle = gesture.view as? AevonEdgeHandleView, handle.edges == .top else {
-            AevonLog.info("[窗口] 双击非顶部手柄 → 无动作（换档已移除）（AevonRestoreDefaultV101）")
-            return
-        }
-        restoreDefaultFrame()
     }
 
     // MARK: - 顶层置顶

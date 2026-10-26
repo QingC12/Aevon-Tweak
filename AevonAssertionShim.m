@@ -939,3 +939,17 @@ __attribute__((used)) static const char AevonRingCloseOnLiftV218Marker[] = "Aevo
  * ────────────────────────────────────────────────────────────────── */
 __attribute__((used)) static const char AevonSysEdgeBandGateV219Marker[] = "AevonSysEdgeBandGateV219";
 __attribute__((used)) static const char AevonMissReasonV219Marker[] = "AevonMissReasonV219";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.2.21（用户定档）：主悬浮窗 5:3 + 手势重做
+ *   AevonFloat53V221             = 内容区比例固定 5:3 + min 等比 letterbox（内容完整可见，绝不裁切）
+ *   AevonFloatBarLongPressV221   = 底/左/右边条改「长按 0.3s 拖动移动」（pan 通道）
+ *   AevonFloatBarHoldV221        = 全局通道边条长按裁决（0.3s 达成才拖动，提前跑远=放弃）
+ *   AevonFloatBottomDblCloseV221 = 底边双击 = 关闭浮窗（✕ 保留）
+ *   AevonRestoreDefaultV101      = 退休收容：顶部双击恢复默认随顶部手势区移除（CI 历史串只加不能改）
+ * ────────────────────────────────────────────────────────────────── */
+__attribute__((used)) static const char AevonFloat53V221Marker[] = "AevonFloat53V221";
+__attribute__((used)) static const char AevonFloatBarLongPressV221Marker[] = "AevonFloatBarLongPressV221";
+__attribute__((used)) static const char AevonFloatBarHoldV221Marker[] = "AevonFloatBarHoldV221";
+__attribute__((used)) static const char AevonFloatBottomDblCloseV221Marker[] = "AevonFloatBottomDblCloseV221";
+__attribute__((used)) static const char AevonRestoreDefaultV101RetiredMarker[] = "AevonRestoreDefaultV101";

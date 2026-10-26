@@ -1777,6 +1777,25 @@ jobs:
             || { echo "::error::SB 侧几何发布函数被删 —— App 侧 fail-closed 将永不挂载"; exit 1; }
           echo "V0.2.20 校验: 几何走共享内存（bit48-63）+ App 侧 fail-closed（读不到不挂识别器）已就位"
 
+          # ---- V0.2.21（用户定档）：主悬浮窗 5:3 + 手势重做
+          for s in AevonFloat53V221 AevonFloatBarLongPressV221 AevonFloatBarHoldV221 AevonFloatBottomDblCloseV221 AevonRestoreDefaultV101 AevonSthenoEdgeBarV37 AevonMedusaFrameV37 AevonFloatGlobalV41 AevonEdgeResizeV36; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::浮窗 0.2.21 缺标记 $s"; exit 1; }
+          done
+          grep -q 'contentAspect: CGFloat = 5.0 / 3.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::内容区比例不是固定 5:3"; exit 1; }
+          grep -q 'min(contentClip.bounds.width' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::letterbox 必须用 min 等比缩放（内容完整可见）"; exit 1; }
+          grep -q 'minimumPressDuration = 0.3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::边条长按 0.3s 拖动未实现"; exit 1; }
+          grep -q 'floatBarHoldDelay: CFTimeInterval = 0.3' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::全局通道边条长按裁决未实现"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'restoreDefaultFrame' \
+            && { echo "::error::顶部双击恢复默认不应回潮（0.2.21 已移除）"; exit 1; }
+          grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q '\[\.top,' \
+            && { echo "::error::顶部不应再有任何手势位"; exit 1; }
+          echo "V0.2.21 校验: 5:3 固定比例 + min letterbox + 底/左/右边条长按拖动 + 底边双击关闭 已就位"
+
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4

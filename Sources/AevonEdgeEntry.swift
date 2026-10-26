@@ -1201,6 +1201,14 @@ enum AevonEdgeEntry {
     private static let floatDoubleTapGap: CFTimeInterval = 0.34
     private static let floatDoubleTapRadius: CGFloat = 26
 
+    /// V0.2.21（AevonFloatBarHoldV221）：边条长按拖动 —— 按住 0.3s 才开始移动。
+    /// 期间手指跑出 floatBarHoldRadius 视为误触，整段放弃（不吞不拖）。
+    private static var floatBarPending = false
+    private static var floatBarHoldPoint: CGPoint = .zero
+    private static var floatBarHoldDeadline: CFTimeInterval = 0
+    private static let floatBarHoldDelay: CFTimeInterval = 0.3
+    private static let floatBarHoldRadius: CGFloat = 18
+
     /// 浮窗手势是否正压着某根手指（供吞事件判断）
     private static var floatGestureActive: Bool {
         return floatTouchID != 0 && floatWindow != nil
@@ -2130,10 +2138,10 @@ enum AevonEdgeEntry {
         }
 
         let now = CACurrentMediaTime()
-        // V0.1.1（AevonRestoreDefaultV101）：顶部边条双击 = 恢复默认大小与位置。
-        // 原「双击换档（小窗/大窗）」移除 —— 大窗档近乎铺满整屏且角手柄不可达；
-        // 其余手柄双击不再有任何特殊动作，按普通拖动处理（无位移 = 轻点无动作）。
-        if case .bar(.top) = hit.grab,
+        // V0.2.21（AevonFloatBottomDblCloseV221）：底边双击 = 关闭浮窗。
+        // 原「顶部双击恢复默认大小与位置」随顶部手势区一起移除（0.2.21 用户定档；
+        // 其 CI 历史串 AevonRestoreDefaultV101 收容在 AevonAssertionShim.m）。
+        if case .bar(.bottom) = hit.grab,
            now - floatLastTapAt <= floatDoubleTapGap,
            floatLastTapWindow === hit.window,
            hypot(point.x - floatLastTapPoint.x,
@@ -2142,10 +2150,10 @@ enum AevonEdgeEntry {
             floatLastTapWindow = nil
             floatTouchID = touchID
             floatWindow = hit.window
-            floatGrab = nil              // 恢复默认不拖拽，抬手直接收尾
+            floatGrab = nil              // 双击关闭不拖拽，抬手直接收尾
             floatDeadline = now + floatDragLimit
-            hit.window.restoreDefaultFrame()
-            AevonLog.info("[窗口] 顶部双击 → 恢复默认大小与位置（全局通道）（AevonRestoreDefaultV101）")
+            AevonLog.info("[窗口] 底边双击 → 关闭浮窗（全局通道）（AevonFloatBottomDblCloseV221）")
+            AevonWindowManager.close(bundleID: hit.window.bundleID)
             return true
         }
 
@@ -2153,13 +2161,19 @@ enum AevonEdgeEntry {
         floatWindow = hit.window
         floatGrab = hit.grab
         floatDeadline = now + floatDragLimit
-        hit.window.grabBegin(hit.grab, at: hit.layerPoint)
         switch hit.grab {
         case .bar:
-            AevonLog.info("[窗口] 全局通道开始拖动（移动）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
+            // V0.2.21（AevonFloatBarHoldV221）：长按拖动 —— 先按住 0.3s 才算数，
+            // 期间手指跑出 18pt 视为误触，整段放弃。这里先不 grabBegin。
+            floatBarPending = true
+            floatBarHoldPoint = point
+            floatBarHoldDeadline = now + floatBarHoldDelay
+            AevonLog.info("[窗口] 全局通道按住边条，0.3s 后可拖动 \(Int(point.x)),\(Int(point.y))（AevonFloatBarHoldV221）")
         case .corner:
+            hit.window.grabBegin(hit.grab, at: hit.layerPoint)
             AevonLog.info("[窗口] 全局通道开始拖动（缩放）\(Int(point.x)),\(Int(point.y))（AevonFloatGlobalV41）")
         case .close:
+            hit.window.grabBegin(hit.grab, at: hit.layerPoint)
             AevonLog.info("[窗口] 全局通道命中关闭钮（AevonFloatGlobalV41）")
         }
         return true
@@ -2178,6 +2192,30 @@ enum AevonEdgeEntry {
             clearFloatGesture()
             return false
         }
+        // V0.2.21（AevonFloatBarHoldV221）：边条长按期内的裁决
+        if floatBarPending {
+            if now >= floatBarHoldDeadline {
+                // 按住满 0.3s → 从当前位置开始移动（原点=激活点，窗口不跳）
+                floatBarPending = false
+                guard let grab = floatGrab, case .bar = grab else {
+                    clearFloatGesture()
+                    return false
+                }
+                win.grabBegin(grab, at: AevonEntryHost.floatLayerPoint(fromScreen: point))
+                AevonLog.info("[窗口] 长按达成 → 开始移动（全局通道）（AevonFloatBarHoldV221）")
+            } else if hypot(point.x - floatBarHoldPoint.x,
+                            point.y - floatBarHoldPoint.y) > floatBarHoldRadius {
+                // 按住未满 0.3s 就跑远 = 误触，整段放手（这根手指后续不再归我们）
+                floatBarPending = false
+                clearFloatGesture()
+                AevonLog.info("[窗口] 边条按住未达时长即移动 → 放弃接管（AevonFloatBarHoldV221）")
+                return false
+            } else {
+                // 还在原地按着 —— 继续等，续期防超时清理
+                floatDeadline = now + floatDragLimit
+                return true
+            }
+        }
         floatDeadline = now + floatDragLimit      // 手指还在动就续期
         win.grabUpdate(to: AevonEntryHost.floatLayerPoint(fromScreen: point))
         return true
@@ -2188,6 +2226,18 @@ enum AevonEdgeEntry {
                                                cancelled: Bool) -> Bool {
         guard floatTouchID != 0, touchID == floatTouchID else { return false }
         let win = floatWindow
+        // V0.2.21（AevonFloatBarHoldV221）：长按未达成就抬手 = 一次轻点。
+        // 不拖不落盘（grabBegin 从未发生），但轻点要记双击候选 —— 底边双击=关闭依赖这里。
+        if floatBarPending {
+            floatBarPending = false
+            if !cancelled, let grab = floatGrab, case .bar = grab, win != nil {
+                floatLastTapAt = CACurrentMediaTime()
+                floatLastTapPoint = point
+                floatLastTapWindow = win
+            }
+            clearFloatGesture()
+            return true
+        }
         let layerPoint = AevonEntryHost.floatLayerPoint(fromScreen: point)
         if cancelled {
             win?.grabCancel()
@@ -2214,6 +2264,8 @@ enum AevonEdgeEntry {
         floatWindow = nil
         floatGrab = nil
         floatDeadline = 0
+        floatBarPending = false        // V0.2.21（AevonFloatBarHoldV221）
+        floatBarHoldDeadline = 0
     }
 
     /// 呼出圆盘。圆心固定在屏幕 75% 高处，不再跟随触发点。
