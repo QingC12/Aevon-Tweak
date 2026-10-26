@@ -122,7 +122,7 @@ final class AevonSysEdgeV213: NSObject {
 
         // ④ 登记进系统手势管线。
         let registeredNow = AevonSysEdgeRegister(result, Self.customTypeBase)
-        let path = AevonSysEdgeLastRegisterPath()
+        let path = AevonSysEdgeLastRegisterPath() ?? ""
 
         recognizer = result
         registered = registeredNow
@@ -139,7 +139,7 @@ final class AevonSysEdgeV213: NSObject {
 
     // MARK: - 识别器回调
 
-    @objc private func handle(_ gesture: UIGestureRecognizer) {
+    @objc private func handle(_ gesture: UIPanGestureRecognizer) {
         guard enabled else { return }
 
         let translation = gesture.translation(in: nil)
@@ -211,6 +211,6 @@ final class AevonSysEdgeV213: NSObject {
                 ? "未装（造不出识别器或管理器未就绪）"
                 : "已关闭"
         }
-        return "已装·登记=\(registered ? AevonSysEdgeLastRegisterPath() : "失败")·type=\(typeValue)·边缘区=\(Int(edgeRegion))pt"
+        return "已装·登记=\(registered ? (AevonSysEdgeLastRegisterPath() ?? "") : "失败")·type=\(typeValue)·边缘区=\(Int(edgeRegion))pt"
     }
 }
