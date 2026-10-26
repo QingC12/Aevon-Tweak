@@ -25,6 +25,13 @@ typedef void (*AevonSDVoidFnRect1)(id, SEL, CGRect);
 typedef void (*AevonSDVoidFnInsets1)(id, SEL, UIEdgeInsets);
 typedef void (*AevonSDVoidFnBlock1)(id, SEL, void (^)(id));
 
+/* V0.2.33（AevonSelfSceneAuditV233）：audit_token_t = 32 字节（8×uint32）。
+ * arm64 上 >16B 的结构体返回走 sret（x8 隐藏指针）、结构体参数按引用传 ——
+ * 用与真实签名一致的 typedef 调 objc_msgSend，编译器自动生成正确 ABI。 */
+typedef struct { uint32_t val[8]; } AevonSDAuditToken;
+typedef AevonSDAuditToken (*AevonSDAuditTokenGetter)(id, SEL);
+typedef void (*AevonSDAuditTokenRegister)(id, SEL, AevonSDAuditToken);
+
 /// CI 标记锚（used 常量；ObjC used 常量是 strings 检查的最可靠载体）
 __attribute__((used)) static const char AevonSelfSceneV228Marker[] = "AevonSelfSceneV228";
 __attribute__((used)) static const char AevonSelfSceneFallbackV228Marker[] = "AevonSelfSceneFallbackV228";
@@ -33,6 +40,11 @@ __attribute__((used)) static const char AevonSelfSceneRBSV230Marker[] = "AevonSe
 __attribute__((used)) static const char AevonSelfScenePidV231Marker[] = "AevonSelfScenePidV231";
 __attribute__((used)) static const char AevonSelfSceneFGV232Marker[] = "AevonSelfSceneFGV232";
 __attribute__((used)) static const char AevonForegroundProbeV232Marker[] = "AevonForegroundProbeV232";
+/* V0.2.33（Aevon(8) 日志：系统 App 显示、第三方 Sileo 黑屏，SB 侧链路完全一致）：
+ * clientIdentity 换 FrontBoardAppLauncher（LiveContainer 同作者、SB 内呈现任意 App）
+ * 的 identityForBundleID: 路线 + FBProcessManager registerProcessForAuditToken:。 */
+__attribute__((used)) static const char AevonSelfSceneBundleIDV233Marker[] = "AevonSelfSceneBundleIDV233";
+__attribute__((used)) static const char AevonSelfSceneAuditV233Marker[] = "AevonSelfSceneAuditV233";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -194,6 +206,22 @@ static id AevonSelfSceneCreateInner(NSString *bundleID, NSInteger pidHint, doubl
     }
     if (processIdentity == nil) { if (outErr) { *outErr = @"process-identity"; } return nil; }
 
+    // ── 1.5. FBProcessManager 进程注册（AevonSelfSceneAuditV233，FrontBoardAppLauncher 同款）──
+    // 注册失败绝不阻断（App 是 FrontBoard 正常拉起的，理论上 SB 已管理；注册是补齐对齐项）。
+    @try {
+        Class pmCls = NSClassFromString(@"FBProcessManager");
+        id pm = (pmCls != nil) ? AevonSDClassFactory(@"FBProcessManager", @"sharedInstance") : nil;
+        SEL auditSel = NSSelectorFromString(@"auditToken");
+        SEL regSel = NSSelectorFromString(@"registerProcessForAuditToken:");
+        if (pm != nil && handle != nil &&
+            [handle respondsToSelector:auditSel] && [pm respondsToSelector:regSel]) {
+            AevonSDAuditToken token = ((AevonSDAuditTokenGetter)objc_msgSend)(handle, auditSel);
+            ((AevonSDAuditTokenRegister)objc_msgSend)(pm, regSel, token);
+        }
+    } @catch (NSException *exception) {
+        // 静默：这条注册是锦上添花，任何异常都不值得中断场景创建
+    }
+
     // ── 2. 场景管理器 ──
     id manager = AevonSDClassFactory(@"FBSceneManager", @"sharedInstance");
     if (manager == nil) { if (outErr) { *outErr = @"fb-manager-nil"; } return nil; }
@@ -220,8 +248,19 @@ static id AevonSelfSceneCreateInner(NSString *bundleID, NSInteger pidHint, doubl
                                             @"identityForIdentifier:", sceneID);
     if (sceneIdentity == nil) { if (outErr) { *outErr = @"scene-identity-nil"; } return nil; }
     AevonSDSetObject(definition, "identity", sceneIdentity);
+    /* V0.2.33（AevonSelfSceneBundleIDV233）：clientIdentity 双路线。
+     * 0.2.30~0.2.32 用 identityForProcessIdentity:（LiveContainer 路线）：系统 App
+     * 全部渲染成功，但第三方（Sileo）黑屏且 SB 侧取证串与系统 App 完全一致 ——
+     * 卡点在 App 端 scene session 连接。FrontBoardAppLauncher（khanhduytran0，
+     * LiveContainer 同作者，SB 内呈现任意 App 场景，公开源码 ViewController.m_sb）
+     * 用的是 identityForBundleID: —— 同环境（SB 内）同目标的已验证形态，优先走；
+     * processIdentity 保留为兜底。 */
     id clientIdentity = AevonSDClassFactory1(@"FBSSceneClientIdentity",
-                                             @"identityForProcessIdentity:", processIdentity);
+                                             @"identityForBundleID:", bundleID);
+    if (clientIdentity == nil) {
+        clientIdentity = AevonSDClassFactory1(@"FBSSceneClientIdentity",
+                                              @"identityForProcessIdentity:", processIdentity);
+    }
     if (clientIdentity == nil) { if (outErr) { *outErr = @"client-identity-nil"; } return nil; }
     AevonSDSetObject(definition, "clientIdentity", clientIdentity);
     id specification = AevonSDClassFactory(@"UIApplicationSceneSpecification", @"specification");

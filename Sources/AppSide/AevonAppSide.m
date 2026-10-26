@@ -177,6 +177,15 @@ __attribute__((used)) static const char AevonAppRingGoneGuardV212Marker[] = "Aev
  * 日志字面量里的 AevonAppGeomNotifyV220 查不到，断言误报缺标记）。 */
 __attribute__((used)) static const char AevonAppGeomNotifyV220Marker[] = "AevonAppGeomNotifyV220";
 __attribute__((used)) static const char AevonAppGeomFailClosedV220Marker[] = "AevonAppGeomFailClosedV220";
+/* V0.2.33（AevonAppSceneProbeV233）：App 端 scene 连接探针（只读取证 + 透传）。
+ * Aevon(8) 判读：0.2.32 自建场景 SB 侧链路全绿，系统 App 渲染成功、第三方 Sileo
+ * 黑屏且取证串与系统 App 完全一致 —— 卡点在 App 端 scene session 连接层。
+ * 本探针回答两个问题（下轮日志直接判读）：
+ *   Q1 App 端收到第二场景的连接请求了吗（拦截 delegate 的
+ *      application:configurationForConnectingSceneSession:options:，只记日志全透传）；
+ *   Q2 场景生命周期事件走到了哪一步（UISceneWillConnect/DidActivate/DidDisconnect）。 */
+__attribute__((used)) static const char AevonAppSceneProbeV233Marker[] = "AevonAppSceneProbeV233";
+__attribute__((used)) static const char AevonAppSceneSwizzleV233Marker[] = "AevonAppSceneSwizzleV233";
 
 #pragma mark - 日志
 
@@ -340,8 +349,91 @@ static NSString *AevonAppPrefString(NSString *key) {
     return result;
 }
 
+#pragma mark - scene 连接探针（V0.2.33，AevonAppSceneProbeV233）
+
+/* session / options / scene 是否属于 Aevon 自建场景（描述串含前缀即命中，
+ * 只读不改 —— 探针纪律）。 */
+static BOOL AevonAppSceneIsOurs(id obj) {
+    if (obj == nil) { return NO; }
+    @try {
+        NSString *desc = [obj description];
+        return [desc rangeOfString:@"com.aevon.float-"].location != NSNotFound;
+    } @catch (NSException *exception) { return NO; }
+}
+
+static BOOL gAevonAppSceneSwizzled = NO;
+
+/* 拦截 delegate 的 application:configurationForConnectingSceneSession:options:。
+ * 只在 Aevon 自建场景的连接上记日志，其余全部原样透传（零行为改动）。
+ * imp_implementationWithBlock：block 首参是 receiver、后续是方法参数（无 _cmd），
+ * 原 IMP 用固定 SEL 手动回发。任何异常都吞掉 —— 探针绝不能影响宿主 App。 */
+static void AevonAppSceneSwizzleConnecting(id delegate) {
+    if (gAevonAppSceneSwizzled || delegate == nil) { return; }
+    @try {
+        Class cls = object_getClass(delegate);
+        SEL sel = NSSelectorFromString(@"application:configurationForConnectingSceneSession:options:");
+        Method m = class_getInstanceMethod(cls, sel);
+        if (m == NULL) {
+            AevonAppLog(@"scene 探针：delegate(%@) 未实现 configurationForConnecting（老式 AppDelegate，UIKit 自动桥接）（AevonAppSceneSwizzleV233）",
+                        NSStringFromClass(cls) ?: @"?");
+            return;
+        }
+        IMP orig = method_getImplementation(m);
+        __block IMP origIMP = orig;
+        id probeBlock = ^(id self_, id application, id connectingSceneSession, id options) {
+            BOOL ours = AevonAppSceneIsOurs(connectingSceneSession) || AevonAppSceneIsOurs(options);
+            id (*fn)(id, SEL, id, id, id) = (id (*)(id, SEL, id, id, id))origIMP;
+            id cfg = fn(self_,
+                        NSSelectorFromString(@"application:configurationForConnectingSceneSession:options:"),
+                        application, connectingSceneSession, options);
+            if (ours) {
+                NSString *delegateClass = @"?";
+                @try { delegateClass = [cfg valueForKey:@"delegateClass"] ?: @"nil"; }
+                @catch (NSException *e) { delegateClass = @"(取不到)"; }
+                AevonAppLog(@"scene 连接请求（App 端已收到）：session=%@ options=%@ → 配置=%@ delegateClass=%@（AevonAppSceneSwizzleV233）",
+                            connectingSceneSession, options, cfg ?: @"nil", delegateClass);
+            }
+            return cfg;
+        };
+        method_setImplementation(m, imp_implementationWithBlock(probeBlock));
+        gAevonAppSceneSwizzled = YES;
+        AevonAppLog(@"scene 探针：已挂 configurationForConnecting 拦截（delegate=%@，只记日志全透传）（AevonAppSceneSwizzleV233）",
+                    NSStringFromClass(cls) ?: @"?");
+    } @catch (NSException *exception) {
+        AevonAppLog(@"scene 探针安装异常：%@（不影响宿主）", exception.reason ?: @"未知");
+    }
+}
+
+/* 场景生命周期通知观察（WillConnect / DidActivate / DidDisconnect）。
+ * 判读规则：黑屏 App 上 WillConnect 有 = 连接到了 App 端，卡在 session 配置/建窗；
+ * WillConnect 无 = 连接在更早环节被拒（SB clientProvider 或 App 端 UIKit 入口）。 */
+static void AevonAppSceneInstallObservers(void) {
+    @try {
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserverForName:@"UISceneWillConnectNotification" object:nil queue:nil
+                    usingBlock:^(NSNotification *note) {
+            if (AevonAppSceneIsOurs(note.object)) {
+                AevonAppLog(@"scene 生命周期：WillConnect（连接已进 App 端生命周期）（AevonAppSceneProbeV233）");
+            }
+        }];
+        [nc addObserverForName:@"UISceneDidActivateNotification" object:nil queue:nil
+                    usingBlock:^(NSNotification *note) {
+            if (AevonAppSceneIsOurs(note.object)) {
+                AevonAppLog(@"scene 生命周期：DidActivate（场景已激活）（AevonAppSceneProbeV233）");
+            }
+        }];
+        [nc addObserverForName:@"UISceneDidDisconnectNotification" object:nil queue:nil
+                    usingBlock:^(NSNotification *note) {
+            if (AevonAppSceneIsOurs(note.object)) {
+                AevonAppLog(@"scene 生命周期：DidDisconnect（场景断开）（AevonAppSceneProbeV233）");
+            }
+        }];
+    } @catch (NSException *exception) {
+        AevonAppLog(@"scene 通知观察安装异常：%@（不影响宿主）", exception.reason ?: @"未知");
+    }
+}
+
 /* 本进程是否正被装在浮窗里。
- *
  * Aevon(95) 主诉「悬浮内的 APP 无法滑动，只能点击」的结构性来源：
  * 浮窗里跑的是真实 App 场景，但它被缩到 289x626 摆在屏幕上某处 ——
  * 此时「屏幕右缘 46pt」根本不代表用户想呼盘，只代表他手指落在浮窗右侧。
@@ -1004,6 +1096,16 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
         AevonAppFileChannelProbe();
         [gAevonAppLock unlock];
     }
+
+    /* V0.2.33（AevonAppSceneProbeV233）：scene 连接探针，只读取证。
+     * 通知观察无条件装；delegate 拦截此刻装一次，delegate 未就绪时 1.5s 后再试一次
+     * （幂等，装过即止）。探针对非 Aevon 场景零输出零改动。 */
+    AevonAppSceneInstallObservers();
+    AevonAppSceneSwizzleConnecting([[UIApplication sharedApplication] delegate]);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonAppSceneSwizzleConnecting([[UIApplication sharedApplication] delegate]);
+    });
 
     /* V0.2.1：默认开。0.2.0 的「默认关」是为了让安全闸先自证一轮；
      * Aevon(87) 证明注入/读域/日志通道全通后，真接管就是这个功能的本体。
