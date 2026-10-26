@@ -104,13 +104,25 @@ enum AevonBandHint {
         AevonGeometryOverlay.preview(duration: duration)
     }
 
-    /// 配置变了 → 立刻按最新偏好重排（常开模式下会保持可见）。
+    /// 配置变了 → 立刻按最新偏好重排。
+    ///
+    /// 只有用户主动打开了「显示区域预览」时才在这里主动亮 3 秒；默认关的情况下，
+    /// 亮不亮由 `AevonEdgeEntry` 的预览请求决定（拖滑条 / 进设置页），
+    /// 这样每次注销重启不会在屏幕上先闪一块色板。
     static func refresh() {
-        AevonGeometryOverlay.sync()
+        guard AevonRightEdge.showBand else {
+            AevonGeometryOverlay.sync()
+            return
+        }
+        show(duration: 3.0)
     }
 
     /// 接管成功闪一下（接管带边框加粗 0.35 秒）。
+    ///
+    /// 仍然只在用户主动打开可视化时才有反馈 —— 不然每次接住手指屏幕上都会闪一下。
     static func flash() {
+        guard AevonRightEdge.enabled, AevonRightEdge.showBand else { return }
+        show(duration: 0.35)
         AevonGeometryOverlay.flashEdge()
     }
 
