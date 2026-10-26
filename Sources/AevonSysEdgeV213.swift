@@ -48,20 +48,21 @@ final class AevonSysEdgeV213: NSObject {
     /// began 后允许多久完成定向。0.12 秒 ≈ 7 帧，足够看清方向；超过就必须 Failed 归还。
     private let begunBudget: Double = 0.12
 
-    /// 是否启用：关掉即整条通道不装（右缘回到 0.2.12 的老通道）。
+    /// 是否启用：**V0.2.17 起常开**（设置页不再提供开关，只留偏好域这个逃生口）。
     ///
-    /// V0.2.14：**默认翻转为关**。Aevon(100) 的真机数据（2 分 34 秒、15 次呼盘）：
-    ///   · 本通道呼盘 **0 次**（`来源 systemedge` = 0；12 次 appedge + 3 次 global）；
-    ///   · 识别器只 began 过 1 次，并在 began 里**扣了 2.03 秒**才 Failed；
-    ///   · began 落点 (390,778) 距右缘 40pt —— 远超设定的 30pt 边缘区，
-    ///     说明 `edges` / `_setEdgeRegionSize:` 对私有 init 造出来的这个识别器并不成立；
-    ///   · 判向时 `translation(in:)` 给出 dx=-421 dy=-796（手指根本到不了的值），读数不可用。
+    /// 沿革：
+    ///   · 0.2.13 默认开（首次试验）；Aevon(100) 判读后 0.2.14 翻成默认关 —— 那一轮它
+    ///     呼盘 0 次，却有一次在 began 上扣了 2.03 秒，把同期的系统手势全排在后面；
+    ///   · 0.2.14 补了两处（位移改用自己的 began 落点、began 后 0.12 秒看门狗），
+    ///     0.2.16 再加「圆盘一开就只喂指针、不再判向」；
+    ///   · Aevon(103) 的 12 次呼盘里这条通道 6 次当先（判向成立用时 15~49ms，
+    ///     零次长扣、零次「began 后 120ms 未定向」）—— 它已经是最稳的一条。
     ///
-    /// 结论：`addGestureRecognizer:withType:` 这个接口在 17.3.1 上是**通的**（登记成功、
-    /// 识别器真的收到触摸），但用它来抢右缘这只手，比它带来的干扰更贵。
-    /// 保留实现与开关，默认关；以后要再研究，打开就能复现这次的取证。
+    /// 用户看不到这个开关就等于不会被误关（0.2.14~0.2.16 的文案还写着「0 次呼盘、
+    /// 实验」，照那个说明关掉它，右缘会直接少掉一条最快通道）。
+    /// 真要关：`defaults write com.Aevon SysEdgeEnabled -bool NO`。
     private var enabled: Bool {
-        return AevonPrefs.bool("SysEdgeEnabled", default: false)
+        return AevonPrefs.bool("SysEdgeEnabled", default: true)
     }
 
     /// 边缘区宽度（pt）。**默认 30**：
@@ -93,10 +94,10 @@ final class AevonSysEdgeV213: NSObject {
     // MARK: - 安装
 
     func install(attempt: Int = 0) {
-        if attempt == 0 { Self.migrateOffOnceV214() }
+        if attempt == 0 { Self.migrateOnOnceV217() }
         guard enabled else {
             if attempt == 0 {
-                AevonLog.info("[系统手势] 已关闭（SysEdgeEnabled=否），右缘走全局通道老路（AevonSysEdgeV213）")
+                AevonLog.info("[系统手势] 已被偏好域手动关闭（SysEdgeEnabled=否），右缘只走热区 + App 侧通道（AevonSysEdgeV213）")
             }
             return
         }
@@ -153,7 +154,7 @@ final class AevonSysEdgeV213: NSObject {
         installedLogged = true
 
         if registeredNow {
-            AevonLog.info("[系统手势] 登记成功 via \(path)；type=\(typeValue) 边缘区=\(Int(edgeRegion))pt 判向=\(Int(distance))pt 放行hook=\(allowOK ? "是" : "否")（AevonSysEdgeV213 AevonSysEdgeWithTypeV213 AevonSysEdgeAllowTypeV213 AevonSysEdgeRegionV213）")
+            AevonLog.info("[系统手势] 登记成功 via \(path)；type=\(typeValue) 边缘区=\(Int(edgeRegion))pt 判向=\(Int(distance))pt 放行hook=\(allowOK ? "是" : "否")（AevonSysEdgeV213 AevonSysEdgeWithTypeV213 AevonSysEdgeAllowTypeV213 AevonSysEdgeRegionV213 AevonSysEdgeAlwaysOnV217）")
         } else {
             AevonLog.warn("[系统手势] 登记失败（\(path)）→ 本通道不生效，右缘走全局通道（AevonSysEdgeV213 AevonSysEdgeWithTypeV213）")
         }
@@ -264,17 +265,22 @@ final class AevonSysEdgeV213: NSObject {
         guardWork = nil
     }
 
-    // MARK: - 老用户一次性迁移（V0.2.14 / AevonSysEdgeOffMigrateV214）
+    // MARK: - 老用户一次性迁移（V0.2.14 关闭 → V0.2.17 常开 / AevonSysEdgeAlwaysOnV217）
 
-    /// 0.2.13 的默认值是「开」，装过那版的设备里这个键可能已经被写成年 true。
-    /// 只改代码里的 default 只影响「从没写过这个键」的设备 —— 老用户必须写盘一次。
-    /// 与 0.1.18 抬带宽、0.1.17 复位是同一种做法：标记键 + 一次性写盘。
-    private static func migrateOffOnceV214() {
-        let marker = "SysEdgeOffMigratedV214"
+    /// 0.2.13 默认开、0.2.14 默认关，两版都写过盘 —— 装过它们的设备里这个键可能是
+    /// `false`，只改代码里的 default 救不了（CFPreferences 里已有值优先）。
+    /// 0.2.17 把开关从设置页撤掉之后，用户已无途径自己翻回来，所以这里**一次性写 true**，
+    /// 并立新标记；此后 `defaults write com.Aevon SysEdgeEnabled -bool NO` 仍可长期关掉它
+    /// （标记只跑一次，不会把用户的选择顶回去）。
+    ///
+    /// 历史标记 `AevonSysEdgeOffMigrateV214`（0.2.14 那条「写了一辈子 false」的迁移）
+    /// 已作废，实现删除，标记由 AevonAssertionShim.m 的 used 常量继续收容。
+    private static func migrateOnOnceV217() {
+        let marker = "SysEdgeOnMigratedV217"
         if AevonPrefs.bool(marker, default: false) { return }
-        AevonPrefs.set("SysEdgeEnabled", false)
+        AevonPrefs.set("SysEdgeEnabled", true)
         AevonPrefs.set(marker, true)
-        AevonLog.info("[系统手势] 老用户一次性迁移：SysEdgeEnabled → 关（0.2.13 默认开，本版默认关）（AevonSysEdgeOffMigrateV214）")
+        AevonLog.info("[系统手势] 一次性迁移：SysEdgeEnabled → 开（0.2.17 起常开、设置页不再提供开关）（AevonSysEdgeAlwaysOnV217）")
     }
 
     // MARK: - 诊断
@@ -288,7 +294,7 @@ final class AevonSysEdgeV213: NSObject {
     /// 一行自述，给 P6 配置快照用。
     func summary() -> String {
         if recognizer == nil {
-            return AevonPrefs.bool("SysEdgeEnabled", default: false)
+            return AevonPrefs.bool("SysEdgeEnabled", default: true)
                 ? "未装（造不出识别器或管理器未就绪）"
                 : "已关闭"
         }

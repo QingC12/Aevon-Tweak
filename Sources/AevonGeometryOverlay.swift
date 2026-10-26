@@ -77,7 +77,7 @@ enum AevonGeometryOverlay {
     /// 显示条件只有两条：**开关总闸打开** +（正在预览 或 用户把「显示接管带」常开了）。
     /// 圆盘展开期间一律不画 —— 盘上的图标需要干净背景。
     static func sync() {
-        guard AevonPrefs.bool("Enabled", default: false) else { hideNow(); return }
+        guard AevonPrefs.bool("Enabled", default: true) else { hideNow(); return }
         guard !AevonRingMenu.isPresented else { hideNow(); return }
         guard let root = AevonEntryHost.activeRoot, root.bounds.width > 1, root.bounds.height > 1 else {
             hideNow()

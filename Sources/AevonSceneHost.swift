@@ -67,8 +67,9 @@ final class AevonSceneHost {
         // V0.0.13：浮窗里的 App 要能直接点。
         // 以前这里硬关掉交互，等于只能看画面。presentationView 的触摸会由 UIKit
         // 通过 presenter 的 UI 连接转发进 App 进程，不需要我们自己造触摸事件。
-        // 开关默认开，若怀疑触摸引发异常可在 设置 → Aevon 关掉。
-        let interactive = AevonPrefs.bool("TouchEnabled", default: true)
+        // V0.2.17（AevonFloatTouchAlwaysV217）：原先那个「浮窗内可触摸」开关撤掉了 ——
+        // 关掉它等于把浮窗变成一张截图，没有第二种用法；这里恒为开。
+        let interactive = true   // AevonFloatTouchAlwaysV217
         host.isUserInteractionEnabled = interactive
         host.clipsToBounds = true
         view.frame = host.bounds

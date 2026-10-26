@@ -42,8 +42,9 @@ enum AevonProbeV107 {
 
     static func runAll() {
         guard !ran else { return }
-        guard AevonPrefs.bool("Enabled", default: false) else { return }
-        guard AevonPrefs.bool("ProbeV107", default: true) else {
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
+        // V0.2.17（AevonProbeDefaultOffV217）：圆盘手势定档，探针默认关（每次启动约 70 行）。
+        guard AevonPrefs.bool("ProbeV107", default: false) else {
             AevonLog.info("[探针] 设置里已关闭运行时探针（ProbeV107=关），本次跳过（AevonProbeV107）")
             return
         }
@@ -277,10 +278,13 @@ enum AevonProbeV107 {
         // Aevon(78) 的 P6 打出 `EdgeGestureEnabled=0`，而当时右缘通道明明是装着的 ——
         // 因为这里一律用 default:false 读，键未落盘时就会把「默认开」的开关报成 0。
         // 探针报错一个数字，就能让人错判一整个版本。
-        let keys: [(String, Bool)] = [("Enabled", false), ("EdgeGestureEnabled", true),
-                                      ("RightEdgeTakeover", false), ("RightEdgeShowBand", false),
-                                      ("TouchEnabled", true), ("SwitcherLongPress", false),
-                                      ("CrashGuard", false), ("LogEnabled", true), ("ProbeV107", false)]
+        // V0.2.17（AevonPrefsSlimV217）：开关撤掉六个，快照跟着只剩这一页真有的；
+        // 撤掉的那几个（RightEdgeTakeover / BandTakeoverFromBegan / SysEdgeEnabled /
+        // RightEdgeShowBand / TouchEnabled / SwitcherLongPress）不再打印 ——
+        // 它们已经不影响任何行为了，报出来只会让人以为「还能调」。
+        let keys: [(String, Bool)] = [("Enabled", true), ("EdgeGestureEnabled", true),
+                                      ("AppSideEnabled", true), ("CrashGuard", true),
+                                      ("LogEnabled", true), ("ProbeV107", false)]
         let snapshot = keys.map { pair in "\(pair.0)=\(AevonPrefs.bool(pair.0, default: pair.1) ? 1 : 0)" }
         AevonLog.info("[探针P6] 开关：\(snapshot.joined(separator: " "))（AevonProbeP6V107 AevonProbeDefaultV111）")
 
@@ -291,7 +295,7 @@ enum AevonProbeV107 {
         let bandMode = AevonRightEdge.enabled
             ? "右缘接管带·按下即接管（\(AevonRightEdge.summary(in: UIScreen.main.bounds))；带内起手需距右缘 ≤\(Int(AevonRightEdge.width))pt）"
             : "已关（整段交回 App）"
-        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；右缘归口=\(bandMode)，可视化=\(AevonRightEdge.showBand ? "开（按需提示条：开关变化 3 秒 / 接管成功 0.35 秒后自动消失）" : "关（想看范围请打开「显示右缘接管带」）")；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")·本版停手不接收触摸（AevonSystemGestureV110 AevonBandHoldMovedV112 AevonBandTakeoverBeganV113 AevonPipelineStandDownV113 AevonRightEdgeTakeoverV115 AevonRightEdgeShowBandV116 AevonNoBandDrawV117 AevonBandHintV117 AevonRightEdgeDefaultV118 AevonRightEdgeMissHintV118）")
+        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；右缘归口=\(bandMode)，可视化=\(AevonRightEdge.showBand ? "常亮" : "按需（进「细节调整」/ 拖滑条时亮 3 秒，AevonGeomPreviewLiveV210）")；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")·本版停手不接收触摸（AevonSystemGestureV110 AevonBandHoldMovedV112 AevonBandTakeoverBeganV113 AevonPipelineStandDownV113 AevonRightEdgeTakeoverV115 AevonRightEdgeShowBandV116 AevonNoBandDrawV117 AevonBandHintV117 AevonRightEdgeDefaultV118 AevonRightEdgeMissHintV118）")
     }
 
     // MARK: - 供手势通道复用（AevonSystemGestureV105 的兜底路径）

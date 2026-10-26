@@ -22,9 +22,9 @@ private func initializeAevon() {
     let safeToContinue = AevonCrashGuard.install()
     guard safeToContinue else { return }
 
-    // 3) 总开关（默认关闭）
-    guard AevonPrefs.bool("Enabled", default: false) else {
-        AevonLog.info("Aevon 未启用（默认关闭）。请在 设置 → Aevon 打开「启用插件」后注销生效。")
+    // 3) 总开关（V0.2.17 起**默认开**：装上就生效，用户要停手时才去关）
+    guard AevonPrefs.bool("Enabled", default: true) else {
+        AevonLog.info("Aevon 未启用（偏好域 Enabled=否；崩溃保护或用户手动关闭）。请在 设置 → Aevon 打开「启用插件」后注销生效。")
         return
     }
 
@@ -54,7 +54,7 @@ private func initializeAevon() {
     // 4) 实验性 hook 一律延迟 10 秒，且必须用户显式打开对应开关
     let delay: TimeInterval = 10
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-        guard AevonPrefs.bool("Enabled", default: false) else {
+        guard AevonPrefs.bool("Enabled", default: true) else {
             AevonLog.info("[启动] 延迟期间插件被关闭，不安装实验 hook")
             return
         }
@@ -64,14 +64,16 @@ private func initializeAevon() {
 }
 
 private func installExperimentalHooks() {
-    // 实验入口：多任务卡片长按开窗（默认关）
-    if AevonPrefs.bool("SwitcherLongPress", default: false) {
-        AevonSwizzle.install(targetClassName: "SBAppSwitcherPageView",
-                             original: Selector(("initWithFrame:")),
-                             replacementClass: AevonSwitcherCardHooks.self,
-                             replacement: #selector(AevonSwitcherCardHooks.sk_sbaspv_initWithFrame(_:)))
-        AevonLog.info("[启动] 已安装「多任务卡片长按」hook（实验）")
-    }
+    /*
+     * 「多任务卡片长按开窗」入口已删除（V0.2.17 / AevonPrefsSlimV217）。
+     *
+     * 它 hook `SBAppSwitcherPageView -initWithFrame:` 给每张卡片挂 0.5 秒长按，
+     * 然后要求该 App **已经在运行** 才能窗口化 —— 从 0.1.x 起就没在任何一版真机日志里
+     * 成功打开过一次（日志里只有 `[手势] …未在运行，跳过` 这一类）。设置里留着一个
+     * 永远不生效的「（实验）」开关，比没有更糟：用户打开它、试几次、什么也没发生。
+     * 这里停掉的是安装入口，AevonSwitcherCardHooks / AevonGestureHandler 的实现留在
+     * 仓库里只作参考，运行期不再有任何代码路径。
+     */
 
     /*
      * V0.1.5（AevonNoFBSWriteV105）：**FBScene updateSettings 的写入 hook 已整体删除**。

@@ -333,7 +333,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
     /// 装带视图 + 识别器 + 管线登记。入口容器还没就绪时自动重试（最多 12 秒）。
     func install(attempt: Int = 0) {
-        guard AevonPrefs.bool("Enabled", default: false) else { return }
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
         guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else {
             AevonLog.info("[手势] 右侧边缘呼出已关闭，不安装系统手势管线（AevonSystemGestureV105）")
             return
@@ -529,7 +529,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
 
     /// 前置闸门（命中与观察共用）：开关、App 前台、圆盘未开、避开热区与浮窗。
     private func commonGatesOK() -> Bool {
-        guard AevonPrefs.bool("Enabled", default: false),
+        guard AevonPrefs.bool("Enabled", default: true),
               AevonPrefs.bool("EdgeGestureEnabled", default: true) else { return false }
         // 只在全屏 App 前台时接管：桌面有自己的热区语义，不能被这条带盖住右侧图标
         guard AevonEntryHost.mountedInAppScene else { return false }
@@ -587,7 +587,7 @@ final class AevonSystemGestureV105: NSObject, UIGestureRecognizerDelegate {
                 // Aevon(78) 里 8 条「距右缘 8pt 起手窗外」其实是被**热区**挡的（热区优先级更高），
                 // 文案写错了，等于自己给自己制造了一个假线索。
                 var why: [String] = []
-                if !AevonPrefs.bool("Enabled", default: false) { why.append("插件未启用") }
+                if !AevonPrefs.bool("Enabled", default: true) { why.append("插件未启用") }
                 if !AevonPrefs.bool("EdgeGestureEnabled", default: true) { why.append("右缘呼出已关") }
                 if !AevonEntryHost.mountedInAppScene { why.append("App 非前台") }
                 if ringOpen { why.append("圆盘开着") }

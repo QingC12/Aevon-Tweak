@@ -116,9 +116,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>④ 右缘接管带几何</string>
+			<string>④ App 内右缘接管带几何</string>
 			<key>footerText</key>
-			<string>只有一级页那个「右缘接管带」开关打开时才有意义：决定那条带多宽、覆盖多高。</string>
+			<string>这两根滑条决定**每个 App 进程里**那条右缘起手带有多宽、覆盖多高（0.2.7 起全 App 生效）。带越窄，误触越少、越要求起手贴边；带内的轻点会延迟到抬手才生效，所以不建议拉大。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -138,7 +138,7 @@
 			<key>default</key>
 			<integer>46</integer>
 			<key>footerText</key>
-			<string>可调范围 8 ~ 140pt，默认 46。取 8 = 只认最贴边的 8pt（最不容易误触，要求起手非常贴边）；取 30 左右可以保住抖音右侧的点赞 / 评论 / 收藏按钮；取 46 以上命中率最高。你实测的四个落点距右缘 12 / 19 / 25 / 42pt，46pt 能盖住其中 3 个。拖动时橙色框实时变宽变窄。</string>
+			<string>可调范围 8 ~ 140pt，默认 46。取 8 = 只认最贴边的 8pt（最不容易误触，要求起手非常贴边，Aevon(103) 实测这一档最稳）；取 30 左右可以保住抖音右侧的点赞 / 评论 / 收藏按钮；取 46 以上命中率最高，代价是带内轻点都要等到抬手。拖动时橙色框实时变宽变窄。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -158,27 +158,7 @@
 			<key>default</key>
 			<integer>60</integer>
 			<key>footerText</key>
-			<string>可调范围 6% ~ 100%，默认 60（= 只覆盖下半屏，从屏高 40% 到底部，上半屏右侧完全不受影响）。6% ≈ 底部 56pt 的右下角一小块，最不容易误触；拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。拖动时橙色框的上边界实时升降。急救：三根手指同时按下 = 立刻释放全部接管并关掉接管带。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>RightEdgeShowBand</string>
-			<key>label</key>
-			<string>显示区域预览</string>
-			<key>infoText</key>
-			<string>打开后屏幕上一直标着两块范围：青色实线框 = 呼出热区，橙色实线框 = 右缘接管带。每个框旁边的胶囊标签写着当前的实际尺寸，跟着滑条实时变。
-
-接管带开关没开时，橙色框会半透明并标「未启用」—— 可以先看清范围再决定开不开。
-
-不打开这个开关也能看：进这一页会自动亮 3 秒，拖任意一根滑条时也会一直亮着跟手变形。
-
-只是绘制：不接触摸、不参与布局，看不见它也不影响功能。</string>
+			<string>可调范围 6% ~ 100%，默认 60（= 只覆盖下半屏，从屏高 40% 到底部，上半屏右侧完全不受影响）。6% ≈ 底部 56pt 的右下角一小块，最不容易误触；拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。拖动时橙色框的上边界实时升降。急救：任何界面三根手指同时按下 = 立刻释放全部接管并退出。</string>
 		</dict>
 	</array>
 	<key>title</key>

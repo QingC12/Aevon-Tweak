@@ -119,7 +119,8 @@ final class AevonRingIcon: UIView {
 ///      再按住圆心 1 秒（或按一下就松手）→ 退出旋转，回到选择模式。
 ///   4. 旋转中把手指移到盘外松手 → 收起圆盘（不打开任何 App）。
 ///   5. 唤出圆盘的那根手指**不必抬起**：它直接从边缘滑进圆盘就能选图标；
-///      它若在盘外抬起，圆盘保持展开等下一次触摸（不再需要「抬手再摸一次」）。
+///      一旦抬起而没落在图标 / 圆心上 → 圆盘立刻收起（V0.2.17 / AevonRingLiftDismissV217，
+///      取代 0.0.28 的「盘外抬手保持展开」AevonRingKeepOpenV28）。
 ///   6. **屏幕上没有任何文字**（圆心、底部都没有）—— 状态只靠圆心图标 / 颜色和动效表达。
 ///
 /// 触摸来源去重：唤出圆盘的那根手指可能同时被「边缘手势条」「窗口 sendEvent 探针」
@@ -761,6 +762,8 @@ final class AevonRingMenu: UIView {
         cancelCenterHold()
         pointerPoint = point
         if isInsideRingArea(point) { pointerEverInsideRing = true }
+        // 取证用：这根手指这一次有没有进过盘内（0.2.17 起不再影响「收不收」，
+        // 只写进日志 —— 用户报「刚划出来就没了」时，靠它区分是抬手太早还是触发太晚）
         let everInside = pointerEverInsideRing
         clearPointer()
 
@@ -793,12 +796,14 @@ final class AevonRingMenu: UIView {
             return
         }
 
-        // ④ 盘外松手：进过圆盘 = 取消；从没进过（就是唤出圆盘那一下）= 圆盘保持展开
-        if !isInsideRingArea(point), !everInside {
-            AevonLog.info("[圆盘] 唤出圆盘的手指已抬起，圆盘保持展开等待选择（AevonRingKeepOpenV28）")
-            return
-        }
-        AevonLog.info("[圆盘] 松手未选中（\(isInsideRingArea(point) ? "空白处" : "盘外")），收起圆盘")
+        // ④ 盘外 / 空白处松手：**一律收起**（V0.2.17 / AevonRingLiftDismissV217）
+        //
+        // 0.0.28 ~ 0.2.16 这里是「从没进过圆盘（就是唤出圆盘那一下）→ 圆盘保持展开等下一次触摸」
+        // （旧标记 AevonRingKeepOpenV28，0.2.17 起作废）。用户 Aevon(103) 的结论很直接：
+        // 松开就该收起 —— 圆盘的用法是「按住不松、直接滑到图标上再松手」（0.2.16 的
+        // 指针通道交接就是为了这条路），没松手就不该有第二个状态。
+        // 留着「保持展开」只有一个后果：呼盘那一下抬起，屏上多一个必须再点一次才消失的圆盘。
+        AevonLog.info("[圆盘] 松手未选中（\(isInsideRingArea(point) ? "空白处" : "盘外")，进过盘内=\(everInside ? "是" : "否")），收起圆盘（AevonRingLiftDismissV217）")
         setHovered(nil)
         dismiss()
     }

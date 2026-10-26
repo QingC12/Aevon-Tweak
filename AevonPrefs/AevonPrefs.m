@@ -340,31 +340,34 @@ static NSArray *AevonBuildFallback(id target) {
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
                               @"所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：打开「启用插件」→ 注销 → 在屏幕右边缘的触发区向左滑 → 弹出圆盘 → 点图标开窗。"
+                              @"用法：桌面右下角贴边向左拉、或全屏 App 右缘左滑 → 圆盘出来 → 手指不用抬起，"
+                              @"直接滑到图标上再松手就开浮窗；没落在图标 / 圆心上松手，圆盘立刻收起。"
                               @"桌面上只会有一个浮窗，再点别的 App 会直接换成它（AevonSingleWindowV105）。"
-                              @"全屏 App 内从右边缘向左滑同样可呼出（系统手势管线，App 不跟手）。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
-    id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @NO);
+    id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @YES);
     if (s1 != nil) [result addObject:s1];
     id s1a = AevonNewSwitch(@"边缘左滑呼出圆盘（热区 + 全屏 App 右缘）", target, @"EdgeGestureEnabled", @YES);
     if (s1a != nil) [result addObject:s1a];
+    id s1b = AevonNewSwitch(@"App 内右缘接管", target, @"AppSideEnabled", @YES);
+    if (s1b != nil) [result addObject:s1b];
 
     /* V0.0.30：一级页只放开关 + 细节入口；滑杆 / 圆盘 App 编辑在二级页 */
     /* V0.1.5（AevonNoSnapV105）：左右吸附开关已随吸附功能一起删除；
        「窗口保活」「强制前台保持」两个无实际作用的开关也删除
-       （进程保活改为单窗恒开，走 RBSAssertion，不再让用户选）。*/
-    id s2a = AevonNewSwitch(@"浮窗内可直接触摸操作（关掉=内容不接收触摸）", target, @"TouchEnabled", @YES);
-    if (s2a != nil) [result addObject:s2a];
-    id s2b = AevonNewSwitch(@"多任务卡片长按开窗（实验）", target, @"SwitcherLongPress", @NO);
-    if (s2b != nil) [result addObject:s2b];
+       （进程保活改为单窗恒开，走 RBSAssertion，不再让用户选）。
+       V0.2.17（AevonPrefsSlimV217）精简：右缘接管带 / 右缘全域接管 / 右缘系统手势通道 /
+       显示区域预览 / 浮窗内可触摸 / 多任务卡片长按 六个开关撤掉 ——
+       前三个随 SB 侧吞摸下线而失效（0.2.15），系统手势通道改常开，
+       另三个改为代码内固定（浮窗可触摸恒开、多任务长按不进这个产品形态、预览改为进页面自动亮）。*/
     id s3 = AevonNewSwitch(@"开机崩溃保护", target, @"CrashGuard", @YES);
     if (s3 != nil) [result addObject:s3];
     id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
     if (s4 != nil) [result addObject:s4];
-    /* V0.1.7（AevonProbeV107）：六组运行时探针。默认开，每次 SpringBoard 启动跑一轮，
-       全部从 ObjC @try 里过 —— 探针只会「没结果」，不会再把 SpringBoard 带崩。*/
-    id s5 = AevonNewSwitch(@"运行时探针（排错用，每次启动跑一轮六组）", target, @"ProbeV107", @YES);
+    /* V0.1.7（AevonProbeV107）：六组运行时探针。每次 SpringBoard 启动跑一轮，
+       全部从 ObjC @try 里过 —— 探针只会「没结果」，不会再把 SpringBoard 带崩。
+       V0.2.17（AevonProbeDefaultOffV217）：圆盘手势定档，日常不再需要这几十行日志，默认关。*/
+    id s5 = AevonNewSwitch(@"运行时探针（排错用，每次启动跑一轮六组）", target, @"ProbeV107", @NO);
     if (s5 != nil) [result addObject:s5];
 
     id groupDetail = AevonNewGroup(@"细节调整",
@@ -422,8 +425,8 @@ static NSArray *AevonBuildFallbackDetail(id target) {
     /* V0.2.11（AevonBandRangeFreeV211）：接管带几何的代码兜底版。
      * Detail.plist 是主力入口，但 plist 加载失败时会走这里 —— 用户 Aevon(97) 要的
      * 「可随意更改」必须两条路都拿得到，否则一旦降级就只剩触发区三根滑条。 */
-    id groupBand = AevonNewGroup(@"④ 右缘接管带几何",
-                                 @"「右缘接管带」开关打开时才生效：决定那条带多宽、覆盖多高。"
+    id groupBand = AevonNewGroup(@"④ App 内右缘接管带几何",
+                                 @"决定每个 App 进程里那条右缘起手带有多宽、覆盖多高（全 App 生效）。"
                                  @"宽度 8~140pt、带高 6~100%，拖动时橙色框实时跟手变形。");
     if (groupBand != nil) [result addObject:groupBand];
     id b1 = AevonNewSlider(@"接管带宽度（pt）", target, @"RightEdgeWidth", 8, 140, 46);

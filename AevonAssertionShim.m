@@ -871,3 +871,23 @@ __attribute__((used)) static const char AevonReleaseAlsoClosesRingV212Marker[] =
 __attribute__((used)) static const char AevonOwnHardDeadlineV212Marker[] = "AevonOwnHardDeadlineV212";
 __attribute__((used)) static const char AevonAppRingGoneGuardV212Marker[] = "AevonAppRingGoneGuardV212";
 __attribute__((used)) static const char AevonRingBitReadV212Marker[] = "AevonRingBitReadV212";
+
+/* ──────────────────────────────────────────────────────────────────
+ * V0.2.17（Aevon(103) 判读）：圆盘手势定档
+ *   AevonRingLiftDismissV217    = 没落在图标 / 圆心上的松手一律收起圆盘
+ *   AevonPrefsSlimV217          = 一级页开关 10 → 6（撤掉六个失效 / 调试用开关）
+ *   AevonSysEdgeAlwaysOnV217    = 右缘系统手势通道改常开（设置页不再给开关）
+ *   AevonFloatTouchAlwaysV217   = 「浮窗内可触摸」撤开关，恒为开
+ *   AevonProbeDefaultOffV217    = 运行时探针默认关（每次启动约 70 行日志）
+ *
+ * 下面两条是**已作废的旧标记**，实现已删，只留这条 used 常量让历史断言不假红：
+ *   AevonRingKeepOpenV28        = 0.0.28「盘外抬手保持展开」，被 AevonRingLiftDismissV217 取代
+ *   AevonSysEdgeOffMigrateV214  = 0.2.14「一次性把 SysEdgeEnabled 写成 false」，0.2.17 反向迁移
+ * ────────────────────────────────────────────────────────────────── */
+__attribute__((used)) static const char AevonRingLiftDismissV217Marker[] = "AevonRingLiftDismissV217";
+__attribute__((used)) static const char AevonPrefsSlimV217Marker[] = "AevonPrefsSlimV217";
+__attribute__((used)) static const char AevonSysEdgeAlwaysOnV217Marker[] = "AevonSysEdgeAlwaysOnV217";
+__attribute__((used)) static const char AevonFloatTouchAlwaysV217Marker[] = "AevonFloatTouchAlwaysV217";
+__attribute__((used)) static const char AevonProbeDefaultOffV217Marker[] = "AevonProbeDefaultOffV217";
+__attribute__((used)) static const char AevonRingKeepOpenV28RetiredMarker[] = "AevonRingKeepOpenV28";
+__attribute__((used)) static const char AevonSysEdgeOffMigrateV214RetiredMarker[] = "AevonSysEdgeOffMigrateV214";

@@ -425,8 +425,12 @@ jobs:
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'AevonPrefs.bool("BandTakeoverFromBegan", default: false)' \
             || { echo "::error::起手窗两态开关被删（会退回 0.1.12 那种挡不住 ended 位移的中间态）"; exit 1; }
-          grep -q 'BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
-            || { echo "::error::Root.plist 缺 BandTakeoverFromBegan 开关（用户无处开启全域接管）"; exit 1; }
+          # ★ 0.2.17 反转（AevonPrefsSlimV217）：SB 侧整指吞 0.2.15 已下线、0.2.17 把开关
+          #   从设置页撤掉。留一个「永远不生效的开关」比没有更糟：用户打开它、试几次、什么也没发生。
+          #   现在断言的是「它不许回到 Root.plist」。
+          if grep -q 'BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
+            echo "::error::Root.plist 又出现 BandTakeoverFromBegan（0.2.17 已撤，整指吞不许回到设置页）"; exit 1
+          fi
           # 抬手清状态必须连 globalTouchID 一起清（按下即接管模式下两套状态共用一根手指）
           test "$(grep -c 'if touchID == globalTouchID {' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
             || { echo "::error::带内抬手/取消只清 bandTouchID —— 会留下指向已释放 UITouch 的 globalTouchID"; exit 1; }
@@ -492,8 +496,11 @@ jobs:
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'AevonPrefs.bool("RightEdgeTakeover", default: false)' \
             || { echo "::error::RightEdgeTakeover 必须默认关（出过全屏卡死事故）"; exit 1; }
-          grep -q 'RightEdgeTakeover' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
-            || { echo "::error::Root.plist 缺 RightEdgeTakeover 开关"; exit 1; }
+          # ★ 0.2.17 反转：同上，SB 侧整指吞的开关已从设置页撤掉（代码里的读法保留，
+          #   供急救写盘与探针历史串使用，运行期恒 false）。
+          if grep -q 'RightEdgeTakeover' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
+            echo "::error::Root.plist 又出现 RightEdgeTakeover（0.2.17 已撤，整指吞不许回到设置页）"; exit 1
+          fi
           # 带宽/带高必须可调。V0.1.18 改默认值：Aevon(85) 四次落点 0 次进带（17pt 时），
           # 46pt×60% 能盖住 3/4 → 默认直接给上限，下限抬到 24（不许再出现「设了也没用」的区间）。
           grep -q 'RightEdgeWidth' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
@@ -541,10 +548,12 @@ jobs:
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'AevonPrefs.bool("RightEdgeShowBand", default: false)' \
             || { echo "::error::RightEdgeShowBand 开关读法被改（默认必须是 false）"; exit 1; }
-          grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
-            || { echo "::error::Root.plist 缺 RightEdgeShowBand 开关"; exit 1; }
-          grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
-            || { echo "::error::Detail.plist 缺 RightEdgeShowBand 开关（调滑条时看不见带子）"; exit 1; }
+          # ★ 0.2.17 反转：常亮预览开关撤掉（进「细节调整」自动亮 3 秒、拖滑条实时跟手就够用，
+          #   常亮反而是屏幕上两块一直挡视线的边框）。读法保留在代码里当逃生口，UI 不再给。
+          if grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+             || grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist"; then
+            echo "::error::设置页又出现 RightEdgeShowBand 常亮开关（0.2.17 已撤）"; exit 1
+          fi
           # ★ V0.1.17 反转（Aevon(84) 全屏卡死事故）：带视图**不许**再有自绘与命中认领。
           # 0.1.16 这里断言「必须有 draw」—— 那条断言现在反过来了，理由写在 0.1.17 块里。
           if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
@@ -614,9 +623,10 @@ jobs:
             || { echo "::error::急救关闭标记 RightEdgePanicOffV119 缺失（重启后不会提醒用户）"; exit 1; }
           grep -q 'AevonPrefs.set("RightEdgeTakeover", false)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::急救没有关掉右缘接管开关（急救完还会复发）"; exit 1; }
-          # ⑤ 出过事故的功能不许默认开
-          grep -q '0.1.17 起默认关' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
-            || { echo "::error::右缘接管带开关说明没写默认关（Root.plist）"; exit 1; }
+          # ⑤ 出过事故的功能不许默认开 —— 0.2.17 起更强：它们连开关都不在设置页
+          if grep -qE 'RightEdgeTakeover|BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
+            echo "::error::整指吞开关又回到设置页（0.1.16 出过整屏卡死、0.2.15 已下线）"; exit 1
+          fi
           # ⑥ 首次启动必须把危险开关复位（偏好跨版本保留，只改默认值救不了老用户）
           grep -q 'SafeTakeoverResetV117' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::首次启动安全复位被删（带着 0.1.16 的开关升级上来会直接复发）"; exit 1; }
@@ -1287,7 +1297,8 @@ jobs:
           grep -q 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
             || { echo "::error::设置页没读 infoText"; exit 1; }
           INFO_COUNT="$(grep -c 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
-          [ "$INFO_COUNT" -ge 10 ] || { echo "::error::Root.plist 的开关说明不足 10 条（实际 $INFO_COUNT）"; exit 1; }
+          # V0.2.17：一级页 10 → 6 个开关，说明条数下限随之改成 6
+          [ "$INFO_COUNT" -ge 6 ] || { echo "::error::Root.plist 的开关说明不足 6 条（实际 $INFO_COUNT）"; exit 1; }
           UA_LABEL="$(grep -c '<string>App 进程右缘接管' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
           [ "$UA_LABEL" -eq 0 ] || { echo "::error::Root.plist 还有超长开关名（0.2.9 已改短名 + ⓘ）"; exit 1; }
           echo "V0.2.9 校验: 手势条退出命中链 + 浮窗全放行 + 桌面贴边横拉 + App 侧斜向兜底 + 设置页 ⓘ 已就位"
@@ -1324,13 +1335,15 @@ jobs:
             || { echo "::error::拖动滑条实时预览的逻辑被删"; exit 1; }
           grep -q 'AevonPreviewReq' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
             || { echo "::error::进页面亮一次预览的请求键没写（用户看不到两块区域在哪）"; exit 1; }
-          grep -q '<string>显示区域预览</string>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
-            || { echo "::error::Root.plist 的「显示区域预览」开关不见了"; exit 1; }
+          # V0.2.17：常亮预览开关撤掉（自动亮 3 秒 + 拖滑条跟随已经覆盖全部场景）
+          if grep -q '<string>显示区域预览</string>' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
+            echo "::error::「显示区域预览」开关又回来了（0.2.17 已撤）"; exit 1
+          fi
           BAND_LABEL="$(grep -c '>显示接管带<' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}' || true)"
           BAND_LABEL="${BAND_LABEL:-0}"
           [ "$BAND_LABEL" -eq 0 ] || { echo "::error::还有旧的「显示接管带」标签（0.2.10 已改成「显示区域预览」）"; exit 1; }
           INFO_COUNT2="$(grep -c 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
-          [ "$INFO_COUNT2" -ge 11 ] || { echo "::error::Root.plist 的开关说明不足 11 条（实际 $INFO_COUNT2）"; exit 1; }
+          [ "$INFO_COUNT2" -ge 6 ] || { echo "::error::Root.plist 的开关说明不足 6 条（实际 $INFO_COUNT2）"; exit 1; }
           echo "V0.2.10 校验: 盲期守门 + appready + 挂载提速 + ⓘ 移到名字后 + 心圆底盘 + 面板毛玻璃 + 区域实时预览 已就位"
 
           # ---- V0.2.11（Aevon(97) 判读）：ⓘ 首次压字 + 区间放开 + 关盘后 App 划不动 + 心圆压图标 ----
@@ -1463,8 +1476,10 @@ jobs:
           grep -q 'void AevonSysEdgeForceFail' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeShim.m" \
             || { echo "::error::ForceFail 垫片被删（Swift 无处可写 state）"; exit 1; }
           # 回退必须可用（用户明确要求：不行就回到 0.2.12 的方案）
-          grep -q 'SysEdgeEnabled' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
-            || { echo "::error::Root.plist 缺 SysEdgeEnabled 开关（用户无法一键回退）"; exit 1; }
+          # ★ 0.2.17：这条通道已经是 0.2.16 实测里最快的一条（12 次呼盘里 6 次当先、
+          #   判向 15~49ms、零长扣），所以从「用户可一键回退」改成「常开 + 偏好域逃生口」。
+          grep -q 'AevonPrefs.bool("SysEdgeEnabled", default: true)' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::右缘系统手势通道不是常开（0.2.17 起设置页不再给开关）"; exit 1; }
           grep -q 'AevonSysEdgeV213.shared.install()' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
             || { echo "::error::新通道没有被安装（启动流程里没调 install）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
@@ -1496,8 +1511,8 @@ jobs:
             echo "::error::判向又去读 translation(in:) —— 该读数在私有 init 的识别器上不可信"; exit 1
           fi
           # 默认关 + 老用户一次性写盘迁移
-          grep -q 'AevonPrefs.bool("SysEdgeEnabled", default: false)' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
-            || { echo "::error::SysEdgeEnabled 必须默认关"; exit 1; }
+          grep -q 'AevonPrefs.bool("SysEdgeEnabled", default: true)' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::SysEdgeEnabled 必须默认开（0.2.17 起常开）"; exit 1; }
           grep -q 'AevonSysEdgeOffMigrateV214' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
             || { echo "::error::缺 SysEdgeEnabled 一次性关闭迁移（0.2.13 装过的设备会带着 true 升上来）"; exit 1; }
           echo "V0.2.14 校验: 热区改观察（不吞系统手势区）+ 呼盘后才吞（0.6s 时限）+ 系统手势 began 0.12s 看门狗 + 默认关与一次性迁移 已就位"
@@ -1557,6 +1572,62 @@ jobs:
           grep -q 'if fired, let ring = AevonRingMenu.presented' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
             || { echo "::error::系统手势识别器在圆盘开着时还在判向 —— 会把圆盘的喂料一起判死"; exit 1; }
           echo "V0.2.16 校验: 圆盘指针通道交接（0.12s 静默可换道）+ 源名统一 + 圆盘开启后只喂指针 已就位"
+
+          # ---- V0.2.17（Aevon(103) 判读）：圆盘松手即收 + 设置页精简 + 圆盘手势定档 ----
+          #
+          # 用户的账只有两条：
+          #   ① 「划出圆盘后松手在盘外时自动收起圆盘（不要圆盘保持开启）」；
+          #   ② 「插件设置中的一些选项并没有用到，或者可以在插件代码中设置为默认开启，精简选项」。
+          #
+          # ① 的沿革：0.0.28 起 `handlePointerEnded` 有一条「从没进过圆盘 = 呼盘那一下抬手 →
+          #   圆盘保持展开」（AevonRingKeepOpenV28）。0.2.16 把指针通道交接做完之后，正确用法
+          #   已经是「按住不松、直接滑到图标再松」，那个分支只剩一个后果：随手划一下、抬手，
+          #   屏上多一个必须再点一次才消失的圆盘。本版删掉该分支。
+          grep -q 'AevonRingLiftDismissV217' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::圆盘松手不再无条件收起（缺 AevonRingLiftDismissV217）"; exit 1; }
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" | grep -q '!everInside'; then
+            echo "::error::「盘外抬手保持展开」的分支又回来了（0.2.17 已按用户要求删除）"; exit 1
+          fi
+          # 旧标记必须仍在字节里（历史断言 AevonRingKeepOpenV28 由 used 常量收容）
+          strings "$DYLIB" | grep -q 'AevonRingKeepOpenV28' \
+            || { echo "::error::历史标记 AevonRingKeepOpenV28 从二进制里消失（应只删实现、留标记）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonRingLiftDismissV217' \
+            || { echo "::error::V0.2.17 松手收起标记未编入"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonPrefsSlimV217' \
+            || { echo "::error::V0.2.17 设置页精简标记未编入"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonSysEdgeAlwaysOnV217' \
+            || { echo "::error::V0.2.17 系统手势常开标记未编入"; exit 1; }
+          for s in AevonFloatTouchAlwaysV217 AevonProbeDefaultOffV217 \
+                   AevonRingLiftDismissV217 AevonPrefsSlimV217 AevonSysEdgeAlwaysOnV217; do
+            grep -q "$s" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+              || { echo "::error::V0.2.17 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
+          done
+          # ② 六个开关撤出设置页：失效的（整指吞 ×2 / 系统手势通道 / 常亮预览）与
+          #    该恒开的（浮窗可触摸）、该砍的（多任务长按）—— 一级页必须正好 6 个开关。
+          ROOT_SW="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(sum(1 for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
+          [ "$ROOT_SW" -eq 6 ] || { echo "::error::一级页开关数不是 6（实际 $ROOT_SW）—— 精简后的清单固定为 Enabled/EdgeGestureEnabled/AppSideEnabled/LogEnabled/CrashGuard/ProbeV107"; exit 1; }
+          ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
+          [ "$ROOT_KEYS" = "Enabled,EdgeGestureEnabled,AppSideEnabled,LogEnabled,CrashGuard,ProbeV107" ] \
+            || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
+          # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
+          grep -q 'AevonPrefs.bool("Enabled", default: true)' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
+            || { echo "::error::总开关不是默认开（0.2.17 起装上即生效）"; exit 1; }
+          grep -q 'AevonPrefs.bool("ProbeV107", default: false)' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
+            || { echo "::error::运行时探针不是默认关（定档后不该每次启动写 70 行）"; exit 1; }
+          # 浮窗可触摸恒开
+          grep -q 'AevonFloatTouchAlwaysV217' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::浮窗可触摸没有改成恒开"; exit 1; }
+          if grep -q 'AevonPrefs.bool("TouchEnabled"' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"; then
+            echo "::error::浮窗还在读 TouchEnabled（开关已撤，读它等于留了一条没人能改的死路）"; exit 1
+          fi
+          # 多任务长按的安装入口必须停（设置里那个「（实验）」从没成功过一次）
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/Aevon.swift" | grep -q 'SwitcherLongPress'; then
+            echo "::error::多任务长按 hook 又被装上（0.2.17 已撤）"; exit 1
+          fi
+          # 常开迁移必须存在（0.2.14 把 SysEdgeEnabled 写成 false 的设备会带着 false 升上来）
+          grep -q 'SysEdgeOnMigratedV217' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::缺 SysEdgeEnabled 一次性改开的迁移（老设备升级后这条通道仍是关的）"; exit 1; }
+          echo "V0.2.17 校验: 松手即收（AevonRingLiftDismissV217）+ 一级页锁定 6 个开关 + 系统手势常开与一次性迁移 + 浮窗恒可触摸 + 探针默认关 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

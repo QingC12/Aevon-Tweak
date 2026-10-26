@@ -219,7 +219,7 @@ enum AevonEntryHost {
     @discardableResult
     static func ensureInstalled(attempt: Int = 1, reason: String) -> UIView? {
         if let existing = container { return existing }
-        guard AevonPrefs.bool("Enabled", default: false) else { return nil }
+        guard AevonPrefs.bool("Enabled", default: true) else { return nil }
         guard attempt <= 12 else {
             AevonLog.warn("[入口] 多次尝试仍没有可用场景，放弃本次创建（\(reason)）")
             return nil

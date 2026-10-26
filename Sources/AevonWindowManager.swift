@@ -88,7 +88,7 @@ enum AevonWindowManager {
     static func open(bundleID: String,
                      sceneID: String?,
                      completion: ((Bool) -> Void)? = nil) {
-        guard AevonPrefs.bool("Enabled", default: false) else {
+        guard AevonPrefs.bool("Enabled", default: true) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
             completion?(false)
             return
@@ -188,7 +188,7 @@ enum AevonWindowManager {
     /// 并挂到我们的浮窗上。全程任何一步失败都只记日志，不做强制解包。
     static func launchAndOpen(bundleID: String,
                               completion: ((Bool) -> Void)? = nil) {
-        guard AevonPrefs.bool("Enabled", default: false) else {
+        guard AevonPrefs.bool("Enabled", default: true) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
             completion?(false)
             return

@@ -93,7 +93,7 @@ enum AevonBootstrap {
     /// V0.0.39（AevonBootShieldV39）：每一步独立套 ObjC 异常保护并落面包屑日志 ——
     /// 任何一步抛 NSException 只记日志不中断启动，后续步骤照常；绝不再把异常抛回系统。
     private static func installEntries(reason: String) {
-        guard AevonPrefs.bool("Enabled", default: false) else { return }
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
 
         var exName: NSString?
         var exReason: NSString?

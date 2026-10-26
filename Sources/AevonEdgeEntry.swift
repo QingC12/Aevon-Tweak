@@ -550,7 +550,7 @@ enum AevonEdgeEntry {
     static var isVisible: Bool { return strip != nil }
 
     static func install(attempt: Int, reason: String) {
-        guard AevonPrefs.bool("Enabled", default: false) else { return }
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
         guard AevonPrefs.bool("EdgeGestureEnabled", default: true) else {
             if !loggedDisabled {
                 loggedDisabled = true
@@ -776,18 +776,16 @@ enum AevonEdgeEntry {
     /// 用户重新打开开关时 `checkTriggerZoneChange()` 会清标记，之后不再提示。
     private static var panicHintOnceV202 = false
     private static func explainPanicDisabledOnceV119() {
-        // V0.2.2（AevonPanicHintOnceV202）：Aevon(88) 里「已提示一次」连打两遍 ——
-        // startTriggerZoneWatch 会在启动路径上跑两次，幂等标记拦住第二遍。
-        guard !panicHintOnceV202 else { return }
-        guard !AevonPrefs.bool("RightEdgeTakeover", default: false),
-              AevonPrefs.bool("RightEdgePanicOffV119", default: false) else { return }
-        panicHintOnceV202 = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
-            guard !AevonPrefs.bool("RightEdgeTakeover", default: false),
-                  AevonPrefs.bool("RightEdgePanicOffV119", default: false) else { return }
-            AevonPanicHint.show("「右缘接管带」当前是关闭状态。\n上次由三指急救关闭，可在设置里重新打开。", duration: 5.0)
-            AevonLog.info("[急救] 启动检查：右缘接管带仍处于「被急救关闭」状态，已提示一次（AevonPanicHintV119）")
-        }
+        // V0.2.2（AevonPanicHintOnceV202）的幂等标记仍然保留（历史串），但**提醒本身停了**。
+        //
+        // V0.2.17（AevonPrefsSlimV217）：`RightEdgeTakeover` / `BandTakeoverFromBegan` 两个
+        // 「整指吞」开关随 SB 侧吞摸一起在 0.2.15 下线、0.2.17 从设置页撤掉。
+        // 于是这条「上次被三指急救关闭，回设置里可以再打开」的提醒变成了纯粹的误导 ——
+        // Aevon(103) 13:08:58.602 就弹了一次，提示用户去开一个已经不存在的开关。
+        // 急救的可见反馈改由 `panicReleaseNow` / 第二档的提示条承担（同一根手指、当场可见）。
+        _ = panicHintOnceV202
+        _ = AevonPrefs.bool("RightEdgePanicOffV119", default: false)
+        return
     }
 
     /// V0.2.10（AevonGeomPreviewLiveV210）：设置页进「细节调整」时写一个时间戳，
@@ -843,7 +841,7 @@ enum AevonEdgeEntry {
     static func syncGuardConfig() {
         let bounds = UIScreen.main.bounds
         let r = AevonTriggerZone.rect(in: bounds)
-        let enabled = AevonPrefs.bool("Enabled", default: false)
+        let enabled = AevonPrefs.bool("Enabled", default: true)
             && AevonPrefs.bool("EdgeGestureEnabled", default: true)
         AevonNotifySetZone(Double(r.minX), Double(r.minY), Double(r.width), Double(r.height), enabled ? 1 : 0)
     }
@@ -1346,8 +1344,8 @@ enum AevonEdgeEntry {
         // 用户重新打开开关时由 checkTriggerZoneChange() 清除。
         AevonPrefs.set("RightEdgePanicOffV119", true)
         AevonPrefs.synchronize()
-        AevonPanicHint.show("三指急救：已关闭「右缘接管带」。\n回设置「细节调整」里可以再打开。", duration: 4.0)
-        AevonLog.warn("[急救] 三指按住 2 秒 → 已关闭「右缘接管带 / 右缘全域接管」并释放全部接管；不用卸载，回设置里可再打开（AevonPanicThreeFingerV117 AevonPanicHoldV119 AevonPanicHintV119）")
+        AevonPanicHint.show("三指急救：已释放全部接管。", duration: 4.0)
+        AevonLog.warn("[急救] 三指按住 2 秒 → 已释放全部接管（两个整指吞开关 0.2.15 起已下线、0.2.17 从设置页撤掉，现在只做释放，功能本身不受影响）（AevonPanicThreeFingerV117 AevonPanicHoldV119 AevonPanicHintV119 AevonPrefsSlimV217）")
     }
 
     /// 死手开关：0.2 秒一次，只在「状态明显泄漏」时动手。
@@ -1381,7 +1379,7 @@ enum AevonEdgeEntry {
             let held = now - panicHoldSince
             if held >= panicHoldHintAfter, !panicHoldReleased {
                 panicHoldReleased = true
-                AevonPanicHint.show("已释放接管。继续按住 2 秒可关闭「右缘接管带」。", duration: 2.5)
+                AevonPanicHint.show("已释放接管。", duration: 2.5)
                 AevonLog.warn("[急救] 三指按住 0.6 秒 → 已释放全部接管（未关闭任何开关）（AevonPanicHoldV119 AevonPanicHintV119）")
             }
             if held >= panicHoldDisableAfter, now - panicAt > 3.0 {
@@ -1403,7 +1401,7 @@ enum AevonEdgeEntry {
     @discardableResult
     static func installGlobalTouch() -> Bool {
         if globalInstalled { return true }
-        guard AevonPrefs.bool("Enabled", default: false) else { return false }
+        guard AevonPrefs.bool("Enabled", default: true) else { return false }
         // V0.0.41：不再依赖 EdgeGestureEnabled。这条通道现在同时承载浮窗拖拽，
         // 用户关掉边缘呼出圆盘也不该让浮窗拖不动 —— 热区逻辑自己在 began 里判断开关。
         let ok = AevonTouchHookInstall()
@@ -1446,7 +1444,7 @@ enum AevonEdgeEntry {
         default:
             break
         }
-        guard AevonPrefs.bool("Enabled", default: false) else { return }
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
         // V0.1.19（AevonPanicHoldV119）：急救释放后的 0.8 秒冷却期内，新落点一律不接管。
         // 三指操作里常有一指落在右缘带内，不挡的话会出现「刚释放完又立刻接管」。
         if phase == .began, CACurrentMediaTime() < panicCooldownUntil { return }
@@ -2342,7 +2340,7 @@ enum AevonEdgeEntry {
     }
 
     static func shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int) -> Bool {
-        guard AevonPrefs.bool("Enabled", default: false) else { return false }
+        guard AevonPrefs.bool("Enabled", default: true) else { return false }
         guard touchID != 0 else { return false }
         // V0.2.12（AevonSwallowSelfHealV212）：任何判断之前先自愈。
         // 这一行就是「结构上不可能卡死」的全部：只要圆盘不在场，ownsTouch / globalTouchID
