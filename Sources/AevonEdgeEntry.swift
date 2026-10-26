@@ -1540,11 +1540,13 @@ enum AevonEdgeEntry {
                 // 0.2.8 只把「按下即吞」去掉、判据仍是「左扫 ≥30pt」，结果桌面能滑了，
                 // 但每次翻页都会顺手弹出圆盘。这里加两把尺子，让两者分得开：
                 //   · 起手必须**贴边**（距右缘 ≤12pt）：翻页是从页面中间起手的；
-                //   · 必须**很横**（|dx| ≥ |dy|×1.6）：拇指翻页天然带弧线，横竖比压不到 1.6。
+                //   · 必须**很横**（|dx| ≥ |dy|×1.3）：拇指翻页天然带弧线，横竖比压不到 1.3；
+                //     而 Aevon(95) 里你那两次真实呼盘是 dx=-36/dy=-15、dx=-31/dy=-21（1.48），
+                //     所以尺子不能比 1.3 更严，否则你自己的手势会被判成翻页。
                 // 判据不成立时我们什么都不做 —— 这根手指照旧属于桌面（本来就没吞）。
                 let startGap = screen.width - deskZoneStart.x
                 let edgePull = startGap <= 12
-                let stronglyHorizontal = abs(zdx) >= abs(zdy) * 1.6
+                let stronglyHorizontal = abs(zdx) >= abs(zdy) * 1.3
                 if !deskZoneFired, zdx <= -AevonEdgeStripView.swipeDistance, stronglyHorizontal {
                     if !edgePull {
                         deskZoneFired = true     // 只报一次，避免逐帧刷屏
