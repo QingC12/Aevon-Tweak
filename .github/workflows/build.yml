@@ -682,11 +682,12 @@ jobs:
             || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
           # V0.0.29：PSSliderCell 只认 min/max —— 缺了量程退化成 0~1，一拖就写回 0.x，
           # 触发条永远贴在屏幕顶部（用户 Aevon(22) 复现的「自动跑到顶部」根因）
-          # V0.0.30：滑杆在二级 Detail.plist
-          for K in '<key>min</key>' '<key>max</key>'; do
-            plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -qF "$K" \
-              || { echo "::error::Detail.plist 滑杆缺少 $K（量程会退化成 0~1，触发条会跑到顶部）"; exit 1; }
-          done
+          # V0.2.51（AevonGripOnlyV251）：触发区三滑条 + 接管带两滑条随「圆盘触发手势退役」
+          # 整体删除，二级页现在**零滑条**（只读说明 + 圆盘 App 编辑器）—— min/max 护栏
+          # 已无对象，改为**反转断言**：一旦回退出现滑条立即报错（量程护栏随之失效）。
+          if plutil -convert xml1 -o - "$ICON_DIR/Detail.plist" | grep -q 'PSSliderCell'; then
+            echo "::error::Detail.plist 又出现滑杆（V0.2.51 起二级页只读，无滑条；滑条回来就会缺量程）"; exit 1
+          fi
           # V0.0.26：滑杆写值后必须广播变更通知，SpringBoard 才会立刻重排触发条
           strings "$PREFS_BIN" | grep -q 'com.aevon.prefschanged' \
             || { echo "::error::设置 bundle 没有广播 com.aevon.prefschanged（改完设置触发条不会实时变化）"; exit 1; }
