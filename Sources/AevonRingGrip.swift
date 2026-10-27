@@ -104,9 +104,10 @@ final class AevonRingGripView: UIView {
         return hitRect.contains(point)
     }
 
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    override func hitTest(_ p: CGPoint, with event: UIEvent?) -> UIView? {
         // 把手之外一律 nil：系统继续往 App 派发，不产生任何争抢。
-        guard point(inside: point, with: event) else { return nil }
+        // （参数叫 p 不叫 point：hitTest 的参数会遮蔽 UIView.point(inside:with:)）
+        guard point(inside: p, with: event) else { return nil }
         return self
     }
 
