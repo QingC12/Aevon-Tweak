@@ -674,9 +674,15 @@ jobs:
             exit 1
           fi
           # V0.0.30：一级 Root.plist 只允许开关（滑杆全部在 Detail.plist）
-          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'PSSliderCell'; then
-            echo "::error::Root.plist 里还有滑杆（V0.0.30 起一级页只放开关，滑杆在 Detail.plist）"; exit 1
-          fi
+          # V0.2.59（AevonGripCustomV259）反转：把手位置 / 长度两个滑条按用户要求
+          #（Aevon(33) #3「增加设置项，自定义上下位置和尺寸大小」）放回一级页
+          # —— 一级页从此允许PSSliderCell，但**必须带 min/max 量程**（V0.0.29 护栏延续）。
+          ROOT_SLIDER_TOTAL=$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c 'PSSliderCell' || true)
+          [ "$ROOT_SLIDER_TOTAL" -eq 2 ] \
+            || { echo "::error::Root.plist 滑杆数不是 2（V0.2.59 定档 = GripY + GripLen，实际 $ROOT_SLIDER_TOTAL）"; exit 1; }
+          ROOT_SLIDER_RANGE=$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c -e '<key>min</key>' -e '<key>max</key>' || true)
+          [ "$ROOT_SLIDER_RANGE" -ge 4 ] \
+            || { echo "::error::Root.plist 滑杆缺 min/max 量程（V0.0.29 护栏：缺量程退化成 0~1）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenDetail' \
             || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
