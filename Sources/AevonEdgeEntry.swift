@@ -92,7 +92,8 @@ enum AevonEdgeEntry {
                                             nil,
                                             aevonPrefsChangedHandler,
                                             "com.aevon.prefschanged" as CFString,
-                                            true, nil)
+                                            nil,
+                                            .deliverImmediately)
             prefsObserverInstalled = true
             AevonLog.info("[边缘] 已监听设置变更通知（prefschanged）（AevonPrefsLiveV26 AevonGuardCleanupV102）")
         }
