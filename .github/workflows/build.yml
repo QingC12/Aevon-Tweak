@@ -2137,6 +2137,39 @@ jobs:
             || { echo "::error::0.2.55 重申间隔下限必须是 0.35s"; exit 1; }
           echo "V0.2.55 校验: 把手物理化+位置30% + 手势探针 + 拖拽残留自愈 + 停靠任意点装回 + 回桌面重申加密 已就位"
 
+          # ── V0.2.56 校验（AevonDedupBeganV256 / AevonStaleShieldV256 / AevonDblTapHealV256 / AevonCloseDisarmV256 / AevonGestureProbeV2V256）──
+          # Aevon(30)：pan 失效未闭合 —— 吞咽状态机三处实锤修复 + 探针 V2 取证。
+          # ①底边双击关窗路径（最高频关法）缺自愈锚点 lastFloatMovedAt：ended 丢帧时
+          #   floatTouchID 带 30s deadline 残留且 0.2.55 自愈（lastFloatMovedAt > 0 才生效）
+          #   完全不触发；②UITouch 槽位地址复用已实锤（同一地址 64441673984 在 2.4s 内
+          #   两次登记），残留+复用 = 新手指 began/moved 整段被吞 = pan 死点按活；
+          # ③重投 began（真机实锤 3ms 两条）走「交回浮窗（不吞）」分支却被吞，自相矛盾；
+          # ④关窗不解除拖拽吞咽状态；⑤0.2.55 探针 prefix(12) 截断 = 取证失败。
+          for s in AevonDedupBeganV256 AevonStaleShieldV256 AevonDblTapHealV256 AevonCloseDisarmV256 AevonGestureProbeV2V256; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.56 缺标记 $s"; exit 1; }
+          done
+          # ①重投 began 必须静默消费（认领中的手指不走「交回浮窗」分支）
+          grep -q 'AevonDedupBeganV256' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.56 缺重投 began 静默消费（日志承诺与管线行为必须一致）"; exit 1; }
+          # ②残留盾：began 时刻 1.5 秒无 moved 即清场重判（比 2s 自愈更早拦住槽位复用）
+          grep -q 'AevonStaleShieldV256' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.56 缺 began 时刻残留盾"; exit 1; }
+          # ③双击关窗路径必须设自愈锚点
+          grep -q 'AevonDblTapHealV256' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.56 双击关窗路径缺自愈锚点 lastFloatMovedAt"; exit 1; }
+          # ④关窗 / 关停靠小窗必须强制解除拖拽吞咽状态
+          grep -c 'forceDisarmFloatGesture' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" | grep -q '[2-9]' \
+            || { echo "::error::0.2.56 关窗与关停靠路径都要挂 forceDisarmFloatGesture"; exit 1; }
+          # ⑤探针 V2：非 possible 全量 + 全屏宿主 pan 单列（旧 prefix(12) 已废）
+          grep -q '手势探针·卡住识别器' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.56 探针缺卡住识别器全量输出"; exit 1; }
+          grep -q '手势探针·全屏宿主 pan' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.56 探针缺全屏宿主 pan 输出"; exit 1; }
+          ! grep -q 'lines.prefix(12)' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.56 旧探针 prefix(12) 截断必须移除（取证失败根源）"; exit 1; }
+          echo "V0.2.56 校验: 重投began静默 + 残留盾 + 双击自愈锚点 + 关窗强制解除 + 探针V2 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

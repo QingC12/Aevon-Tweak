@@ -652,6 +652,9 @@ enum AevonWindowManager {
         // App 下一遍布局立刻拿到真实屏幕尺寸（否则关窗后仍按画布排）。
         AevonNotifySetFloatStage("")
         windowView.teardown()
+        // V0.2.56（AevonCloseDisarmV256）：窗没了 → 拖拽吞咽状态必须一并解除，
+        // 残留 floatTouchID 只会误吞同槽位的新触摸（pan 死、点按活）。
+        AevonEdgeEntry.forceDisarmFloatGesture(reason: "关窗 \(bundleID)")
         AevonSceneHelper.stopKeepAlive(bundleID)
         // V0.2.32（AevonSelfSceneFGV232）：自建场景已随 teardown 销毁，登记必须同步
         // 注销（保活定时器若还查到悬空场景对象会写进已销毁场景）。
@@ -795,6 +798,8 @@ enum AevonWindowManager {
         AevonSceneHelper.stopKeepAlive(bundleID)
         AevonSceneHelper.unregisterSelfScene(bundleID)
         view.teardown()
+        // V0.2.56（AevonCloseDisarmV256）：停靠小窗关闭同样强制解除拖拽吞咽状态。
+        AevonEdgeEntry.forceDisarmFloatGesture(reason: "关闭停靠小窗 \(bundleID)")
         scheduleSleep(bundleID: bundleID, after: 0.75)
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         relayoutDock(side: side, animated: true)

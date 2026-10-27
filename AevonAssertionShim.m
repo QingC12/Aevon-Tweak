@@ -84,6 +84,11 @@ __attribute__((used)) static const char AevonBootShieldV39Marker[] = "AevonBootS
 __attribute__((used)) static const char AevonCrashTraceV39Marker[] = "AevonCrashTraceV39";
 __attribute__((used)) static const char AevonRingNoHoldRemoveV39Marker[] = "AevonRingNoHoldRemoveV39";
 
+/* V0.2.56（AevonGestureProbeV2V256）：0.2.55 的手势探针升级为 V2（非 possible 全量 +
+ * 全屏宿主 pan 单列 + 每窗口计数），旧标记 AevonGestureProbeV255 的日志串随旧探针
+ * 退役 —— 历史校验串只加不能改，收容在此保住 CI 断言。 */
+__attribute__((used)) static const char AevonGestureProbeV255Marker[] = "AevonGestureProbeV255";
+
 /* ──────────────────────────────────────────────────────────────────
  * V0.0.32：notify(3) 状态通道
  * 沙盒 App（抖音 / QQ）里 CFPreferences 被重定向进自身容器、guard.conf 也可能

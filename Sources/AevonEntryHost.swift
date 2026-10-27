@@ -573,29 +573,53 @@ enum AevonEntryHost {
     /// 下次日志一复现，谁在抢 pan 一目了然。
     private static func dumpGestureRecognizerProbe(tag: String) {
         guard AevonPrefs.bool("GestureProbe", default: true) else { return }
-        var lines: [String] = []
+        // V0.2.56（AevonGestureProbeV2V256）：0.2.55 探针的「可疑」= cancels=YES（几乎所有
+        // 识别器的默认值）→ 182 条全量命中再 prefix(12) 截断 = 取证失败。V2 改三路输出：
+        //   ① 卡住识别器（state ≠ possible）全量 —— pan 杀手头号嫌疑人，一条不落；
+        //   ② 全屏宿主（≥80% 屏宽 × 60% 屏高）上的 pan / swipe —— 结构性抢触摸者
+        //     （Aevon(30) 采样已见 KayokoMainView 的 pan/edge pan 挂在状态栏窗口）；
+        //   ③ 每窗口识别器计数 —— 数量突变一眼可见。
+        let screenW = UIScreen.main.bounds.width
+        let screenH = UIScreen.main.bounds.height
+        var stuckAll = 0
+        var stuck: [String] = []
+        var fullPanAll = 0
+        var fullPan: [String] = []
+        var perWindow: [String: Int] = [:]
+        func stateText(_ s: UIGestureRecognizer.State) -> String {
+            switch s {
+            case .possible: return "可能"
+            case .began: return "已开始"
+            case .changed: return "进行中"
+            case .ended: return "已结束"
+            case .cancelled: return "已取消"
+            case .failed: return "已失败"
+            @unknown default: return "?"
+            }
+        }
         func walk(_ view: UIView, _ windowName: String, depth: Int) {
-            guard depth <= 6 else { return }
+            guard depth <= 8 else { return }
+            let vw = view.frame.width
+            let vh = view.frame.height
+            let isBigHost = vw >= screenW * 0.8 && vh >= screenH * 0.6
             for gesture in view.gestureRecognizers ?? [] {
-                let stateText: String
-                switch gesture.state {
-                case .possible: stateText = "可能"
-                case .began: stateText = "已开始"
-                case .changed: stateText = "进行中"
-                case .ended: stateText = "已结束"
-                case .cancelled: stateText = "已取消"
-                case .failed: stateText = "已失败"
-                @unknown default: stateText = "?"
+                perWindow[windowName, default: 0] += 1
+                let gcls = AevonSafeClassName(gesture) ?? "?"
+                let host = AevonSafeClassName(view) ?? "?"
+                if gesture.state != .possible {
+                    stuckAll += 1
+                    if stuck.count < 24 {
+                        stuck.append("\(windowName)/\(gcls)[\(host)] state=\(stateText(gesture.state))"
+                            + " cancels=\(gesture.cancelsTouchesInView ? 1 : 0) host=\(Int(vw))x\(Int(vh))")
+                    }
                 }
-                let suspicious = gesture.state != .possible || gesture.cancelsTouchesInView
-                if suspicious {
-                    lines.append(String(format: "%@/%@[%@] cancels=%d delays=%d state=%@",
-                                        windowName,
-                                        AevonSafeClassName(gesture) ?? "?",
-                                        AevonSafeClassName(view) ?? "?",
-                                        gesture.cancelsTouchesInView ? 1 : 0,
-                                        gesture.delaysTouchesBegan ? 1 : 0,
-                                        stateText))
+                let panKind = gcls.contains("Pan") || gcls.contains("Swipe")
+                if panKind, isBigHost {
+                    fullPanAll += 1
+                    if fullPan.count < 16 {
+                        fullPan.append("\(windowName)/\(gcls)[\(host)] host=\(Int(vw))x\(Int(vh))"
+                            + " state=\(stateText(gesture.state))")
+                    }
                 }
             }
             for sub in view.subviews { walk(sub, windowName, depth: depth + 1) }
@@ -607,9 +631,20 @@ enum AevonEntryHost {
                 walk(w, name, depth: 0)
             }
         }
-        if !lines.isEmpty {
-            let joined = lines.prefix(12).joined(separator: " | ")
-            AevonLog.info("[诊断] 手势探针（\(tag)）：\(lines.count) 个可疑识别器 → \(joined)（AevonGestureProbeV255）")
+        if stuckAll > 0 {
+            let more = stuckAll > stuck.count ? "（另 \(stuckAll - stuck.count) 条截断）" : ""
+            AevonLog.warn("[诊断] 手势探针·卡住识别器（\(tag)）：\(stuckAll) 个非 possible → "
+                + stuck.joined(separator: " | ") + more + "（AevonGestureProbeV2V256）")
+        }
+        if fullPanAll > 0 {
+            let more = fullPanAll > fullPan.count ? "（另 \(fullPanAll - fullPan.count) 条截断）" : ""
+            AevonLog.info("[诊断] 手势探针·全屏宿主 pan（\(tag)）：\(fullPanAll) 个 → "
+                + fullPan.joined(separator: " | ") + more + "（AevonGestureProbeV2V256）")
+        }
+        if !perWindow.isEmpty {
+            let parts = perWindow.sorted { $0.value > $1.value }.map { "\($0.key)=\($0.value)" }
+            AevonLog.info("[诊断] 手势探针·窗口识别器计数（\(tag)）：\(parts.joined(separator: " "))"
+                + "（AevonGestureProbeV2V256）")
         }
     }
 }

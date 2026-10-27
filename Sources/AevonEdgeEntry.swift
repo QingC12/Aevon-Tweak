@@ -51,6 +51,8 @@ enum AevonEdgeEntry {
     private static var lastHealLogAt: CFTimeInterval = 0
     /// V0.2.55（AevonGripHealV255）：吞咽日志节流
     private static var lastSwallowLogAt: CFTimeInterval = 0
+    /// V0.2.56（AevonDedupBeganV256）：重投 began 静默消费的节流日志
+    private static var lastDedupLogAt: CFTimeInterval = 0
     /// V0.2.8（AevonSelectionCoolV208）：圆盘选中开窗后 1.5 秒冷静期（防双呼）
     private static var selectionCoolUntil: CFTimeInterval = 0
     private static var lastTriggerAt: CFTimeInterval = 0
@@ -127,6 +129,29 @@ enum AevonEdgeEntry {
         let screen = UIScreen.main.bounds
         switch phase {
         case .began:
+            // V0.2.56（AevonDedupBeganV256）：浮窗拖拽已认领的手指，重投的 began 静默消费。
+            // Aevon(30) 真机日志实锤同一根手指 3ms 内两条 began（14.969「落指即拖」→
+            // 14.972 又一条同点 began 走了交回分支）——重投让 handleFloatGestureBegan
+            // 返回 false，走进「交回浮窗（不接管、不吞）」分支，而 shouldSwallow 又把
+            // 同一帧吞掉：日志承诺与管线行为自相矛盾，SB 的触摸簿记拿到说不清的序列。
+            // 统一口径：认领中的手指，began 一律与首条同命运（吞），不再走交回分支。
+            if floatGestureActive, touchID == floatTouchID {
+                let now = CACurrentMediaTime()
+                // AevonStaleShieldV256：1.5 秒没有 moved 续期 = 抬手帧已丢的残留状态
+                //（槽位地址复用会让新手指被当成旧手指整段吞）→ 先清场，再按新触摸判定。
+                if lastFloatMovedAt > 0, now - lastFloatMovedAt > 1.5 {
+                    AevonLog.warn("[自愈] 浮窗拖拽残留（began 盾 1.5s，touchID=\(floatTouchID)）→ 清场重判"
+                        + "（AevonStaleShieldV256）")
+                    clearFloatGesture()
+                } else {
+                    // 静默消费，但要可观测（重投频率本身就是证据）
+                    if now - lastDedupLogAt > 2.0 {
+                        lastDedupLogAt = now
+                        AevonLog.info("[边缘] 浮窗拖拽手指重投 began → 静默消费（AevonDedupBeganV256）")
+                    }
+                    return
+                }
+            }
             // 圆盘展开期间：整屏触摸归圆盘（AevonRingFullSwallowV102）。
             // 原指针还压着 → 新手指只登记「额外吞掉」；原指针已抬起 → 新触摸接管为当前指针。
             if let ring = AevonRingMenu.presented {
@@ -347,7 +372,19 @@ enum AevonEdgeEntry {
     /// 按下：命中浮窗外侧手柄 / ✕ 就整段接管这根手指。
     private static func handleFloatGestureBegan(point: CGPoint, touchID: UInt) -> Bool {
         if floatTouchID != 0 {
-            if CACurrentMediaTime() > floatDeadline { clearFloatGesture() } else { return false }
+            let now0 = CACurrentMediaTime()
+            // V0.2.56（AevonStaleShieldV256）：残留盾提前到接管判定 —— 1.5 秒没有 moved
+            // 续期的拖拽状态 = 抬手帧已丢（shouldSwallow 里的自愈是 2 秒，这里更早拦）。
+            // 清场后按新触摸正常判定，槽位地址复用的新手指能被重新接管而不是当残影吞。
+            if lastFloatMovedAt > 0, now0 - lastFloatMovedAt > 1.5 {
+                AevonLog.warn("[自愈] 浮窗拖拽残留（接管盾 1.5s，touchID=\(floatTouchID)）→ 清场重判"
+                    + "（AevonStaleShieldV256）")
+                clearFloatGesture()
+            } else if now0 > floatDeadline {
+                clearFloatGesture()
+            } else {
+                return false
+            }
         }
         guard AevonRingMenu.presented == nil else { return false }
         guard let hit = AevonEntryHost.grabFloatingWindow(atScreenPoint: point) else {
@@ -367,7 +404,13 @@ enum AevonEdgeEntry {
             floatWindow = hit.window
             floatGrab = nil
             floatDeadline = now + floatDragLimit
-            AevonLog.info("[窗口] 底边双击 → 关闭浮窗（全局通道）（AevonFloatBottomDblCloseV221）")
+            // V0.2.56（AevonDblTapHealV256）：底边双击是最高频关法（Aevon(30) 两次关窗
+            // 都是它），这根手指的 ended 若丢帧，floatTouchID 会带 30 秒 deadline 残留
+            // —— 0.2.55 的自愈条件是 lastFloatMovedAt > 0 才生效，这条路径原来没设锚点
+            // = 残留 30 秒且自愈完全不触发，同槽位新手指被整段吞（pan 死、点按活）。
+            lastFloatMovedAt = now
+            AevonLog.info("[窗口] 底边双击 → 关闭浮窗（全局通道，自愈锚点已登记）"
+                + "（AevonFloatBottomDblCloseV221 AevonDblTapHealV256）")
             AevonWindowManager.close(bundleID: hit.window.bundleID)
             return true
         }
@@ -486,6 +529,18 @@ enum AevonEdgeEntry {
         floatBarPending = false
         floatBarHoldDeadline = 0
         lastFloatMovedAt = 0
+    }
+
+    /// V0.2.56（AevonCloseDisarmV256）：浮窗生命周期收尾（关窗 / 关停靠小窗）强制解除
+    /// 全局通道的拖拽吞咽状态 —— 窗口没了，残留的 floatTouchID 只剩「误吞同槽位
+    /// 新触摸」一种结局（UITouch 槽位地址复用已被 Aevon(30) 日志实锤：同一地址
+    /// 64441673984 在 2.4 秒内被两次登记为不同的手指）。幂等，无状态时零开销。
+    static func forceDisarmFloatGesture(reason: String) {
+        guard floatGestureActive || floatBarPending else { return }
+        let held = floatTouchID
+        clearFloatGesture()
+        AevonLog.warn("[边缘] \(reason) → 强制解除拖拽吞咽状态（touchID=\(held)）"
+            + "（AevonCloseDisarmV256）")
     }
 
     // MARK: - 圆盘呼出 / 收起
