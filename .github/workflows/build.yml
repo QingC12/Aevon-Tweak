@@ -414,9 +414,8 @@ jobs:
           done
           # V0.2.51：断言退役 —— 锚的旧功能代码已删（widenRightEdgeOnceV118()）
           echo "V0.1.18 校验: 默认 46pt / 下限 24 / 带外落点自述原因 / 抬手结论 / 老用户带宽迁移（触摸逻辑未动）"
-          # V0.0.15：边缘手势入口 + 圆盘选择器
-          strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
-            || { echo "::error::缺少边缘手势入口（AevonEdge）"; exit 1; }
+          # V0.2.51（AevonGripOnlyV251）：入口断言由 AevonGripOnlyV251 标记承接
+          # （Swift 类名不落 strings，旧断言锚的 AevonEdgeEntry/AevonEdgeStripView 二进制串已不在）。
           strings "$DYLIB" | grep -q 'AevonRingMenu' \
             || { echo "::error::缺少圆盘选择器（AevonRingMenu）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingIcon' \
