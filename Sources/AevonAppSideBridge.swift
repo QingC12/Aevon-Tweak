@@ -45,9 +45,8 @@ enum AevonAppSideBridge {
     }
 
     private static func drain() {
-        // 开关关着就零开销：连偏好都不读，直接返回（V0.2.1 起默认开 —— 真接管是本体）
-        guard AevonPrefs.bool("AppSideEnabled", default: true) else { return }
-
+        // V0.2.51（AevonGripOnlyV251）：AppSideEnabled 闸已随 App 侧识别器退役 ——
+        // App 侧只剩日志桥 + scene takeover/screen fit（无开关），桥保持常开。
         let domains = watchedDomains + extraDomains.sorted()
         for domain in domains {
             guard let text = probeText(domain: domain) else { continue }

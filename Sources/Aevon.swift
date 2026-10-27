@@ -139,35 +139,13 @@ private func installExperimentalHooks() {
     }
 
     /*
-     * ⑦ V0.1.4 → V0.1.5（AevonSystemGestureV105）：全屏 App 内的右缘改由
-     *    **SpringBoard 系统手势管线**接管（`SBMainDisplaySystemGestureManager
-     *    -addGestureRecognizer:toDisplayWithIdentity:`，ScreenCore 同款）。
-     *    0.1.4 找 `_UISystemGestureWindow` 的路已被归档(14) 的窗口清单证伪。
+     * ⑦（0.2.51 移除，AevonGripOnlyV251）：右缘呼盘手势全部退役 ——
+     *    AevonSystemGestureV105 / AevonSysEdgeV213 / 边缘手势条 / App 侧右缘识别器
+     *    一并删除（用户 Aevon(26) #2：「移除现在的所有圆盘触发手势代码和开关，
+     *    只保留新添加的圆盘把手」）。呼盘唯一入口 = AevonRingGrip 可见把手。
+     *    历史标记 AevonSystemGestureV104/V106/V108/V110、AevonSysEdge* 全部
+     *    收容在 AevonAssertionShim.m 的 used 常量里。
      */
-    AevonSystemGestureV105.shared.install()
-
-    /*
-     * ⑦-2 V0.2.13（AevonSysEdgeV213）：右缘呼出**再试一次系统手势管线**。
-     *
-     * 与上面 0.1.5~0.1.13 那条的本质区别（那次失败的前提本轮全部变了）：
-     *   · 登记接口换成本轮才发现的 `-addGestureRecognizer:withType:` ——
-     *     真机探针（Aevon(75)）只测过 toDisplayWithIdentity:，这个带 type 的重载
-     *     **从未验证过**，而 Triggr（iOS 15–18）用的正是它；
-     *   · 识别器换成 `UIScreenEdgePanGestureRecognizer`（私有 init，type=2）——
-     *     它是系统自己的边缘识别器，从边缘落手就进入判定，失败时由 UIKit 归还触摸，
-     *     不需要我们再「补投」任何一帧（0.1.19 判定补投不可做的那条死路）；
-     *   · 触摸开关回到 UIKit 默认（delaysTouchesBegan=NO / cancelsTouchesInView=YES），
-     *     也就是 Apple 给左缘返回手势用的那套。
-     *
-     * 任何一步失败都只记日志、什么都不做 —— 右缘继续由全局通道 + 热区负责，
-     * 行为与 0.2.12 完全一致。可用设置里的「右缘系统手势通道」一键关掉。
-     *
-     * V0.2.14 结论：接口**是通的**（Aevon(100) 里 withType 登记成功、识别器真的收到
-     * 了触摸），但用它抢右缘这只手不划算 —— 那 2 分 34 秒里它呼盘 0 次，却有一次
-     * 在 began 上扣了 2.03 秒，把同期的系统手势全排在了后面。所以默认翻转为关，
-     * 实现与开关都留着（打开即可复现取证），右缘交回 0.2.12 那条已跑通的路径。
-     */
-    AevonSysEdgeV213.shared.install()
 
     /*
      * ⑧ V0.1.7（AevonProbeV107）：运行时探针。六组一次装齐，8 秒后开始、组间隔 0.8 秒：

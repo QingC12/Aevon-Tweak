@@ -282,23 +282,14 @@ enum AevonProbeV107 {
         // 撤掉的那几个（RightEdgeTakeover / BandTakeoverFromBegan / SysEdgeEnabled /
         // RightEdgeShowBand / TouchEnabled / SwitcherLongPress）不再打印 ——
         // 它们已经不影响任何行为了，报出来只会让人以为「还能调」。
-        let keys: [(String, Bool)] = [("Enabled", true), ("EdgeGestureEnabled", true),
-                                      ("AppSideEnabled", true), ("CrashGuard", true),
+        let keys: [(String, Bool)] = [("Enabled", true), ("CrashGuard", true),
                                       ("LogEnabled", true), ("ProbeV107", false)]
         let snapshot = keys.map { pair in "\(pair.0)=\(AevonPrefs.bool(pair.0, default: pair.1) ? 1 : 0)" }
         AevonLog.info("[探针P6] 开关：\(snapshot.joined(separator: " "))（AevonProbeP6V107 AevonProbeDefaultV111）")
 
-        let zone = AevonTriggerZone.rect(in: UIScreen.main.bounds)
-        let bottom = AevonPrefs.double("RingTriggerY", default: AevonTriggerZone.defaultBottomRatio)
-        let width = AevonPrefs.double("RingTriggerWidth", default: AevonTriggerZone.defaultWidth)
-        let height = AevonPrefs.double("RingTriggerHeight", default: AevonTriggerZone.defaultHeight)
-        let bandMode = AevonRightEdge.enabled
-            ? "右缘接管带·按下即接管（\(AevonRightEdge.summary(in: UIScreen.main.bounds))；带内起手需距右缘 ≤\(Int(AevonRightEdge.width))pt）"
-            : "已关（整段交回 App）"
-        AevonLog.info("[探针P6] 热区：底边 \(Int(bottom))% 宽 \(Int(width)) 高 \(Int(height)) → x \(Int(zone.minX))~\(Int(zone.maxX)) y \(Int(zone.minY))~\(Int(zone.maxY))；右缘归口=\(bandMode)，可视化=\(AevonRightEdge.showBand ? "常亮" : "按需（进「细节调整」/ 拖滑条时亮 3 秒，AevonGeomPreviewLiveV210）")；系统手势通道 \(AevonSystemGestureV105.isInstalled ? "已装" : "未装")·本版停手不接收触摸（AevonSystemGestureV110 AevonBandHoldMovedV112 AevonBandTakeoverBeganV113 AevonPipelineStandDownV113 AevonRightEdgeTakeoverV115 AevonRightEdgeShowBandV116 AevonNoBandDrawV117 AevonBandHintV117 AevonRightEdgeDefaultV118 AevonRightEdgeMissHintV118）")
+        AevonLog.info("[探针P6] 入口：全局通道 \(AevonEdgeEntry.isVisible ? "已装" : "未装")·呼盘唯一入口=圆盘把手（AevonGripOnlyV251）")
     }
 
-    // MARK: - 供手势通道复用（AevonSystemGestureV105 的兜底路径）
 
     /// 给出手势管理器实例。硬编码类名全落空时，右缘通道从这里要候选。
     ///

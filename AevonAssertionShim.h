@@ -21,34 +21,17 @@ void AevonPrefSetString(NSString *key, NSString *value);
 /// 全程 @try/@catch，取不到返回 nil —— 调用方必须准备文字兜底，绝不因图标缺失而失败。
 UIImage *AevonIconImage(NSString *bundleID, CGFloat scale);
 
-/// V0.0.32：跨进程热区配置通道（notify_set_state / notify_get_state）。
-/// 沙盒 App 读不到 com.Aevon 偏好域、也未必能读 jbroot 文件，但 notify(3) 状态
-/// 在沙盒里通用 —— SpringBoard 写入后，注入 App 的 AevonGuard 直接读。
-/// 打包：x(10bit) y(10bit) w(8bit) h(10bit) enabled(1bit) ring(1bit) + 版本标记(8bit)。
-void AevonNotifySetZone(double x, double y, double w, double h, int enabled);
-/// 读到有效配置返回 1，否则 0（不改动出参）。
-int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled);
+/// V0.2.51（AevonGripOnlyV251）：SetZone/GetZone（旧热区几何）已随触发热区退役。
 /// V0.0.34：圆盘展开状态位（notify state bit39，AevonNotifyRingBitV34）。
 /// SpringBoard 在圆盘开 / 关时调用；Guard 每条 sendEvent 直接读共享内存，
 /// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
 void AevonNotifySetRing(int on);
-/// V0.2.20（AevonAppGeomNotifyV220）：右缘带几何 → 共享内存 bit48-63
-/// （48-55 = 带宽 pt，56-63 = 带高 %；0 = 未发布）。读-改-写保留 zone/enabled/ring/版本位。
-/// App 侧只认这里 —— 沙盒 App 读不到 com.Aevon 域（Aevon(105)：抖音按 fallback
-/// 46pt×60% 误判几何，「屏幕 50% 呼出圆盘」），notify 状态是沙盒里验证多年的通道。
-void AevonNotifySetBand(double w, double h);
 /// V0.2.49（AevonAppScreenFitV249）：把「浮窗里装的是哪个 App」发到共享内存。
 /// 单开一个 notify 名字 `com.aevon.floatstage`，state = bundleID 的 FNV-1a 32 位散列
 /// （0 = 没有浮窗）。App 侧据此决定要不要把 `UIScreen.bounds` 报成画布尺寸 ——
 /// 走 notify 而不是偏好域，是因为沙盒最严的 App（抖音）读不到 com.Aevon。
 void AevonNotifySetFloatStage(NSString *bundleID);
-/// V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位。返回 1 = 圆盘正展开，0 = 已收起。
-///
-/// 为什么 App 侧必须能读：Aevon(98) 事故里 App 识别器停在 .began 之后，抬手帧被
-/// SpringBoard 吞掉（那是它的职责），Darwin 的 ringclose 通知也可能没送到 ——
-/// 唯一不依赖任何事件、任何时序的判据就是这个共享内存位。App 侧轮询它，
-/// 只要「圆盘已收起 + 我还在 .began」就立刻收尾，卡死结构上不可能发生。
-int AevonNotifyGetRing(void);
+/// V0.2.51（AevonGripOnlyV251）：GetRing 已随 App 侧识别器退役（bit39 写入保留）。
 
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），

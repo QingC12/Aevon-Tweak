@@ -92,7 +92,7 @@ enum AevonEntryHost {
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
 
-    /// V0.1.5（AevonSystemGestureV105）：把「右缘接管带」挂到入口容器最上层。
+    /// V0.1.5（AevonSystemGestureV105）：把视图挂到入口容器最上层。
     ///
     /// 挂在**容器**里而不是窗口：容器会搬进 App 画面容器
     /// （`SBDeviceApplicationSceneViewController.view`），带子跟着走，全屏 App 上一样在。
@@ -117,21 +117,6 @@ enum AevonEntryHost {
             if win.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return true }
         }
         return false
-    }
-
-    /// V0.2.47（AevonRingGripGuardV247）：这个点是不是落在「浮窗自己的手势范围」里
-    /// （窗口本体 + 外侧手柄外扩 barThickness）。
-    ///
-    /// 为什么单独包一层：调用方是**系统手势管线**那条通道（AevonSysEdgeV213）——
-    /// 它由 BackBoard 直接喂触摸，完全不经过我们的 hitTest，所以
-    /// `AevonEdgeStripView.hitTest` 里那句「浮窗开着就 return nil」对它无效。
-    /// 结果就是：右下角角块正好压在右缘 30pt 边缘区里，往下拖缩放时 dx 为负 →
-    /// 判向成立 → 圆盘跳出来（Aevon(22) 主诉）。这里给它同一套让路判据。
-    ///
-    /// 只在**有浮窗**时才返回 true（没浮窗时右缘行为一字不变）。
-    static func pointHitsFloatGrip(at point: CGPoint) -> Bool {
-        guard AevonWindowManager.openBundleID != nil else { return false }
-        return pointHitsFloatingWindow(at: point)
     }
 
     /// 屏幕点 → 命中的浮窗与抓取目标（V0.0.41，AevonFloatGlobalV41）。
@@ -160,7 +145,7 @@ enum AevonEntryHost {
         return layer.convert(point, from: nil)
     }
 
-    /// 入口视图的统一挂载点（手势条 / 悬浮球 / 圆盘 / 面板都往这里加）
+    /// 入口视图的统一挂载点（圆盘 / 面板都往这里加）
     static var activeRoot: UIView? { return container }
     /// 历史别名，语义同 `activeRoot`
     static var rootView: UIView? { return container }
@@ -329,7 +314,6 @@ enum AevonEntryHost {
         window = host
         container = box
         floatLayer = floatView
-        AevonEdgeEntry.attachProbe(to: host)
         startWatchdog()
         // V0.2.50（AevonRingGripV250）：圆盘的可见把手挂到容器最上层 ——
         // 容器会随全屏 App 搬进画面容器，所以桌面 / 全屏 App 里都摸得到。
@@ -361,7 +345,6 @@ enum AevonEntryHost {
         host.addSubview(box)
         host.bringSubviewToFront(box)
         // 父视图换了，手势条按新 bounds 重新落位
-        AevonEdgeEntry.refreshLayoutIfNeeded()
         AevonLog.info("[入口] 容器已搬家 \(from) → \(AevonRuntime.className(host) ?? "\(type(of: host))")（\(Int(host.bounds.width))x\(Int(host.bounds.height))，原因=\(reason)）")
     }
 
@@ -469,7 +452,6 @@ enum AevonEntryHost {
     static func refreshLayout(reason: String) {
         guard let box = container else { return }
         box.layoutIfNeeded()
-        AevonEdgeEntry.refreshLayoutIfNeeded()
         let bounds = box.bounds
         if bounds.width < 1 || bounds.height < 1 {
             AevonLog.warn("[入口] 容器尺寸异常（\(Int(bounds.width))x\(Int(bounds.height))，\(reason)）")
@@ -545,7 +527,6 @@ enum AevonEntryHost {
 
         // 入口视图按最新配置重新落位（V0.0.25：设置里改了热区位置/宽高要立即生效，
         // 不能等下次注销 —— 这里每 3 秒对一次，代价可以忽略）
-        AevonEdgeEntry.refreshLayoutIfNeeded()
 
         // 前 3 分钟每 30 秒打一次栈（够用户打开 App 验证一轮）
         if tickCount <= 60, tickCount % 10 == 0 {

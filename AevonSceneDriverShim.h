@@ -97,6 +97,10 @@ NSInteger AevonIdleTimerKick(void);
 ///   返回 YES = 至少挂上一个锁屏入口；NO = 本机没有该入口（日志里会写「不可用」）。
 BOOL AevonInstallLockBlock(void);
 
+/// V0.2.51（AevonDeactGateV251）：回桌面守画 —— 拦截浮窗场景的停用登记。
+/// 幂等；类/方法不存在返回 NO（0.2.50 的黑屏守卫照常兜底）。
+BOOL AevonInstallDeactivationGate(void);
+
 /// V0.2.35/36/37（AevonSceneRouteV235/236/237）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
 /// 查 LSApplicationProxy 的 Info.plist，三档细判（0.2.37 权威判据 = App 侧 scene
 /// 探针实锤：delegate 实现 configurationForConnecting 才会接受第二场景连接；

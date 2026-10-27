@@ -41,7 +41,6 @@ enum AevonProbeP7V114 {
             ("P7-1 窗口命中链", { windowHitChain() }),
             ("P7-2 入口宿主", { entryHost() }),
             ("P7-3 系统识别器宿主", { systemRecognizerHosts() }),
-            ("P7-4 自己的识别器", { ownRecognizer() }),
             ("P7-5 延迟路由能力", { deferringCapability() })
         ]
     }
@@ -135,16 +134,6 @@ enum AevonProbeP7V114 {
             }
         }
         AevonLog.info("[探针P7-3] 完成（AevonProbeP7V114 AevonRecognizerHostV114）")
-    }
-
-    // MARK: - P7-4 自己的识别器
-
-    /// 我们登记进管线的识别器有没有宿主视图 —— 九版零 began 的直接答案。
-    private static func ownRecognizer() {
-        for line in AevonSystemGestureV105.debugRecognizerSnapshot() {
-            AevonLog.info("[探针P7-4] \(line)（AevonOwnRecognizerV114）")
-        }
-        AevonLog.info("[探针P7-4] 完成（AevonProbeP7V114 AevonOwnRecognizerV114）")
     }
 
     // MARK: - P7-5 延迟路由能力

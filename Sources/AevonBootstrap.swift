@@ -35,9 +35,7 @@ enum AevonBootstrap {
         _ = center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                object: nil,
                                queue: .main) { _ in
-            let wantEdge = AevonPrefs.bool("EdgeGestureEnabled", default: true)
-            let missingEdge = wantEdge && !AevonEdgeEntry.isVisible
-            guard missingEdge || !AevonEntryHost.isInstalled else {
+            guard !AevonEdgeEntry.isVisible || !AevonEntryHost.isInstalled else {
                 AevonEntryHost.refreshLayout(reason: "didBecomeActive")
                 AevonEntryHost.raise(reason: "回到桌面")
                 diagnose("回到桌面")
@@ -88,7 +86,7 @@ enum AevonBootstrap {
         AevonEntryHost.dumpWindowStack(tag)
     }
 
-    /// 建唯一入口窗口 → 挂边缘手势条（V0.0.27：备用悬浮球已全部移除）
+    /// 建唯一入口窗口 → 装全局触摸通道（0.2.51 起没有手势条，呼盘只有把手）
     ///
     /// V0.0.39（AevonBootShieldV39）：每一步独立套 ObjC 异常保护并落面包屑日志 ——
     /// 任何一步抛 NSException 只记日志不中断启动，后续步骤照常；绝不再把异常抛回系统。
@@ -109,13 +107,6 @@ enum AevonBootstrap {
             return
         }
 
-        AevonTryExecute({
-            AevonEdgeEntry.install(attempt: 1, reason: reason)
-        }, &exName, &exReason)
-        if let name = exName {
-            AevonLog.warn("[引导] 手势条挂载抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
-        }
-
         exName = nil
         exReason = nil
         AevonTryExecute({
@@ -125,8 +116,7 @@ enum AevonBootstrap {
             AevonLog.warn("[引导] 场景钩子安装抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
         }
 
-        // V0.0.23：App 前台时视图层收不到边缘触摸（被 App 画面命中测试截走），
-        // 补一条不经过命中测试的全局通道。
+        // V0.0.23：全局触摸通道 —— 浮窗窗外手势与圆盘指针喂料的唯一基础设施。
         exName = nil
         exReason = nil
         AevonTryExecute({

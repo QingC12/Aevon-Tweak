@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.24（arm64e / roothide）。用法：桌面右下角贴边向左拉、或全屏 App 右缘左滑 → 圆盘出来 → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
+			<string>Aevon 0.2.51（arm64e / roothide）。用法：拖出浮窗后，窗口边缘的**圆盘把手**是呼盘唯一入口（0.2.51 起，AevonGripOnlyV251）：点按把手或在其上左滑 ≥14pt → 圆盘出来 → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。主悬浮窗左右边条**轻点**=吸附停靠，停靠后再点=装回。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -24,47 +24,8 @@
 			<key>label</key>
 			<string>启用插件</string>
 			<key>infoText</key>
-			<string>总开关（0.2.17 起默认开）。关掉后不创建入口窗口、不挂任何识别器：桌面上没有手势条，也不响应任何边缘手势。开关改动要注销（或重启桌面）才生效。
+			<string>总开关（0.2.17 起默认开）。关掉后不创建入口窗口、不挂任何触摸通道：浮窗和圆盘把手都不再出现。开关改动要注销（或重启桌面）才生效。
 它管的是「有没有 Aevon 这个人」，下面那些开关管的是「它怎么动」。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>EdgeGestureEnabled</string>
-			<key>label</key>
-			<string>边缘呼出</string>
-			<key>infoText</key>
-			<string>「边缘呼出圆盘」的总闸。现在同时管三条通道（每条都只在自己那一层判向，互不吞对方的触摸）：
-① 桌面右下角的边缘手势条：贴边向左拉 30pt 呼盘，轻点/上下滑/翻页一律放行；
-② 全屏 App 进程内的右缘识别器：右缘左滑 8pt 呼盘，同时把这根触摸合法取消，页面不会跟着滚；
-③ SpringBoard 系统手势管线里的右缘识别器（0.2.17 起常开，不再单独给开关）：判向最快的一条，纵向/斜向会立刻失败归还。
-
-关掉它 = 上述全部停手（桌面和 App 的触摸完全回到系统原生状态，只是呼不出圆盘）。排查「某个触摸异常是不是 Aevon 引起的」时，先关这个最快。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>AppSideEnabled</string>
-			<key>label</key>
-			<string>App 内右缘接管</string>
-			<key>infoText</key>
-			<string>把右缘判向搬进每个 App 自己的进程（0.2.7 起全 App，默认开）：
-· 全屏 App 里从屏幕右缘向左滑 8pt 且横向占优 → 圆盘呼出，同时 App 的这根触摸被合法取消，页面物理上不会跟着动；
-· 纵向滚动 / 向右扫 / 轻点 → 立刻放行，App 照常操作，只晚一两帧；
-· 三个方向都判不出来但已经走过 10pt → 立刻放行（0.2.9 新增，修「只能点不能滑」）；
-· 装进浮窗的 App 整体退让，一根手指都不碰（0.2.9 新增）。
-
-代价：右缘接管带内的轻点会延迟到抬手才生效（带的宽度在「细节调整」里调，默认 46pt，越小代价越小）。金融类 App（建行/工行/招行/云闪付/支付宝）已内置排除；其它 App 可在 com.Aevon 域用 AppSideExcludePrefixes 排除。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -120,13 +81,13 @@
 			<key>label</key>
 			<string>细节调整</string>
 			<key>footerText</key>
-			<string>热区位置 / 宽度 / 高度、App 内右缘接管带的宽与高、圆盘里放哪些 App，都在二级页。</string>
+			<string>圆盘 App 列表、浮窗几何说明，都在二级页。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>触发条 / 圆盘细节调整</string>
+			<string>圆盘 / 浮窗细节调整</string>
 			<key>action</key>
 			<string>aevonOpenDetail</string>
 		</dict>

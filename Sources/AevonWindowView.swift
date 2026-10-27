@@ -438,9 +438,13 @@ final class AevonWindowView: UIView {
         //   · `SBLockScreenManager -lockUIFromSource:withOptions:` 兜底拦截（电源键放行）。
         // 8 秒 ≪ 系统最短「自动锁定 30 秒」，既压得住又不会每秒烧一次私有 API。
         let lockBlock = AevonInstallLockBlock()
+        // V0.2.51（AevonDeactGateV251，用户 Aevon(26) #3）：回桌面守画 ——
+        // 拦截浮窗场景的停用登记（Stheno 方向），回桌面后浮窗直接是实时画面。
+        let deactGate = AevonInstallDeactivationGate()
         AevonLog.info("[窗口] 熄屏压制已启动（\(AevonWindowView.idleKickMaskText(mask))，"
-            + "锁屏拦截=\(lockBlock ? "已装" : "不可用")，之后每 8 秒重申一次）"
-            + "（AevonNoAutoLockV249 AevonNoAutoLockV250）")
+            + "锁屏拦截=\(lockBlock ? "已装" : "不可用")，"
+            + "回桌面守画=\(deactGate ? "已装" : "不可用")，之后每 8 秒重申一次）"
+            + "（AevonNoAutoLockV249 AevonNoAutoLockV250 AevonDeactGateV251）")
         let timer = Timer(timeInterval: 8.0, repeats: true) { [weak self] _ in
             let now = AevonWindowView.kickIdleTimerIfNeeded()
             guard let self, now != self.idleKickMask else { return }
@@ -959,6 +963,15 @@ final class AevonWindowView: UIView {
                 doubleTap.numberOfTapsRequired = 2
                 handle.addGestureRecognizer(doubleTap)
             }
+            if edges == .left || edges == .right {
+                // V0.2.51（AevonDockTapV251，用户 Aevon(26) #1）：左右缘**轻点** = 吸附停靠。
+                // 主诉：「修改主悬浮窗的手势热区左右边缘点击时触发吸附停靠」。
+                // 拖到边缘松手吸附照旧保留（AevonDockDropV250），轻点是第二个入口；
+                // 停靠态轻点任意边条 = 装回主窗。pan 需要位移才 began，原地轻点不会触发拖动。
+                let tap = UITapGestureRecognizer(target: self,
+                                                 action: #selector(handleEdgeTap(_:)))
+                handle.addGestureRecognizer(tap)
+            }
         }
     }
 
@@ -1110,6 +1123,23 @@ final class AevonWindowView: UIView {
                 layoutIfNeeded()
             }
         }
+    }
+
+    /// 左 / 右缘轻点 = 吸附停靠 / 装回主窗（V0.2.51，AevonDockTapV251）。
+    /// 全局通道那条路（App 前台时窗外触摸只有 sendEvent 能收到）在
+    /// `AevonEdgeEntry.handleFloatGestureEnded` 的轻点分支里做同一件事。
+    @objc private func handleEdgeTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended,
+              !isLiveResizing, !isBarHoldMoving else { return }
+        guard let handle = gesture.view as? AevonEdgeHandleView,
+              handle.edges == .left || handle.edges == .right else { return }
+        if isDocked {
+            AevonWindowManager.restoreDocked(bundleID: bundleID)
+            return
+        }
+        let side: AevonDockSide = handle.edges == .left ? .left : .right
+        AevonLog.info("[窗口] 边条轻点 → 吸附停靠到屏幕\(side.title)侧（AevonDockTapV251）")
+        _ = AevonWindowManager.dockCurrent(side: side)
     }
 
     /// 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）。

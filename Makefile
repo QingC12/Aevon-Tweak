@@ -17,7 +17,6 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonSceneHook.m \
     Sources/AevonProbeSupport.m \
     Sources/AevonTouchHook.m \
-    Sources/AevonSysEdgeShim.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
     Sources/AevonCrashCatcher.swift \
@@ -26,9 +25,6 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonBootstrap.swift \
     Sources/AevonEntryHost.swift \
     Sources/AevonEdgeEntry.swift \
-    Sources/AevonGeometryOverlay.swift \
-    Sources/AevonSystemGestureV104.swift \
-    Sources/AevonSysEdgeV213.swift \
     Sources/AevonProbeV107.swift \
     Sources/AevonProbeP7V114.swift \
     Sources/AevonRingMenu.swift \

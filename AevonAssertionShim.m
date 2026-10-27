@@ -114,26 +114,7 @@ static int AevonNotifyZoneToken(void) {
 #define AEVON_NOTIFY_VER (0x34ULL << 40)
 #define AEVON_NOTIFY_RING_BIT (1ULL << 39)
 
-void AevonNotifySetZone(double x, double y, double w, double h, int enabled) {
-    @try {
-        int token = AevonNotifyZoneToken();
-        if (token < 0) { return; }
-        /* 读-改-写：保留 bit39 圆盘状态位（圆盘开着时设置页改几何，不能把 ring 位冲掉） */
-        uint64_t old = 0;
-        notify_get_state(token, &old);
-        uint64_t ringBit = (((old >> 40) & 0xFF) == 0x34) ? (old & AEVON_NOTIFY_RING_BIT) : 0;
-        uint64_t pack = ringBit;
-        pack |= ((uint64_t)llround(x)) & 0x3FFULL;
-        pack |= (((uint64_t)llround(y)) & 0x3FFULL) << 10;
-        pack |= (((uint64_t)llround(w)) & 0xFFULL) << 20;
-        pack |= (((uint64_t)llround(h)) & 0x3FFULL) << 28;
-        pack |= (enabled ? 1ULL : 0ULL) << 38;
-        pack |= AEVON_NOTIFY_VER;
-        notify_set_state(token, pack);
-        notify_post("com.aevon.guardzone");
-    } @catch (NSException *exception) {
-    }
-}
+/* V0.2.51（AevonGripOnlyV251）：AevonNotifySetZone / GetZone 已随热区几何退役。 */
 
 /* V0.0.34：圆盘展开状态位（AevonNotifyRingBitV34）。
  * SpringBoard 在 presentRing / ringDidDismiss 调用；Guard 每条 sendEvent 直接读。 */
@@ -152,70 +133,9 @@ void AevonNotifySetRing(int on) {
     }
 }
 
-/* V0.2.20（AevonAppGeomNotifyV220）：右缘带几何 → 共享内存 bit48-63。
- * Aevon(105) 铁证：抖音读不到 com.Aevon 域的 RightEdgeWidth/RightEdgeHeight，
- * App 侧静默落回 fallback 46pt×60%（用户实际设的是 8pt×28%），屏幕中部右缘
- * 左滑全部误呼圆盘、App 触摸还被合法取消。修法 = SB 把真实几何写进 notify 状态
- * （沙盒 App 必可读，bit39 圆盘位已验证多年），App 侧只认它、读不到一律 fail-closed。
- * bit48-55 = 带宽 pt（0 = 未发布），bit56-63 = 带高 %（0 = 未发布）。
- * used 常量是 CI strings 检查的锚点 —— C 函数名不在 section 内容里，
- * strings 抓不到符号名（run 40281434515 的教训）。 */
-__attribute__((used)) static const char AevonGeomPublishV220Marker[] =
-    "AevonNotifySetBand AevonAppGeomNotifyV220";
-void AevonNotifySetBand(double w, double h) {
-    @try {
-        int token = AevonNotifyZoneToken();
-        if (token < 0) { return; }
-        uint64_t old = 0;
-        notify_get_state(token, &old);
-        uint64_t pack = (((old >> 40) & 0xFF) == 0x34) ? old : AEVON_NOTIFY_VER;
-        pack &= ~(0xFFULL << 48);
-        pack &= ~(0xFFULL << 56);
-        pack |= (((uint64_t)llround(w)) & 0xFFULL) << 48;
-        pack |= (((uint64_t)llround(h)) & 0xFFULL) << 56;
-        notify_set_state(token, pack);
-        notify_post("com.aevon.guardzone");
-    } @catch (NSException *exception) {
-    }
-}
 
-/* V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位（bit39）。
- *
- * 这是全插件唯一「零时序、零事件依赖」的状态判据：不靠 Darwin 通知送达、
- * 不靠抬手帧到达、不靠跨进程回调。App 侧识别器只要拿它对照自己的 state，
- * 就能判断「圆盘早就关了，我却还压着这根手指」。
- * 读不到（token 失效 / 版本位不对）一律返回 0 —— 出错方向必须是「认为圆盘已关」，
- * 因为对 App 来说「以为圆盘还开着」会把整台设备的滚动全部压死。 */
-int AevonNotifyGetRing(void) {
-    @try {
-        int token = AevonNotifyZoneToken();
-        if (token < 0) { return 0; }
-        uint64_t pack = 0;
-        notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
-        return (pack & AEVON_NOTIFY_RING_BIT) ? 1 : 0;
-    } @catch (NSException *exception) {
-        return 0;
-    }
-}
+/* V0.2.51（AevonGripOnlyV251）：AevonNotifyGetRing 已随 App 侧识别器退役（bit39 写入保留）。 */
 
-int AevonNotifyGetZone(double *x, double *y, double *w, double *h, int *enabled) {
-    @try {
-        int token = AevonNotifyZoneToken();
-        if (token < 0) { return 0; }
-        uint64_t pack = 0;
-        notify_get_state(token, &pack);
-        if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
-        if (x) { *x = (double)(pack & 0x3FFULL); }
-        if (y) { *y = (double)((pack >> 10) & 0x3FFULL); }
-        if (w) { *w = (double)((pack >> 20) & 0xFFULL); }
-        if (h) { *h = (double)((pack >> 28) & 0x3FFULL); }
-        if (enabled) { *enabled = (int)((pack >> 38) & 1ULL); }
-        return 1;
-    } @catch (NSException *exception) {
-        return 0;
-    }
-}
 
 void AevonPrefSetBool(NSString *key, BOOL value) {
     @try {

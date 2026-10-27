@@ -655,7 +655,6 @@ final class AevonRingMenu: UIView {
         clearPointer()
         stopDamping()
         AevonRingMenu.current = nil
-        AevonEdgeEntry.setStripInteraction(true)
         // V0.2.50（AevonRingGripV250）：圆盘收起 → 把手重新露出来
         AevonRingGrip.setVisible(true)
         // V0.0.24：立刻解除「吞掉那根手指」的接管，把事件通道还给 App

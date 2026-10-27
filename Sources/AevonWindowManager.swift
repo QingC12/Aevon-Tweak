@@ -139,6 +139,7 @@ enum AevonWindowManager {
     /// → 直接置顶，不重复开。
     static func open(bundleID: String,
                      sceneID: String?,
+                     warmupFullscreenFirst: Bool = false,
                      completion: ((Bool) -> Void)? = nil) {
         guard AevonPrefs.bool("Enabled", default: true) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
@@ -384,6 +385,11 @@ enum AevonWindowManager {
             // 把 frame 重算回全屏，三拍复查 + 补写（防回弹）。关窗由承载器还原。
             var mainResized = false
             var mainCanvas: CGSize = .zero
+            // V0.2.51（AevonDouyinWarmupV251，用户 Aevon(26) #4）：抖音不经「全屏打开
+            // 一次」、直接浮窗打开会断层 —— 差别就在 App 进程有没有以整屏画布完成过
+            // 第一遍排版。刚由 launchAndOpen 拉起的场景是「生」的：这里先按整屏画布让
+            // App 渲染一拍（等价用户先全屏开一次），1.0 秒后再切浮窗画布。
+            let warmupCanvas = warmupFullscreenFirst && !screenAspectOn
             if !usedSelfScene && routeMain {
                 // V0.2.43（AevonCanvasScaleV243）：画布 = 窗口 × k（不再等于窗口本身）
                 // V0.2.44（AevonScreenAspectV244）：屏幕比例档 → 画布 = 整屏原生尺寸
@@ -391,7 +397,14 @@ enum AevonWindowManager {
                 let size = AevonWindowView.canvasSize(for: windowSize)
                 let expected = "frame=\(Int(size.width))x\(Int(size.height))"
                 let stateNow = AevonMainSceneFrameState(scene) ?? ""
-                if screenAspectOn && stateNow.contains(expected) {
+                if warmupCanvas {
+                    // 预热：不写小画布（场景此刻本来就是整屏），mainCanvas 仍记小画布
+                    // —— 复查与后续流程都认它；真正的切换在 +1.0s 那一拍做。
+                    mainResized = true
+                    mainCanvas = size
+                    AevonLog.info("[场景] 画布预热：\(bundleID) 先按整屏画布渲染一拍（模拟「全屏打开一次」），"
+                        + "1.0 秒后切浮窗画布 \(Int(size.width))x\(Int(size.height))（AevonDouyinWarmupV251）")
+                } else if screenAspectOn && stateNow.contains(expected) {
                     // 屏幕比例档 + 画布本来就是整屏 → 一个字节都不用写
                     // （多余的 updateSettings 会让 App 白重排一次，画面闪一下）
                     AevonLog.info("[场景] 整屏画布：\(bundleID) 已是 \(expected)，跳过写入"
@@ -434,7 +447,8 @@ enum AevonWindowManager {
                 : ((AevonRuntime.send(scene, Selector(("identifier"))) as? String) ?? sceneID ?? "")
             guard let sceneHost = AevonSceneHost(scene: hostScene, sceneID: sceneIdentifier,
                                                  bundleID: bundleID, isSelfBuilt: usedSelfScene,
-                                                 mainResized: mainResized) else {
+                                                 mainResized: mainResized,
+                                                 canvasWarmupDelay: warmupCanvas ? 1.15 : 0) else {
                 AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
                 if mainResized {
                     // V0.2.42（AevonMainSceneResizeV242）：承载不了就把主场景画布还原，
@@ -467,9 +481,11 @@ enum AevonWindowManager {
             // 抖音这类深层级 App 往往要等下一次滚动才吃新尺寸（Aevon(24) 原话：
             // 「需要等待 1.5 秒或者上滑一下视频才能完整真重排」）。
             // 这里做一次有界微扰（-1pt → 恢复），强制它多走一遍布局。
-            let kickCanvas = AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize())
-            sceneHost.kickRelayout(width: kickCanvas.width, height: kickCanvas.height,
-                                   tag: "开窗 \(bundleID)")
+            if !warmupCanvas {
+                let kickCanvas = AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize())
+                sceneHost.kickRelayout(width: kickCanvas.width, height: kickCanvas.height,
+                                       tag: "开窗 \(bundleID)")
+            }
 
             let title = AevonWindowManager.title(for: bundleID)
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
@@ -494,6 +510,23 @@ enum AevonWindowManager {
                 AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
             }
             AevonLog.info("[窗口] \(bundleID) 窗口化成功（单窗模式）（AevonSingleWindowV105）")
+            // V0.2.51（AevonDouyinWarmupV251）：预热切换 —— App 已按整屏画布渲染一拍，
+            // 现在把画布切到浮窗尺寸并踢一次重排。只在「还是这同一个开窗会话」时执行。
+            if warmupCanvas {
+                let warmupScene = scene
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak sceneHost] in
+                    // currentBundleID 已变 = 窗口已关 / 已换 App（承载器 invalidate 会随之发生）
+                    guard currentBundleID == bundleID else {
+                        AevonLog.info("[场景] 画布预热切换作废（窗口已关 / 已换 App）（AevonDouyinWarmupV251）")
+                        return
+                    }
+                    let ok = AevonMainSceneSetFrame(warmupScene, Double(mainCanvas.width), Double(mainCanvas.height))
+                    AevonLog.info("[场景] 画布预热完成：\(bundleID) 已切到浮窗画布 \(Int(mainCanvas.width))x\(Int(mainCanvas.height))"
+                        + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")）（AevonDouyinWarmupV251）")
+                    sceneHost?.kickRelayout(width: mainCanvas.width - 1, height: mainCanvas.height - 1,
+                                            tag: "预热切换 \(bundleID)")
+                }
+            }
             completion?(true)
         }
     }
@@ -545,7 +578,10 @@ enum AevonWindowManager {
             if AevonSceneHelper.scene(for: bundleID) != nil {
                 timer.invalidate()
                 AevonLog.info("[窗口] \(bundleID) 场景已就绪（等待 \(attempts) 次）")
-                open(bundleID: bundleID, sceneID: nil, completion: completion)
+                // V0.2.51（AevonDouyinWarmupV251）：这个场景是刚拉起的「生」场景，
+                // App 还没以整屏画布排版过 → 先预热（等价用户先全屏开一次）再切浮窗画布。
+                open(bundleID: bundleID, sceneID: nil,
+                     warmupFullscreenFirst: true, completion: completion)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -803,4 +839,28 @@ enum AevonWindowManager {
 @_cdecl("AevonFloatActive")
 func aevonFloatActive() -> Bool {
     return AevonWindowManager.hasAnyWindow
+}
+
+/// V0.2.51（AevonDeactGateV251，用户 Aevon(26) #3）：给 ObjC 停用登记拦截钩子用的
+/// 「这个场景正被浮窗 / 停靠列承载吗」。
+///
+/// Stheno 方向（blueprint-2026-10-13 UIApplicationSceneDeactivationManagerHook）：
+/// 回桌面那一刻系统会给场景登记停用原因，浮窗里那个 App 的场景被一起停用，
+/// 远程表面回收 → 事后重申前台要 1.5 秒才回画。在登记那一刻拦住，画面全程不中断。
+/// 场景对不上（类型不同 / 已不在浮窗）一律返回 false = 完全透传（fail-closed）。
+@_cdecl("AevonFloatGuardsScene")
+func aevonFloatGuardsScene(_ scene: UnsafeMutableRawPointer?) -> Bool {
+    guard let scene = scene else { return false }
+    let candidate = Unmanaged<AnyObject>.fromOpaque(scene).takeUnretainedValue()
+    var bundleIDs: [String] = []
+    if let open = AevonWindowManager.openBundleID { bundleIDs.append(open) }
+    for view in AevonWindowManager.allWindows where view.isDocked {
+        bundleIDs.append(view.bundleID)
+    }
+    for bundleID in bundleIDs {
+        if let ours = AevonSceneHelper.scene(for: bundleID), ours === candidate {
+            return true
+        }
+    }
+    return false
 }

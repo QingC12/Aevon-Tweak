@@ -340,18 +340,17 @@ static NSArray *AevonBuildFallback(id target) {
 
     id group1 = AevonNewGroup(@"Aevon 分屏",
                               @"所有功能只在本页开关，无需终端/SSH。"
-                              @"用法：桌面右下角贴边向左拉、或全屏 App 右缘左滑 → 圆盘出来 → 手指不用抬起，"
+                              @"用法：点按浮窗边缘的圆盘把手、或在其上左滑 → 圆盘出来 → 手指不用抬起，"
                               @"直接滑到图标上再松手就开浮窗。手指还按在屏幕上时圆盘永远不自己收（滑到盘外也不算）；"
                               @"只有抬手那一刻才判定：图标上=开窗，圆心=打开面板，其余（盘外 / 图标间隙）=收起。"
+                              @"主悬浮窗左右边条轻点=吸附停靠（0.2.51，AevonDockTapV251）。"
                               @"桌面上只会有一个浮窗，再点别的 App 会直接换成它（AevonSingleWindowV105）。"
                               @"日志文件：/var/mobile/Aevon.log（Filza 可见）。");
     if (group1 != nil) [result addObject:group1];
     id s1 = AevonNewSwitch(@"启用插件", target, @"Enabled", @YES);
     if (s1 != nil) [result addObject:s1];
-    id s1a = AevonNewSwitch(@"边缘左滑呼出圆盘（热区 + 全屏 App 右缘）", target, @"EdgeGestureEnabled", @YES);
-    if (s1a != nil) [result addObject:s1a];
-    id s1b = AevonNewSwitch(@"App 内右缘接管", target, @"AppSideEnabled", @YES);
-    if (s1b != nil) [result addObject:s1b];
+    /* V0.2.51（AevonGripOnlyV251）：EdgeGestureEnabled / AppSideEnabled 已随触发手势退役 ——
+       呼盘唯一入口 = 圆盘把手，不存在可关的「边缘呼出」通道。 */
 
     /* V0.0.30：一级页只放开关 + 细节入口；滑杆 / 圆盘 App 编辑在二级页 */
     /* V0.1.5（AevonNoSnapV105）：左右吸附开关已随吸附功能一起删除；
@@ -372,9 +371,9 @@ static NSArray *AevonBuildFallback(id target) {
     if (s5 != nil) [result addObject:s5];
 
     id groupDetail = AevonNewGroup(@"细节调整",
-                                   @"触发条位置 / 宽度 / 高度、圆盘 App 编辑等都在二级页（AevonDetailPageV30）。");
+                                   @"圆盘 App 编辑、浮窗几何说明都在二级页（AevonDetailPageV30）。");
     if (groupDetail != nil) [result addObject:groupDetail];
-    id detailButton = AevonNewSpecifier(@"触发条 / 圆盘细节调整",
+    id detailButton = AevonNewSpecifier(@"圆盘 / 浮窗细节调整",
                                         target,
                                         NSSelectorFromString(@"aevonOpenDetail"),
                                         nil,
@@ -404,48 +403,9 @@ static NSArray *AevonBuildFallbackDetail(id target) {
         [result addObject:ringButton];
     }
 
-    id groupZone1 = AevonNewGroup(@"① 触发位置（底边锚定）",
-                                  @"热区底边在屏幕高度的百分比。100% = 区底边贴住屏幕底部，"
-                                  @"此时改「触发高度」触发条永远贴底、只向上伸展。");
-    if (groupZone1 != nil) [result addObject:groupZone1];
-    id z1 = AevonNewSlider(@"触发位置（区底边在屏幕高度 %）", target, @"RingTriggerY", 0, 100, 75);
-    if (z1 != nil) [result addObject:z1];
-
-    id groupZone2 = AevonNewGroup(@"② 触发宽度（横向）",
-                                  @"热区从屏幕右边缘往左有多宽（pt）。默认 48，建议 30~60。");
-    if (groupZone2 != nil) [result addObject:groupZone2];
-    id z2 = AevonNewSlider(@"触发宽度（pt）", target, @"RingTriggerWidth", 18, 140, 48);
-    if (z2 != nil) [result addObject:z2];
-
-    id groupZone3 = AevonNewGroup(@"③ 触发高度（纵向）",
-                                  @"热区从底边向上伸展的高度（pt）。默认 320，建议 240~420。");
-    if (groupZone3 != nil) [result addObject:groupZone3];
-    id z3 = AevonNewSlider(@"触发高度（pt）", target, @"RingTriggerHeight", 80, 900, 320);
-    if (z3 != nil) [result addObject:z3];
-
-    /* V0.2.11（AevonBandRangeFreeV211）：接管带几何的代码兜底版。
-     * Detail.plist 是主力入口，但 plist 加载失败时会走这里 —— 用户 Aevon(97) 要的
-     * 「可随意更改」必须两条路都拿得到，否则一旦降级就只剩触发区三根滑条。 */
-    id groupBand = AevonNewGroup(@"④ App 内右缘接管带几何",
-                                 @"决定每个 App 进程里那条右缘起手带有多宽、覆盖多高（全 App 生效）。"
-                                 @"宽度 8~140pt、带高 6~100%，拖动时橙色框实时跟手变形。");
-    if (groupBand != nil) [result addObject:groupBand];
-    id b1 = AevonNewSlider(@"接管带宽度（pt）", target, @"RightEdgeWidth", 8, 140, 46);
-    if (b1 != nil) [result addObject:b1];
-    id b2 = AevonNewSlider(@"接管带高度（屏高 %）", target, @"RightEdgeHeight", 6, 100, 60);
-    if (b2 != nil) [result addObject:b2];
-
-    id resetButton = AevonNewSpecifier(@"恢复默认触发区域（75% / 48pt / 320pt）",
-                                       target,
-                                       NSSelectorFromString(@"aevonResetTriggerZone"),
-                                       nil,
-                                       AEVON_CELL_BUTTON);
-    if (resetButton != nil) {
-        AevonSetProperty(resetButton, @"aevonResetTriggerZone", @"buttonAction");
-        [result addObject:resetButton];
-    }
-
-    /* V0.0.37：浮窗尺寸/位置设置项已移除 —— 浮窗几何改用 Stheno 式全局记忆
+    /* V0.2.51（AevonGripOnlyV251）：触发区三滑条 / 接管带两滑条 / 恢复按钮已随触发手势
+     * 体系整建制退役 —— 呼盘唯一入口 = 圆盘把手，几何不再可调。
+     * V0.0.37：浮窗尺寸/位置设置项已移除 —— 浮窗几何改用 Stheno 式全局记忆
      * （medusaFrameLast 方案），拖动 / 缩放自动记住，无需设置项。 */
 
     return result.count > 0 ? result : nil;
@@ -955,26 +915,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 }
 
-/* 一键恢复触发区默认值：位置 75% / 宽 48pt / 高 320pt */
-- (void)aevonResetTriggerZone {
-    NSDictionary *defaults = @{ @"RingTriggerY": @75,
-                                @"RingTriggerWidth": @48,
-                                @"RingTriggerHeight": @320 };
-    CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
-    [defaults enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSNumber *value, BOOL *stop) {
-        (void)stop;
-        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)value, domain);
-    }];
-    CFPreferencesAppSynchronize(domain);
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-                                         CFSTR("com.aevon.prefschanged"),
-                                         NULL, NULL, true);
-    @try {
-        [self reloadSpecifiers];
-    } @catch (NSException *exception) {
-    }
-    [self aevonSyncAllSliders];
-}
+/* V0.2.51（AevonGripOnlyV251）：aevonResetTriggerZone 已随触发区滑条退役 ——
+ * 呼盘唯一入口 = 圆盘把手，触发区几何不再存在，无默认值可恢复。 */
 
 #pragma mark - V0.0.27：圆盘 App 编辑器入口
 

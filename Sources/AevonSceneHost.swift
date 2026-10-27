@@ -60,11 +60,17 @@ final class AevonSceneHost {
     private var invalidated = false
     /// V0.2.32（AevonForegroundProbeV232）：假首帧只记一次，避免刷屏
     private var fakeAliveLogged = false
+    /// V0.2.51（AevonDouyinWarmupV251）：画布预热期截止时刻（0 = 无预热）。
+    /// 预热期内复查**不补写** —— App 正按整屏画布做第一遍排版（模拟「全屏打开一次」），
+    /// 提前补写小画布会把预热拆了（Aevon(26) #4：抖音不经全屏先开一次、直接浮窗打开会断层）。
+    private let canvasWarmupDeadline: CFTimeInterval
 
     init?(scene: AnyObject, sceneID: String, bundleID: String,
-          isSelfBuilt: Bool = false, mainResized: Bool = false) {
+          isSelfBuilt: Bool = false, mainResized: Bool = false,
+          canvasWarmupDelay: TimeInterval = 0) {
         self.isSelfBuilt = isSelfBuilt
         self.mainResized = mainResized
+        self.canvasWarmupDeadline = canvasWarmupDelay > 0 ? CACurrentMediaTime() + canvasWarmupDelay : 0
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
         // 用同一个 id 会撞车。
         let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))"
@@ -356,6 +362,12 @@ final class AevonSceneHost {
             let expected = "frame=\(Int(width))x\(Int(height))"
             let kept = state.contains(expected)
             if !kept {
+                // V0.2.51（AevonDouyinWarmupV251）：预热期内画布仍是整屏 = 正常，
+                // 绝不提前补写小画布（App 的整屏第一遍排版还没做完）。
+                if CACurrentMediaTime() < self.canvasWarmupDeadline {
+                    AevonLog.info("[场景] 主场景画布复查（+\(delay)s）：\(state)（预热期内，不补写）（AevonDouyinWarmupV251）")
+                    return
+                }
                 _ = AevonMainSceneSetFrame(self.scene, Double(width), Double(height))
             }
             AevonLog.info("[场景] 主场景画布复查（+\(delay)s）：\(state)"

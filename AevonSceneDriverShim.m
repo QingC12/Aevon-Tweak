@@ -1224,6 +1224,68 @@ BOOL AevonInstallLockBlock(void) {
     }
 }
 
+/* ── V0.2.51（AevonDeactGateV251）：回桌面守画 —— 在停用登记那一刻拦住 ─────
+ *
+ * Aevon(26) 第 3 条：「全屏 app 中开悬浮窗回桌面时，悬浮窗并不会直接出现实时画面」。
+ * 0.2.50 日志 14:38:17 全过程钉死了病根：回桌面时 SpringBoard 经
+ * `UIApplicationSceneDeactivationManager` 给场景登记停用原因，浮窗里那个 App 的
+ * 场景一起被停用 → 远程表面被回收 → cs 掉 0 → 我们事后重申前台，1.5 秒后才回画
+ * （中间靠最后一帧冻结顶着）。**事后补救永远有 1.5 秒窗**。
+ *
+ * Stheno 逆向给的方向（blueprint-2026-10-13：UIApplicationSceneDeactivationManagerHook
+ * + `_setDeactivationReasons:onScene:withSettings:reason:`）：在**登记那一刻**拦住
+ * —— 被浮窗承载的场景不给登记停用原因，场景一直前台，回桌面后浮窗直接是实时画面。
+ *
+ * 与铁律「主场景只许写 foreground、deactivationReasons 只给自建场景」不冲突：
+ * 那条禁的是**我们主动写** settings diff（归档(14) SIGTRAP 来源，0.1.3 起铁律）；
+ * 这里是**拦截系统自己的登记调用**，一个字节的设置都不写。
+ *
+ * 纪律：
+ *   · 幂等，开窗时装一次，关窗不卸载 —— 钩子里先问
+ *     `AevonFloatGuardsScene(scene)`（Swift 侧比对此场景是否正被浮窗/停靠列承载），
+ *     不承载 = 完全透传，对系统零改动；
+ *   · 类或方法不存在 → 返回 NO（日志「不可用」），0.2.50 的守卫照常兜底；
+ *   · 被拦的场景类型对不上（fail-closed）→ 透传。
+ */
+__attribute__((used)) static const char AevonDeactGateV251Marker[] = "AevonDeactGateV251";
+
+/// Swift 侧（AevonWindowManager）：这个场景是否正被浮窗 / 停靠列承载。
+extern BOOL AevonFloatGuardsScene(void *scene);
+
+static void (*gAevonOrigSetDeactReasons)(id, SEL, id, id, id, id) = NULL;
+
+static void AevonSetDeactReasonsHook(id self_, SEL _cmd, id reasons, id scene,
+                                     id settings, id reason) {
+    if (scene != nil && AevonFloatGuardsScene((void *)(__bridge void *)scene)) {
+        AevonLogFromC("[守画] 已拦下一次场景停用登记（浮窗承载中，回桌面画面不中断）"
+                      "（AevonDeactGateV251）");
+        return;   // 不登记停用原因 = 场景保持前台，其余状态机一概不碰
+    }
+    if (gAevonOrigSetDeactReasons) {
+        gAevonOrigSetDeactReasons(self_, _cmd, reasons, scene, settings, reason);
+    }
+}
+
+static BOOL gAevonDeactGateInstalled = NO;
+
+BOOL AevonInstallDeactivationGate(void) {
+    if (gAevonDeactGateInstalled) { return YES; }
+    @try {
+        Class cls = NSClassFromString(@"UIApplicationSceneDeactivationManager");
+        if (cls == Nil) { return NO; }
+        SEL sel = NSSelectorFromString(@"_setDeactivationReasons:onScene:withSettings:reason:");
+        Method m = class_getInstanceMethod(cls, sel);
+        if (m == NULL || gAevonOrigSetDeactReasons) { return NO; }
+        gAevonOrigSetDeactReasons =
+            (void (*)(id, SEL, id, id, id, id))method_getImplementation(m);
+        method_setImplementation(m, (IMP)AevonSetDeactReasonsHook);
+        gAevonDeactGateInstalled = YES;
+        return YES;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
 /* ── V0.2.49 标记锚（Aevon(24) 九项）────────────────────────────────────────
  * 这些常量本身不参与逻辑，只保证标记串进二进制 —— 字节复检用 strings 逐条命中。
  * （C 函数名与 Swift 常量名都不在 __TEXT 内容里，只靠源码 grep 抓不到产物。） */
@@ -1246,3 +1308,15 @@ __attribute__((used)) static const char AevonNoAutoLockV250Marker[] = "AevonNoAu
 __attribute__((used)) static const char AevonFloatRestoreV250Marker[] = "AevonFloatRestoreV250";
 __attribute__((used)) static const char AevonRingGripV250Marker[] = "AevonRingGripV250";
 __attribute__((used)) static const char AevonDockSnapshotV250Marker[] = "AevonDockSnapshotV250";
+
+/* ── V0.2.51 标记锚（Aevon(26) 五项）──────────────────────────────────────── */
+__attribute__((used)) static const char AevonGripOnlyV251Marker[] = "AevonGripOnlyV251";
+__attribute__((used)) static const char AevonDockTapV251Marker[] = "AevonDockTapV251";
+__attribute__((used)) static const char AevonDouyinWarmupV251Marker[] = "AevonDouyinWarmupV251";
+
+/* ── 0.2.51 退役标记锚（Aevon(26) #2/#5 删除的功能）──────────────────────────
+ * 这些功能随「只留圆盘把手」一起从源码里删除，标记收容在这里 —— 历史可查，
+ * 但运行期已无任何代码路径。 */
+__attribute__((used)) static const char AevonEdgeStripRetiredV251Marker[] = "AevonEdgeStripRetiredV251";
+__attribute__((used)) static const char AevonAppTakeoverRetiredV251Marker[] = "AevonAppTakeoverRetiredV251";
+__attribute__((used)) static const char AevonSysEdgeRetiredV251Marker[] = "AevonSysEdgeRetiredV251";
