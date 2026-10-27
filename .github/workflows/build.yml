@@ -653,13 +653,15 @@ jobs:
           PREFS_DIR_TMP="$(dirname "$PREFS_BIN")"
           plutil -convert xml1 -o - "$PREFS_DIR_TMP/Root.plist" | grep -q 'aevonOpenDetail' \
             || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
-          echo "V0.0.30 设置侧校验: 一级只放开关 + Detail.plist 二级页 + 恢复默认 已编入"
-          # Root.plist 必须随包，且开关项不少于 6 个
+          echo "V0.0.30 设置侧校验: 一级只放开关 + Detail.plist 二级页 已编入"
+          # Root.plist 必须随包；V0.2.51（AevonGripOnlyV251）起一级页开关定档 4 个
+          # （Enabled/LogEnabled/CrashGuard/ProbeV107）—— 触发区/接管带开关与滑条已随
+          # 「圆盘触发手势退役」整体删除，故下限由 6 降为 4（与 L977 的 -eq 4 定档一致）。
           ICON_DIR="$(dirname "$PREFS_BIN")"
           [ -s "$ICON_DIR/Root.plist" ] || { echo "::error::bundle 缺少 Root.plist"; exit 1; }
           SWITCH_COUNT="$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c 'PSSwitchCell' || true)"
           echo "Root.plist 开关项: $SWITCH_COUNT"
-          [ "$SWITCH_COUNT" -ge 6 ] || { echo "::error::Root.plist 开关项不足 6 个（实际 $SWITCH_COUNT）"; exit 1; }
+          [ "$SWITCH_COUNT" -ge 4 ] || { echo "::error::Root.plist 开关项不足 4 个（实际 $SWITCH_COUNT）"; exit 1; }
           # V0.0.27：悬浮球已删除，设置里不应再有 BubbleEnabled
           if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'BubbleEnabled'; then
             echo "::error::Root.plist 仍残留 BubbleEnabled（悬浮球已移除）"

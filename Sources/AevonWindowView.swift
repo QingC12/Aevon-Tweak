@@ -1973,7 +1973,7 @@ final class AevonWindowView: UIView {
         guardArmedUntil = 0
         stopGuardTimer()
         removeDarkFreeze(reason: "关窗收尾")
-        // V0.2.49：抓离场帧（必须在 sceneHost.invalidate 之前）
+        // V0.2.49：抓离场帧（必须在承载容器 invalidate 之前）
         let exitFrame = exitFreezeView()
         // V0.2.44（AevonScreenAspectV244）：比例监听到此为止
         aspectWatchTimer?.invalidate()
