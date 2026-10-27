@@ -1,5 +1,7 @@
 #import "AevonSceneDriverShim.h"
 #import <objc/message.h>
+#import <stdio.h>
+#import <string.h>
 
 /*
  * 自建场景驱动垫片（V0.2.28，AevonSelfSceneV228，P1 概念验证）。
