@@ -96,6 +96,17 @@ NSString *AevonSelfSceneRouteDump(NSString *bundleID);
 ///           调用方保守走旧路径（白名单制）。结果按 bundleID 缓存。
 NSInteger AevonSelfSceneAppBinarySupport(NSString *bundleID);
 
+/// V0.2.41（AevonSceneCapsV241）：读 App 侧能力登记表（进程内权威判据的落地）。
+/// App 侧 AevonAppSceneCapRegistry 在启动时算「delegate 是否实现
+/// application:configurationForConnectingSceneSession:options:」并合并写
+/// /var/mobile/aevon_caps.txt（`bundleID=1/0` 逐行）——该判据与 0.2.31~0.40
+/// 五轮真机成败 100% 对齐（静态判据全翻车：设置 manifest 无 delegate 类名却成功、
+/// Sileo 二进制含该选择子串却被拒、贴吧纯净版扫不到却成功）。
+///   返回 1 = 该 App 能接受自建场景 → 自建（真重排）；
+///   返回 0 = 老式 App（必拒）→ 旧路径（画面即刻出现）；
+///   返回 -1 = 该 App 从未登记（未知）→ 调用方维持自建（旧行为，下次开窗即准）。
+NSInteger AevonSelfSceneAppCapVerdict(NSString *bundleID);
+
 /// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段
 /// （client / clientPort，全 @try，取不到写 nil），区分「FB 层就没客户端」与
 /// 「App 端 UIKit 拒绝」。返回串仅供日志。

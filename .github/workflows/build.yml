@@ -2118,6 +2118,27 @@ jobs:
           grep -q 'AevonSceneRouteV240' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧缺 V240 分流注释锚"; exit 1; }
           echo "V0.2.40 校验: App 二进制扫描判据（configurationForConnectingSceneSession）已就位"
+          # ── V0.2.41 校验（AevonSceneCapsV241）：判据落 App 进程内 + 落盘登记表。
+          # 0.2.40 真机证伪静态扫描：Sileo/Filza 含该选择子串仍黑屏、贴吧纯净版扫不到
+          # 却本可成功、设置 manifest 无 delegate 类名却成功 → 静态判据五版全错。
+          # 唯一与五轮真机成败 100% 对齐 = App delegate 是否实现
+          # application:configurationForConnectingSceneSession:options:（进程内
+          # respondsToSelector）。App 侧 AevonAppSceneCapRegistry 启动时算完合并写
+          # /var/mobile/aevon_caps.txt，SB 侧 AevonSelfSceneAppCapVerdict 开窗前读。
+          # 只加不改。
+          strings "$DYLIB" | grep -q 'AevonSceneCapsV241' \
+            || { echo "::error::0.2.41 SB 侧缺标记 AevonSceneCapsV241"; exit 1; }
+          grep -q 'AevonAppSceneCapV241' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.41 App 侧缺标记 AevonAppSceneCapV241"; exit 1; }
+          grep -q 'aevon_caps.txt' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::SB 侧缺能力登记表读取"; exit 1; }
+          grep -q 'aevon_caps.txt' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺能力登记表写入"; exit 1; }
+          grep -q 'AevonAppSceneCapRegistry' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺能力登记函数"; exit 1; }
+          grep -q 'AevonSelfSceneAppCapVerdict' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧未切到能力登记判据"; exit 1; }
+          echo "V0.2.41 校验: 能力登记表判据（进程内 respondsToSelector + 落盘 aevon_caps）已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

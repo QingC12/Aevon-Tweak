@@ -90,6 +90,7 @@ __attribute__((used)) static const char AevonSceneRouteV238Marker[] = "AevonScen
  * SB 自己解析好的 manifest，老式 App 为 nil，与 roothide 文件系统补丁无关。 */
 __attribute__((used)) static const char AevonSceneRouteV239Marker[] = "AevonSceneRouteV239";
 __attribute__((used)) static const char AevonSceneRouteV240Marker[] = "AevonSceneRouteV240";
+__attribute__((used)) static const char AevonSceneCapsV241Marker[] = "AevonSceneCapsV241";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -791,6 +792,30 @@ NSString *AevonSelfSceneRouteDump(NSString *bundleID) {
     } @catch (NSException *exception) {
         [out appendFormat:@"EXC=%@(%@) ", exception.name, exception.reason ?: @"-"];
         return out;
+    }
+}
+
+/* V0.2.41（AevonSceneCapsV241）：读 App 侧能力登记表（进程内权威判据的落地）。
+ * 文件由 App 侧 AevonAppSceneCapRegistry 写（/var/mobile/aevon_caps.txt，
+ * `bundleID=1/0` 逐行）：1 = delegate 实现 configurationForConnecting（自建可接受），
+ * 0 = 未实现（老式，必拒 → 旧路径），-1 = 该 App 从未登记（未知 → 调用方维持自建）。*/
+NSInteger AevonSelfSceneAppCapVerdict(NSString *bundleID) {
+    @try {
+        if (bundleID.length == 0) { return -1; }
+        NSString *raw = [NSString stringWithContentsOfFile:@"/var/mobile/aevon_caps.txt"
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+        if (raw.length == 0) { return -1; }
+        for (NSString *line in [raw componentsSeparatedByString:@"\n"]) {
+            NSRange eq = [line rangeOfString:@"="];
+            if (eq.location == NSNotFound) { continue; }
+            if (![[line substringToIndex:eq.location] isEqualToString:bundleID]) { continue; }
+            NSString *value = [line substringFromIndex:eq.location + 1];
+            return [value isEqualToString:@"1"] ? 1 : 0;
+        }
+        return -1;
+    } @catch (NSException *exception) {
+        return -1;
     }
 }
 

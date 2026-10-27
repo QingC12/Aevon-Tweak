@@ -173,10 +173,20 @@ enum AevonWindowManager {
             // manifest。垫片内部升级为 A 路线（SBApplication，其他版本兜底）+ B 路线
             // （二进制扫 configurationForConnectingSceneSession，主路线），Swift 判据
             // 仍只有确证 2 才自建（AevonSelfSceneAppBinarySupport 已由垫片内部调用）。
+            // V0.2.41（AevonSceneCapsV241）：判据改成「App 侧进程内能力登记表」。
+            // 静态判据连错五版（0.2.35 manifest 有无 / 0.2.36 supportsMultipleScenes /
+            // 0.2.37 delegate 类名 / 0.2.39 SBApplication spec / 0.2.40 二进制扫描）：
+            // 0.2.40 真机 Sileo/Filza 二进制扫到该选择子串仍黑屏，贴吧纯净版扫不到
+            // 却本可真重排；设置 manifest 无 delegate 类名却成功。唯一与五轮真机成败
+            // 100% 对齐的判据是 App 进程内「delegate 是否实现
+            // application:configurationForConnectingSceneSession:options:」——
+            // 由 App 侧 AevonAppSceneCapRegistry 算完写 /var/mobile/aevon_caps.txt，
+            // 这里只读表：0 → 旧路径；1 → 自建；-1（未登记）→ 维持自建（旧行为）。
             let routeDump = AevonSelfSceneRouteDump(bundleID)
-            let sceneSupport = AevonSelfSceneAppSceneSupport(bundleID)
-            if sceneSupport != 2 {
-                AevonLog.info("[场景] 分流：\(bundleID) 判=\(sceneSupport) → 全屏接管旧路径；取证：\(routeDump)（AevonSceneRouteV238）")
+            let capVerdict = AevonSelfSceneAppCapVerdict(bundleID)
+            AevonLog.info("[场景] 能力登记：\(bundleID) cap=\(capVerdict)（1=scene App 可自建，0=老式必拒，-1=未登记）（AevonSceneCapsV241）")
+            if capVerdict == 0 {
+                AevonLog.info("[场景] 分流：\(bundleID) 能力登记 cap=0 → 全屏接管旧路径；取证：\(routeDump)（AevonSceneRouteV238）")
             } else if AevonPrefs.bool("SelfBuiltScene", default: true) {
                 let size = AevonWindowView.plannedContentSize()
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`

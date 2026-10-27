@@ -1300,6 +1300,53 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
     return list;
 }
 
+/* V0.2.41（AevonAppSceneCapV241）：场景能力登记 —— 判据落进程内，落盘给 SB 读。
+ * 0.2.33 探针 + 0.2.31~0.40 五轮真机矩阵闭环：App 的 delegate 实现
+ * application:configurationForConnectingSceneSession:options: ⇔ 自建场景被接受
+ * （设置/文件/GitHub 实现 → 真重排；Sileo/Filza 未实现 → 连接被拒黑屏）。
+ * 静态判据五版全翻车：设置 manifest 无 delegate 类名却成功、Sileo 二进制含该串
+ * 却被拒、贴吧纯净版扫不到却成功 —— 只有进程内 respondsToSelector 与成败 100% 对齐。
+ * 落地：本进程算完合并写 /var/mobile/aevon_caps.txt（`bundleID=1/0` 逐行），
+ * SB 侧开窗前读（AevonSelfSceneAppCapVerdict）；读不到 = 未知 → 维持自建（旧行为）。
+ * delegate 未就绪（nil）不写，绝不把「判断不了」记成 0。 */
+__attribute__((used)) static const char AevonAppSceneCapV241Marker[] = "AevonAppSceneCapV241";
+
+static void AevonAppSceneCapRegistry(void) {
+    @try {
+        id delegate = [[UIApplication sharedApplication] delegate];
+        if (delegate == nil) {
+            AevonAppLog(@"场景能力登记：delegate 尚未就绪，本轮不写（AevonAppSceneCapV241）");
+            return;
+        }
+        SEL sel = NSSelectorFromString(@"application:configurationForConnectingSceneSession:options:");
+        BOOL cap = [delegate respondsToSelector:sel];
+        NSString *bid = gAevonAppBundleID;
+        if (bid.length == 0) { return; }
+        NSString *path = @"/var/mobile/aevon_caps.txt";
+        NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+        NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+        if (old.length > 0) {
+            for (NSString *line in [old componentsSeparatedByString:@"\n"]) {
+                NSRange eq = [line rangeOfString:@"="];
+                if (eq.location == NSNotFound) { continue; }
+                NSString *k = [line substringToIndex:eq.location];
+                NSString *v = [line substringFromIndex:eq.location + 1];
+                if (k.length > 0) { dict[k] = v; }
+            }
+        }
+        dict[bid] = cap ? @"1" : @"0";
+        NSMutableString *merged = [NSMutableString string];
+        for (NSString *k in dict.allKeys) {
+            [merged appendFormat:@"%@=%@\n", k, dict[k]];
+        }
+        BOOL ok = [merged writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        AevonAppLog(@"场景能力登记：cap=%d（delegate=%@，写入=%d）（AevonAppSceneCapV241）",
+                    cap ? 1 : 0, NSStringFromClass([delegate class]), ok ? 1 : 0);
+    } @catch (NSException *exception) {
+        AevonAppLog(@"场景能力登记异常：%@（AevonAppSceneCapV241）", exception.name);
+    }
+}
+
 - (void)start {
     /* V0.2.4（AevonAppAllAppsV204）：filter 已放开到全部 App（Classes=[UIApplication]），
      * 「进哪些进程」由 plist 管，「在进程里做不做」由这里的分支管：
@@ -1309,6 +1356,17 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
     if ([gAevonAppBundleID isEqualToString:@"com.apple.springboard"]) {
         return;
     }
+    /* V0.2.41（AevonAppSceneCapV241）：场景能力登记必须在排除表之前 ——
+     * 排除表里的 App（银行等）同样可能被浮窗打开，也要有能力记录。
+     * 两次：0.6s（多数 App delegate 已就绪）+ 2.5s（慢启动兜底），幂等。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonAppSceneCapRegistry();
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonAppSceneCapRegistry();
+    });
     NSArray<NSString *> *excluded = AevonAppExcludePrefixes();
     for (NSString *prefix in excluded) {
         if ([gAevonAppBundleID hasPrefix:prefix]) {
