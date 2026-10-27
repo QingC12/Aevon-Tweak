@@ -104,6 +104,9 @@ final class AevonWindowView: UIView {
     private var isLiveResizing = false
     /// 边条拖动进行中（V0.2.21 建；V0.2.27 起落指即拖，AevonFloatEdgeGripV227）
     private var isBarHoldMoving = false
+    /// V0.2.43（AevonCanvasScaleV243）：最近一次提交给场景的画布尺寸（去重，
+    /// 避免每次 layoutSubviews 都跨进程写一遍 settings.frame）
+    private var appliedCanvasSize: CGSize = .zero
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
@@ -233,10 +236,55 @@ final class AevonWindowView: UIView {
     }
 
     /// V0.2.28（AevonSelfSceneV228）：自建场景的画布尺寸 = 开窗时的内容区尺寸
-    /// （恢复几何或默认）。开窗瞬间用它烙定场景画布，与窗口 1:1。
+    /// （恢复几何或默认）。开窗瞬间用它烙定场景画布。
     static func plannedContentSize() -> CGSize {
         let restored = rememberedFrame(fallback: defaultFrame())
         return CGSize(width: restored.width, height: restored.height)
+    }
+
+    /// V0.2.43（AevonCanvasScaleV243）：内容画布倍数。
+    ///
+    /// 0.2.42 真机（Aevon(18)）定论：S2 主场景改画布 = **真重排成立**（所有 App 都重排了），
+    /// 但画布 = 窗口尺寸时 App 的逻辑宽度只有 272pt —— 比任何一台 iPhone 都窄，
+    /// 而字号是固定 pt 值 → 用户看到的就是「文字比全屏大、显示的内容变少」。
+    ///
+    /// 解法：把**逻辑画布放大 k 倍**，呈现时再把整套内容缩回 1/k。
+    /// 同一块窗口面积里因此塞得下 k 倍宽的排版，字号等比变小、内容变多。
+    ///   k = 1.00 → 字号与全屏一致（0.2.42 形态）
+    ///   k = 1.30 → 标准（默认，逻辑宽 ≈354pt，接近 iPhone SE 的 375）
+    ///   k = 1.58 → 逻辑宽正好占满屏宽 430（抖音这类按 UIScreen 排满画面的 App 最友好）
+    /// 上限由屏宽夹住（画布宽绝不超屏宽），5:3 比例不变 → 无变形、无黑边、无 letterbox。
+    static var canvasScale: CGFloat {
+        // 设置 App 是另一个进程：CFPreferences 在本进程有缓存，不失效就读到旧值。
+        // 这里是布局热路径（App 每帧都会间接走到），所以 0.5s 节流 —— 拖滑杆后
+        // 最迟半秒生效，代价是每半秒一次 IPC，远低于「每次布局都 synchronize」。
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastCanvasScaleSync >= 0.5 {
+            lastCanvasScaleSync = now
+            AevonPrefs.synchronize()
+        }
+        let raw = AevonPrefs.double("ContentCanvasScale", default: 1.30)
+        let clamped = max(1.0, min(1.60, CGFloat(raw)))
+        // 量化到 0.05：滑杆产生的 1.2837 不进日志、不进画布
+        return (clamped * 20).rounded() / 20
+    }
+
+    /// 画布倍数偏好的最后一次 CFPreferences 失效时刻（V0.2.43）
+    private static var lastCanvasScaleSync: TimeInterval = 0
+
+    /// 窗口内容尺寸 → 场景画布尺寸（等比放大 k 倍，宽高比不变，宽不超屏宽）。
+    static func canvasSize(for windowSize: CGSize) -> CGSize {
+        guard windowSize.width > 1, windowSize.height > 1 else { return windowSize }
+        let screen = UIScreen.main.bounds.size
+        var width = min(windowSize.width * canvasScale, screen.width)
+        var height = width / contentAspect
+        if height > screen.height {
+            // 极端（窗口已经很高 + 大倍数）：按屏高反推，仍保持 5:3
+            height = screen.height
+            width = height * contentAspect
+        }
+        let rounded = floor(width)
+        return CGSize(width: rounded, height: rounded / contentAspect)
     }
 
     /// 首帧到达（主场景 / 自建场景共用）。
@@ -340,15 +388,32 @@ final class AevonWindowView: UIView {
     /// settings，只在自建场景上有效）。当前内容形态 = 整屏渲染顶左裁切（诚实标注），
     /// 真重排唯一通路 = 自建场景路线（P0 探测见 probeSceneRoutesOnce）。
     /// 本函数保持容器 bounds = 窗口尺寸：呈现视图几何跟窗，缩放快照（V226）以此为基。
+    ///
+    /// V0.2.43（AevonCanvasScaleV243）：容器不再是「窗口尺寸」，而是**画布尺寸**。
+    /// 画布 = 窗口 × k（见 canvasSize(for:)），再把容器整体 scale(1/k) 缩回窗口大小：
+    /// App 按 k 倍宽的逻辑画布排版（字变小、内容变多），合成时等比缩小铺满窗口。
+    /// 因为画布与窗口同为 5:3，1/k 缩放正好 1:1 贴合 —— 不拉伸、不留边。
+    /// 触摸不受影响：UIKit 命中测试会按 transform 逆变换回画布坐标再转发给 App 进程。
+    /// （这里对容器施加的是**静态**矩阵，不是逐帧改的窗口矩阵，不触发 0.2.23 的卡顿路径。）
     private func applyContentLayout() {
         guard contentClip.bounds.width > 0, contentClip.bounds.height > 0 else { return }
         let container = sceneHost.container
-        let target = CGRect(origin: .zero, size: contentClip.bounds.size)
-        if container.bounds.size != target.size || container.transform != .identity {
+        let canvas = AevonWindowView.canvasSize(for: contentClip.bounds.size)
+        let k = canvas.width / contentClip.bounds.width
+        let target = CGRect(origin: .zero, size: canvas)
+        let shrink = CGAffineTransform(scaleX: 1.0 / k, y: 1.0 / k)
+        if container.bounds.size != target.size || container.transform != shrink {
             container.transform = .identity
             container.bounds = target
             container.layer.anchorPoint = .zero
             container.layer.position = .zero
+            container.transform = shrink
+        }
+        // 画布变了（首次布局 / 滑杆改了倍数 / 缩放手势提交）→ 场景跟着改画布，
+        // App 才会按新尺寸真正重排（而不是被拉伸）。
+        if canvas != appliedCanvasSize {
+            appliedCanvasSize = canvas
+            sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
         }
     }
 
@@ -769,9 +834,11 @@ final class AevonWindowView: UIView {
         persistFrame()
         // V0.2.28（AevonSelfSceneV228）：自建场景 → 提交新画布 = App 按新尺寸真重排
         // （这是缩放的根治：不再是整屏渲染缩放，而是 App 原生布局到新尺寸）。
-        if sceneHost.isSelfBuilt {
-            sceneHost.resizeCanvasTo(width: width, height: height)
-        }
+        // V0.2.43（AevonCanvasScaleV243）：窗口尺寸 × k = 场景画布；主场景（S2）与
+        // 自建场景走同一条提交路径。先记下已提交的画布，layoutSubviews 不再重复写。
+        let canvas = AevonWindowView.canvasSize(for: CGSize(width: width, height: height))
+        appliedCanvasSize = canvas
+        sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
         // V0.2.27（AevonFloatSnapCacheV227）：尺寸已提交，旧快照作废，空闲后重抓
         cachedSnapshotImage = nil
         scheduleSnapshotRecapture(after: 0.8)

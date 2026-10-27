@@ -217,7 +217,9 @@ enum AevonWindowManager {
                 AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
             }
             if routeSelf {
-                let size = AevonWindowView.plannedContentSize()
+                // V0.2.43（AevonCanvasScaleV243）：自建场景的烙定画布同样是「窗口 × k」
+                let windowSize = AevonWindowView.plannedContentSize()
+                let size = AevonWindowView.canvasSize(for: windowSize)
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`
                 // 刚拉起的进程，processHandle 可能还没在 SBApplication 上登记好
                 // → 短重试等登记，共 4 次尝试 × 0.3s；其余 step 串不重试（重试也不会好）。
@@ -286,25 +288,21 @@ enum AevonWindowManager {
             // 只写 settings.frame（主场景前台状态机归系统，绝不写）；FrontBoard 可能
             // 把 frame 重算回全屏，三拍复查 + 补写（防回弹）。关窗由承载器还原。
             var mainResized = false
+            var mainCanvas: CGSize = .zero
             if !usedSelfScene && mainResizeOn {
-                let size = AevonWindowView.plannedContentSize()
+                // V0.2.43（AevonCanvasScaleV243）：画布 = 窗口 × k（不再等于窗口本身）
+                let windowSize = AevonWindowView.plannedContentSize()
+                let size = AevonWindowView.canvasSize(for: windowSize)
                 let ok = AevonMainSceneSetFrame(scene, Double(size.width), Double(size.height))
                 mainResized = ok
-                AevonLog.info("[场景] 主场景改画布：\(bundleID) 目标=\(Int(size.width))x\(Int(size.height))"
-                    + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
-                for delay in [0.35, 1.2, 2.5] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak scene] in
-                        guard let target = scene else { return }
-                        let state = AevonMainSceneFrameState(target) ?? ""
-                        let expected = "frame=\(Int(size.width))x\(Int(size.height))"
-                        let kept = state.contains(expected)
-                        if !kept {
-                            _ = AevonMainSceneSetFrame(target, Double(size.width), Double(size.height))
-                        }
-                        AevonLog.info("[场景] 主场景画布复查（+\(delay)s）：\(state)"
-                            + "（\(kept ? "仍在画布" : "被回弹已补写")）（AevonMainSceneResizeV242）")
-                    }
-                }
+                mainCanvas = size
+                AevonLog.info("[场景] 主场景改画布：\(bundleID) 窗口=\(Int(windowSize.width))x\(Int(windowSize.height))"
+                    + " × \(String(format: "%.2f", AevonWindowView.canvasScale)) → 画布=\(Int(size.width))x\(Int(size.height))"
+                    + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                    + "（AevonMainSceneResizeV242 AevonCanvasScaleV243）")
+                // 三拍复查（0.35 / 1.2 / 2.5s）由承载器持有：关窗 invalidate 之后
+                // 一律不再补写 —— 0.2.42 把闭包排在这里，关窗后 2.5s 那一拍又把
+                // 已还原的 430x932 写回画布尺寸（Aevon(18) 真机日志两处）。
             }
 
             AevonSceneHelper.setForeground(hostScene, true)
@@ -338,6 +336,16 @@ enum AevonWindowManager {
                 AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: sceneID)
                 completion?(false)
                 return
+            }
+
+            // V0.2.43（AevonMainCanvasGuardV243）：防回弹三拍交给承载器 ——
+            // 它无效化（关窗 / 换 App）之后，这些闭包一个都不会再写主场景画布。
+            if sceneHost.mainResized {
+                for delay in [0.35, 1.2, 2.5] {
+                    sceneHost.verifyMainCanvasKeep(width: mainCanvas.width,
+                                                   height: mainCanvas.height,
+                                                   delay: delay)
+                }
             }
 
             let title = AevonWindowManager.title(for: bundleID)

@@ -2180,6 +2180,40 @@ jobs:
           grep -q 'SceneRouteForceSelf' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧未读 S1 档开关"; exit 1; }
           echo "V0.2.42 校验: S2 主场景改画布（默认开）+ S1 场景闸试验档（默认关）已就位"
+          # ── V0.2.43 校验（AevonCanvasScaleV243 / AevonMainCanvasGuardV243 /
+          #    AevonContentTreeV243）：Aevon(18) 真机定论 —— S2 = 真重排成立
+          #    （所有 App 都重排了）。剩两个问题都在「画布尺寸」层：
+          #    ① 画布 = 窗口（272pt 逻辑宽，比任何 iPhone 都窄）→ 字大内容少；
+          #       修法 = 逻辑画布 × k（1.00/1.30/1.58）、容器 scale(1/k) 缩回，5:3 不变。
+          #    ② 抖音右侧栏不显示 = 按 UIScreen 全屏宽排版、右侧落到画布外被裁，
+          #       只读取证一级子视图宽 vs 画布宽（超宽即证实），1.58 档才治得了。
+          #    另修一处真 bug：0.2.42 防回弹三拍排在 WindowManager 里捕获裸 scene，
+          #    关窗还原 430x932 后 +2.5s 那拍又把 272x454 写回去（日志两处置实）；
+          #    三拍已挪进承载器，invalidated 后一律不写。只加不改。
+          for s in AevonCanvasScaleV243 AevonMainCanvasGuardV243 AevonContentTreeV243; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.43 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'ContentCanvasScale' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::Swift 侧未读画布倍数偏好"; exit 1; }
+          grep -q 'canvasSize(for' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::缺窗口→画布尺寸换算"; exit 1; }
+          grep -q 'scaleX: 1.0 / k' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::容器未按 1/k 缩回窗口（画布会溢出）"; exit 1; }
+          grep -q 'appliedCanvasSize' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::缺画布提交去重（每帧跨进程写 settings）"; exit 1; }
+          grep -q 'verifyMainCanvasKeep' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::防回弹复查未进承载器"; exit 1; }
+          grep -q 'verifyMainCanvasKeep' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::主场景复查未接到承载器"; exit 1; }
+          if grep -q 'AevonMainSceneFrameState(target)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.43 反转：防回弹闭包不许留在 WindowManager（关窗后仍会把画布写回去）"; exit 1
+          fi
+          grep -q 'AevonContentTreeV243' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::缺子视图超宽取证（抖音右侧栏判据）"; exit 1; }
+          grep -q 'ContentCanvasScale' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 缺画布倍数滑杆"; exit 1; }
+          echo "V0.2.43 校验: 画布倍数（1.00/1.30/1.58）+ 关窗残留复查修复 + 超宽取证已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

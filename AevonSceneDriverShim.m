@@ -99,6 +99,21 @@ __attribute__((used)) static const char AevonSceneCapsV241Marker[] = "AevonScene
  * displayConfiguration（显示配置）与呈现上下文开关，不是场景自身 settings.frame；
  * S2 走的是另一层，二者不构成互证。老式单场景 App 也能收到——不需要第二场景。 */
 __attribute__((used)) static const char AevonMainSceneResizeV242Marker[] = "AevonMainSceneResizeV242";
+/* V0.2.43（AevonCanvasScaleV243 / AevonMainCanvasGuardV243 / AevonContentTreeV243）：
+ * Aevon(18) 真机定论 —— S2 主场景改画布 = 真重排成立（所有 App 都重排了），
+ * 剩下两个问题都在「画布尺寸」这一层，不在场景路线层：
+ *   ① 画布 = 窗口（272pt 逻辑宽，比任何 iPhone 都窄）→ 字号 pt 固定 = 字大内容少。
+ *      修法：逻辑画布 = 窗口 × k（1.00 / 1.30 / 1.58），呈现时容器 scale(1/k) 缩回，
+ *      同面积装下 k 倍宽排版。画布宽上限 = 屏宽，5:3 不变 → 无变形无黑边。
+ *   ② 抖音右侧点赞 / 头像栏不显示 → 一级子视图比画布宽 = App 按 UIScreen 全屏宽度
+ *      排版，右侧落在画布外被裁；只有把画布宽提到接近屏宽（1.58 档）才治得了。
+ * 另修一处真 bug（AevonMainCanvasGuardV243）：0.2.42 的防回弹三拍排在
+ * WindowManager 里、捕获裸 scene，关窗还原 430x932 后 +2.5s 那拍仍在跑，
+ * 读回「不是画布」→ 又写回 272x454（Aevon(18) 10:23:14 / 10:24:03 两处置实）。
+ * 三拍已挪进 AevonSceneHost，invalidated 后一律不写。 */
+__attribute__((used)) static const char AevonCanvasScaleV243Marker[] = "AevonCanvasScaleV243";
+__attribute__((used)) static const char AevonMainCanvasGuardV243Marker[] = "AevonMainCanvasGuardV243";
+__attribute__((used)) static const char AevonContentTreeV243Marker[] = "AevonContentTreeV243";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {

@@ -37,6 +37,14 @@ final class AevonSceneHost {
     /// 到全屏尺寸（否则 App 之后全屏打开只有浮窗那么大）。
     let mainResized: Bool
 
+    /// V0.2.43（AevonMainCanvasGuardV243）：S2 防回弹三拍复查挪进承载器。
+    ///
+    /// 0.2.42 真机日志实锤（Aevon(18) 10:23:14 / 10:24:03 两处）：关窗时 invalidate
+    /// 已把主场景还原成 430x932，但开窗时排下的 +2.5s 复查闭包还在跑，读回发现
+    /// 「不是画布尺寸」→ 当回弹处理 → **又写回 272x454**。结果 App 退出浮窗后
+    /// 主场景仍停在浮窗画布上（再全屏打开只剩一小块）。
+    /// 修法：复查闭包由承载器持有，`invalidated`（关窗/切换 App）即全部作废。
+
     /// 屏幕尺寸的普通容器；浮窗只对它做等比缩放，不改它的尺寸。
     let container: UIView
 
@@ -138,6 +146,24 @@ final class AevonSceneHost {
             AevonLog.info("[场景] 首帧已到达（第 \(ticks) 次探测，子视图 \(presentationView.subviews.count) 个，"
                 + "呈现视图 \(Int(outer.width))x\(Int(outer.height))，"
                 + "首个子视图 \(Int(inner.width))x\(Int(inner.height))）")
+            // V0.2.43（AevonContentTreeV243）：抖音「右侧点赞 / 头像栏不显示」的取证。
+            // 只读：画布尺寸 vs 一级子视图尺寸。子视图比画布宽 = 该 App 仍按
+            // UIScreen 全屏尺寸排版，右侧内容必然落在画布外被裁（缩放倍数治不了它，
+            // 只能把画布宽度提到接近屏宽 —— ContentCanvasScale 的 1.58 档）。
+            let canvas = container.bounds.size
+            let views = presentationView.subviews.prefix(4).map { sub -> String in
+                "\(AevonRuntime.className(sub) ?? "?")=\(Int(sub.frame.width))x\(Int(sub.frame.height))"
+            }
+            let overflow = presentationView.subviews.contains { $0.frame.width > canvas.width + 1 }
+            let line = "[场景] 画布/视图核对：画布 \(Int(canvas.width))x\(Int(canvas.height))"
+                + " 一级子视图 [\(views.joined(separator: " "))]"
+                + " 倍数 \(String(format: "%.2f", AevonWindowView.canvasScale))"
+                + "\(overflow ? " 超宽=是（按 UIScreen 排版，右侧会被裁）" : " 超宽=否")"
+            if overflow {
+                AevonLog.warn(line + "（AevonContentTreeV243）")
+            } else {
+                AevonLog.info(line + "（AevonContentTreeV243）")
+            }
             onFirstContent?()
         }
 
@@ -242,6 +268,26 @@ final class AevonSceneHost {
             let ok = AevonMainSceneSetFrame(scene, Double(width), Double(height))
             AevonLog.info("[场景] 主场景画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")，"
                 + "读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
+        }
+    }
+
+    /// V0.2.43（AevonMainCanvasGuardV243）：S2 防回弹复查（0.35 / 1.2 / 2.5 三拍）。
+    ///
+    /// 与 0.2.42 的差别只有一处关键：闭包由承载器持有，`invalidated` 后一律不写。
+    /// 0.2.42 那版把三拍排在 WindowManager 里、捕获裸 scene，关窗后仍在跑：
+    /// 读回 430x932 ≠ 画布 → 判「被回弹」→ 又写回 272x454（真机日志两处置实）。
+    func verifyMainCanvasKeep(width: CGFloat, height: CGFloat, delay: TimeInterval) {
+        guard mainResized else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.invalidated else { return }
+            let state = AevonMainSceneFrameState(self.scene) ?? ""
+            let expected = "frame=\(Int(width))x\(Int(height))"
+            let kept = state.contains(expected)
+            if !kept {
+                _ = AevonMainSceneSetFrame(self.scene, Double(width), Double(height))
+            }
+            AevonLog.info("[场景] 主场景画布复查（+\(delay)s）：\(state)"
+                + "（\(kept ? "仍在画布" : "被回弹已补写")）（AevonMainSceneResizeV242 AevonMainCanvasGuardV243）")
         }
     }
 

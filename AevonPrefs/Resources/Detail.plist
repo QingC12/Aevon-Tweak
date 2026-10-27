@@ -7,96 +7,96 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>圆盘 App</string>
 			<key>footerText</key>
 			<string>圆盘里放哪些 App、按什么顺序排，都在这里改。进入后点「编辑」可以上下拖动排序、左滑删除；点右上「添加」从已安装 App 里勾选加入（最多 36 个）。改完立即生效。</string>
+			<key>label</key>
+			<string>圆盘 App</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>aevonOpenRingEditor</string>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
 			<string>编辑圆盘 App（添加 / 排序）</string>
-			<key>action</key>
-			<string>aevonOpenRingEditor</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>① 触发区：宽度</string>
 			<key>footerText</key>
 			<string>热区贴右边缘有多厚（pt）。越小越不容易误触，也越难划出；默认 48，建议 30~60。拖动时屏幕上那块青色框会跟着变宽变窄，框旁边的标签同步显示新宽度。</string>
+			<key>label</key>
+			<string>① 触发区：宽度</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
+			<key>default</key>
+			<integer>48</integer>
 			<key>key</key>
 			<string>RingTriggerWidth</string>
 			<key>label</key>
 			<string>热区宽度</string>
-			<key>minValue</key>
-			<integer>18</integer>
+			<key>max</key>
+			<integer>140</integer>
 			<key>maxValue</key>
 			<integer>140</integer>
 			<key>min</key>
 			<integer>18</integer>
-			<key>max</key>
-			<integer>140</integer>
-			<key>default</key>
-			<integer>48</integer>
+			<key>minValue</key>
+			<integer>18</integer>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>② 触发区：底边位置</string>
 			<key>footerText</key>
 			<string>热区底边落在屏幕高度的百分比。100% = 底边贴住屏幕底部（最顺手），此时改高度只会往上长。</string>
+			<key>label</key>
+			<string>② 触发区：底边位置</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
+			<key>default</key>
+			<integer>75</integer>
 			<key>key</key>
 			<string>RingTriggerY</string>
 			<key>label</key>
 			<string>热区底边位置（屏高 %）</string>
-			<key>minValue</key>
-			<integer>0</integer>
+			<key>max</key>
+			<integer>100</integer>
 			<key>maxValue</key>
 			<integer>100</integer>
 			<key>min</key>
 			<integer>0</integer>
-			<key>max</key>
-			<integer>100</integer>
-			<key>default</key>
-			<integer>75</integer>
+			<key>minValue</key>
+			<integer>0</integer>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>③ 触发区：高度</string>
 			<key>footerText</key>
 			<string>热区从底边向上伸展的高度（pt）。越大能呼出的纵向范围越大；默认 320（约屏高 1/3），建议 240~420。拖动时青色框的上边界跟着升降，一眼看得出改到哪了。</string>
+			<key>label</key>
+			<string>③ 触发区：高度</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
+			<key>default</key>
+			<integer>320</integer>
 			<key>key</key>
 			<string>RingTriggerHeight</string>
 			<key>label</key>
 			<string>热区高度（pt）</string>
-			<key>minValue</key>
-			<integer>80</integer>
+			<key>max</key>
+			<integer>900</integer>
 			<key>maxValue</key>
 			<integer>900</integer>
 			<key>min</key>
 			<integer>80</integer>
-			<key>max</key>
-			<integer>900</integer>
-			<key>default</key>
-			<integer>320</integer>
+			<key>minValue</key>
+			<integer>80</integer>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -105,68 +105,68 @@
 			<string>触发条位置乱了？点下面按钮一键恢复：宽 48pt / 底边 75% / 高 320pt。</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>aevonResetTriggerZone</string>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
 			<string>恢复默认触发区（48pt / 75% / 320pt）</string>
-			<key>action</key>
-			<string>aevonResetTriggerZone</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>④ App 内右缘接管带几何</string>
 			<key>footerText</key>
 			<string>这两根滑条决定**每个 App 进程里**那条右缘起手带有多宽、覆盖多高（0.2.7 起全 App 生效）。带越窄，误触越少、越要求起手贴边；带内的轻点会延迟到抬手才生效，所以不建议拉大。</string>
+			<key>label</key>
+			<string>④ App 内右缘接管带几何</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
-			<key>key</key>
-			<string>RightEdgeWidth</string>
-			<key>label</key>
-			<string>接管带宽度（pt）</string>
-			<key>minValue</key>
-			<integer>8</integer>
-			<key>maxValue</key>
-			<integer>140</integer>
-			<key>min</key>
-			<integer>8</integer>
-			<key>max</key>
-			<integer>140</integer>
 			<key>default</key>
 			<integer>46</integer>
 			<key>footerText</key>
 			<string>可调范围 8 ~ 140pt，默认 46。取 8 = 只认最贴边的 8pt（最不容易误触，要求起手非常贴边，Aevon(103) 实测这一档最稳）；取 30 左右可以保住抖音右侧的点赞 / 评论 / 收藏按钮；取 46 以上命中率最高，代价是带内轻点都要等到抬手。拖动时橙色框实时变宽变窄。</string>
+			<key>key</key>
+			<string>RightEdgeWidth</string>
+			<key>label</key>
+			<string>接管带宽度（pt）</string>
+			<key>max</key>
+			<integer>140</integer>
+			<key>maxValue</key>
+			<integer>140</integer>
+			<key>min</key>
+			<integer>8</integer>
+			<key>minValue</key>
+			<integer>8</integer>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
-			<key>key</key>
-			<string>RightEdgeHeight</string>
-			<key>label</key>
-			<string>接管带高度（屏高 %）</string>
-			<key>minValue</key>
-			<integer>6</integer>
-			<key>maxValue</key>
-			<integer>100</integer>
-			<key>min</key>
-			<integer>6</integer>
-			<key>max</key>
-			<integer>100</integer>
 			<key>default</key>
 			<integer>60</integer>
 			<key>footerText</key>
 			<string>可调范围 6% ~ 100%，默认 60（= 只覆盖下半屏，从屏高 40% 到底部，上半屏右侧完全不受影响）。6% ≈ 底部 56pt 的右下角一小块，最不容易误触；拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。拖动时橙色框的上边界实时升降。急救：任何界面三根手指同时按下 = 立刻释放全部接管并退出。</string>
+			<key>key</key>
+			<string>RightEdgeHeight</string>
+			<key>label</key>
+			<string>接管带高度（屏高 %）</string>
+			<key>max</key>
+			<integer>100</integer>
+			<key>maxValue</key>
+			<integer>100</integer>
+			<key>min</key>
+			<integer>6</integer>
+			<key>minValue</key>
+			<integer>6</integer>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>浮窗路线（0.2.42）</string>
 			<key>footerText</key>
 			<string>浮窗怎么让 App 按窗大小排版，两条路：S2 改主场景画布（默认开，改的是 App 已在运行的那个场景，老式 App 也收得到）；S1 是试验档（老式 App 也走自建场景 + 打开 App 端场景闸），默认关，只在排查时打开。</string>
+			<key>label</key>
+			<string>浮窗路线（0.2.42）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -175,10 +175,6 @@
 			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
-			<key>key</key>
-			<string>MainSceneResize</string>
-			<key>label</key>
-			<string>主场景改画布（S2）</string>
 			<key>infoText</key>
 			<string>浮窗打开老式 App（Sileo / Filza / 抖音 / 微信这类）时，直接把这个 App **已经在运行的主场景**画布改成浮窗尺寸，让它按浮窗大小重新排版（0.2.42 新增，默认开）。
 
@@ -187,6 +183,10 @@
 与「自建场景」的关系：两条路互不依赖。自建场景要 App 接受第二场景（老式 App 不接受），改主场景画布不需要——老式 App 也能收到。关浮窗时会把画布还原成全屏（不还原的话，之后全屏打开只有浮窗那么大）。
 
 判读：日志里「主场景改画布：…读回 frame=WxH」读回等于目标值 = 提交成功；跟着的首帧「呈现视图 WxH，首个子视图 WxH」两者相等 = App 真重排了。</string>
+			<key>key</key>
+			<string>MainSceneResize</string>
+			<key>label</key>
+			<string>主场景改画布（S2）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -195,10 +195,6 @@
 			<false/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
-			<key>key</key>
-			<string>SceneRouteForceSelf</string>
-			<key>label</key>
-			<string>S1 试验：老式 App 也走自建场景</string>
 			<key>infoText</key>
 			<string>**试验档，默认关**。0.2.42 新增，用来一次验证「场景请求闸」。
 
@@ -207,6 +203,44 @@
 为什么值得试：0.2.34 窗口搬家失败的死因是「自建场景没连上 App 端」（connectedScenes 里 8 秒都没有它）。如果闸是那个死因，打开后日志会看到『已搬入自建场景』并且出画面 —— 那就是终极解（原生重排，不依赖 App 类型）。
 
 代价：老式 App **如果闸还是不够，会再黑一次**（黑窗，不崩）。所以它默认关；测的时候只开一个 App 试，测完关掉就回到上面的 S2 路线。</string>
+			<key>key</key>
+			<string>SceneRouteForceSelf</string>
+			<key>label</key>
+			<string>S1 试验：老式 App 也走自建场景</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>0.2.42 真机结论：所有 App 都能真重排了，但画布等于窗口尺寸时，App 的逻辑宽度只有 272pt（比任何一台 iPhone 都窄），字号是固定 pt 值 —— 所以「字比全屏大、显示的内容少」。这里调的就是逻辑画布放大多少倍：放大 k 倍排版、显示时再缩回 1/k，同一块窗口面积里就能装下 k 倍宽的内容，字号等比变小。</string>
+			<key>label</key>
+			<string>内容画布（0.2.43）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>1.3</real>
+			<key>footerText</key>
+			<string>可调范围 1.00 ~ 1.60，按 0.05 取整，默认 1.30。
+
+1.00 = 窗口多大画布就多大，字号与全屏 App 完全一致（0.2.42 的形态；字最大、内容最少）。
+1.30 = 标准（默认），逻辑宽约 354pt，接近 iPhone SE 的 375，字比全屏略小、内容多三成。
+1.58 = 逻辑宽正好占满屏宽 430（窗口再大就自动回收倍数）。抖音这类整屏铺满、按屏幕宽度排版的 App 用这一档，右侧点赞 / 头像栏才会回来。
+
+画布宽最多到屏宽，5:3 比例不变 —— 不拉伸、不留黑边。改完直接生效（注销后重开一次浮窗最稳）。</string>
+			<key>key</key>
+			<string>ContentCanvasScale</string>
+			<key>label</key>
+			<string>画布倍数</string>
+			<key>max</key>
+			<real>1.6</real>
+			<key>maxValue</key>
+			<real>1.6</real>
+			<key>min</key>
+			<real>1.0</real>
+			<key>minValue</key>
+			<real>1.0</real>
 		</dict>
 	</array>
 	<key>title</key>
