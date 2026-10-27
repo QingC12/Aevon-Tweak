@@ -2238,9 +2238,17 @@ jobs:
 
           # ── V0.2.59 校验（AevonGuardFastV259 / AevonDockHaloOffV259 / AevonGripCustomV259 / AevonDockStageV259）──
           # Aevon(33) 四项：①回桌面定格提速 ②停靠小窗点击穿透 ③把手竖条化+自定义 ④停靠光晕闪过。
-          for s in AevonGuardFastV259 AevonDockHaloOffV259 AevonGripCustomV259 AevonDockStageV259 AevonDockFuseV259; do
+          # 主库标记（SB 侧 Swift 日志串 + shim）：
+          for s in AevonGuardFastV259 AevonDockHaloOffV259 AevonGripCustomV259 AevonDockStageV259; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.59 缺标记 $s"; exit 1; }
+          done
+          # App 侧标记：停靠交互拦截代码在 AevonApp.dylib（0.2.20 同款结构，主库查不到）
+          APP_DYLIB_V259="$(find . -name 'AevonApp.dylib' | head -n1)"
+          [ -n "$APP_DYLIB_V259" ] || { echo "::error::0.2.59 缺 AevonApp.dylib"; exit 1; }
+          for s in AevonDockStageV259 AevonDockFuseV259; do
+            strings "$APP_DYLIB_V259" | grep -q "$s" \
+              || { echo "::error::0.2.59 App 侧缺标记 $s"; exit 1; }
           done
           # ①守卫提速：0.1s 拍 + 0.25s 重申桶距
           grep -q 'Timer(timeInterval: 0.1, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
