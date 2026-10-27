@@ -77,6 +77,21 @@ NSInteger AevonSceneContentState(id scene);
 /// 与 contentState 交叉判读：两个都掉了才是真黑，单个掉了只记日志不动手。
 NSInteger AevonSceneLayerCount(id scene);
 
+/// V0.2.49（AevonNoAutoLockV249）：真正压住系统熄屏 / 自动锁定。
+///
+/// Aevon(24)：「悬浮窗打开期间，依旧会跟随系统时间暗屏锁屏」。0.2.48 写的是
+/// `UIApplication.shared.isIdleTimerDisabled = true` —— 在 **SpringBoard 进程**里
+/// 这一笔并不进 SpringBoard 自己的空闲计时器（它归 `SBIdleTimerGlobalCoordinator`
+/// 管），所以日志写着「已禁用」、屏幕照样按时暗。
+///
+/// 这里走 SpringBoard 自己的全局协调器：优先 `resetIdleTimer`（每次调用 = 把
+/// 空闲计时重新起表），退而求其次 `resetIdleTimerAndUndim:`；两者都不响应就退回
+/// `isIdleTimerDisabled`（与 0.2.48 同一条写入，只当兜底）。
+/// 调用方必须**有界**：浮窗存在期间每 20 秒一次，绝不无限次狂调。
+/// 返回位掩码（进日志）：1 = 调到了 resetIdleTimer；2 = 调到了 resetIdleTimerAndUndim:；
+/// 4 = isIdleTimerDisabled 写成功；0 = 全都没成功（调用方只记一次日志，不重试）。
+NSInteger AevonIdleTimerKick(void);
+
 /// V0.2.35/36/37（AevonSceneRouteV235/236/237）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
 /// 查 LSApplicationProxy 的 Info.plist，三档细判（0.2.37 权威判据 = App 侧 scene
 /// 探针实锤：delegate 实现 configurationForConnecting 才会接受第二场景连接；

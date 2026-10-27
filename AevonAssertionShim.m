@@ -968,3 +968,43 @@ __attribute__((used)) static const char AevonFloatTopBarV223RetiredMarker[] = "A
  * （Aevon(109) 日志铁证：「呈现视图 430x932，首个子视图 430x932」）——
  * 这是「浮窗内内容不完全」与「缩放卡顿（每帧跨进程合成全屏大纹理）」的共同根源。 */
 __attribute__((used)) static const char AevonFloatHostedResizeV225Marker[] = "AevonFloatHostedResizeV225";
+
+/* ── V0.2.49（AevonAppScreenFitV249）：把「浮窗里装的是哪个 App」发到共享内存 ────
+ *
+ * 为什么不用偏好域：0.2.20 的实锤仍然成立 —— 抖音（沙盒最严）读不到 com.Aevon 域，
+ * 而它恰恰是最需要这条信号的 App（分享面板 / 视频区按屏幕高度排版）。
+ * notify 状态位是沙盒里验证过十年的通道（bit39 圆盘位），所以这里单开一个名字
+ * `com.aevon.floatstage`，state = bundleID 的 FNV-1a 32 位散列（0 = 没有浮窗）。
+ * App 侧算自己的散列比对即可，不必知道字符串，也没有长度限制。
+ * 散列碰撞只会导致「别的 App 误开贴合」——36 位空间下概率可忽略，且关窗即复原。 */
+static int AevonNotifyFloatStageToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.floatstage", &token);
+    });
+    return token;
+}
+
+static uint32_t AevonFloatStageHash(NSString *text) {
+    if (text.length == 0) { return 0; }
+    const char *utf8 = text.UTF8String;
+    if (utf8 == NULL) { return 0; }
+    uint32_t hash = 2166136261u;
+    for (const char *p = utf8; *p != '\0'; p++) {
+        hash ^= (uint32_t)(unsigned char)(*p);
+        hash *= 16777619u;
+    }
+    return hash == 0 ? 1u : hash;
+}
+
+void AevonNotifySetFloatStage(NSString *bundleID) {
+    @try {
+        int token = AevonNotifyFloatStageToken();
+        if (token < 0) { return; }
+        uint64_t pack = (uint64_t)AevonFloatStageHash(bundleID);
+        notify_set_state(token, pack);
+        notify_post("com.aevon.floatstage");
+    } @catch (NSException *exception) {
+    }
+}

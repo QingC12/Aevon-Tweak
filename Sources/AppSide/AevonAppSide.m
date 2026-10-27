@@ -1664,6 +1664,126 @@ static void AevonAppSceneGateApply(void) {
 
 @end
 
+#pragma mark - V0.2.49 屏幕尺寸贴合浮窗（AevonAppScreenFitV249）
+
+/* Aevon(24)：「悬浮窗打开抖音时点击分享按钮，二级页面显示不全，无法查看整个分享菜单」
+ *          「抖音部分视频还是会出现整体上移（能不能改为抖音视频画面自动重排以适应
+ *            小胖屏的尺寸）」
+ *
+ * 这两条是同一个根因，而且是我们自己造的：**场景画布已经是 430×737，但 App 里
+ * `UIScreen.main.bounds` 还是 430×932**。凡是按「屏幕高度」算尺寸的 UI（抖音的分享
+ * 面板高度、视频区纵向锚点）都按 932 算，于是底部 195pt 落在画布外 —— 分享菜单被裁、
+ * 视频被顶到上半屏。S2 改画布只改得动「场景」，改不动这条全局查询。
+ *
+ * 做法：在**被浮窗承载的那个 App 进程里**把 `-[UIScreen bounds]` 报成画布尺寸
+ * （宽 = 真实屏宽，高 = 宽 × 12/7，与浮窗画布同一比例）。三条纪律：
+ *   ① **只改 bounds 这一个选择子** —— 像素级尺寸与 scale 一个字节都不碰
+ *      （动了它们就动到渲染缓冲，画面会变形甚至黑屏）；
+ *   ② **只在「这个 App 正被浮窗承载」时生效**（判据 = com.Aevon 域的 AevonFloatBundle
+ *      等于自己，与 0.2.9 的识别器退让用同一个键），关窗后立刻恢复真实值；
+ *   ③ 全链 @try + 0.5 秒节流的偏好读取，判据读不到就是「关」——
+ *      出错方向必须是「不介入」，绝不能把整机 App 的屏幕尺寸改坏。
+ *
+ * 关窗后 App 的下一次布局会重新拿到真实 430×932；由于关窗流程会先把场景画布还原成
+ * 整屏并等抖动走完（AevonCloseSettleV249），不会留下残留。 */
+__attribute__((used)) static const char AevonAppScreenFitV249Marker[] = "AevonAppScreenFitV249";
+__attribute__((used)) static const char AevonAppScreenFitFailV249Marker[] = "AevonAppScreenFitFailV249";
+
+static IMP gAevonScreenBoundsOrigIMP = NULL;
+static BOOL gAevonScreenFitOn = NO;
+static BOOL gAevonScreenFitLogged = NO;
+static BOOL gAevonScreenFitRefreshing = NO;
+static CFTimeInterval gAevonScreenFitCheckedAt = 0;
+
+/* 与 SB 侧 AevonFloatStageHash 必须逐字节一致（FNV-1a 32 位，0 = 没有浮窗）。 */
+static uint32_t AevonAppFloatStageHash(NSString *text) {
+    if (text.length == 0) { return 0; }
+    const char *utf8 = text.UTF8String;
+    if (utf8 == NULL) { return 0; }
+    uint32_t hash = 2166136261u;
+    for (const char *p = utf8; *p != '\0'; p++) {
+        hash ^= (uint32_t)(unsigned char)(*p);
+        hash *= 16777619u;
+    }
+    return hash == 0 ? 1u : hash;
+}
+
+/* 「本 App 是否正被浮窗承载」——两条通道取或：共享内存（沙盒必可读）+ 偏好域
+ * （0.2.9 起验证可用，作为老环境兜底）。任何一条成立就开贴合。 */
+static BOOL AevonAppIsFloatHosted(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.floatstage", &token);
+    });
+    if (token >= 0) {
+        uint64_t stage = 0;
+        if (notify_get_state(token, &stage) == NOTIFY_STATUS_OK) {
+            if (stage == (uint64_t)AevonAppFloatStageHash(gAevonAppBundleID)) { return YES; }
+        }
+    }
+    NSString *bundle = AevonAppPrefString(@"AevonFloatBundle");
+    return (bundle.length > 0 && [bundle isEqualToString:gAevonAppBundleID]);
+}
+
+static void AevonScreenFitRefresh(void) {
+    if (gAevonScreenFitRefreshing) { return; }
+    gAevonScreenFitRefreshing = YES;
+    @try {
+        BOOL on = AevonAppIsFloatHosted();
+        if (on != gAevonScreenFitOn || !gAevonScreenFitLogged) {
+            gAevonScreenFitOn = on;
+            gAevonScreenFitLogged = YES;
+            AevonAppLog(@"屏幕贴合：%@（AevonAppScreenFitV249）",
+                        on ? @"开 —— 本 App 正被浮窗承载，UIScreen 改报画布尺寸"
+                           : @"关 —— 按真实屏幕报告");
+        }
+        gAevonScreenFitCheckedAt = CACurrentMediaTime();
+    } @catch (NSException *exception) {
+        gAevonScreenFitOn = NO;
+    }
+    gAevonScreenFitRefreshing = NO;
+}
+
+static CGRect AevonScreenBoundsFit(id self_, SEL _cmd) {
+    if (gAevonScreenBoundsOrigIMP == NULL) { return CGRectZero; }
+    CGRect real = ((CGRect (*)(id, SEL))gAevonScreenBoundsOrigIMP)(self_, _cmd);
+    @try {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - gAevonScreenFitCheckedAt >= 0.5) { AevonScreenFitRefresh(); }
+        if (!gAevonScreenFitOn) { return real; }
+        if (real.size.width < 2) { return real; }
+        CGFloat width = floor(real.size.width);
+        CGFloat height = floor(width * 12.0 / 7.0);
+        return CGRectMake(real.origin.x, real.origin.y, width, height);
+    } @catch (NSException *exception) {
+        return real;
+    }
+}
+
+static void AevonScreenFitInstall(void) {
+    if ([gAevonAppBundleID isEqualToString:@"com.apple.springboard"]) { return; }
+    @try {
+        UIScreen *screen = [UIScreen mainScreen];
+        Class cls = screen != nil ? object_getClass(screen) : [UIScreen class];
+        SEL sel = @selector(bounds);
+        Method m = class_getInstanceMethod(cls, sel);
+        if (m == NULL) {
+            AevonAppLog(@"屏幕贴合：%@ 没有 -bounds，跳过（AevonAppScreenFitV249）",
+                        NSStringFromClass(cls) ?: @"?");
+            return;
+        }
+        gAevonScreenBoundsOrigIMP = method_getImplementation(m);
+        class_replaceMethod(cls, sel, (IMP)AevonScreenBoundsFit, method_getTypeEncoding(m));
+        AevonAppLog(@"屏幕贴合：已接管 %@ -bounds（浮窗承载期间 UIScreen 报「屏宽 × 屏宽÷(7/12)」，"
+                    @"与画布同比例；关窗即恢复真实值）（AevonAppScreenFitV249）",
+                    NSStringFromClass(cls) ?: @"?");
+    } @catch (NSException *exception) {
+        AevonAppLog(@"屏幕贴合：接管失败 %@（不影响宿主，按真实屏幕走）（AevonAppScreenFitFailV249）",
+                    exception.reason ?: @"未知");
+    }
+}
+
 #pragma mark - 入口
 
 __attribute__((constructor))
@@ -1684,6 +1804,9 @@ static void AevonAppSideEntry(void) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 @try {
+                    /* V0.2.49（AevonAppScreenFitV249）：先接管屏幕尺寸，再挂识别器 ——
+                     * 顺序反了会让第一遍布局用整屏尺寸（真重排要等下一次布局）。 */
+                    AevonScreenFitInstall();
                     [[AevonAppSide sharedInstance] start];
                 } @catch (NSException *exception) {
                     AevonAppLog(@"启动抛异常：%@", exception.reason ?: @"未知");

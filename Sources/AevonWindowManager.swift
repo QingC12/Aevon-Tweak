@@ -116,6 +116,9 @@ enum AevonWindowManager {
             AevonLog.info("[窗口] 单窗模式：先关掉 \(existingID)，再把 \(bundleID) 装进同一个窗（AevonSingleWindowV105）")
             close(bundleID: existingID)
         }
+        // V0.2.49（AevonCloseSettleV249）：这个 App 若刚被关窗、正等着挂起，先撤销 ——
+        // 否则 0.75 秒后它会在浮窗里被挂起（画面停住 / 断层）。
+        cancelPendingSleep(bundleID: bundleID)
 
         // V0.0.36（AevonFloatInEntryV36）：浮窗外壳直接挂进唯一入口容器的浮窗层。
         // 旧路：独立宿主窗口 level 9,999,990 —— App 前台时画面在
@@ -136,8 +139,26 @@ enum AevonWindowManager {
             host = fallback
         }
         // 登记前台保活，唤醒场景
+        // V0.2.49（AevonAppScreenFitV249）：**先置位「浮窗里装的是谁」，再唤醒场景**。
+        // App 侧 0.2.49 起在浮窗承载期间把 `UIScreen.main.bounds` 报成画布尺寸
+        // （这是抖音分享面板 / 视频区按小胖屏重排的唯一办法），生效判据就是这条信号。
+        // 若等唤醒之后再写，App 的**第一遍布局**（画布刚变那一刻）读到的还是整屏尺寸
+        // → 又回到「要等 1.5 秒 / 上滑一下才重排」。所以顺序是：置位 → 唤醒 → 改画布。
+        AevonPrefs.set("AevonFloatBundle", bundleID)
+        // 同一条信息再发一份到共享内存 —— 沙盒最严的 App（抖音）读不到 com.Aevon 域，
+        // 而它正是最需要「UIScreen = 画布」的那个 App。
+        AevonNotifySetFloatStage(bundleID)
         AevonForegroundManager.shared.add(bundleID: bundleID, sceneID: sceneID)
         AevonSceneHelper.wakeUp(bundleID)
+
+        // 开窗失败要把这条信号清掉，否则该 App 的右缘识别器会一直处于「浮窗里」的
+        // 退让状态（全屏时右缘呼不出圆盘），同时 UIScreen 也会一直报画布尺寸。
+        let clearFloatMarkIfNeeded = {
+            if AevonPrefs.string("AevonFloatBundle") == bundleID, currentView == nil {
+                AevonPrefs.set("AevonFloatBundle", "")
+                AevonNotifySetFloatStage("")
+            }
+        }
 
         // 等待场景就绪后再承载
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -148,6 +169,7 @@ enum AevonWindowManager {
             guard let scene = scene else {
                 AevonLog.warn("[窗口] 未找到 \(bundleID) 的场景，放弃开窗")
                 AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: sceneID)
+                clearFloatMarkIfNeeded()
                 completion?(false)
                 return
             }
@@ -380,6 +402,7 @@ enum AevonWindowManager {
                     AevonSceneHelper.setForeground(scene, true)
                 }
                 AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: sceneID)
+                clearFloatMarkIfNeeded()
                 completion?(false)
                 return
             }
@@ -393,6 +416,13 @@ enum AevonWindowManager {
                                                    delay: delay)
                 }
             }
+            // V0.2.49（AevonRelayoutKickV249）：画布写下去 ≠ App 已重排。
+            // 抖音这类深层级 App 往往要等下一次滚动才吃新尺寸（Aevon(24) 原话：
+            // 「需要等待 1.5 秒或者上滑一下视频才能完整真重排」）。
+            // 这里做一次有界微扰（-1pt → 恢复），强制它多走一遍布局。
+            let kickCanvas = AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize())
+            sceneHost.kickRelayout(width: kickCanvas.width, height: kickCanvas.height,
+                                   tag: "开窗 \(bundleID)")
 
             let title = AevonWindowManager.title(for: bundleID)
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
@@ -404,6 +434,8 @@ enum AevonWindowManager {
             // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
             // App 侧识别器读它 —— 等于自己的 bundleID 就整体退让（不扣 began、不建失败要求），
             // 浮窗内的滑动才不会被右缘判向延迟到抬手。
+            // V0.2.49：已经在进入开窗流程时提前写过一次（App 侧 UIScreen 覆盖要用），
+            // 这里再确认一次（幂等），保证「窗口已存在」与「键已置位」同时成立。
             AevonPrefs.set("AevonFloatBundle", bundleID)
 
             // presenter 激活后画面是异步出来的，由承载器自己探测首帧
@@ -485,19 +517,58 @@ enum AevonWindowManager {
         // V0.2.9（AevonFloatStandDownV209）：浮窗没了 → 清掉「浮窗里装的是谁」，
         // App 侧识别器立刻恢复常态（空串 = 不在浮窗里）。
         AevonPrefs.set("AevonFloatBundle", "")
+        // V0.2.49（AevonAppScreenFitV249）：共享内存那份同步清掉 ——
+        // App 下一遍布局立刻拿到真实屏幕尺寸（否则关窗后仍按画布排）。
+        AevonNotifySetFloatStage("")
         windowView.teardown()
         AevonSceneHelper.stopKeepAlive(bundleID)
         // V0.2.32（AevonSelfSceneFGV232）：自建场景已随 teardown 销毁，登记必须同步
         // 注销（保活定时器若还查到悬空场景对象会写进已销毁场景）。
         AevonSceneHelper.unregisterSelfScene(bundleID)
         if !releaseOnly {
-            AevonSceneHelper.sleep(bundleID)
+            // V0.2.49（AevonCloseSettleV249）：**挂起要等还原抖动走完**。
+            // Aevon(24)：「关闭浮窗后再打开浮窗，抖音有概率出现断层」；
+            // Aevon(23)：「关浮窗后全屏打开设置会黑屏」—— 同一个成因：
+            // `invalidate()` 把画布还原成整屏后还有两拍抖动（+0.15s / +0.40s），
+            // 而旧代码紧接着就把 App 挂起（sleep），那两拍根本没被执行 → App 留在
+            // 「浮窗尺寸的布局」上，下次无论全屏打开还是再开浮窗，看到的都是残局。
+            // 现在把 sleep 推迟到 0.75 秒（> 0.40s + 一帧余量），期间若又开窗则取消。
+            scheduleSleep(bundleID: bundleID, after: 0.75)
         }
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         if let pid = AevonAppInfo.pid(bundleID: bundleID) {
             AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
         }
         AevonLog.info("[窗口] \(bundleID) 已关闭\(releaseOnly ? "（交接给系统全屏拉起，未写场景前台标记）" : "")")
+    }
+
+    /// V0.2.49（AevonCloseSettleV249）：延迟挂起（等画布还原 + 抖动完成）。
+    ///
+    /// 同一 App 只保留最后一个待执行项；重开这个 App 时先取消
+    /// （见 `cancelPendingSleep`），绝不允许「刚开窗又被上一个关窗任务挂起」。
+    private static var pendingSleep: [String: DispatchWorkItem] = [:]
+
+    private static func scheduleSleep(bundleID: String, after delay: TimeInterval) {
+        pendingSleep[bundleID]?.cancel()
+        let work = DispatchWorkItem {
+            pendingSleep[bundleID] = nil
+            // 期间又被装进浮窗 → 不挂了（画面在上面）
+            guard openBundleID != bundleID else {
+                AevonLog.info("[窗口] \(bundleID) 在挂起前又被装回浮窗 → 取消挂起（AevonCloseSettleV249）")
+                return
+            }
+            AevonSceneHelper.sleep(bundleID)
+            AevonLog.info("[窗口] \(bundleID) 场景已挂起（画布还原与抖动都已完成，再开窗不会断层）"
+                + "（AevonCloseSettleV249）")
+        }
+        pendingSleep[bundleID] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private static func cancelPendingSleep(bundleID: String) {
+        guard let work = pendingSleep.removeValue(forKey: bundleID) else { return }
+        work.cancel()
+        AevonLog.info("[窗口] 取消 \(bundleID) 的待挂起任务（马上要重新开窗）（AevonCloseSettleV249）")
     }
 
     /// V0.1.4（AevonIconLaunchV104）：桌面图标被点、要把这个 App 全屏拉起时调用。

@@ -37,6 +37,11 @@ void AevonNotifySetRing(int on);
 /// App 侧只认这里 —— 沙盒 App 读不到 com.Aevon 域（Aevon(105)：抖音按 fallback
 /// 46pt×60% 误判几何，「屏幕 50% 呼出圆盘」），notify 状态是沙盒里验证多年的通道。
 void AevonNotifySetBand(double w, double h);
+/// V0.2.49（AevonAppScreenFitV249）：把「浮窗里装的是哪个 App」发到共享内存。
+/// 单开一个 notify 名字 `com.aevon.floatstage`，state = bundleID 的 FNV-1a 32 位散列
+/// （0 = 没有浮窗）。App 侧据此决定要不要把 `UIScreen.bounds` 报成画布尺寸 ——
+/// 走 notify 而不是偏好域，是因为沙盒最严的 App（抖音）读不到 com.Aevon。
+void AevonNotifySetFloatStage(NSString *bundleID);
 /// V0.2.12（AevonAppRingGoneGuardV212）：读圆盘状态位。返回 1 = 圆盘正展开，0 = 已收起。
 ///
 /// 为什么 App 侧必须能读：Aevon(98) 事故里 App 识别器停在 .began 之后，抬手帧被

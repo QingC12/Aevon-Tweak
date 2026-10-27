@@ -30,21 +30,36 @@ final class AevonEdgeHandleView: UIView {
 ///   · 0.90 不透明度 + 半径 9 是一大片雾，不是「一圈边」；
 ///   · border 1.0 又给这片雾加了一条硬边。
 /// 现在改成「贴边 + 只留光晕 + 压暗」：
-///   · 外扩收到 **2pt**（贴住窗沿，肉眼只看到一条紧贴窗口的光）；
-///   · 只留 shadowPath 光晕，深色 **0.42 / 半径 5**、浅色 **0.12 / 半径 4**；
-///   · border 降到 0.5pt 的淡淡一层（深 0.22 / 浅 0.06），只用来「封口」。
+///   · 外扩收到 **2pt**（0.2.49 再收到 **1pt**，AevonGlowTightV249）；
+///   · 只留 shadowPath 光晕，深色 **0.42 → 0.46 / 半径 5 → 6**、浅色 **0.12 → 0.14 / 4 → 5**
+///     （外扩收窄后靠半径补回「四周一圈柔光」的观感）；
+///   · border 保持 0.5pt 的淡淡一层（深 0.22 / 浅 0.06），只用来「封口」。
 /// 圈依然加在内容层**下面**（index 0），不占窗内任何像素、不参与命中（hitTest 恒 nil）。
 final class AevonGlowRingView: UIView {
-    /// 光晕外扩宽度（pt）。V0.2.47：12 → **2**（贴边；只让光晕从窗沿往外渗）。
-    static let halo: CGFloat = 2
+    /// 光晕外扩宽度（pt）。
+    /// V0.2.47：12 → 2（贴边）；**V0.2.49（AevonGlowTightV249）：2 → 1**。
+    ///
+    /// Aevon(24)：「把边缘发光条外扩改为 1pt（只贴住窗沿 pt），呈现的画面应该是
+    /// 悬浮四周出现光晕」。1pt = 只是把光晕的**起点**挪到窗沿外侧一点点，
+    /// 视觉上那圈亮的是 `shadow` 从窗沿渗出来的柔光，不是一条框。
+    /// 光晕强度靠 shadowRadius / shadowOpacity 给（半径略加，抵消外扩收窄后的观感）。
+    static let halo: CGFloat = 1
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
 
     /// 按当前几何 + 外观刷新（幂等；参数没变时内部直接返回）。
+    ///
+    /// **V0.2.49（AevonFloatAnimV249）：整段写入都在「禁用隐式动画」的事务里。**
+    /// Aevon(24)：「缩放时悬浮窗边缘会出现抖动」—— 根因就在这里：缩放每帧都调
+    /// 本函数改 frame / cornerRadius / borderWidth / shadowPath，而 CALayer 对这些
+    /// 属性默认带 0.25 秒隐式动画，于是**每帧都重新起一段新动画**，边缘就来回抖。
+    /// 关掉隐式动画后，边缘严格跟着手指走（一帧一个位置）。
     func apply(width: CGFloat, height: CGFloat, radius: CGFloat, dark: Bool) {
         let halo = AevonGlowRingView.halo
         let target = CGRect(x: -halo, y: -halo,
                             width: width + halo * 2, height: height + halo * 2)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         if frame != target { frame = target }
         let corner = max(1, radius + halo)
         layer.cornerRadius = corner
@@ -53,12 +68,13 @@ final class AevonGlowRingView: UIView {
         layer.borderColor = (dark ? UIColor(white: 1.0, alpha: 0.22)
                                   : UIColor(white: 0.0, alpha: 0.06)).cgColor
         layer.shadowColor = (dark ? UIColor.white : UIColor.black).cgColor
-        layer.shadowOpacity = Float(dark ? 0.42 : 0.12)
-        layer.shadowRadius = dark ? 5 : 4
+        layer.shadowOpacity = Float(dark ? 0.46 : 0.14)
+        layer.shadowRadius = dark ? 6 : 5
         layer.shadowOffset = .zero
         // 直接赋 path（不做相等比较：CGPath 的相等判断要走 CF 层，这里几何变才调用，
         // 调用频率由 updateEdgeGlow 的去重保证）
         layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: corner).cgPath
+        CATransaction.commit()
     }
 }
 
@@ -351,10 +367,83 @@ final class AevonWindowView: UIView {
         updateEdgeGlow()
         // V0.2.48（AevonNoAutoLockV248）：浮窗在 → 不让系统按自动锁定暗屏/锁屏
         AevonWindowView.beginNoAutoLock()
+        // V0.2.49（AevonNoAutoLockV249）：真正压住空闲熄屏（每 20 秒重申一次）
+        startIdleKick()
+        // V0.2.49（AevonUnlockGuardV249）：解锁 / 回前台后重新布防（治「解锁后黑 1 秒」）
+        installSystemWakeObservers()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    // MARK: - 熄屏压制（V0.2.49，AevonNoAutoLockV249）
+
+    /// 空闲熄屏重申定时器（20 秒一次，见 `kickIdleTimerIfNeeded`）
+    private var idleKickTimer: Timer?
+    /// 上一次的压制结果位（只在变化时记日志，免得每 20 秒刷一行）
+    private var idleKickMask: NSInteger = -1
+
+    private func startIdleKick() {
+        let mask = AevonWindowView.kickIdleTimerIfNeeded()
+        idleKickMask = mask
+        AevonLog.info("[窗口] 熄屏压制已启动（\(AevonWindowView.idleKickMaskText(mask))，"
+            + "之后每 20 秒重申一次）（AevonNoAutoLockV249）")
+        let timer = Timer(timeInterval: 20.0, repeats: true) { [weak self] _ in
+            let now = AevonWindowView.kickIdleTimerIfNeeded()
+            guard let self, now != self.idleKickMask else { return }
+            self.idleKickMask = now
+            AevonLog.info("[窗口] 熄屏压制方式变化 → \(AevonWindowView.idleKickMaskText(now))"
+                + "（AevonNoAutoLockV249）")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        idleKickTimer = timer
+    }
+
+    private static func idleKickMaskText(_ mask: NSInteger) -> String {
+        var parts: [String] = []
+        if mask & 1 != 0 { parts.append("SBIdleTimerGlobalCoordinator.resetIdleTimer") }
+        if mask & 2 != 0 { parts.append("resetIdleTimerAndUndim") }
+        if mask & 4 != 0 { parts.append("UIApplication.isIdleTimerDisabled") }
+        return parts.isEmpty ? "全部不可用（本机压不住熄屏，按系统设置走）" : parts.joined(separator: " + ")
+    }
+
+    // MARK: - 解锁 / 回前台重新布防（V0.2.49，AevonUnlockGuardV249）
+
+    /// 系统回到前台 / 解锁的通知令牌
+    private var wakeObservers: [NSObjectProtocol] = []
+
+    /// Aevon(24)：「悬浮窗打开期间，如果锁屏再解锁，悬浮窗内容会黑屏 1 秒才能出现画面」。
+    ///
+    /// 锁屏那一刻场景被置后台、远程表面回收；解锁后 App 要重新画一帧才回来。
+    /// 我们能在「解锁」这个事件上立刻重申前台，把这个过程压到最短 ——
+    /// 这也是 0.2.47 那条守卫唯一缺的触发源（它只接了「全屏画面离场」）。
+    private func installSystemWakeObservers() {
+        guard wakeObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        let names: [Notification.Name] = [UIApplication.didBecomeActiveNotification,
+                                          UIApplication.willEnterForegroundNotification]
+        for name in names {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                self?.handleSystemWake(noteName: note.name.rawValue)
+            }
+            wakeObservers.append(token)
+        }
+    }
+
+    private func handleSystemWake(noteName: String) {
+        guard window != nil, sceneHost.hasContent, !isTearingDown else { return }
+        // 已经在画就什么都不做 —— 别为了一个通知去写场景状态机
+        if sceneHost.contentLooksRendering == true { return }
+        AevonLog.info("[窗口] 系统回前台/解锁（\(noteName)）→ 布防守卫（当前 \(sceneHost.stateSummary())）"
+            + "（AevonUnlockGuardV249）")
+        armBackgroundGuard(reason: "解锁/回前台")
+    }
+
+    private func removeSystemWakeObservers() {
+        let center = NotificationCenter.default
+        for token in wakeObservers { center.removeObserver(token) }
+        wakeObservers.removeAll()
     }
 
     // MARK: - 真重排路线 P0 探测（V0.2.26，AevonPiPProbeV226）
@@ -523,21 +612,32 @@ final class AevonWindowView: UIView {
     /// V0.2.45（AevonFloatFadeInV245）：窗口出现时轻微淡入。
     ///
     /// 参考视频里浮窗是渐显出现的，直接硬切会有「整块内容突然闪现」的观感。
-    /// 只动 alpha（**不动 frame / transform**，因此不触发任何布局与画布提交），
-    /// 起始值取 0.35 而不是 0 —— alpha < 0.01 的 UIView 会被 hitTest 跳过，
+    /// **V0.2.49（AevonFloatAnimV249）：淡入 + 0.96 → 1.0 的轻微放大。**
+    /// Aevon(24)：「再次优化一下悬浮窗出现和关闭、缩放等动画，让他看起来更加流畅，
+    /// 而不是突然间的变动」。只动 alpha 与 transform，**不动 frame** ——
+    /// 因此不触发布局，也不会提交任何场景画布；动画结束后立刻把 transform 复位成
+    /// 恒等矩阵，缩放手势（改真实 frame）完全不受影响。
+    /// 起始 alpha 取 0.35 而不是 0 —— alpha < 0.01 的 UIView 会被 hitTest 跳过，
     /// 开窗瞬间的手势不能失效。每窗口只做一次。
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard window != nil, !hasFadedIn else { return }
         hasFadedIn = true
         alpha = 0.35
-        UIView.animate(withDuration: 0.18, delay: 0,
+        transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+        UIView.animate(withDuration: 0.24, delay: 0,
                        options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
             self?.alpha = 1.0
+            self?.transform = .identity
+        } completion: { [weak self] _ in
+            // 兜底：动画被打断（比如手势立刻开始）也必须回到恒等矩阵
+            self?.transform = .identity
         }
     }
 
     private var hasFadedIn = false
+    /// V0.2.49（AevonFloatAnimV249）：正在走关闭动画 —— 防重入（双击 ✕ / 双击底边同时到）
+    private var isTearingDown = false
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -699,8 +799,8 @@ final class AevonWindowView: UIView {
             self?.applyAspectIfChanged()
             // V0.2.46（AevonFloatGlowV246）：外观巡检 —— 系统切深/浅色时重刷发光圈
             self?.refreshEdgeGlowIfAppearanceChanged()
-            // V0.2.47（AevonDarkGuardV247）：巡逻守卫 + 滚动刷新最后一帧快照
-            self?.checkBackgroundGuard()
+            // V0.2.49（AevonDarkGuardV249）：守卫改由专用的 0.2 秒拍子驱动
+            // （这里只剩「滚动刷新最后一帧」，它与守卫节奏无关）
             self?.refreshRollingSnapshot()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -1072,34 +1172,94 @@ final class AevonWindowView: UIView {
     private var cachedSnapshotImage: UIImage?
     private var snapshotRecaptureWork: DispatchWorkItem?
 
-    /// 抓一帧内容区当前画面，并校验非空（远程表面抓取可能得到全透明图 —— 4×4 采样 alpha）。
-    /// 只在空闲路径调用；缩放手势 .began 上绝不做同步渲染。
+    /// 抓一帧内容区当前画面，并校验「这真是一幅画面」。
+    ///
+    /// **V0.2.49（AevonDarkGuardV249）：两条路径 + 一条判据。**
+    /// Aevon(24) 的「回桌面黑屏 1 秒以上」追下去发现：`layer.render(in:)` **抓不到
+    /// 跨进程远程表面**（0.2.26 已记录），抓到的只是 contentClip 那层深灰底色 ——
+    /// 于是「最后一帧」铺上去就是一块纯色，用户看到的就是黑屏。
+    /// 现在：
+    ///   ① 主路径 `drawViewHierarchyInRect:afterScreenUpdates:NO` —— 走渲染服务器取
+    ///      「这一块屏幕上现在是什么」，这类抓法**包含**远程表面（屏幕截图同源）；
+    ///   ② 备路径 `layer.render(in:)`（老路径，某些场景下反而有效）；
+    ///   ③ 判据 `imageLooksLikeContent`：既要有不透明像素，也要有明显明暗差
+    ///      （纯色 = 空壳，宁可不盖）；两条路径都过不了就返回 nil。
+    /// 只在空闲路径调用；缩放手势里绝不做同步渲染。
     private func captureSnapshotImage() -> UIImage? {
         let bounds = contentClip.bounds
         guard bounds.width > 1, bounds.height > 1, !isLiveResizing else { return nil }
-        var image: UIImage?
-        let exception = AevonShieldRun { [weak self] in
+        let scale = contentClip.layer.contentsScale > 0 ? contentClip.layer.contentsScale : 3.0
+
+        // ① 屏幕同源抓取（含远程表面）
+        var hierarchyImage: UIImage?
+        let hierarchyException = AevonShieldRun { [weak self] in
             guard let self else { return }
             let format = UIGraphicsImageRendererFormat()
-            format.scale = self.contentClip.layer.contentsScale
+            format.scale = scale
+            format.opaque = false
             let renderer = UIGraphicsImageRenderer(size: bounds.size, format: format)
-            image = renderer.image { ctx in
+            hierarchyImage = renderer.image { _ in
+                _ = self.contentClip.drawHierarchy(in: self.contentClip.bounds,
+                                                   afterScreenUpdates: false)
+            }
+        }
+        if hierarchyException == nil, let image = hierarchyImage, imageLooksLikeContent(image) {
+            return image
+        }
+
+        // ② 老路径：CALayer 渲染
+        var layerImage: UIImage?
+        let layerException = AevonShieldRun { [weak self] in
+            guard let self else { return }
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = scale
+            let renderer = UIGraphicsImageRenderer(size: bounds.size, format: format)
+            layerImage = renderer.image { ctx in
                 self.contentClip.layer.render(in: ctx.cgContext)
             }
         }
-        guard exception == nil, let image, image.size.width > 1, let cg = image.cgImage else { return nil }
-        // 有效性校验：缩到 4×4 读 alpha，全透明 = 抓取失败（返回 nil，调用方走兜底）
-        var pixels = [UInt8](repeating: 0, count: 4 * 4 * 4)
-        if let ctx = CGContext(data: &pixels, width: 4, height: 4, bitsPerComponent: 8,
-                               bytesPerRow: 4 * 4, space: CGColorSpaceCreateDeviceRGB(),
-                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-            ctx.interpolationQuality = .low
-            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 4, height: 4))
-            var maxAlpha: UInt8 = 0
-            for i in stride(from: 3, to: pixels.count, by: 4) { maxAlpha = max(maxAlpha, pixels[i]) }
-            if maxAlpha <= 8 { return nil }
-        }
+        guard layerException == nil, let image = layerImage,
+              image.size.width > 1, imageLooksLikeContent(image) else { return nil }
         return image
+    }
+
+    /// 判「这张图是一幅画面，还是一块纯色空壳」。
+    ///
+    /// 采样 8×8：既要有不透明像素（全透明 = 远程表面没抓到），
+    /// 又要有明显明暗差（纯色 = 只抓到了背景层，铺上去就是一块黑/灰）。
+    /// 阈值取 10/255：真实 App 界面（哪怕全黑视频 + 一行字幕）的明暗跨度远大于它。
+    private func imageLooksLikeContent(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        let n = 8
+        var pixels = [UInt8](repeating: 0, count: n * n * 4)
+        guard let ctx = CGContext(data: &pixels, width: n, height: n, bitsPerComponent: 8,
+                                  bytesPerRow: n * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return false
+        }
+        ctx.interpolationQuality = .low
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: n, height: n))
+        var maxAlpha: UInt8 = 0
+        var minLuma = 255
+        var maxLuma = 0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            maxAlpha = max(maxAlpha, pixels[i + 3])
+            let luma = (Int(pixels[i]) * 3 + Int(pixels[i + 1]) * 6 + Int(pixels[i + 2])) / 10
+            minLuma = min(minLuma, luma)
+            maxLuma = max(maxLuma, luma)
+        }
+        if maxAlpha <= 8 { return false }
+        return (maxLuma - minLuma) >= 10
+    }
+
+    /// 「离黑屏最近的那一帧」：优先现场抓（画面还在时抓到的就是真·最后一帧），
+    /// 抓不到/是空壳才退回滚动缓存。
+    private func lastContentFrame() -> UIImage? {
+        if let fresh = captureSnapshotImage() {
+            cachedSnapshotImage = fresh
+            return fresh
+        }
+        return cachedSnapshotImage
     }
 
     /// 空闲时预抓快照进缓存（窗口创建后首帧、每次缩放提交后各一次）。
@@ -1163,10 +1323,17 @@ final class AevonWindowView: UIView {
 
     /// 布防截止时刻（`CACurrentMediaTime`；0 = 未布防）。
     private var guardArmedUntil: TimeInterval = 0
-    /// 连续「没在画」的拍数（0.5s 一拍）
+    /// V0.2.49（AevonDarkGuardV249）：守卫专用拍子（0.2 秒一拍）。
+    ///
+    /// 0.2.47/0.2.48 用的是 0.5 秒那根通用巡检定时器，撤冻结还要连续两拍 ——
+    /// 场景明明 0.2 秒就回来了，用户却还要多看最多 1 秒的定格画面。
+    /// Aevon(24)：「回桌面时会出现 1 秒以上的黑屏」= 这一段。
+    /// 现在守卫自己拿一根 0.2 秒的拍子，且**一看到 cs=2 就立刻撤**。
+    private var guardTimer: Timer?
+    /// 连续「没在画」的拍数（0.2s 一拍）
     private var darkTicks = 0
-    /// 连续「在画」的拍数（V0.2.48：撤冻结要两拍确认，避免一来一回地闪）
-    private var aliveTicks = 0
+    /// 这个布防窗口里撤过几次冻结（用于日志与「撤了又掉」的自愈）
+    private var freezeRemoveCount = 0
     /// 盖上来的「最后一帧」快照（永不黑屏的兜底层）
     private var darkFreezeView: UIImageView?
     /// 本次布防里已经重申过几次前台 / 上一次重申的时刻
@@ -1184,17 +1351,19 @@ final class AevonWindowView: UIView {
     /// 所以前台补偿一直是「开窗后头 8 次」的有界写法。这里沿用同一条纪律：
     /// 只在明确发生「场景离场」这个事件时补两拍，其他时候一次都不写。
     ///
-    /// V0.2.48（AevonCanvasFixedV248）：Aevon(23) 报「回桌面时浮窗要闪好几次黑才出来」。
-    /// 0.2.47 是「先重申、等连续 2 拍确认掉帧才盖图」—— 那 1 秒里用户看到的就是
-    /// 从黑到黑到黑的闪烁。现在改成 **布防当场就盖最后一帧**（画面还在时立刻定格，
-    /// 视觉上连续），重申与恢复在冻结层底下进行，**连续 2 拍确认在画**才撤图。
-    /// 同时对「离场」这个事件少写一次：只补 立即 / +0.9s 两拍（原 3 拍），
-    /// 表面重建次数减半，闪烁窗口随之缩短。
+    /// V0.2.49（AevonDarkGuardV249）：两处改动对齐 Aevon(24) 的 #6「回桌面黑屏 1 秒以上」。
+    ///   ① **只在「确认没在画」时才盖最后一帧** —— 0.2.48 是无条件先盖，于是
+    ///      「离场事件来了但画面其实还在」的情况下会白盖一张最多 3 秒前的旧帧，
+    ///      撤帧又要等 → 观感反而是「画面顿住一下」。现在 cs 还在画就不盖。
+    ///   ② 撤帧从「连续 2 拍确认（≥1 秒）」改成「**一看到 cs=2 立刻撤**」，
+    ///      拍子也从 0.5 秒提到 0.2 秒 —— 恢复窗口从 ~1.2 秒压到 ~0.2 秒。
     func armBackgroundGuard(reason: String) {
         guard window != nil else { return }
         guard sceneHost.hasContent else { return }   // 还没出过首帧：交给首帧探测，别掺和
         beginGuardWindow(reason: reason)
-        installDarkFreeze()                          // 先定格，再在底下抢救
+        if sceneHost.contentLooksRendering == false {
+            installDarkFreeze(reason: "离场")
+        }
         reassertContentForeground(tag: "立即")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
             self?.reassertContentForeground(tag: "+0.9s")
@@ -1204,18 +1373,33 @@ final class AevonWindowView: UIView {
     private func beginGuardWindow(reason: String) {
         guardArmedUntil = CACurrentMediaTime() + 4.0
         darkTicks = 0
-        aliveTicks = 0
+        freezeRemoveCount = 0
         reassertCount = 0
-        AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：当场盖最后一帧，4 秒内连续 2 拍在画才撤图"
-            + "（当前 \(sceneHost.stateSummary())）（AevonDarkGuardV247）")
+        startGuardTimerIfNeeded()
+        AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：0.2 秒一拍盯 contentState，"
+            + "不在画才盖最后一帧、一回到 cs=2 立刻撤（当前 \(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
     }
 
-    /// 重申浮窗里这个场景的前台（有界：一次布防最多 4 次，间隔 ≥1 秒）。
+    private func startGuardTimerIfNeeded() {
+        guard guardTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.checkBackgroundGuard()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        guardTimer = timer
+    }
+
+    private func stopGuardTimer() {
+        guardTimer?.invalidate()
+        guardTimer = nil
+    }
+
+    /// 重申浮窗里这个场景的前台（有界：一次布防最多 4 次，间隔 ≥0.9 秒）。
     private func reassertContentForeground(tag: String) {
         guard guardArmedUntil > 0, window != nil else { return }
         guard reassertCount < 4 else { return }
         let now = CACurrentMediaTime()
-        if reassertCount > 0, now - lastReassertAt < 1.0 { return }
+        if reassertCount > 0, now - lastReassertAt < 0.9 { return }
         reassertCount += 1
         lastReassertAt = now
         let before = sceneHost.stateSummary()
@@ -1223,53 +1407,56 @@ final class AevonWindowView: UIView {
         let after = sceneHost.stateSummary()
         AevonLog.info("[窗口] 重申浮窗场景前台（\(tag)，\(ok ? "已提交" : "失败")）"
             + "\(before) → \(after)（AevonDarkGuardV247）")
+
     }
 
-    /// 每 0.5 秒一拍：布防期里盯 contentState —— 读不到一律不动手；撤图要两拍确认。
+    /// 每 0.2 秒一拍（V0.2.49）：布防期里盯 contentState。
+    ///
+    /// 三档判读，全部沿用 0.2.47 的 fail-open 纪律：
+    ///   · `cs == 2`（在画）→ **立刻撤冻结**（这是 #6「黑屏 1 秒以上」的直接解）；
+    ///   · `cs` 是 0/1（确实没在画）→ 确认没画面就盖最后一帧 + 有界重申；
+    ///   · `cs == -1`（读不到）→ **一根手指都不动**，既不盖也不撤（绝不把「读不到」当黑）。
     private func checkBackgroundGuard() {
-        guard guardArmedUntil > 0 else { return }
+        guard guardArmedUntil > 0 else { stopGuardTimer(); return }
         let now = CACurrentMediaTime()
-        // nil = 信号不可用（contentState 读不到）→ fail-open：当「在画」处理，绝不盖黑
-        let alive = sceneHost.contentLooksRendering
-        if now > guardArmedUntil + 1.0 {
+        if now > guardArmedUntil {
             // 布防期结束：在画（或读不到）就撤图；确认不在画则保留冻结（宁可冻着也不黑着）
             guardArmedUntil = 0
+            stopGuardTimer()
             darkTicks = 0
-            aliveTicks = 0
-            if alive != false {
-                removeDarkFreeze()
+            if sceneHost.contentLooksRendering != false {
+                removeDarkFreeze(reason: "布防结束且已恢复")
             }
             return
         }
-        guard window != nil else { return }
-        guard let alive else {
-            aliveTicks = 1   // 读不到：按「疑似在画」推进一拍，够两拍就撤图（fail-open）
-            if aliveTicks >= 2 { removeDarkFreeze() }
-            return
-        }
-        if alive {
-            aliveTicks += 1
+        guard window != nil, !isTearingDown else { return }
+        switch sceneHost.contentLooksRendering {
+        case .some(true):
             darkTicks = 0
-            // V0.2.48：连续 2 拍在画才撤 —— 撤早了会「图层一恢复又掉」来回闪
-            if aliveTicks >= 2 {
-                removeDarkFreeze()
+            removeDarkFreeze(reason: "内容已出画（cs=2）")
+        case .some(false):
+            darkTicks += 1
+            if darkFreezeView == nil {
+                installDarkFreeze(reason: "巡查发现不出画")
             }
-            return
+            reassertContentForeground(tag: "发现不出画")
+        case .none:
+            break
         }
-        aliveTicks = 0
-        darkTicks += 1
-        if darkFreezeView == nil {
-            installDarkFreeze()
-        }
-        reassertContentForeground(tag: "发现不出画")
     }
 
-    /// 盖上最后一帧（缓存快照；没有可用快照就不盖 —— 盖一张黑图没有意义）。
-    private func installDarkFreeze() {
-        guard darkFreezeView == nil, hintLabel.isHidden else { return }
-        guard let image = cachedSnapshotImage ?? captureSnapshotImage() else {
-            AevonLog.warn("[窗口] 内容不出画但没有可用快照 → 无法冻结（只能等重申生效）"
-                + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247）")
+    /// 盖上最后一帧（缓存快照；没有可用快照就不盖 —— 盖一张纯色图没有意义）。
+    ///
+    /// V0.2.49（AevonDarkGuardV249）：**加一条「这张图是画面还是空壳」的校验**。
+    /// `layer.render(in:)` 抓不到跨进程远程表面（0.2.26 已记录），抓到的往往只是
+    /// contentClip 的深灰底色 —— 铺上去就是一块纯色，用户看到的就是「黑屏」。
+    /// 现在只接受「有明显明暗差异」的图（见 `imageLooksLikeContent`），
+    /// 空壳一律不盖：宁可让真实画面自己回来，也不盖一张假的。
+    private func installDarkFreeze(reason: String) {
+        guard darkFreezeView == nil, hintLabel.isHidden, !isTearingDown else { return }
+        guard let image = lastContentFrame() else {
+            AevonLog.warn("[窗口] 内容不出画但没有可用快照 → 无法冻结（只能等重申生效，\(reason)）"
+                + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
             return
         }
         let bounds = contentClip.bounds
@@ -1286,15 +1473,17 @@ final class AevonWindowView: UIView {
         view.addGestureRecognizer(tap)
         addSubview(view)
         darkFreezeView = view
-        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（点一下可手动重申）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247）")
+        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，点一下可手动重申）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
     }
 
-    private func removeDarkFreeze() {
+    private func removeDarkFreeze(reason: String) {
         guard darkFreezeView != nil else { return }
         darkFreezeView?.removeFromSuperview()
         darkFreezeView = nil
-        AevonLog.info("[窗口] 画面恢复 → 撤掉最后一帧冻结（\(sceneHost.stateSummary())）（AevonDarkGuardV247）")
+        freezeRemoveCount += 1
+        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
     }
 
     /// 点冻结图：用户主动要画面。
@@ -1303,11 +1492,10 @@ final class AevonWindowView: UIView {
             + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247）")
         guardArmedUntil = CACurrentMediaTime() + 4.0
         darkTicks = 0
-        aliveTicks = 0
         reassertCount = 0
         lastReassertAt = 0
-        // V0.2.48：点一下之后**继续盖着**（画面回来两拍才撤），
-        // 否则撤图的瞬间又是一次「黑 — 出画」的闪。
+        startGuardTimerIfNeeded()
+        // 点一下之后继续盖着：巡查看到 cs=2 会立刻撤（0.2.49 起不再等两拍）
         reassertContentForeground(tag: "手动点击")
         for delay in [0.6, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -1463,6 +1651,22 @@ final class AevonWindowView: UIView {
             + "（AevonNoAutoLockV248）")
     }
 
+    /// V0.2.49（AevonNoAutoLockV249）：**真正压住熄屏的那一下**。
+    ///
+    /// Aevon(24)：「悬浮窗打开期间，依旧会跟随系统时间暗屏锁屏」。
+    /// 0.2.48 只写了 `UIApplication.isIdleTimerDisabled` —— 在 SpringBoard 进程里
+    /// 这一笔不进 SpringBoard 自己的空闲计时器（归 `SBIdleTimerGlobalCoordinator`），
+    /// 所以日志写着「已禁用」、屏幕照样按时暗。
+    /// 这里每 20 秒调一次垫片 `AevonIdleTimerKick`：调 SpringBoard 全局协调器的
+    /// `resetIdleTimer`（= 告诉系统「用户又动了」，空闲计时重新起表），
+    /// 垫片内部同时兜底重写一次 `isIdleTimerDisabled`。
+    ///
+    /// 频率是刻意的：20 秒 ≪ 系统最短的「自动锁定 30 秒」，又不会每秒烧一次私有 API。
+    static func kickIdleTimerIfNeeded() -> NSInteger {
+        let mask = AevonIdleTimerKick()
+        return mask
+    }
+
     static func endNoAutoLock() {
         guard let saved = idleTimerSaved else { return }
         idleTimerSaved = nil
@@ -1510,17 +1714,35 @@ final class AevonWindowView: UIView {
         AevonWindowManager.close(bundleID: bundleID)
     }
 
+    /// V0.2.49（AevonFloatAnimV249）：Aevon(24)「关闭动画要更流畅，而不是突然间的变动」。
+    ///
+    /// 关闭的三步顺序是刻意的：
+    ///   ① 先把当前画面**冻结成一张图**（在场景被销毁之前抓，否则抓到的是空表面）；
+    ///   ② 同步做完全部销毁（host.invalidate / 场景 sleep 由 close 接着做）——
+    ///      这一刻真实画面已经没了，但上面盖着那张图，视觉上什么都没发生；
+    ///   ③ 视图做 0.18 秒淡出 + 0.97 缩小后自己摘掉。
+    ///
+    /// 如果没有第 ① 步，淡出的就是一块黑 —— 那比硬切还难看。
+    /// 抓不到快照（远程表面异常）就跳过冻结，直接硬摘（退回 0.2.48 行为）。
     func teardown() {
+        guard !isTearingDown else { return }
+        isTearingDown = true
         // 关窗前把最终位置记下来
         persistFrame()
         // V0.2.48（AevonNoAutoLockV248）：浮窗没了 → 空闲锁屏还原
         AevonWindowView.endNoAutoLock()
+        // V0.2.49：熄屏重申定时器与系统唤醒观察者一起收尾
+        idleKickTimer?.invalidate()
+        idleKickTimer = nil
+        removeSystemWakeObservers()
         selfSceneFallbackTimer?.invalidate()
         selfSceneFallbackTimer = nil
         // V0.2.47（AevonDarkGuardV247）：守卫与冻结层一起收尾
         guardArmedUntil = 0
-        darkFreezeView?.removeFromSuperview()
-        darkFreezeView = nil
+        stopGuardTimer()
+        removeDarkFreeze(reason: "关窗收尾")
+        // V0.2.49：抓离场帧（必须在 sceneHost.invalidate 之前）
+        let exitFrame = exitFreezeView()
         // V0.2.44（AevonScreenAspectV244）：比例监听到此为止
         aspectWatchTimer?.invalidate()
         aspectWatchTimer = nil
@@ -1529,6 +1751,37 @@ final class AevonWindowView: UIView {
         sceneHost.onFirstContent = nil
         sceneHost.invalidate()
         sceneHost.container.removeFromSuperview()
-        removeFromSuperview()
+
+        guard exitFrame != nil, window != nil else {
+            removeFromSuperview()
+            return
+        }
+        // ②→③ 动画离场：只动 alpha / transform，不动 frame（不触发布局）
+        UIView.animate(withDuration: 0.18, delay: 0,
+                       options: [.curveEaseIn, .allowUserInteraction]) { [weak self] in
+            self?.alpha = 0
+            self?.transform = CGAffineTransform(scaleX: 0.97, y: 0.97)
+        } completion: { [weak self] _ in
+            self?.removeFromSuperview()
+        }
+    }
+
+    /// 离场帧：把当前内容区画面盖成一张静态图（只为让关闭动画有画面可淡）。
+    /// 优先用空闲预抓的缓存（零渲染），没有才现场抓一帧；都拿不到返回 nil。
+    private func exitFreezeView() -> UIView? {
+        let bounds = contentClip.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        guard let image = cachedSnapshotImage ?? captureSnapshotImage() else { return nil }
+        let view = UIImageView(image: image)
+        view.frame = contentClip.frame
+        view.contentMode = .scaleToFill
+        view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
+        view.layer.masksToBounds = true
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.isUserInteractionEnabled = false
+        addSubview(view)
+        AevonLog.info("[窗口] 关闭动画：已冻结离场帧（\(Int(bounds.width))x\(Int(bounds.height))）"
+            + "（AevonFloatAnimV249）")
+        return view
     }
 }

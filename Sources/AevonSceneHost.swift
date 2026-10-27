@@ -299,8 +299,52 @@ final class AevonSceneHost {
         }
     }
 
-    /// V0.2.43（AevonMainCanvasGuardV243）：S2 防回弹复查（0.35 / 1.2 / 2.5 三拍）。
+    /// V0.2.49（AevonRelayoutKickV249）：**强制 App 走一遍完整重排**。
     ///
+    /// Aevon(24) 两条同源反馈：
+    ///   ｜「悬浮窗打开抖音时，需要等待 1.5 秒或者上滑一下视频才能完整真重排」
+    ///   ｜「再次打开浮窗时，抖音有概率出现断层」
+    ///
+    /// 成因：`settings.frame` 写下去之后，App 的 window 尺寸确实变了，但**它自己不
+    /// 一定立刻重排** —— 抖音这类视图层级深的 App 往往要等下一次滚动 / 视频换帧才
+    /// 把新尺寸吃进布局。所以「画布改了」≠「重排完成」，中间那 1.5 秒就是空白期。
+    ///
+    /// 这里的做法是 **有界微扰**：先写 (w-1, h-1)，220ms 后写回 (w, h)。
+    /// 两次尺寸不同 → 系统一定会再发一次 size change → App 必须再布局一遍，
+    /// 而这一遍用的就是正确的画布 + 正确的 UIScreen（App 侧 0.2.49 起把 UIScreen
+    /// 报成画布尺寸，见 AevonAppScreenFitV249）→ 真重排在开窗后 ~0.6 秒内完成。
+    ///
+    /// 纪律：**总共 2 次写入，只在开窗时一次**。绝不循环、绝不在关窗后写。
+    func kickRelayout(width: CGFloat, height: CGFloat, tag: String) {
+        guard !invalidated, width > 2, height > 2 else { return }
+        // 0.45s 起手：让过 0.35s 那一拍防回弹复查（否则会被它当成「被回弹」再补写一次）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, !self.invalidated else { return }
+            _ = self.writeCanvas(width - 1, height - 1)
+            AevonLog.info("[场景] 强制重排：先写 \((Int(width - 1)))x\((Int(height - 1)))"
+                + "（\(tag)，让 App 收到一次尺寸变化）（AevonRelayoutKickV249）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, !self.invalidated else { return }
+                _ = self.writeCanvas(width, height)
+                AevonLog.info("[场景] 强制重排：写回 \(Int(width))x\(Int(height))"
+                    + "（\(tag)，App 这一遍布局用的就是最终画布）（AevonRelayoutKickV249）")
+            }
+        }
+    }
+
+    /// 只写画布（自建场景 / 主场景两档口径不变），不写任何前台状态。
+    @discardableResult
+    private func writeCanvas(_ width: CGFloat, _ height: CGFloat) -> Bool {
+        if isSelfBuilt {
+            return AevonSelfSceneResize(scene, Double(width), Double(height))
+        }
+        if mainResized {
+            return AevonMainSceneSetFrame(scene, Double(width), Double(height))
+        }
+        return false
+    }
+
+    /// V0.2.43（AevonMainCanvasGuardV243）：S2 防回弹复查（0.35 / 1.2 / 2.5 三拍）。
     /// 与 0.2.42 的差别只有一处关键：闭包由承载器持有，`invalidated` 后一律不写。
     /// 0.2.42 那版把三拍排在 WindowManager 里、捕获裸 scene，关窗后仍在跑：
     /// 读回 430x932 ≠ 画布 → 判「被回弹」→ 又写回 272x454（真机日志两处置实）。

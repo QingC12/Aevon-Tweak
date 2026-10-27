@@ -1044,3 +1044,80 @@ NSString *AevonSelfSceneConnectionState(id scene) {
         return @"exception";
     }
 }
+
+/* ── V0.2.49（AevonNoAutoLockV249）：压住系统空闲熄屏 ────────────────────────
+ *
+ * Aevon(24)：「悬浮窗打开期间，依旧会跟随系统时间暗屏锁屏」。
+ * 0.2.48 的 `UIApplication.shared.isIdleTimerDisabled = true` 在 SpringBoard 进程里
+ * 不进 SpringBoard 自己的空闲计时器（它归 SBIdleTimerGlobalCoordinator 管），
+ * 所以日志写着「已禁用」，屏幕照样按「自动锁定」暗下去。
+ *
+ * 这里做的是 iOS 上公认的「caffeine」写法：找到 SpringBoard 的全局空闲计时协调器，
+ * 每调一次 resetIdleTimer 就等于告诉系统「用户又动了」，空闲计时重新起表。
+ * 全链选择子探测 + @try，任何一步不存在就降级 —— 绝不因为私有 API 改名而崩。
+ * 调用频率由调用方控制（20 秒一次），本函数自身不做任何计时。 */
+__attribute__((used)) static const char AevonNoAutoLockV249Marker[] = "AevonNoAutoLockV249";
+__attribute__((used)) static const char AevonIdleKickProbeV249Marker[] = "AevonIdleKickV249";
+NSInteger AevonIdleTimerKick(void) {
+    NSInteger mask = 0;
+    @try {
+        NSArray<NSString *> *coordinatorNames = @[@"SBIdleTimerGlobalCoordinator",
+                                                  @"SBIdleTimerCoordinatorHelper",
+                                                  @"SBIdleTimerGlobalStateMonitor"];
+        id coordinator = nil;
+        for (NSString *name in coordinatorNames) {
+            Class cls = NSClassFromString(name);
+            if (cls == Nil) { continue; }
+            SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+            if ([cls respondsToSelector:sharedSel]) {
+                coordinator = ((AevonSDIdFn0)objc_msgSend)((id)cls, sharedSel);
+            }
+            if (coordinator == nil) {
+                SEL shared2 = NSSelectorFromString(@"sharedCoordinator");
+                if ([cls respondsToSelector:shared2]) {
+                    coordinator = ((AevonSDIdFn0)objc_msgSend)((id)cls, shared2);
+                }
+            }
+            if (coordinator != nil) { break; }
+        }
+        if (coordinator != nil) {
+            SEL resetSel = NSSelectorFromString(@"resetIdleTimer");
+            if ([coordinator respondsToSelector:resetSel]) {
+                ((AevonSDVoidFn0)objc_msgSend)(coordinator, resetSel);
+                mask |= 1;
+            }
+            SEL undimSel = NSSelectorFromString(@"resetIdleTimerAndUndim:");
+            if ([coordinator respondsToSelector:undimSel]) {
+                ((AevonSDVoidFnBool1)objc_msgSend)(coordinator, undimSel, YES);
+                mask |= 2;
+            }
+        }
+    } @catch (NSException *exception) {
+        /* 私有 API 抛异常：继续走下面的兜底，绝不上抛 */
+    }
+    // 兜底：与 0.2.48 同一条写入（部分机型 / 部分版本上它确实有效）
+    @try {
+        Class appCls = NSClassFromString(@"UIApplication");
+        SEL sharedSel = NSSelectorFromString(@"sharedApplication");
+        if (appCls != Nil && [appCls respondsToSelector:sharedSel]) {
+            id app = ((AevonSDIdFn0)objc_msgSend)((id)appCls, sharedSel);
+            SEL setSel = NSSelectorFromString(@"setIdleTimerDisabled:");
+            if (app != nil && [app respondsToSelector:setSel]) {
+                ((AevonSDVoidFnBool1)objc_msgSend)(app, setSel, YES);
+                mask |= 4;
+            }
+        }
+    } @catch (NSException *exception) {
+    }
+    return mask;
+}
+
+/* ── V0.2.49 标记锚（Aevon(24) 九项）────────────────────────────────────────
+ * 这些常量本身不参与逻辑，只保证标记串进二进制 —— 字节复检用 strings 逐条命中。
+ * （C 函数名与 Swift 常量名都不在 __TEXT 内容里，只靠源码 grep 抓不到产物。） */
+__attribute__((used)) static const char AevonGlowTightV249Marker[] = "AevonGlowTightV249";
+__attribute__((used)) static const char AevonFloatAnimV249Marker[] = "AevonFloatAnimV249";
+__attribute__((used)) static const char AevonRelayoutKickV249Marker[] = "AevonRelayoutKickV249";
+__attribute__((used)) static const char AevonUnlockGuardV249Marker[] = "AevonUnlockGuardV249";
+__attribute__((used)) static const char AevonDarkGuardV249Marker[] = "AevonDarkGuardV249";
+__attribute__((used)) static const char AevonCloseSettleV249Marker[] = "AevonCloseSettleV249";

@@ -2419,12 +2419,15 @@ jobs:
             exit 1
           fi
           # ② 发光贴边：外扩 2pt + 亮度 0.42（0.2.46 的 12pt/0.90 回潮即断构建）
-          grep -q 'static let halo: CGFloat = 2' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.47 发光圈没有贴边（halo 不是 2pt）"; exit 1; }
-          grep -q 'dark ? 0.42 : 0.12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.47 发光亮度不是压暗后的 0.42/0.12"; exit 1; }
+          #    0.2.49 起外扩再收到 1pt（AevonGlowTightV249），亮度靠半径补回
+          grep -q 'static let halo: CGFloat = 1' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 发光圈外扩不是 1pt（Aevon(24) 定档：只贴窗沿）"; exit 1; }
+          grep -q 'dark ? 0.46 : 0.14' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 发光亮度不是 0.46/0.14"; exit 1; }
           grep -q 'static let halo: CGFloat = 12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::0.2.47 发光外扩 12pt 不许回潮"; exit 1; }
+          grep -q 'static let halo: CGFloat = 2' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.49 发光外扩 2pt 已是历史档（用户定档 1pt）"; exit 1; }
           # ④ 系统手势通道：起手落在浮窗上必须 Failed，且这条判定要排在热区判定之前
           grep -q 'AevonEntryHost.pointHitsFloatGrip(at: point)' \
             "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
@@ -2502,20 +2505,97 @@ jobs:
           grep -q 'store.synchronize()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.48 几何记忆没有落盘（注销后回到默认）"; exit 1; }
           # ⑦ 布防即盖帧：installDarkFreeze 必须排在第一次 reassert 之前
-          FREEZE_LINE=$(grep -n 'installDarkFreeze()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
+          FREEZE_LINE=$(grep -n 'installDarkFreeze(reason:' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
           REASSERT_LINE=$(grep -n 'reassertContentForeground(tag: "立即")' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
           if [ -z "$FREEZE_LINE" ] || [ -z "$REASSERT_LINE" ] || [ "$FREEZE_LINE" -ge "$REASSERT_LINE" ]; then
             echo "::error::0.2.48 回桌面守卫没先盖帧（会先闪几下黑才出画）"
             exit 1
           fi
-          grep -q 'aliveTicks' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.48 撤冻结没有两拍确认（会来回闪）"; exit 1; }
+          # 反转断言（0.2.49，Aevon(24) #6）：撤冻结不许再等两拍 ——
+          # 两拍确认 = 场景回来了还要多看最多 1 秒定格，正是「黑屏 1 秒以上」的成因。
+          if grep -q 'aliveTicks' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.49 撤冻结又回到两拍确认（cs=2 必须立刻撤）"
+            exit 1
+          fi
           # ⑩ 关窗还原：主场景抖动复位 + 自建场景销毁前先还原整屏
           grep -q 'Double(screen.width) + dx' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.48 主场景还原后没有抖动复位（App 会缓存浮窗尺寸 → 全屏黑）"; exit 1; }
           grep -q 'AevonSelfSceneRestoreV248' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.48 自建场景销毁前没有还原整屏（全屏视频会断层）"; exit 1; }
           echo "V0.2.48 校验: 画布恒定（脱钩窗口）+ 实时缩放 + 防熄屏 + 几何落盘夹屏 + 布防即盖帧 + 关窗抖动复位 已就位"
+
+          # ── V0.2.49 校验（Aevon(24) 九项：分享面板 / 1pt 光晕 / 动画 / 强制重排 /
+          #     解锁守卫 / 黑屏时长 / 真防熄屏 / 缩放抖动 / 二次开窗断层）───────────
+          for s in AevonGlowTightV249 AevonFloatAnimV249 AevonRelayoutKickV249 \
+                   AevonUnlockGuardV249 AevonDarkGuardV249 AevonNoAutoLockV249 \
+                   AevonCloseSettleV249; do
+            grep -rq "$s" "$GITHUB_WORKSPACE/Sources" "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+              || { echo "::error::0.2.49 缺标记 $s"; exit 1; }
+          done
+          # ① 分享面板/视频重排：App 侧必须接管 UIScreen bounds（只改 bounds）
+          grep -q 'AevonAppScreenFitV249' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.49 App 侧没有贴合屏幕尺寸（分享面板会被裁）"; exit 1; }
+          grep -q 'class_replaceMethod(cls, sel, (IMP)AevonScreenBoundsFit' \
+            "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.49 -[UIScreen bounds] 没被接管"; exit 1; }
+          # 反转断言：绝不许动 nativeBounds / scale（动像素级尺寸会毁渲染）
+          if grep -q 'nativeBounds' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"; then
+            echo "::error::0.2.49 屏幕贴合只许改 bounds，不许碰 nativeBounds"; exit 1
+          fi
+          # ③ 关闭动画：必须先冻结离场帧、再销毁、最后淡出
+          EXITFREEZE_LINE=$(grep -n 'let exitFrame = exitFreezeView()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
+          INVALIDATE_LINE=$(grep -n 'sceneHost.invalidate()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$EXITFREEZE_LINE" ] || [ -z "$INVALIDATE_LINE" ] || [ "$EXITFREEZE_LINE" -ge "$INVALIDATE_LINE" ]; then
+            echo "::error::0.2.49 关闭动画没有先抓离场帧（淡出的会是一块黑）"
+            exit 1
+          fi
+          grep -q 'transform = CGAffineTransform(scaleX: 0.96, y: 0.96)' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 进场没有缩放过渡（只有淡入 = 突然出现）"; exit 1; }
+          # ④ App 必须先收到「浮窗里是谁」再改画布（否则第一遍布局用整屏尺寸）
+          FLOATMARK_LINE=$(grep -n 'AevonPrefs.set("AevonFloatBundle", bundleID)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" | head -n1 | cut -d: -f1)
+          CANVAS_LINE=$(grep -n 'AevonMainSceneSetFrame(scene, Double(size.width), Double(size.height))' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$FLOATMARK_LINE" ] || [ -z "$CANVAS_LINE" ] || [ "$FLOATMARK_LINE" -ge "$CANVAS_LINE" ]; then
+            echo "::error::0.2.49 「浮窗里是谁」写晚了（App 第一遍布局会按整屏排）"
+            exit 1
+          fi
+          grep -q 'func kickRelayout(width: CGFloat, height: CGFloat, tag: String)' \
+            "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.49 缺强制重排（抖音要等上滑才重排）"; exit 1; }
+          grep -q 'sceneHost.kickRelayout(' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.49 强制重排没有被调用"; exit 1; }
+          # ⑤ 解锁/回前台必须重新布防
+          grep -q 'UIApplication.didBecomeActiveNotification' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 解锁后没人管（浮窗会黑 1 秒）"; exit 1; }
+          grep -q 'AevonUnlockGuardV249' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 缺解锁守卫标记"; exit 1; }
+          # ⑥ 守卫拍子必须被压到 0.2 秒（0.5 秒一拍 + 两拍确认 = 黑屏 1 秒以上）
+          grep -q 'Timer(timeInterval: 0.2, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 守卫拍子不是 0.2 秒（黑屏时长压不下来）"; exit 1; }
+          grep -q 'private func removeDarkFreeze(reason: String)' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 撤冻结没有原因串（分不清是哪种恢复）"; exit 1; }
+          # 反转断言：最后一帧不许只看 alpha（纯色空壳会当成「画面」盖上去 = 黑屏）
+          grep -q 'imageLooksLikeContent' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 最后一帧没有「是不是一幅画面」的判据"; exit 1; }
+          grep -q 'drawHierarchy' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 最后一帧只走 layer.render（抓不到远程表面）"; exit 1; }
+          # ⑦ 真防熄屏：必须调 SpringBoard 的全局空闲计时协调器
+          grep -q 'NSInteger AevonIdleTimerKick(void)' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.49 缺熄屏压制垫片"; exit 1; }
+          grep -q 'SBIdleTimerGlobalCoordinator' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.49 熄屏压制没有真调 SpringBoard 协调器（只写 isIdleTimerDisabled 无效）"; exit 1; }
+          grep -q 'Timer(timeInterval: 20.0, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 熄屏压制没有周期重申"; exit 1; }
+          # ⑧ 缩放抖动：发光圈刷新必须禁用隐式动画
+          grep -q 'CATransaction.setDisableActions(true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.49 发光圈仍有隐式动画（缩放时边缘会抖）"; exit 1; }
+          # ⑨⑩ 关窗要等画布还原走完再挂起
+          grep -q 'scheduleSleep(bundleID: bundleID, after: 0.75)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.49 关窗立刻挂起（还原抖动没执行 → 再开窗断层/全屏黑）"; exit 1; }
+          grep -q 'cancelPendingSleep(bundleID: bundleID)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.49 重开窗没撤销待挂起（浮窗里的 App 会被挂起）"; exit 1; }
+          echo "V0.2.49 校验: 屏幕贴合画布（分享面板/视频重排）+ 1pt 光晕 + 进出场动画 + 强制重排 + 解锁守卫 + 0.2s 撤帧 + SpringBoard 熄屏压制 + 缩放禁隐式动画 + 关窗等还原 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
