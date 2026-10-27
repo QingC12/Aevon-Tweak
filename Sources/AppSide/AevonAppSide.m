@@ -951,6 +951,10 @@ static void AevonScreenFitNudgeLayout(BOOL nowOn) {
     }
 }
 
+/* 前向声明（V0.2.59）：ScreenFitRefresh 的 0.5s 轮询兜底要调停靠交互刷新，
+ * 定义在本文件更后面 —— C99 不支持隐式声明（0.2.52 同款坑，编译期才暴露）。 */
+static void AevonDockInteractionRefresh(void);
+
 static void AevonScreenFitRefresh(void) {
     if (gAevonScreenFitRefreshing) { return; }
     gAevonScreenFitRefreshing = YES;
@@ -1046,8 +1050,8 @@ static void AevonDockInteractionRefresh(void) {
             if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
             for (UIWindow *window in ((UIWindowScene *)scene).windows) {
                 BOOL want = !docked;
-                if (window.isUserInteractionEnabled != want) {
-                    window.isUserInteractionEnabled = want;
+                if (window.userInteractionEnabled != want) {
+                    window.userInteractionEnabled = want;
                     touched += 1;
                 }
             }
