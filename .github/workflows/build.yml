@@ -396,21 +396,8 @@ jobs:
               || { echo "::error::V0.1.17 标记 $s 未编入"; exit 1; }
           done
           # V0.2.51：断言退役 —— 锚的旧功能代码已删（enforceDeadManSwitch()）
-          # ④ 三指急救：判定必须在所有闸门之前，且必须能真正把开关写盘关掉。
-          #   V0.1.19 起语义升级为两档（三指成形只释放接管、按住 2 秒才写盘关开关），
-          #   旧形态的判定串保留为「兼容分支」，同时新增四条硬断言把两档钉住 ——
-          #   不是放宽，是换了形态之后一条都不能少。
-          if grep -q 'if activeTouches.count >= 3 { panicRelease() }' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
-            echo "三指急救：旧形态（0.1.18 及以前）"
-          elif grep -q 'panicReleaseNow("三指同时按下")' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            && grep -q 'static let panicHoldDisableAfter: CFTimeInterval = 2.0' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            && grep -q 'static let panicHoldHintAfter: CFTimeInterval = 0.6' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            && grep -q 'panicCooldownUntil' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
-            echo "三指急救：0.1.19 两档形态（成形只释放 / 按住 2 秒才关开关 / 0.8 秒冷却）"
-          else
-            echo "::error::三指急救判定被删（再出事故就只能卸载）"
-            exit 1
-          fi
+          # ④ V0.2.51（AevonGripOnlyV251）：三指急救 / 死手开关随右缘状态机整建制退役 ——
+          #   急救路径由常驻圆盘把手承接（把手永远可见可点，点按即收圆盘 / 停靠即隔离触摸）。
           # ⑤ 出过事故的功能不许默认开 —— 0.2.17 起更强：它们连开关都不在设置页
           if grep -qE 'RightEdgeTakeover|BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
             echo "::error::整指吞开关又回到设置页（0.1.16 出过整屏卡死、0.2.15 已下线）"; exit 1
