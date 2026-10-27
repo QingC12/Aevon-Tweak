@@ -209,10 +209,18 @@ enum AevonWindowManager {
             let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: true)
             let forceSelf = AevonPrefs.bool("SceneRouteForceSelf", default: false)
             let mainResizeOn = AevonPrefs.bool("MainSceneResize", default: true)
-            let routeSelf = selfSceneOn && (capVerdict == 1 || forceSelf)
-            let routeMain = !routeSelf && mainResizeOn
-            let routeName = routeSelf ? "自建场景" : (routeMain ? "主场景改画布(S2)" : "全屏接管旧路径")
-            AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)（AevonSceneRouteV242）")
+            // ── V0.2.44（AevonScreenAspectV244）：内容比例跟随屏幕档 ──────────────
+            // 这一档的画布 = **整屏原生尺寸**，App 的排版与全屏逐像素一致，呈现层只做
+            // 等比缩进窗口。所以自建场景（第二场景）在这档没有任何意义：它的画布也是
+            // 整屏，等于把整屏塞进浮窗，还多一层「App 是否接受第二场景」的风险。
+            // 一律走主场景整屏呈现：画布写一次屏尺寸（幂等，能从任何残留小画布恢复）。
+            let screenAspectOn = AevonWindowView.usesScreenAspect
+            let routeSelf = selfSceneOn && !screenAspectOn && (capVerdict == 1 || forceSelf)
+            let routeMain = !routeSelf && (screenAspectOn || mainResizeOn)
+            let routeName = routeSelf
+                ? "自建场景"
+                : (screenAspectOn ? "整屏等比缩放（屏幕比例档）" : (routeMain ? "主场景改画布(S2)" : "全屏接管旧路径"))
+            AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)（AevonSceneRouteV242 AevonScreenAspectV244）")
             if !routeSelf {
                 AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
             }
@@ -289,17 +297,34 @@ enum AevonWindowManager {
             // 把 frame 重算回全屏，三拍复查 + 补写（防回弹）。关窗由承载器还原。
             var mainResized = false
             var mainCanvas: CGSize = .zero
-            if !usedSelfScene && mainResizeOn {
+            if !usedSelfScene && routeMain {
                 // V0.2.43（AevonCanvasScaleV243）：画布 = 窗口 × k（不再等于窗口本身）
+                // V0.2.44（AevonScreenAspectV244）：屏幕比例档 → 画布 = 整屏原生尺寸
                 let windowSize = AevonWindowView.plannedContentSize()
                 let size = AevonWindowView.canvasSize(for: windowSize)
-                let ok = AevonMainSceneSetFrame(scene, Double(size.width), Double(size.height))
-                mainResized = ok
-                mainCanvas = size
-                AevonLog.info("[场景] 主场景改画布：\(bundleID) 窗口=\(Int(windowSize.width))x\(Int(windowSize.height))"
-                    + " × \(String(format: "%.2f", AevonWindowView.canvasScale)) → 画布=\(Int(size.width))x\(Int(size.height))"
-                    + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
-                    + "（AevonMainSceneResizeV242 AevonCanvasScaleV243）")
+                let expected = "frame=\(Int(size.width))x\(Int(size.height))"
+                let stateNow = AevonMainSceneFrameState(scene) ?? ""
+                if screenAspectOn && stateNow.contains(expected) {
+                    // 屏幕比例档 + 画布本来就是整屏 → 一个字节都不用写
+                    // （多余的 updateSettings 会让 App 白重排一次，画面闪一下）
+                    AevonLog.info("[场景] 整屏画布：\(bundleID) 已是 \(expected)，跳过写入"
+                        + "（App 本就按整屏排版，呈现层等比缩进窗口）（AevonScreenAspectV244）")
+                } else {
+                    let ok = AevonMainSceneSetFrame(scene, Double(size.width), Double(size.height))
+                    mainResized = ok
+                    mainCanvas = size
+                    if screenAspectOn {
+                        AevonLog.info("[场景] 整屏画布：\(bundleID) 窗口=\(Int(windowSize.width))x\(Int(windowSize.height))"
+                            + " → 画布=\(Int(size.width))x\(Int(size.height))（与整屏一致，App 原生排版后等比缩进浮窗）"
+                            + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                            + "（AevonScreenAspectV244）")
+                    } else {
+                        AevonLog.info("[场景] 主场景改画布：\(bundleID) 窗口=\(Int(windowSize.width))x\(Int(windowSize.height))"
+                            + " × \(String(format: "%.2f", AevonWindowView.canvasScale)) → 画布=\(Int(size.width))x\(Int(size.height))"
+                            + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                            + "（AevonMainSceneResizeV242 AevonCanvasScaleV243）")
+                    }
+                }
                 // 三拍复查（0.35 / 1.2 / 2.5s）由承载器持有：关窗 invalidate 之后
                 // 一律不再补写 —— 0.2.42 把闭包排在这里，关窗后 2.5s 那一拍又把
                 // 已还原的 430x932 写回画布尺寸（Aevon(18) 真机日志两处）。

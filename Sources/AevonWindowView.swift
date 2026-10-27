@@ -69,7 +69,63 @@ final class AevonWindowView: UIView {
 
     /// 内容区宽高比（宽 ÷ 高）。V0.2.22（AevonFloat53PortraitV222）：5:3 = 高5:宽3（竖窗）。
     /// Aevon(106) 用户纠偏：0.2.21 曾按「宽:高」做成 1.667 横长条，实为竖窗 0.6。
+    /// V0.2.44（AevonScreenAspectV244）：本常量是「5:3 真重排档」的比例；实际生效值
+    /// 走 `contentAspectCurrent`（屏幕比例档 = 屏宽 / 屏高）。CI 断言钉的是本行。
     static let contentAspect: CGFloat = 3.0 / 5.0
+
+    /// V0.2.44（AevonScreenAspectV244）：内容比例档 —— 是否跟随屏幕比例（默认是）。
+    ///
+    /// 0.2.43 真机（Aevon(19)）判读：滑到 1.58 档后抖音右侧栏回来了（画布宽 = 屏宽），
+    /// 但画面「整体上移、视频不在正中、底部黑一大片」。根因是比例而不是倍数：
+    /// 5:3 竖窗的逻辑画布是 430×716，比整屏 430×932 矮 216pt，抖音这类「整页按整屏
+    /// 高度排版」的 App 只能露出上半页 —— 顶栏贴窗顶、视频被挤到上中部、底部文案与
+    /// 底栏被切（日志：`首个子视图 430x716`）。
+    ///
+    /// 5:3（0.6）与「整屏内容完整可见」（0.4614）在数学上互斥，所以这一档把**窗口比例**
+    /// 换成屏幕比例：画布 = 整屏原生尺寸 → App 的排版与全屏逐像素一致（顶栏 / 底栏 /
+    /// 右侧栏全部在位、视频在原生位置居中、上下黑边天然等量），呈现层再按 1/k 把整屏
+    /// 画面等比缩进窗口（X/Y 系数天然相等 → 不裁切、不变形、不留 letterbox）。
+    ///
+    /// 关掉 = 回到 0.2.43 的 5:3 真重排（画布 = 窗口 × 画布倍数）。
+    ///
+    /// 注意：本属性在缩放手势里是**每帧**读取（clampedCornerWidth 用比例算上限），
+    /// 所以偏好值必须缓存 0.5s —— 绝不能每帧一次 CFPreferences IPC（那是锁 + 跨进程）。
+    static var usesScreenAspect: Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - aspectFlagStamp >= 0.5 {
+            aspectFlagStamp = now
+            AevonPrefs.synchronize()
+            aspectFlag = AevonPrefs.bool("ContentScreenAspect", default: true)
+        }
+        return aspectFlag
+    }
+
+    private static var aspectFlag: Bool = true
+    private static var aspectFlagStamp: TimeInterval = 0
+
+    /// 当前生效的内容区宽高比：屏幕比例档 = 屏宽 / 屏高；否则 5:3 竖窗。
+    /// 结果按「档位 + 屏幕尺寸」缓存（同一台设备上比例只可能被偏好改变）。
+    static var contentAspectCurrent: CGFloat {
+        let mode = usesScreenAspect
+        let screen = UIScreen.main.bounds.size
+        if cachedAspect > 0, cachedAspectMode == mode, cachedAspectScreen == screen {
+            return cachedAspect
+        }
+        let value: CGFloat
+        if mode, screen.width > 1, screen.height > 1 {
+            value = screen.width / screen.height
+        } else {
+            value = contentAspect
+        }
+        cachedAspect = value
+        cachedAspectMode = mode
+        cachedAspectScreen = screen
+        return value
+    }
+
+    private static var cachedAspect: CGFloat = 0
+    private static var cachedAspectMode = true
+    private static var cachedAspectScreen: CGSize = .zero
 
     private static let minContentWidth: CGFloat = 240
     private static let cornerRadius: CGFloat = 12
@@ -107,6 +163,10 @@ final class AevonWindowView: UIView {
     /// V0.2.43（AevonCanvasScaleV243）：最近一次提交给场景的画布尺寸（去重，
     /// 避免每次 layoutSubviews 都跨进程写一遍 settings.frame）
     private var appliedCanvasSize: CGSize = .zero
+    /// V0.2.44（AevonScreenAspectV244）：当前生效的内容比例 + 变更监听定时器
+    /// （设置页切「内容比例跟随屏幕」后 0.5 秒内自动重建窗口几何，不用重开浮窗）
+    private var appliedAspect: CGFloat = 0
+    private var aspectWatchTimer: Timer?
 
     init(sceneHost: AevonSceneHost, bundleID: String, title: String) {
         self.bundleID = bundleID
@@ -172,8 +232,14 @@ final class AevonWindowView: UIView {
         // V0.2.26（AevonPiPProbeV226）：真重排路线 P0 探测（只读，一次一进程）
         AevonWindowView.probeSceneRoutesOnce()
 
+        // V0.2.44（AevonScreenAspectV244）：记下开窗时的内容比例，并每 0.5s 检测一次
+        // 偏好是否被改（设置页在另一个进程）—— 变了就原地重建窗口几何，不用重开浮窗。
+        appliedAspect = AevonWindowView.contentAspectCurrent
+        startAspectWatch()
+
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（外侧手势区，内容比例 5:3 = 宽3:高5 竖窗（AevonFloat53V221 AevonFloat53PortraitV222），"
+            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "5:3 = 宽3:高5 竖窗")"
+            + "（AevonFloat53V221 AevonFloat53PortraitV222），"
             + "内容=整屏场景呈现（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
             + "真重排唯一通路=自建场景路线，P0 探测 AevonPiPProbeV226），"
             + "手势区=左/右/底全宽 30/44+压边10 落指即拖（AevonFloatWideGripV223"
@@ -182,6 +248,10 @@ final class AevonWindowView: UIView {
             + "全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
+        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "5:3 真重排档")"
+            + "，比例 \(String(format: "%.4f", appliedAspect))"
+            + "，画布 \(Int(AevonWindowView.canvasSize(for: restored.size).width))x\(Int(AevonWindowView.canvasSize(for: restored.size).height))"
+            + "（AevonScreenAspectV244）")
     }
 
     required init?(coder: NSCoder) {
@@ -226,7 +296,7 @@ final class AevonWindowView: UIView {
     /// 无记忆时的默认几何：宽 62% 屏宽（5:3 竖窗 → 高约 48% 屏高），顶边 10% 屏高，水平居中。
     private static func defaultFrame() -> CGRect {
         let screen = UIScreen.main.bounds
-        let aspect = contentAspect
+        let aspect = contentAspectCurrent
         let width = max(minContentWidth, min(screen.width * 0.62,
                                              (screen.height * 0.92) * aspect))
         let height = width / aspect
@@ -272,19 +342,27 @@ final class AevonWindowView: UIView {
     /// 画布倍数偏好的最后一次 CFPreferences 失效时刻（V0.2.43）
     private static var lastCanvasScaleSync: TimeInterval = 0
 
-    /// 窗口内容尺寸 → 场景画布尺寸（等比放大 k 倍，宽高比不变，宽不超屏宽）。
+    /// 窗口内容尺寸 → 场景画布尺寸。
+    ///
+    /// V0.2.44（AevonScreenAspectV244）：屏幕比例档 → 画布恒等于**整屏原生尺寸**，
+    /// App 的排版与全屏逐像素一致；呈现层按 1/k 等比缩进窗口（见 applyContentLayout，
+    /// 那里 k = 画布宽 / 窗口宽，高度同系数 → 绝不会出现 X/Y 不等比的拉伸）。
+    /// 5:3 档 → 等比放大 k 倍，宽不超屏宽（0.2.43 行为）。
     static func canvasSize(for windowSize: CGSize) -> CGSize {
         guard windowSize.width > 1, windowSize.height > 1 else { return windowSize }
         let screen = UIScreen.main.bounds.size
+        if usesScreenAspect {
+            return CGSize(width: floor(screen.width), height: floor(screen.height))
+        }
         var width = min(windowSize.width * canvasScale, screen.width)
-        var height = width / contentAspect
+        var height = width / contentAspectCurrent
         if height > screen.height {
             // 极端（窗口已经很高 + 大倍数）：按屏高反推，仍保持 5:3
             height = screen.height
-            width = height * contentAspect
+            width = height * contentAspectCurrent
         }
         let rounded = floor(width)
-        return CGSize(width: rounded, height: rounded / contentAspect)
+        return CGSize(width: rounded, height: rounded / contentAspectCurrent)
     }
 
     /// 首帧到达（主场景 / 自建场景共用）。
@@ -415,6 +493,53 @@ final class AevonWindowView: UIView {
             appliedCanvasSize = canvas
             sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
         }
+    }
+
+    // MARK: - 内容比例热切换（V0.2.44，AevonScreenAspectV244）
+
+    /// 每 0.5 秒看一次「内容比例跟随屏幕」是否被改过（设置页是另一个进程，
+    /// CFPreferences 缓存由 usesScreenAspect 里的节流 synchronize 负责失效）。
+    private func startAspectWatch() {
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.applyAspectIfChanged()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        aspectWatchTimer = timer
+    }
+
+    /// 比例变了 → 宽保持不变（用户在旧档里拉到的宽度就是他想要的），高度按新比例重算，
+    /// 夹进屏内；画布跟着重提一次，App 按新画布重排。
+    ///
+    /// 两个档的差别：屏幕比例档画布 = 整屏原生尺寸（App 与全屏一致），5:3 档画布 =
+    /// 窗口 × 倍数（App 在小逻辑尺寸上原生重排）。
+    private func applyAspectIfChanged() {
+        guard !isLiveResizing, transform.isIdentity else { return }
+        let aspect = AevonWindowView.contentAspectCurrent
+        guard appliedAspect > 0.01, abs(aspect - appliedAspect) > 0.0005 else { return }
+        let screen = UIScreen.main.bounds
+        let maxWidth = min(screen.width * 0.95, screen.height * 0.92 * aspect)
+        var width = max(AevonWindowView.minContentWidth, min(frame.width, maxWidth))
+        var height = width / aspect
+        if height > screen.height * 0.92 {
+            height = screen.height * 0.92
+            width = height * aspect
+        }
+        let centerX = frame.midX
+        var origin = CGPoint(x: centerX - width / 2.0, y: frame.minY)
+        origin.x = max(0, min(origin.x, screen.width - width))
+        origin.y = max(0, min(origin.y, screen.height - height))
+        frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
+        setNeedsLayout()
+        persistFrame()
+        let canvas = AevonWindowView.canvasSize(for: frame.size)
+        appliedCanvasSize = canvas
+        sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
+        cachedSnapshotImage = nil
+        scheduleSnapshotRecapture(after: 0.5)
+        appliedAspect = aspect
+        AevonLog.info("[窗口] 内容比例切换 → 窗口 \(Int(width))x\(Int(height))，画布 \(Int(canvas.width))x\(Int(canvas.height))"
+            + "（\(AevonWindowView.usesScreenAspect ? "屏幕比例档：整屏原生排版 + 等比缩进窗口" : "5:3 真重排档：画布 = 窗口 × 倍数")）"
+            + "（AevonScreenAspectV244）")
     }
 
     // MARK: - 外侧手势区（V0.0.37，AevonSthenoEdgeBarV37）
@@ -678,7 +803,7 @@ final class AevonWindowView: UIView {
     /// 角块横竖都在动，取变化更明显的那个方向，斜拖也跟手，拖不出细长条。
     private func clampedCornerWidth(dx: CGFloat, dy: CGFloat, base: CGRect,
                                     edges: UIRectEdge) -> CGFloat {
-        let aspect = AevonWindowView.contentAspect
+        let aspect = AevonWindowView.contentAspectCurrent
         let screen = UIScreen.main.bounds
 
         var width: CGFloat? = nil
@@ -815,7 +940,7 @@ final class AevonWindowView: UIView {
         layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
 
         let screen = UIScreen.main.bounds
-        let aspect = AevonWindowView.contentAspect
+        let aspect = AevonWindowView.contentAspectCurrent
         var width = max(AevonWindowView.minContentWidth,
                         min(resizeOriginFrame.width * factor, screen.width * 0.95))
         width = min(width, screen.height * 0.92 * aspect)
@@ -864,7 +989,7 @@ final class AevonWindowView: UIView {
               raw.count >= 3 else { return fallback }
 
         let screen = UIScreen.main.bounds
-        let aspect = contentAspect
+        let aspect = contentAspectCurrent
         let width = max(minContentWidth,
                         min(screen.width * CGFloat(raw[2]) / 100.0, screen.width * 0.95))
         let height = width / aspect
@@ -895,6 +1020,9 @@ final class AevonWindowView: UIView {
         persistFrame()
         selfSceneFallbackTimer?.invalidate()
         selfSceneFallbackTimer = nil
+        // V0.2.44（AevonScreenAspectV244）：比例监听到此为止
+        aspectWatchTimer?.invalidate()
+        aspectWatchTimer = nil
         // 必须先 invalidate 承载容器再拆视图，否则容器 dealloc 会抛
         // NSInternalInconsistencyException: Must be invalidated before deallocating
         sceneHost.onFirstContent = nil

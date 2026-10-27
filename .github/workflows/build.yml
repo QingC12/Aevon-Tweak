@@ -2214,6 +2214,37 @@ jobs:
           grep -q 'ContentCanvasScale' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
             || { echo "::error::Detail.plist 缺画布倍数滑杆"; exit 1; }
           echo "V0.2.43 校验: 画布倍数（1.00/1.30/1.58）+ 关窗残留复查修复 + 超宽取证已就位"
+          # ── V0.2.44 校验（AevonScreenAspectV244）：窗口比例跟随屏幕。
+          # Aevon(19) 判读：1.58 档后抖音右侧栏回来了，但「内容整体上移、视频不在
+          # 正中、底部黑一大片」——5:3 的逻辑画布 430×716 比整屏 430×932 矮 216pt，
+          # 抖音这类按整屏高度排整页的 App 只能露出上半页。5:3（0.6）与「整屏完整
+          # 可见」（0.4614）数学上互斥，本档把窗口比例换成屏幕比例、画布 = 整屏原生
+          # 尺寸、呈现层 1/k 等比缩进 → 顶栏/底栏/右侧栏全在位、视频居中、黑边等量。
+          # 只加不改：5:3 常量与 contentAspect 行原样保留（上面 1785 行断言仍在钉它）。
+          for s in AevonScreenAspectV244; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.44 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'contentAspectCurrent' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::缺动态内容比例（窗口比例跟随屏幕）"; exit 1; }
+          grep -q 'ContentScreenAspect' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::Swift 侧未读内容比例开关"; exit 1; }
+          grep -q 'ContentScreenAspect' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 缺内容比例开关"; exit 1; }
+          grep -q 'AevonScreenAspectV244' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺 0.2.44 分流锚"; exit 1; }
+          if grep -q 'AevonScreenAspectV244' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" && \
+             ! grep -q 'AevonScreenAspectV244Marker' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m"; then
+            echo "::error::0.2.44 标记未用 used 常量锚"; exit 1
+          fi
+          # 反转断言：屏幕比例档下不许走自建场景（画布 = 整屏，第二场景没有意义）
+          grep -q 'selfSceneOn && !screenAspectOn' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.44 反转：屏幕比例档仍会走自建场景"; exit 1; }
+          # 反转断言：屏幕比例档的画布必须是整屏原生尺寸（不是窗口 × 倍数）
+          grep -q 'return CGSize(width: floor(screen.width), height: floor(screen.height))' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.44 反转：屏幕比例档画布不是整屏尺寸"; exit 1; }
+          echo "V0.2.44 校验: 内容比例跟随屏幕（整屏原生排版 + 1/k 等比缩进）+ 5:3 真重排档可切回"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

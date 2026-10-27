@@ -114,6 +114,16 @@ __attribute__((used)) static const char AevonMainSceneResizeV242Marker[] = "Aevo
 __attribute__((used)) static const char AevonCanvasScaleV243Marker[] = "AevonCanvasScaleV243";
 __attribute__((used)) static const char AevonMainCanvasGuardV243Marker[] = "AevonMainCanvasGuardV243";
 __attribute__((used)) static const char AevonContentTreeV243Marker[] = "AevonContentTreeV243";
+/* V0.2.44（AevonScreenAspectV244）：内容比例档 —— 窗口比例跟随屏幕。
+ * 0.2.43 真机（Aevon(19)）判读：1.58 档后抖音右侧栏回来了（画布宽 = 屏宽），
+ * 但画面「整体上移、视频不在正中、底部黑一大片」。根因在比例不在倍数：
+ * 5:3 竖窗的逻辑画布 430×716，比整屏 430×932 矮 216pt，抖音这类「整页按整屏
+ * 高度排版」的 App 只能露出上半页（首个子视图 430x716 就是证据）。
+ * 5:3（0.6）与「整屏完整可见」（0.4614）在数学上互斥 —— 本档把**窗口比例**换成
+ * 屏幕比例：画布 = 整屏原生尺寸，App 与全屏逐像素一致地排版（顶栏 / 底栏 /
+ * 右侧栏全在位、视频在原生位置居中、上下黑边天然等量），呈现层按 1/k 等比缩进
+ * 窗口（X/Y 系数天然相等 → 不裁切、不变形、不留 letterbox）。关掉 = 5:3 真重排。 */
+__attribute__((used)) static const char AevonScreenAspectV244Marker[] = "AevonScreenAspectV244";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
