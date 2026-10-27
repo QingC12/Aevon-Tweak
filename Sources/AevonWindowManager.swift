@@ -817,8 +817,7 @@ enum AevonWindowManager {
     /// V0.2.59（AevonDockStageV259）：把当前停靠集合广播给各 App 进程。
     /// 幂等：集合没变时 App 侧的状态比对会吸收（只在翻转时动作）。
     private static func publishDockStages() {
-        let ids = dockedViews.map { $0.bundleID }
-        AevonNotifyPublishDockStages(ids as NSArray)
+        AevonNotifyPublishDockStages(dockedViews.map { $0.bundleID })
     }
 
     /// V0.2.59（AevonDockStageV259）：SpringBoard 启动时清掉停靠集合的 notify 残留。
@@ -826,7 +825,7 @@ enum AevonWindowManager {
     /// 那几个 App 的进程（若还活着）会一直以为自己「正在停靠」而交互关闭。
     /// SB 启动 = 停靠列必空（视图都没了），直接广播空集合。
     static func clearDockStagesOnBoot() {
-        AevonNotifyPublishDockStages([] as NSArray)
+        AevonNotifyPublishDockStages([String]())
         AevonLog.info("[停靠] 启动清场：停靠集合广播已复位（AevonDockStageV259）")
     }
 
