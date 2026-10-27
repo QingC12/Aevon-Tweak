@@ -360,9 +360,8 @@ jobs:
           if grep -q 'RightEdgeTakeover' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
             echo "::error::Root.plist 又出现 RightEdgeTakeover（0.2.17 已撤，整指吞不许回到设置页）"; exit 1
           fi
-          # 抬手/取消必须清右缘状态，否则 touchID 指针被复用后会误吞下一根手指
-          test "$(grep -c 'if touchID == rightEdgeTouchID {' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
-            || { echo "::error::右缘状态清理不全（ended / cancelled 两处都必须清）"; exit 1; }
+          # V0.2.51（AevonGripOnlyV251）：右缘状态（rightEdgeTouchID）整建制退役，
+          # 清理义务由 globalTouchID 的 defer 归还断言（上方）承接。
           # 识别器必须仍然停手：0.1.13 的延迟补投根因不能因为本版改回旧路
           strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
             || { echo "::error::识别器停手标记丢失 —— 会退回 0.1.12 的延迟补投"; exit 1; }
@@ -384,9 +383,7 @@ jobs:
              || grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist"; then
             echo "::error::设置页又出现 RightEdgeShowBand 常亮开关（0.2.17 已撤）"; exit 1
           fi
-          # 闪示必须挂在「接管成功」两个点上（起手 + 判向成立各一次）
-          test "$(grep -c 'AevonSystemGestureV105.flashBandIndicator()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
-            || { echo "::error::接管成功没有闪示（起手 / 判向成立两处都要调）"; exit 1; }
+          # V0.2.51：断言退役 —— 锚的旧功能代码已删（AevonSystemGestureV105.flashBandIndicato）
           echo "V0.1.16 校验: 接管带可视化开关 + 设置即时预览（自绘部分已由 V0.1.17 反转断言守住）"
           # V0.1.17（Aevon(84) 全屏卡死事故 → 安全修复版）
           #
@@ -398,9 +395,7 @@ jobs:
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::V0.1.17 标记 $s 未编入"; exit 1; }
           done
-          # ③ 死手开关必须真的挂在 0.2 秒轮询里（定义 1 处 + 调用 1 处）
-          test "$(grep -c 'enforceDeadManSwitch()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
-            || { echo "::error::死手开关没接进 0.2s 轮询（接管泄漏后无法自愈）"; exit 1; }
+          # V0.2.51：断言退役 —— 锚的旧功能代码已删（enforceDeadManSwitch()）
           # ④ 三指急救：判定必须在所有闸门之前，且必须能真正把开关写盘关掉。
           #   V0.1.19 起语义升级为两档（三指成形只释放接管、按住 2 秒才写盘关开关），
           #   旧形态的判定串保留为「兼容分支」，同时新增四条硬断言把两档钉住 ——
@@ -430,8 +425,7 @@ jobs:
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::V0.1.18 标记 $s 未编入"; exit 1; }
           done
-          test "$(grep -c 'widenRightEdgeOnceV118()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
-            || { echo "::error::带宽迁移没接进 startTriggerZoneWatch"; exit 1; }
+          # V0.2.51：断言退役 —— 锚的旧功能代码已删（widenRightEdgeOnceV118()）
           echo "V0.1.18 校验: 默认 46pt / 下限 24 / 带外落点自述原因 / 抬手结论 / 老用户带宽迁移（触摸逻辑未动）"
           # V0.0.15：边缘手势入口 + 圆盘选择器
           strings "$DYLIB" | grep -q 'AevonEdgeEntry\|AevonEdgeStripView' \
