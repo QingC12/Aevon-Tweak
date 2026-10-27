@@ -17,6 +17,36 @@ enum AevonWindowManager {
     private static var currentView: AevonWindowView?
     private static var currentBundleID: String?
 
+    // MARK: - 停靠列（V0.2.50，AevonDockColumnV250）
+    //
+    // 历史：0.1.0 重制时把 0.0.x 的「吸附 + 停靠列」整体删掉了（单窗模式）。
+    // Aevon(25) 第 3 条要把它拿回来：「更新一下屏幕左右边缘的吸附停靠小窗……
+    // 小窗吸附后的尺寸按照我们的小胖屏等比例缩小……停靠位置优先从顶部开始，依次向下排列」。
+    //
+    // 这一版的实现刻意**不动**主窗那条链路：
+    //   · 主窗仍然是唯一「活」的窗口（`currentView` / `openBundleID` 语义完全不变）；
+    //   · 停靠小窗 = 把**已经开好的那个主窗**降级成边缘小窗（同一个 AevonWindowView、
+    //     同一个 scene host、同一个 presenter）—— 不新建场景、不新建画布、不重排 App；
+    //   · 所以「拖到边缘 → 变停靠小窗 → 圆盘再开另一个 App → 再拖到边缘」可以一路叠到 5 个，
+    //     每个都是活的画面，而主窗位置始终只有一个。
+    // 之所以不用「每个停靠窗都自建场景」：一台机器上 App 侧只有**一个**
+    // `AevonFloatBundle` 承载信号（UIScreen 覆盖靠它），多场景并存会互相抢这个信号，
+    // 反而把已经修好的抖音重排又弄坏。
+    private static var dockedViews: [AevonWindowView] = []
+
+    /// 现在有没有浮窗（主窗或任意停靠小窗）—— 给 ObjC 的锁屏拦截钩子用。
+    static var hasAnyWindow: Bool {
+        return currentView != nil || !dockedViews.isEmpty
+    }
+
+    /// 全部浮窗（主窗在前，停靠列按加入顺序）。
+    static var allWindows: [AevonWindowView] {
+        var list: [AevonWindowView] = []
+        if let view = currentView { list.append(view) }
+        list.append(contentsOf: dockedViews)
+        return list
+    }
+
     /// 最近一次成功开窗的时间（`CACurrentMediaTime`）。
     ///
     /// V0.1.6（AevonFullscreenCloseV106）：开浮窗这个动作本身也会让 SpringBoard
@@ -68,12 +98,13 @@ enum AevonWindowManager {
         view.armBackgroundGuard(reason: "全屏 App 画面离场")
     }
 
-    /// 这个 App 是否正装在这个唯一浮窗里。
+    /// 这个 App 是否正装在我们某个浮窗里（主窗或停靠小窗）。
     static func isWindowed(_ bundleID: String) -> Bool {
-        return currentView != nil && currentBundleID == bundleID
+        if currentView != nil, currentBundleID == bundleID { return true }
+        return dockedViews.contains { $0.bundleID == bundleID }
     }
 
-    /// 当前浮窗里装的 App（没有浮窗时返回 nil）。
+    /// 当前浮窗里装的 App（没有主窗时返回 nil；停靠小窗不算主窗）。
     static var openBundleID: String? {
         return currentView != nil ? currentBundleID : nil
     }
@@ -88,10 +119,18 @@ enum AevonWindowManager {
         return AevonAppInfo.displayName(bundleID: bundleID) ?? bundleID
     }
 
-    /// 把浮窗提到最前（单窗其实恒在最前，保留这个入口只为面板调用不改）。
+    /// 把浮窗提到最前（主窗恒在最前，停靠窗按点击顺序提到列内最前）。
     static func bringToFront(bundleID: String) {
-        guard isWindowed(bundleID) else { return }
-        currentView?.bringToFront()
+        if let view = currentView, currentBundleID == bundleID {
+            view.bringToFront()
+            return
+        }
+        if let index = dockedViews.firstIndex(where: { $0.bundleID == bundleID }) {
+            let view = dockedViews.remove(at: index)
+            dockedViews.append(view)
+            view.superview?.bringSubviewToFront(view)
+            relayoutDock(side: view.dockedSide)
+        }
     }
 
     /// 为指定 App 开窗（带场景就绪等待与全路径守卫，任何失败都静默放弃）。
@@ -104,6 +143,14 @@ enum AevonWindowManager {
         guard AevonPrefs.bool("Enabled", default: true) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
             completion?(false)
+            return
+        }
+        // V0.2.50（AevonDockColumnV250）：目标 App 正在停靠列里 → 不重新开窗，
+        // 直接把它装回主窗（同一个 presenter，画面不中断）。
+        if dockedViews.contains(where: { $0.bundleID == bundleID }) {
+            AevonLog.info("[窗口] \(bundleID) 正在停靠列里 → 装回主窗（不重复开窗）（AevonDockColumnV250）")
+            restoreDocked(bundleID: bundleID)
+            completion?(true)
             return
         }
         if let existingID = openBundleID {
@@ -511,7 +558,16 @@ enum AevonWindowManager {
     /// 那一刻 FrontBoard 正在自己接管这个场景，我们再往里写一次 settings 就是抢
     /// 同一份状态机（归档(12)/(13) 的 SIGTRAP 来源），所以这一步只放手、不置位。
     static func close(bundleID: String, releaseOnly: Bool = false) {
+        // V0.2.50（AevonDockColumnV250）：停靠小窗有自己的关闭路径（主窗变量不指向它）
+        if currentBundleID != bundleID, dockedViews.contains(where: { $0.bundleID == bundleID }) {
+            closeDocked(bundleID: bundleID, reason: "用户关闭停靠小窗")
+            return
+        }
         guard let windowView = currentView, currentBundleID == bundleID else { return }
+        // V0.2.50（AevonFloatRestoreV250）：关窗收尾要多写一拍整屏画布，
+        // 先把这个 App 的主场景抓在手上（teardown 之后 AevonSceneHelper 还能查到，但抓早更稳）。
+        let mainScene = AevonSceneHelper.scene(for: bundleID)
+        let wasSelfBuilt = windowView.usesSelfScene
         currentView = nil
         currentBundleID = nil
         // V0.2.9（AevonFloatStandDownV209）：浮窗没了 → 清掉「浮窗里装的是谁」，
@@ -532,10 +588,31 @@ enum AevonWindowManager {
             // `invalidate()` 把画布还原成整屏后还有两拍抖动（+0.15s / +0.40s），
             // 而旧代码紧接着就把 App 挂起（sleep），那两拍根本没被执行 → App 留在
             // 「浮窗尺寸的布局」上，下次无论全屏打开还是再开浮窗，看到的都是残局。
-            // 现在把 sleep 推迟到 0.75 秒（> 0.40s + 一帧余量），期间若又开窗则取消。
+            // 现在把 sleep 推迟到 1.05 秒（> 0.40s + 一帧余量 + 第 1 条那次补写），期间若又开窗则取消。
             // 同时把「释放 RBS 保活断言」也一起推迟 —— 断言一旦释放，系统随时可以把
-            // App 挂起，那 0.75 秒的等待就白等了（断言是唯一能按住它的东西）。
-            scheduleSleep(bundleID: bundleID, after: 0.75)
+            // App 挂起，那 1 秒的等待就白等了（断言是唯一能按住它的东西）。
+            //
+            // V0.2.50（AevonFloatRestoreV250）：再多写一拍**整屏画布**。
+            // Aevon(25) 第 1 条：「悬浮窗打开过的应用关闭悬浮窗后全屏打开时依旧会黑屏，
+            // 只能通过关闭后台卡片重新打开才会恢复」—— 历史档案里同一现象出现过：
+            // 「改 keyWindow / 场景尺寸会让 App 真的变成小窗，关窗后残留 → 全屏打开大面积黑屏」。
+            // 现在的链路是：关窗还原整屏（0s）→ 抖动（0.15/0.40）→ **App 侧那一刻才收到
+            // 「不再是浮窗承载」**（UIScreen 改回真实尺寸）→ App 需要**再一次**尺寸变化
+            // 才会按真实屏幕重排。少了这一拍，App 就停在「按 430x737 排版、窗口却 430x932」
+            // 的状态里，全屏打开就是黑的，只有杀进程重来才重建。
+            // 所以 0.75s（App 侧信号已清）再写一次整屏画布 —— 有界、只一次、只在关窗时。
+            scheduleSleep(bundleID: bundleID, after: 1.05)
+            if let scene = mainScene, !wasSelfBuilt {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                    guard !isWindowed(bundleID) else { return }
+                    let screen = UIScreen.main.bounds.size
+                    let ok = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+                    AevonLog.info("[场景] 关窗收尾：承载信号已清，再写一次整屏画布 "
+                        + "\(Int(screen.width))x\(Int(screen.height))（\(ok ? "已提交" : "失败")，"
+                        + "读回 \(AevonMainSceneFrameState(scene) ?? "")；"
+                        + "App 这一遍布局用的就是真实屏幕尺寸）（AevonFloatRestoreV250）")
+                }
+            }
         }
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         if releaseOnly, let pid = AevonAppInfo.pid(bundleID: bundleID) {
@@ -545,8 +622,100 @@ enum AevonWindowManager {
         AevonLog.info("[窗口] \(bundleID) 已关闭\(releaseOnly ? "（交接给系统全屏拉起，未写场景前台标记）" : "")")
     }
 
-    /// V0.2.49（AevonCloseSettleV249）：延迟挂起（等画布还原 + 抖动完成）。
+    // MARK: - 停靠列动作（V0.2.50，AevonDockColumnV250）
+
+    /// 把当前主窗降级成停靠小窗。
     ///
+    /// 用户操作 = 拖主窗贴住左/右边缘松手（26pt 内）。名额只有 5 格，
+    /// 满了就把该侧**最早进来的**那个关掉（历史 V0.0.50 定档：一列 5 个）。
+    @discardableResult
+    static func dockCurrent(side: AevonDockSide) -> Bool {
+        guard let view = currentView else { return false }
+        let bundleID = view.bundleID
+        var column = dockedViews.filter { $0.dockedSide == side }
+        if column.count >= AevonDock.maxCount {
+            if let oldest = column.first {
+                AevonLog.info("[停靠] \(side.title)侧 5 格已满 → 先关掉最早那个 \(oldest.bundleID)"
+                    + "（AevonDockColumnV250）")
+                closeDocked(bundleID: oldest.bundleID, reason: "该侧已满")
+            }
+            column = dockedViews.filter { $0.dockedSide == side }
+        }
+        // 主窗位清空（主窗变量归零，停靠窗活在 dockedViews 里）
+        currentView = nil
+        currentBundleID = nil
+        dockedViews.removeAll { $0 === view }
+        dockedViews.append(view)
+        relayoutDock(side: side, animated: true)
+        // App 侧「浮窗承载」信号清掉：停靠窗只是一块缩略图，不该再让 App 按画布尺寸
+        // 覆盖 UIScreen（那个信号全机只有一份，留给真正的主窗）。
+        AevonPrefs.set("AevonFloatBundle", "")
+        AevonNotifySetFloatStage("")
+        AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧"
+            + "（该侧现有 \(dockedViews.filter { $0.dockedSide == side }.count) 个，"
+            + "尺寸 \(Int(AevonDock.size.width))x\(Int(AevonDock.size.height))，顶部起依次向下）"
+            + "（AevonDockColumnV250 AevonDockDropV250）")
+        return true
+    }
+
+    /// 把某个停靠小窗装回主窗（点它 / 圆盘再选它 / 拖它）。
+    ///
+    /// 如果主窗里已经有别的 App，先把它降到它现在更靠近的那一侧（不丢窗）。
+    static func restoreDocked(bundleID: String) {
+        guard let view = dockedViews.first(where: { $0.bundleID == bundleID }) else { return }
+        let columnSide = view.dockedSide
+        if let main = currentView, main.bundleID != bundleID {
+            let side = AevonDock.side(forDropAt: main.frame) ?? columnSide.opposite
+            AevonLog.info("[停靠] 主窗里还有 \(main.bundleID) → 先把它降到\(side.title)侧，"
+                + "把主窗位让给 \(bundleID)（AevonDockColumnV250）")
+            _ = dockCurrent(side: side)
+        }
+        dockedViews.removeAll { $0 === view }
+        currentView = view
+        currentBundleID = bundleID
+        lastOpenedAt = CACurrentMediaTime()
+        view.leaveDock(animated: true)
+        relayoutDock(side: columnSide, animated: true)
+        cancelPendingSleep(bundleID: bundleID)
+        // 主窗重新拿到承载信号（App 侧 UIScreen 才会改报画布尺寸）
+        AevonPrefs.set("AevonFloatBundle", bundleID)
+        AevonNotifySetFloatStage(bundleID)
+        AevonSceneHelper.wakeUp(bundleID)
+        if let pid = AevonAppInfo.pid(bundleID: bundleID) {
+            AevonAssertionShim.resumePID(Int32(pid))
+            AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
+        }
+        AevonLog.info("[窗口] \(bundleID) 已从停靠列装回主窗（画面不中断，未重建场景）"
+            + "（AevonDockColumnV250）")
+    }
+
+    /// 关掉一个停靠小窗（满员挤掉 / 面板关闭 / 插件停用）。
+    static func closeDocked(bundleID: String, reason: String) {
+        guard let view = dockedViews.first(where: { $0.bundleID == bundleID }) else { return }
+        let side = view.dockedSide
+        dockedViews.removeAll { $0 === view }
+        AevonSceneHelper.stopKeepAlive(bundleID)
+        AevonSceneHelper.unregisterSelfScene(bundleID)
+        view.teardown()
+        scheduleSleep(bundleID: bundleID, after: 0.75)
+        AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
+        relayoutDock(side: side, animated: true)
+        AevonLog.info("[停靠] \(bundleID) 已从停靠列关闭（\(reason)，该侧剩 "
+            + "\(dockedViews.filter { $0.dockedSide == side }.count) 个）（AevonDockColumnV250）")
+    }
+
+    /// 重排某一侧：按加入顺序重新分配 0..n 号槽位（顶部起依次向下）。
+    ///
+    /// V0.0.50 的历史教训：排序不能用 `frame.minY` —— 动画途中它是中间值，
+    /// 会出现「每格错位、1 秒后自愈」。这里直接用数组顺序（加入顺序）当槽位号。
+    static func relayoutDock(side: AevonDockSide, animated: Bool = true) {
+        let column = dockedViews.filter { $0.dockedSide == side }
+        for (index, view) in column.enumerated() {
+            view.enterDock(side: side, index: index, animated: animated)
+        }
+    }
+
+    /// V0.2.49（AevonCloseSettleV249）：延迟挂起（等画布还原 + 抖动完成）。
     /// 同一 App 只保留最后一个待执行项；重开这个 App 时先取消
     /// （见 `cancelPendingSleep`），绝不允许「刚开窗又被上一个关窗任务挂起」。
     private static var pendingSleep: [String: DispatchWorkItem] = [:]
@@ -555,8 +724,8 @@ enum AevonWindowManager {
         pendingSleep[bundleID]?.cancel()
         let work = DispatchWorkItem {
             pendingSleep[bundleID] = nil
-            // 期间又被装进浮窗 → 不挂了（画面在上面），断言留给重新开窗那一侧
-            guard openBundleID != bundleID else {
+            // 期间又被装回浮窗（或装进了停靠列）→ 不挂了（画面在上面），断言留给那一侧
+            guard !isWindowed(bundleID) else {
                 AevonLog.info("[窗口] \(bundleID) 在挂起前又被装回浮窗 → 取消挂起（AevonCloseSettleV249）")
                 return
             }
@@ -601,6 +770,14 @@ enum AevonWindowManager {
         if let identifier = openBundleID {
             close(bundleID: identifier)
         }
+        // V0.2.50：停靠列一起收（插件停用 / 注销前清理）
+        for view in dockedViews {
+            AevonSceneHelper.stopKeepAlive(view.bundleID)
+            AevonSceneHelper.unregisterSelfScene(view.bundleID)
+            view.teardown()
+            scheduleSleep(bundleID: view.bundleID, after: 0.6)
+        }
+        dockedViews.removeAll()
     }
 
     /// App 的图层列表更新时通知浮窗重排。
@@ -614,6 +791,16 @@ enum AevonWindowManager {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastLayerRefresh >= 0.3 else { return }
         lastLayerRefresh = now
-        currentView?.setNeedsLayout()
+        // V0.2.50：停靠小窗也要跟着 App 的图层变化重排（否则小窗里画面会停在旧比例）
+        for view in allWindows { view.setNeedsLayout() }
     }
+}
+
+/// V0.2.50（AevonLockBlockV250）：给 ObjC 锁屏拦截钩子用的「浮窗还在吗」。
+///
+/// 钩子必须在 ObjC 里（`method_setImplementation` + @try 包住），但它需要的这个判断
+/// 只有 Swift 侧知道 —— 用 C 符号桥一下，比在 ObjC 里再维护一套镜像状态安全得多。
+@_cdecl("AevonFloatActive")
+func aevonFloatActive() -> Bool {
+    return AevonWindowManager.hasAnyWindow
 }

@@ -11,6 +11,16 @@ func aevonInitialize() {
     initializeAevon()
 }
 
+/// V0.2.50（AevonLockBlockV250）：给 ObjC 垫片用的日志桥。
+///
+/// 锁屏拦截的钩子必须在 ObjC 里（`method_setImplementation` + @try），
+/// 但它拦下的每一条都要进同一份日志，否则用户反馈「还是锁屏」时我们两头对不上。
+/// Swift 的 `AevonLog` 自己有串行队列与文件句柄，这里只做一次字符串转换。
+@_cdecl("AevonLogFromC")
+func aevonLogFromC(_ text: UnsafePointer<CChar>) {
+    AevonLog.info(String(cString: text))
+}
+
 private func initializeAevon() {
     AevonLog.info("Aevon \(AevonVersion) 开始加载 (iOS \(UIDevice.current.systemVersion), 进程 \(ProcessInfo.processInfo.processName))")
 

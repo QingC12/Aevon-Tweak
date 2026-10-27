@@ -331,6 +331,9 @@ enum AevonEntryHost {
         floatLayer = floatView
         AevonEdgeEntry.attachProbe(to: host)
         startWatchdog()
+        // V0.2.50（AevonRingGripV250）：圆盘的可见把手挂到容器最上层 ——
+        // 容器会随全屏 App 搬进画面容器，所以桌面 / 全屏 App 里都摸得到。
+        AevonRingGrip.installIfNeeded(force: true)
 
         let bounds = box.bounds
         AevonLog.info("[入口] ④ 入口窗口与容器已创建（level=\(Int(host.windowLevel.rawValue))，场景 \(type(of: scene))，容器 \(Int(bounds.width))x\(Int(bounds.height))，浮窗层已就位，原因=\(reason)）（AevonEntryHost AevonSingleContainerV22 AevonFloatInEntryV36 AevonBootShieldV39）")

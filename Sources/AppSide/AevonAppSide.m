@@ -1726,12 +1726,58 @@ static BOOL AevonAppIsFloatHosted(void) {
     return (bundle.length > 0 && [bundle isEqualToString:gAevonAppBundleID]);
 }
 
+/* V0.2.50（AevonAppFitRelayoutV250）：贴合状态翻转时**让窗口立刻重排一遍**。
+ *
+ * Aevon(25) 第 1 条：「悬浮窗打开过的应用关闭悬浮窗后全屏打开时依旧会黑屏，只能通过
+ * 关闭后台卡片重新打开才会恢复」。历史档案里同一现象出现过（V0.0.57 记录：
+ * 「改 keyWindow / 场景尺寸会让 App 真的变成小窗，关窗后残留 → 全屏打开大面积黑屏」）。
+ *
+ * 成因链：本进程在浮窗期间按 **430×737** 排好了版；关窗后我们把贴合关掉，
+ * `UIScreen.bounds` 立刻回到 430×932 —— 但**没有任何东西会因此触发重排**
+ * （UIKit 的窗口几何来自场景，不来自 UIScreen）。于是进程里留着
+ * 「按 737 高排版、窗口却是 932 高」的残局，全屏打开就是黑/半黑，只有杀进程才重建。
+ *
+ * 这里在状态翻转的那一刻主动把每个窗口敲一遍（setNeedsLayout + layoutIfNeeded），
+ * 顺手把 rootViewController 的 view 也敲一遍 —— 一次翻转只敲一次，不是轮询。 */
+__attribute__((used)) static const char AevonAppFitRelayoutV250Marker[] = "AevonAppFitRelayoutV250";
+
+static void AevonScreenFitNudgeLayout(BOOL nowOn) {
+    @try {
+        UIApplication *app = [UIApplication sharedApplication];
+        if (app == nil) { return; }
+        NSInteger touched = 0;
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                [window setNeedsLayout];
+                [window layoutIfNeeded];
+                UIView *root = window.rootViewController.view;
+                if (root != nil) {
+                    [root setNeedsLayout];
+                    [root layoutIfNeeded];
+                }
+                touched += 1;
+            }
+        }
+        AevonAppLog(@"屏幕贴合：状态翻转 → %@，已让 %ld 个窗口立即重排（防止「按画布排版、"
+                    @"占整屏窗口」的残留黑屏）（AevonAppFitRelayoutV250）",
+                    nowOn ? @"开（改报画布尺寸）" : @"关（回到真实屏幕尺寸）",
+                    (long)touched);
+    } @catch (NSException *exception) {
+        /* 敲布局失败不影响宿主：下一次系统 resize 仍会自愈 */
+    }
+}
+
 static void AevonScreenFitRefresh(void) {
     if (gAevonScreenFitRefreshing) { return; }
     gAevonScreenFitRefreshing = YES;
+    BOOL flipped = NO;
+    BOOL nowOn = NO;
     @try {
         BOOL on = AevonAppIsFloatHosted();
+        nowOn = on;
         if (on != gAevonScreenFitOn || !gAevonScreenFitLogged) {
+            flipped = (on != gAevonScreenFitOn);
             gAevonScreenFitOn = on;
             gAevonScreenFitLogged = YES;
             AevonAppLog(@"屏幕贴合：%@（AevonAppScreenFitV249）",
@@ -1743,6 +1789,7 @@ static void AevonScreenFitRefresh(void) {
         gAevonScreenFitOn = NO;
     }
     gAevonScreenFitRefreshing = NO;
+    if (flipped) { AevonScreenFitNudgeLayout(nowOn); }
 }
 
 static CGRect AevonScreenBoundsFit(id self_, SEL _cmd) {
@@ -1778,6 +1825,18 @@ static void AevonScreenFitInstall(void) {
         AevonAppLog(@"屏幕贴合：已接管 %@ -bounds（浮窗承载期间 UIScreen 报「屏宽 × 屏宽÷(7/12)」，"
                     @"与画布同比例；关窗即恢复真实值）（AevonAppScreenFitV249）",
                     NSStringFromClass(cls) ?: @"?");
+        /* V0.2.50（AevonAppFitRelayoutV250）：把「0.5 秒轮询」升级成「事件驱动 + 轮询兜底」。
+         * 共享内存 com.aevon.floatstage 一变（开窗 / 关窗 / 换 App），主线程立刻重算一次 ——
+         * 关窗那一刻的顺序因此变成：信号清 → 本进程 10ms 内把 UIScreen 改回 932 并重排 →
+         * SB 侧再写一次整屏画布。少了这个事件，本进程要等最多 0.5 秒才知道「门已经关了」，
+         * 而关窗流程 1 秒就结束了，于是永远停在「按 737 排版」的残局里（第 1 条的黑屏）。 */
+        static int fitNotifyToken = -1;
+        if (fitNotifyToken < 0) {
+            notify_register_dispatch("com.aevon.floatstage", &fitNotifyToken,
+                                     dispatch_get_main_queue(), ^(int token) {
+                AevonScreenFitRefresh();
+            });
+        }
     } @catch (NSException *exception) {
         AevonAppLog(@"屏幕贴合：接管失败 %@（不影响宿主，按真实屏幕走）（AevonAppScreenFitFailV249）",
                     exception.reason ?: @"未知");

@@ -92,6 +92,11 @@ NSInteger AevonSceneLayerCount(id scene);
 /// 4 = isIdleTimerDisabled 写成功；0 = 全都没成功（调用方只记一次日志，不重试）。
 NSInteger AevonIdleTimerKick(void);
 
+/// V0.2.50（AevonLockBlockV250）：在锁屏真正发生的那一刻拦下「非电源键」的锁屏请求。
+/// 只在浮窗还存在时生效（钩子内部查 `AevonFloatActive()`），电源键（source == 1）永远放行。
+///   返回 YES = 至少挂上一个锁屏入口；NO = 本机没有该入口（日志里会写「不可用」）。
+BOOL AevonInstallLockBlock(void);
+
 /// V0.2.35/36/37（AevonSceneRouteV235/236/237）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
 /// 查 LSApplicationProxy 的 Info.plist，三档细判（0.2.37 权威判据 = App 侧 scene
 /// 探针实锤：delegate 实现 configurationForConnecting 才会接受第二场景连接；

@@ -2511,10 +2511,13 @@ jobs:
             echo "::error::0.2.48 回桌面守卫没先盖帧（会先闪几下黑才出画）"
             exit 1
           fi
-          # 反转断言（0.2.49，Aevon(24) #6）：撤冻结不许再等两拍 ——
-          # 两拍确认 = 场景回来了还要多看最多 1 秒定格，正是「黑屏 1 秒以上」的成因。
-          if grep -q 'aliveTicks' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
-            echo "::error::0.2.49 撤冻结又回到两拍确认（cs=2 必须立刻撤）"
+          # 修订断言（0.2.49 → V0.2.50）：0.2.49 当时把「两拍确认」定性为黑屏成因，
+          # 但那是**0.5 秒一拍**（两拍 = 最多 1 秒定格），而且守卫只在「全屏画面离场」
+          # 事件到场时才布防（Aevon(25) #7：事件没来就完全没有守卫，黑屏 >1 秒）。
+          # V0.2.50 改成「上屏即常驻 + 0.2 秒一拍」（两拍上限 0.4 秒），前提已变，
+          # 所以允许两拍确认 —— 但拍子一旦退回 0.5 秒就必须报警。
+          if sed -n '/func startGuardTimerIfNeeded/,/^    }/p' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'Timer(timeInterval: 0.5'; then
+            echo "::error::0.2.50 守卫拍子退回 0.5 秒（两拍确认会变成最多 1 秒定格，正是 #7 的老毛病）"
             exit 1
           fi
           # ⑩ 关窗还原：主场景抖动复位 + 自建场景销毁前先还原整屏
@@ -2585,8 +2588,12 @@ jobs:
             || { echo "::error::0.2.49 缺熄屏压制垫片"; exit 1; }
           grep -q 'SBIdleTimerGlobalCoordinator' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.49 熄屏压制没有真调 SpringBoard 协调器（只写 isIdleTimerDisabled 无效）"; exit 1; }
-          grep -q 'Timer(timeInterval: 20.0, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.49 熄屏压制没有周期重申"; exit 1; }
+          # 反转断言（V0.2.50 接管）：20 秒一节拍太慢，熄屏已经压不住 → 必须换成 8 秒
+          if grep -q 'Timer(timeInterval: 20.0, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.50 熄屏压制节拍又退回 20 秒（系统会按时间锁屏）"; exit 1
+          fi
+          grep -q 'Timer(timeInterval: 8.0, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 熄屏压制没有周期重申（8 秒节拍）"; exit 1; }
           # ⑧ 缩放抖动：发光圈刷新必须禁用隐式动画
           grep -q 'CATransaction.setDisableActions(true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 发光圈仍有隐式动画（缩放时边缘会抖）"; exit 1; }
@@ -2596,6 +2603,128 @@ jobs:
           grep -q 'cancelPendingSleep(bundleID: bundleID)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.49 重开窗没撤销待挂起（浮窗里的 App 会被挂起）"; exit 1; }
           echo "V0.2.49 校验: 屏幕贴合画布（分享面板/视频重排）+ 1pt 光晕 + 进出场动画 + 强制重排 + 解锁守卫 + 0.2s 撤帧 + SpringBoard 熄屏压制 + 缩放禁隐式动画 + 关窗等还原 已就位"
+          # ── V0.2.50 校验（Aevon(25) 七项：关窗后全屏黑 / 拖动掉帧 / 左右停靠小窗 /
+          #    圆盘呼出热区 / 按时间锁屏 / 设置浮窗文字提示 / 回桌面黑屏 >1 秒）──────────
+          W="$GITHUB_WORKSPACE"   # 本步骤已 cd 进 verify/，源码一律走绝对路径
+          # ① 两侧停靠列：新文件必须进 Makefile（否则编得过去但功能不存在）
+          grep -q 'Sources/AevonDock.swift' "$W/Makefile" \
+            || { echo "::error::0.2.50 AevonDock.swift 没进 Makefile"; exit 1; }
+          grep -q 'Sources/AevonRingGrip.swift' "$W/Makefile" \
+            || { echo "::error::0.2.50 AevonRingGrip.swift 没进 Makefile"; exit 1; }
+          # 几何必须沿用本项目 V0.0.50~57 真机定档值，不许重新拍脑袋
+          grep -q 'static let maxCount = 5' "$W/Sources/AevonDock.swift" \
+            || { echo "::error::0.2.50 停靠列不是 5 格（V0.0.50 用户定档）"; exit 1; }
+          grep -q 'static let topRatio: CGFloat = 0.10' "$W/Sources/AevonDock.swift" \
+            || { echo "::error::0.2.50 停靠列顶部锚点不是屏高 10%（第一个小窗在右上角 10% 处）"; exit 1; }
+          grep -q 'static var size: CGSize' "$W/Sources/AevonDock.swift" \
+            || { echo "::error::0.2.50 停靠窗尺寸没按可用高度反算（5 格会排不下）"; exit 1; }
+          # 尺寸必须随当前小胖屏比例走，不是写死的 9:16
+          grep -q 'contentAspectCurrent' "$W/Sources/AevonDock.swift" \
+            || { echo "::error::0.2.50 停靠窗没按小胖屏比例等比缩小"; exit 1; }
+          # ② 停靠 = 主窗降级，绝不许新建场景（抢承载信号会让 App 整屏排错）
+          grep -q 'static func dockCurrent(side: AevonDockSide) -> Bool' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 缺 dockCurrent（主窗降级成小窗）"; exit 1; }
+          grep -q 'AevonPrefs.set("AevonFloatBundle", "")' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 停靠时没清「浮窗承载」信号（App 会继续按 430x737 排版）"; exit 1; }
+          grep -q 'static func restoreDocked(bundleID: String)' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 缺 restoreDocked（小窗装不回主窗）"; exit 1; }
+          grep -q 'static func closeDocked(bundleID: String, reason: String)' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 缺 closeDocked（5 格满员挤不掉最早的）"; exit 1; }
+          grep -q 'static func relayoutDock(side: AevonDockSide, animated: Bool = true)' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 缺 relayoutDock（槽位不会顺势补位）"; exit 1; }
+          grep -q 'func enterDock(side: AevonDockSide' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 缺 enterDock"; exit 1; }
+          grep -q 'func leaveDock(animated: Bool' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 缺 leaveDock"; exit 1; }
+          # 槽位不许用 minY 排序（V0.0.50 血泪：动画途中 minY 是中间值 → 每格错位、1 秒后自愈）
+          if sed -n '/static func relayoutDock/,/^    }/p' "$W/Sources/AevonWindowManager.swift" | grep -q 'minY'; then
+            echo "::error::0.2.50 槽位又按 minY 排序了（动画中会错位）"; exit 1
+          fi
+          # 停靠态触摸必须断掉转发（否则点小窗 = 点了 App 里那个坐标）
+          grep -q 'func setContentInteraction(_ enabled: Bool)' "$W/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.50 缺 setContentInteraction"; exit 1; }
+          grep -q 'sceneHost.setContentInteraction(false)' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 停靠态仍在转发触摸（点小窗会点到 App 内容）"; exit 1; }
+          # 停靠坐标绝不能落盘（否则下次开窗跑到边角）
+          grep -q 'guard !isDocked else { return }' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 停靠坐标被当成主窗记忆落盘"; exit 1; }
+          # ③ 圆盘入口改成可见把手（PullOver 逆向：空白盲带上没有「既拦住又没拦」的中间态）
+          grep -q 'final class AevonRingGripView: UIView' "$W/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.50 圆盘把手没落地"; exit 1; }
+          grep -q 'hitOutsetX: CGFloat = 40' "$W/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.50 把手命中区没外扩（摸起来会很难触发）"; exit 1; }
+          grep -q 'AevonRingGrip.installIfNeeded' "$W/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.50 把手没装到入口容器"; exit 1; }
+          grep -q 'AevonRingGrip.setVisible(true)' "$W/Sources/AevonRingMenu.swift" \
+            || { echo "::error::0.2.50 圆盘收起后把手不回来"; exit 1; }
+          # ④ 拖动期必须关投影（每帧重算离屏模糊 = 前 1 秒掉帧）
+          grep -q 'func setShadowSuppressed(_ suppressed: Bool)' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 缺 setShadowSuppressed"; exit 1; }
+          grep -q 'private func setMovingWindow(_ moving: Bool)' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 位移起止没有统一开关（投影关不掉）"; exit 1; }
+          grep -q 'glowRing.setShadowSuppressed(moving)' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 位移时没关投影（拖动前半秒必掉帧）"; exit 1; }
+          # ⑤ 回桌面黑屏：守卫必须上屏即常驻，且「连续 2 拍在画」才撤冻结
+          grep -q 'startGuardTimerIfNeeded()' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 守卫没常驻"; exit 1; }
+          if sed -n '/override func didMoveToWindow/,/^    }/p' "$W/Sources/AevonWindowView.swift" | grep -q 'startGuardTimerIfNeeded'; then :; else
+            echo "::error::0.2.50 守卫不是上屏即起（事件没来时完全没有守卫 = 黑屏 >1 秒）"; exit 1
+          fi
+          grep -q 'if renderTicks >= 2 { removeDarkFreeze' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 撤冻结没有 2 拍确认（cs 先报 2、表面还没画 → 露出黑窗）"; exit 1; }
+          grep -q 'AevonDarkGuardV250' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 缺常驻守卫标记"; exit 1; }
+          # ⑥ 熄屏：必须真拦锁屏（日志已证 isIdleTimerDisabled 在本机 12 次全无效，位掩码恒 4）
+          grep -q 'BOOL AevonInstallLockBlock(void)' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 缺锁屏拦截垫片"; exit 1; }
+          grep -q 'AevonInstallLockBlock' "$W/AevonSceneDriverShim.h" \
+            || { echo "::error::0.2.50 锁屏拦截没有对外声明"; exit 1; }
+          grep -q 'AevonInstallLockBlock()' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 锁屏拦截从没被装上"; exit 1; }
+          # 电源键必须永远放行（source == 1），否则用户按电源键锁不了屏
+          grep -q 'if (source == 1) { return NO; }' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 锁屏拦截把电源键也吃了"; exit 1; }
+          grep -q 'AevonFloatActive()' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 锁屏拦截没按「浮窗是否在」放行"; exit 1; }
+          grep -q 'AevonFloatActive' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 缺 AevonFloatActive 导出"; exit 1; }
+          grep -q 'AevonLogFromC' "$W/Sources/Aevon.swift" \
+            || { echo "::error::0.2.50 缺 C 侧日志桥（拦截结果进不了日志）"; exit 1; }
+          grep -q 'acquireIdleTimerDisableAssertionForReason:' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 熄屏压制缺断言通道"; exit 1; }
+          grep -q '_resetIdleTimer' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 熄屏压制缺私有变体通道"; exit 1; }
+          grep -q 'AevonNoAutoLockV250' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 缺熄屏锁屏标记"; exit 1; }
+          # ⑦ 提示文案：排障话术必须消失，且文案层必须沉到内容之下
+          if grep -q '正在等待 App 画面' "$W/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.50 开设置浮窗还在弹排障话术"; exit 1
+          fi
+          grep -q 'hintLabel.text = "正在准备画面' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 提示文案没改成中性版"; exit 1; }
+          grep -q 'insertSubview(hintLabel, belowSubview: sceneHost.container)' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.50 提示文案压在内容层之上（首帧慢半拍就闪一次）"; exit 1; }
+          grep -q 'AevonHintCleanV250' "$W/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.50 缺提示文案清理标记"; exit 1; }
+          # ⑧ 关窗后全屏黑：贴合翻转必须事件驱动 + 立刻敲布局；关窗收尾再补写一次整屏画布
+          grep -q 'notify_register_dispatch("com.aevon.floatstage"' "$W/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.50 App 侧贴合还是 0.5 秒轮询（关窗 1 秒就结束，永远等不到翻转）"; exit 1; }
+          grep -q 'static void AevonScreenFitNudgeLayout(BOOL nowOn)' "$W/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.50 贴合翻转后没敲窗口重排（进程留着按 737 排的残局）"; exit 1; }
+          grep -q 'AevonAppFitRelayoutV250' "$W/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.50 缺 App 侧重排标记"; exit 1; }
+          grep -q 'scheduleSleep(bundleID: bundleID, after: 1.05)' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 关窗挂起早于画布还原（再全屏打开必黑）"; exit 1; }
+          grep -q 'AevonFloatRestoreV250' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.50 缺关窗收尾重写整屏画布标记"; exit 1; }
+          # ⑨ 九个 V250 标记一个都不能少（产物字节复检靠它们认版本）
+          for m in AevonDockColumnV250 AevonDockDropV250 AevonHintCleanV250 AevonMoveShadowOffV250 \
+                   AevonDarkGuardV250 AevonNoAutoLockV250 AevonFloatRestoreV250 AevonRingGripV250 \
+                   AevonDockSnapshotV250; do
+            grep -q "$m" "$W/AevonSceneDriverShim.m" || { echo "::error::0.2.50 缺标记 $m"; exit 1; }
+          done
+          echo "V0.2.50 校验: 左右停靠列（92x158 / 5 格 / 顶部 10% 起）+ 圆盘可见把手（外扩 40）+ 拖动关投影 + 常驻守卫 2 拍确认 + 熄屏锁屏拦截（电源键放行）+ 提示文案沉底 + 关窗事件驱动重排 + 1.05s 挂起 + 9 标记 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

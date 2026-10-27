@@ -76,6 +76,34 @@ final class AevonGlowRingView: UIView {
         layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: corner).cgPath
         CATransaction.commit()
     }
+
+    /// V0.2.50（AevonMoveShadowOffV250）：**移动期间整圈光晕的投影全关**。
+    ///
+    /// Aevon(25) 第 2 条：「悬浮窗拖动时前 1 秒会非常卡顿掉帧，然后会恢复流畅度」。
+    /// 同一个症状在 V0.0.56 出现过一次（`AevonMoveSmoothV56`），当时定位到的是
+    /// 「位移期间没关投影 → 每帧重做离屏模糊」。这一版的投影比当年更贵：
+    /// 0.2.47 起光晕层是一个**带 shadow 的独立图层**（深色 0.46 / 半径 6），
+    /// 窗口每移动一帧，CoreAnimation 就要为它重算一次离屏模糊 —— 前几十帧尤其慢
+    /// （缓存还没热），之后 CA 把结果缓存住才「恢复流畅」。
+    /// 位移时把 shadowOpacity 归零（同时清掉 shadowPath，省一次路径光栅化），
+    /// 抬手再按当前外观重新 `apply` 回来。光晕只有 1pt，位移中看不见它，观感无损。
+    func setShadowSuppressed(_ suppressed: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if suppressed {
+            layer.shadowOpacity = 0
+            layer.shadowPath = nil
+        } else {
+            let dark = traitCollection.userInterfaceStyle == .dark
+            layer.shadowColor = (dark ? UIColor.white : UIColor.black).cgColor
+            layer.shadowOpacity = Float(dark ? 0.46 : 0.14)
+            layer.shadowRadius = dark ? 6 : 5
+            layer.shadowOffset = .zero
+            layer.shadowPath = UIBezierPath(roundedRect: bounds,
+                                            cornerRadius: layer.cornerRadius).cgPath
+        }
+        CATransaction.commit()
+    }
 }
 
 /// 浮窗上被按住的位置（V0.0.41，AevonFloatGlobalV41）。
@@ -256,6 +284,8 @@ final class AevonWindowView: UIView {
     private var isLiveResizing = false
     /// 边条拖动进行中（V0.2.21 建；V0.2.27 起落指即拖，AevonFloatEdgeGripV227）
     private var isBarHoldMoving = false
+    /// V0.2.50（AevonMoveShadowOffV250）：位移进行中（此时光晕投影必须全关）
+    private var isMovingWindow = false
     /// V0.2.43（AevonCanvasScaleV243）：最近一次提交给场景的画布尺寸（去重，
     /// 避免每次 layoutSubviews 都跨进程写一遍 settings.frame）
     private var appliedCanvasSize: CGSize = .zero
@@ -304,17 +334,30 @@ final class AevonWindowView: UIView {
         contentClip.addSubview(sceneHost.container)
 
         // 等待画面提示（拿到第一帧后自动消失）
+        //
+        // V0.2.50（AevonHintCleanV250）：Aevon(25) 第 6 条「每次悬浮窗打开设置时都会出现
+        // 这个文字提示」—— 上一版那两行是**开发者排障文案**（还带日志路径），
+        // 只要首帧慢半拍就会闪一次，观感等同于报错。两处一起改：
+        //   ① 文案只留一句中性的「正在准备…」，不再出现任何路径 / 开发者字样；
+        //   ② **z 序放到底层**（插在场景容器下面）：即便它该显示的时候，也绝不会盖住
+        //      已经出画的真实内容 —— 上一版的观感问题一半来自它压在内容上面。
+        //   ③ 另有 1.6 秒兜底强制隐藏（见下面的 hintFailsafe），任何首帧探测失灵都不会留字。
         hintLabel.frame = contentClip.bounds
         hintLabel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         hintLabel.numberOfLines = 0
         hintLabel.textAlignment = .center
-        hintLabel.textColor = UIColor(white: 0.85, alpha: 1.0)
-        hintLabel.font = UIFont.systemFont(ofSize: 13)
-        hintLabel.text = "正在等待 App 画面…\n若一直停在这里，请把 /var/mobile/Aevon.log 发给开发者"
-        contentClip.addSubview(hintLabel)
+        hintLabel.textColor = UIColor(white: 0.72, alpha: 1.0)
+        hintLabel.font = UIFont.systemFont(ofSize: 12.5)
+        hintLabel.text = "正在准备画面…"
+        contentClip.insertSubview(hintLabel, belowSubview: sceneHost.container)
 
         sceneHost.onFirstContent = { [weak self] in
             self?.handleFirstContent()
+        }
+        // V0.2.50（AevonHintCleanV250）：兜底 1.6 秒无条件隐藏 —— 首帧探测失灵时
+        // （自建场景被 App 拒绝、presenter 迟到等）也绝不在窗口里留一行字。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            self?.hintLabel.isHidden = true
         }
 
         // V0.2.28（AevonSelfSceneV228）：自建场景看门狗 —— 单场景 App 可能拒绝连接
@@ -379,22 +422,31 @@ final class AevonWindowView: UIView {
 
     // MARK: - 熄屏压制（V0.2.49，AevonNoAutoLockV249）
 
-    /// 空闲熄屏重申定时器（20 秒一次，见 `kickIdleTimerIfNeeded`）
+    /// 空闲熄屏重申定时器（V0.2.50：8 秒一次，见 `startIdleKick`）
     private var idleKickTimer: Timer?
-    /// 上一次的压制结果位（只在变化时记日志，免得每 20 秒刷一行）
+    /// 上一次的压制结果位（只在变化时记日志，免得每 8 秒刷一行）
     private var idleKickMask: NSInteger = -1
 
     private func startIdleKick() {
         let mask = AevonWindowView.kickIdleTimerIfNeeded()
         idleKickMask = mask
+        // V0.2.50（AevonNoAutoLockV250）：Aevon(25) 第 5 条「开悬浮窗时，依旧跟随系统时间
+        // 锁屏」。0.2.49 的三条通道在这台机器上**全都没命中**（日志实锤 mask=4
+        // → 只剩 UIApplication.isIdleTimerDisabled 那一条，而它在 SB 进程不进计时器）。
+        // 本版补齐两条真正能压住的路子，并把节拍从 20 秒收到 8 秒：
+        //   · `SBIdleTimerGlobalCoordinator` 类名/单例名/方法名全部扩表（含下划线私有变体）；
+        //   · `SBLockScreenManager -lockUIFromSource:withOptions:` 兜底拦截（电源键放行）。
+        // 8 秒 ≪ 系统最短「自动锁定 30 秒」，既压得住又不会每秒烧一次私有 API。
+        let lockBlock = AevonInstallLockBlock()
         AevonLog.info("[窗口] 熄屏压制已启动（\(AevonWindowView.idleKickMaskText(mask))，"
-            + "之后每 20 秒重申一次）（AevonNoAutoLockV249）")
-        let timer = Timer(timeInterval: 20.0, repeats: true) { [weak self] _ in
+            + "锁屏拦截=\(lockBlock ? "已装" : "不可用")，之后每 8 秒重申一次）"
+            + "（AevonNoAutoLockV249 AevonNoAutoLockV250）")
+        let timer = Timer(timeInterval: 8.0, repeats: true) { [weak self] _ in
             let now = AevonWindowView.kickIdleTimerIfNeeded()
             guard let self, now != self.idleKickMask else { return }
             self.idleKickMask = now
             AevonLog.info("[窗口] 熄屏压制方式变化 → \(AevonWindowView.idleKickMaskText(now))"
-                + "（AevonNoAutoLockV249）")
+                + "（AevonNoAutoLockV249 AevonNoAutoLockV250）")
         }
         RunLoop.main.add(timer, forMode: .common)
         idleKickTimer = timer
@@ -405,6 +457,8 @@ final class AevonWindowView: UIView {
         if mask & 1 != 0 { parts.append("SBIdleTimerGlobalCoordinator.resetIdleTimer") }
         if mask & 2 != 0 { parts.append("resetIdleTimerAndUndim") }
         if mask & 4 != 0 { parts.append("UIApplication.isIdleTimerDisabled") }
+        if mask & 8 != 0 { parts.append("空闲计时器禁用断言") }
+        if mask & 16 != 0 { parts.append("私有变体 _resetIdleTimer") }
         return parts.isEmpty ? "全部不可用（本机压不住熄屏，按系统设置走）" : parts.joined(separator: " + ")
     }
 
@@ -625,6 +679,9 @@ final class AevonWindowView: UIView {
         hasFadedIn = true
         alpha = 0.35
         transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+        // V0.2.50（AevonDarkGuardV250）：看门定时器从「上屏那一刻」就开，
+        // 不再等某个事件来布防（第 7 条：事件没来 = 守卫从未上场 = 纯黑）。
+        startGuardTimerIfNeeded()
         UIView.animate(withDuration: 0.24, delay: 0,
                        options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
             self?.alpha = 1.0
@@ -932,7 +989,17 @@ final class AevonWindowView: UIView {
         case .ended, .cancelled, .failed:
             guard isBarHoldMoving else { break }
             isBarHoldMoving = false
+            if isDocked {
+                setMovingWindow(false)
+                AevonWindowManager.restoreDocked(bundleID: bundleID)
+                return
+            }
             applyBarMove(to: point)
+            setMovingWindow(false)
+            if let side = AevonDock.side(forDropAt: frame) {
+                AevonWindowManager.dockCurrent(side: side)
+                return
+            }
             persistFrame()
         default:
             break
@@ -1004,8 +1071,21 @@ final class AevonWindowView: UIView {
         activeGrab = nil
         switch grab {
         case .bar:
+            if isDocked {
+                // V0.2.50（AevonDockColumnV250）：停靠态任何点击 / 拖动都只有一个语义
+                // —— 把这个 App 装回主窗（用户 Aevon(43) 当年原话：「停靠小窗点一下就还原」）。
+                setMovingWindow(false)
+                AevonWindowManager.restoreDocked(bundleID: bundleID)
+                return
+            }
             applyBarMove(to: layerPoint)
-            // V0.1.5（AevonNoSnapV105）：贴边吸附已移除，松手就是松手，几何原样落盘。
+            setMovingWindow(false)
+            // V0.2.50（AevonDockColumnV250）：松手贴着左/右边缘 → 进停靠列。
+            // 这是用户第 3 条要的入口：「吸附停靠」= 拖到边缘放手。
+            if let side = AevonDock.side(forDropAt: frame) {
+                AevonWindowManager.dockCurrent(side: side)
+                return
+            }
             persistFrame()
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
@@ -1019,6 +1099,7 @@ final class AevonWindowView: UIView {
         activeGrab = nil
         switch grab {
         case .bar:
+            setMovingWindow(false)
             frame = moveOriginFrame
         case .corner:
             if isLiveResizing {
@@ -1049,6 +1130,9 @@ final class AevonWindowView: UIView {
     /// V0.2.48（AevonCanvasFixedV248）：从「留 60pt 可见」改成**完整夹进屏幕**——
     /// 手柄挂在窗口外面，窗口有一部分在屏外时那侧手柄就抓不到（用户体感 = 拖丢）。
     private func applyBarMove(to point: CGPoint) {
+        // V0.2.50（AevonMoveShadowOffV250）：真位移的那一刻关投影（不在按下关，
+        // 保持「轻点不闪」的既有观感）。
+        setMovingWindow(true)
         let dx = point.x - moveOriginPoint.x
         let dy = point.y - moveOriginPoint.y
         let target = CGRect(x: moveOriginFrame.minX + dx,
@@ -1058,6 +1142,20 @@ final class AevonWindowView: UIView {
         let clamped = AevonWindowView.clampedToScreen(target)
         // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
         self.center = CGPoint(x: clamped.midX, y: clamped.midY)
+    }
+
+    /// 位移开始 / 结束时的投影开关（幂等）。
+    private func setMovingWindow(_ moving: Bool) {
+        guard moving != isMovingWindow else { return }
+        isMovingWindow = moving
+        glowRing.setShadowSuppressed(moving)
+        if moving {
+            // 位移期间不做任何抓帧（整屏 drawHierarchy 会直接掉帧）
+            snapshotRecaptureWork?.cancel()
+        } else {
+            // 落位后补一张（守卫要用最新的「最后一帧」）
+            scheduleSnapshotRecapture(after: 0.8)
+        }
     }
 
     // MARK: - 外角缩放（V0.0.36 起，V0.0.37 移到窗外角块）
@@ -1332,6 +1430,8 @@ final class AevonWindowView: UIView {
     private var guardTimer: Timer?
     /// 连续「没在画」的拍数（0.2s 一拍）
     private var darkTicks = 0
+    /// 连续「在画」的拍数（V0.2.50：稳定 2 拍才撤冻结）
+    private var renderTicks = 0
     /// 这个布防窗口里撤过几次冻结（用于日志与「撤了又掉」的自愈）
     private var freezeRemoveCount = 0
     /// 盖上来的「最后一帧」快照（永不黑屏的兜底层）
@@ -1373,11 +1473,13 @@ final class AevonWindowView: UIView {
     private func beginGuardWindow(reason: String) {
         guardArmedUntil = CACurrentMediaTime() + 4.0
         darkTicks = 0
+        renderTicks = 0
         freezeRemoveCount = 0
         reassertCount = 0
         startGuardTimerIfNeeded()
         AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：0.2 秒一拍盯 contentState，"
-            + "不在画才盖最后一帧、一回到 cs=2 立刻撤（当前 \(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
+            + "不在画才盖最后一帧、cs=2 稳定 2 拍再撤（当前 \(sceneHost.stateSummary())）"
+            + "（AevonDarkGuardV247 AevonDarkGuardV249 AevonDarkGuardV250）")
     }
 
     private func startGuardTimerIfNeeded() {
@@ -1417,24 +1519,51 @@ final class AevonWindowView: UIView {
     ///   · `cs` 是 0/1（确实没在画）→ 确认没画面就盖最后一帧 + 有界重申；
     ///   · `cs == -1`（读不到）→ **一根手指都不动**，既不盖也不撤（绝不把「读不到」当黑）。
     private func checkBackgroundGuard() {
-        guard guardArmedUntil > 0 else { stopGuardTimer(); return }
+        guard window != nil, !isTearingDown else { return }
+        // ── V0.2.50（AevonDarkGuardV250）：常驻看门（没布防也在盯）───────────────
+        // Aevon(25) 第 7 条：「全屏 App 时开浮窗后回桌面：悬浮窗黑屏时间依旧大于 1 秒
+        // 甚至更多」。0.2.49 只在「全屏 App 画面离场」这一个事件上布防 —— 只要那一刻
+        // 事件没来（App 切换、上滑手势被别的通道吃掉、从锁屏回来…），守卫就从未上场，
+        // 用户看到的就是纯黑。现在改成**浮窗只要在，就 0.2 秒一拍盯着**：
+        //   · 看到不在画 → 盖上最后一帧（有缓存图才盖）；
+        //   · 看到回画 → 稳定 0.4 秒（2 拍）才撤（防止「cs 先报 2、表面还是空」）。
+        // 布防窗口只额外多一件事：有界重申前台（最多 4 次），其它时候一次都不写场景设置。
+        guard guardArmedUntil > 0 else {
+            guard !isDocked else { return }
+            switch sceneHost.contentLooksRendering {
+            case .some(true):
+                renderTicks += 1
+                if renderTicks >= 2 { removeDarkFreeze(reason: "看门：内容回来了（cs=2）") }
+            case .some(false):
+                renderTicks = 0
+                if darkFreezeView == nil, sceneHost.hasContent, hintLabel.isHidden {
+                    installDarkFreeze(reason: "看门：内容掉出画")
+                }
+            case .none:
+                break
+            }
+            return
+        }
         let now = CACurrentMediaTime()
         if now > guardArmedUntil {
             // 布防期结束：在画（或读不到）就撤图；确认不在画则保留冻结（宁可冻着也不黑着）
             guardArmedUntil = 0
-            stopGuardTimer()
             darkTicks = 0
+            renderTicks = 0
             if sceneHost.contentLooksRendering != false {
                 removeDarkFreeze(reason: "布防结束且已恢复")
             }
             return
         }
-        guard window != nil, !isTearingDown else { return }
         switch sceneHost.contentLooksRendering {
         case .some(true):
             darkTicks = 0
-            removeDarkFreeze(reason: "内容已出画（cs=2）")
+            renderTicks += 1
+            // 0.4 秒（2 拍）稳定后才撤：0.2.49 的「一看到 cs=2 立刻撤」在
+            // 「cs 先报 2、远程表面还没画出来」时会把黑窗露出来（第 7 条的残留成因）。
+            if renderTicks >= 2 { removeDarkFreeze(reason: "布防：内容已回画（cs=2 连续 2 拍）") }
         case .some(false):
+            renderTicks = 0
             darkTicks += 1
             if darkFreezeView == nil {
                 installDarkFreeze(reason: "巡查发现不出画")
@@ -1681,7 +1810,80 @@ final class AevonWindowView: UIView {
             + "（AevonNoAutoLockV248）")
     }
 
+    // MARK: - 停靠态（V0.2.50，AevonDockColumnV250）
+
+    /// 当前是否在停靠列里（吸附小窗）。
+    private(set) var isDocked = false
+    /// 停靠在左列还是右列
+    private(set) var dockedSide: AevonDockSide = .right
+    /// V0.2.50：这个窗承载的是自建场景吗（关窗收尾补写整屏画布时要排除 —— 自建场景已被销毁）
+    var usesSelfScene: Bool { return sceneHost.isSelfBuilt }
+
+    /// 主窗还原时的目标几何（全局记忆 → 夹屏）。
+    static func mainFrameForRestore() -> CGRect {
+        let restored = rememberedFrame(fallback: defaultFrame())
+        return clampedToScreen(restored)
+    }
+
+    /// 进入停靠：变成边缘那一格的小窗。
+    ///
+    /// 三件事必须同时发生，否则「小窗」会名不副实：
+    ///   ① 几何切到槽位（动画，0.22s）→ 圆角 / 光晕 / 画布缩放全部跟着走；
+    ///   ② **内容不再接收触摸** —— 停靠窗只是一个「活缩略图」，点它的语义是「装回主窗」，
+    ///      绝不能把这次点击转发进 App（历史上正是这条把抖音点跑了）；
+    ///   ③ 不落盘几何（`persistFrame` 里拦掉）—— 停靠坐标不是用户想要的「主窗位置」。
+    func enterDock(side: AevonDockSide, index: Int, animated: Bool) {
+        let target = AevonDock.frame(side: side, index: index)
+        guard !isDocked || frame != target else {
+            isDocked = true
+            dockedSide = side
+            return
+        }
+        isDocked = true
+        dockedSide = side
+        sceneHost.setContentInteraction(false)
+        let apply = { [weak self] in
+            guard let self else { return }
+            self.frame = target
+            self.layoutIfNeeded()
+        }
+        if animated, window != nil {
+            UIView.animate(withDuration: 0.22, delay: 0,
+                           options: [.curveEaseOut, .allowUserInteraction],
+                           animations: apply, completion: nil)
+        } else {
+            apply()
+        }
+        AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧第 \(index + 1) 格"
+            + "（\(Int(target.width))x\(Int(target.height))，顶部起向下排列，最多 \(AevonDock.maxCount) 格）"
+            + "（AevonDockColumnV250）")
+    }
+
+    /// 离开停靠：装回主窗（几何回到主窗记忆）。
+    func leaveDock(animated: Bool) {
+        guard isDocked else { return }
+        isDocked = false
+        sceneHost.setContentInteraction(true)
+        let target = AevonWindowView.mainFrameForRestore()
+        let apply = { [weak self] in
+            guard let self else { return }
+            self.frame = target
+            self.layoutIfNeeded()
+        }
+        if animated, window != nil {
+            UIView.animate(withDuration: 0.22, delay: 0,
+                           options: [.curveEaseOut, .allowUserInteraction],
+                           animations: apply, completion: nil)
+        } else {
+            apply()
+        }
+        AevonLog.info("[停靠] \(bundleID) 已从停靠列装回主窗"
+            + "（\(Int(target.width))x\(Int(target.height))）（AevonDockColumnV250）")
+    }
+
     private func persistFrame() {
+        // V0.2.50：停靠态的坐标不进「主窗几何记忆」（否则下次开窗跑到边角）
+        guard !isDocked else { return }
         guard !isLiveResizing, transform.isIdentity else { return }
         guard let store = UserDefaults(suiteName: AevonWindowView.prefsSuite) else { return }
         let screen = UIScreen.main.bounds

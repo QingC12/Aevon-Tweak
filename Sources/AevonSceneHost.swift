@@ -417,6 +417,18 @@ final class AevonSceneHost {
         return true
     }
 
+    /// V0.2.50（AevonDockColumnV250）：停靠小窗不转发触摸。
+    ///
+    /// 停靠窗的点击语义只有一个 ——「把这个 App 装回主窗」。如果内容层还开着交互，
+    /// UIKit 会通过 presenter 把这根手指原样转发进 App 进程（历史上就是这条把抖音
+    /// 点跑了：点停靠小窗等于点了 App 里的那个位置）。关掉交互后，命中只会落在
+    /// 我们自己的边条手柄上，语义可控。
+    func setContentInteraction(_ enabled: Bool) {
+        guard !invalidated else { return }
+        container.isUserInteractionEnabled = enabled
+        presentationView.isUserInteractionEnabled = enabled
+    }
+
     private func teardownPresenter() {
         stopProbing()
         hasContent = false

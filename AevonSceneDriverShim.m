@@ -1058,38 +1058,70 @@ NSString *AevonSelfSceneConnectionState(id scene) {
  * 调用频率由调用方控制（20 秒一次），本函数自身不做任何计时。 */
 __attribute__((used)) static const char AevonNoAutoLockV249Marker[] = "AevonNoAutoLockV249";
 __attribute__((used)) static const char AevonIdleKickProbeV249Marker[] = "AevonIdleKickV249";
+
+/// V0.2.50（AevonNoAutoLockV250）：0.2.49 的扩表版。
+///
+/// Aevon(25) 真机日志（13:41:59 起共 12 次开窗）每一条都是
+/// `熄屏压制已启动（UIApplication.isIdleTimerDisabled…）` —— 即 mask 恒为 4，
+/// 说明 `SBIdleTimerGlobalCoordinator` 这台机器上**根本不叫这个名字**（或没有
+/// `sharedInstance`）。于是本版把类名 / 单例名 / 方法名三张表全部扩开：
+///   类：  SBIdleTimerGlobalCoordinator / SBIdleTimerCoordinatorHelper /
+///         SBIdleTimerGlobalStateMonitor / SBIdleTimerPolicyAggregator /
+///         SBLockScreenIdleTimer / SBIdleTimerAggregator
+///   单例：sharedInstance / sharedCoordinator / globalCoordinator / shared
+///   方法：resetIdleTimer / _resetIdleTimer / resetIdleTimerAndUndim: /
+///         resetIdleTimerAndCancelPrevious / _resetIdleTimerAndCancelPrevious /
+///         _updateIdleTimer / _resetIdleTimerIfNecessary /
+///         acquireIdleTimerDisableAssertionForReason:
+/// 任何一步不存在就往下试，绝不因为私有 API 改名而崩（全 @try）。
+/// 返回值进日志（位掩码），下一次真机日志就能一眼看出这台机器到底走通了哪条。
 NSInteger AevonIdleTimerKick(void) {
     NSInteger mask = 0;
     @try {
-        NSArray<NSString *> *coordinatorNames = @[@"SBIdleTimerGlobalCoordinator",
-                                                  @"SBIdleTimerCoordinatorHelper",
-                                                  @"SBIdleTimerGlobalStateMonitor"];
-        id coordinator = nil;
+        NSArray<NSString *> *coordinatorNames =
+            @[@"SBIdleTimerGlobalCoordinator",
+              @"SBIdleTimerCoordinatorHelper",
+              @"SBIdleTimerGlobalStateMonitor",
+              @"SBIdleTimerPolicyAggregator",
+              @"SBLockScreenIdleTimer",
+              @"SBIdleTimerAggregator"];
+        NSArray<NSString *> *factorySelNames =
+            @[@"sharedInstance", @"sharedCoordinator", @"globalCoordinator", @"shared"];
+        NSArray<NSString *> *resetSelNames =
+            @[@"resetIdleTimer", @"_resetIdleTimer",
+              @"resetIdleTimerAndCancelPrevious", @"_resetIdleTimerAndCancelPrevious",
+              @"_updateIdleTimer", @"_resetIdleTimerIfNecessary"];
+        NSMutableArray<id> *coordinators = [NSMutableArray array];
         for (NSString *name in coordinatorNames) {
             Class cls = NSClassFromString(name);
             if (cls == Nil) { continue; }
-            SEL sharedSel = NSSelectorFromString(@"sharedInstance");
-            if ([cls respondsToSelector:sharedSel]) {
-                coordinator = ((AevonSDIdFn0)objc_msgSend)((id)cls, sharedSel);
-            }
-            if (coordinator == nil) {
-                SEL shared2 = NSSelectorFromString(@"sharedCoordinator");
-                if ([cls respondsToSelector:shared2]) {
-                    coordinator = ((AevonSDIdFn0)objc_msgSend)((id)cls, shared2);
+            for (NSString *factory in factorySelNames) {
+                SEL sel = NSSelectorFromString(factory);
+                if (![cls respondsToSelector:sel]) { continue; }
+                id object = ((AevonSDIdFn0)objc_msgSend)((id)cls, sel);
+                if (object != nil && ![coordinators containsObject:object]) {
+                    [coordinators addObject:object];
                 }
             }
-            if (coordinator != nil) { break; }
         }
-        if (coordinator != nil) {
-            SEL resetSel = NSSelectorFromString(@"resetIdleTimer");
-            if ([coordinator respondsToSelector:resetSel]) {
+        for (id coordinator in coordinators) {
+            for (NSString *resetName in resetSelNames) {
+                SEL resetSel = NSSelectorFromString(resetName);
+                if (![coordinator respondsToSelector:resetSel]) { continue; }
                 ((AevonSDVoidFn0)objc_msgSend)(coordinator, resetSel);
-                mask |= 1;
+                if ([resetName hasPrefix:@"_"]) { mask |= 16; } else { mask |= 1; }
             }
             SEL undimSel = NSSelectorFromString(@"resetIdleTimerAndUndim:");
             if ([coordinator respondsToSelector:undimSel]) {
                 ((AevonSDVoidFnBool1)objc_msgSend)(coordinator, undimSel, YES);
                 mask |= 2;
+            }
+            // 断言通道（历史的 V0.0.55 同款）：持有一次「空闲计时器禁用」断言。
+            // 参数是一个 reason 字符串；同一个 reason 反复取是幂等的。
+            SEL assertSel = NSSelectorFromString(@"acquireIdleTimerDisableAssertionForReason:");
+            if ([coordinator respondsToSelector:assertSel]) {
+                ((AevonSDIdFn1)objc_msgSend)(coordinator, assertSel, @"AevonFloat");
+                mask |= 8;
             }
         }
     } @catch (NSException *exception) {
@@ -1112,6 +1144,86 @@ NSInteger AevonIdleTimerKick(void) {
     return mask;
 }
 
+/* ── V0.2.50（AevonLockBlockV250）：压不住空闲计时器时的最后一道闸 ────────
+ *
+ * Aevon(25) 第 5 条：「开悬浮窗时，依旧跟随系统时间锁屏」（第三个版本没修好）。
+ * 0.2.47/0.2.48/0.2.49 三次都在「让系统别计时」这条路上：写 isIdleTimerDisabled、
+ * 调 resetIdleTimer —— 真机日志证明这台机器上那两条通道都不通。
+ *
+ * 换个位置：**在锁屏真正发生的那一刻拦下来**。SpringBoard 的锁屏入口是
+ * `SBLockScreenManager -lockUIFromSource:withOptions:`（历史 V0.0.55 用过同一条）。
+ * 判据只有两条：① 浮窗在 → 才拦；② source == 1（电源键）→ 永远放行。
+ * 也就是说：只有「浮窗开着 + 不是用户按电源键」的锁屏请求会被拒，其余全放行。
+ *
+ * 纪律：
+ *   · 只在开窗时 `AevonInstallLockBlock()` 装一次（幂等），关窗不卸载
+ *     （钩子里自己用 `AevonFloatActive()` 判浮窗在不在，浮窗不在等于完全透传）；
+ *   · 方法不存在就返回 NO（日志里写「不可用」），绝不影响系统；
+ *   · 任何异常都不上抛 —— 这里在 SpringBoard 主线程上，抛一次就是注销。 */
+__attribute__((used)) static const char AevonLockBlockV250Marker[] = "AevonLockBlockV250";
+
+/// Swift 侧（AevonWindowManager）：现在有没有浮窗（含停靠小窗）。
+extern BOOL AevonFloatActive(void);
+/// Swift 侧（Aevon.swift）：把一行日志写进 /var/mobile/Aevon.log（与主日志同格式）。
+extern void AevonLogFromC(const char *text);
+
+static BOOL (*gAevonOrigLockUI)(id, SEL, NSInteger, id) = NULL;
+static BOOL (*gAevonOrigLockUICompletion)(id, SEL, NSInteger, id, id) = NULL;
+
+static BOOL AevonShouldBlockLock(NSInteger source) {
+    if (source == 1) { return NO; }           // 电源键：永远放行
+    return AevonFloatActive();
+}
+
+static BOOL AevonLockUIHook(id self_, SEL _cmd, NSInteger source, id options) {
+    if (AevonShouldBlockLock(source)) {
+        AevonLogFromC("[熄屏] 已拦下一次空闲锁屏请求（source 非电源键；浮窗还在，按用户定档不熄屏）"
+                      "（AevonLockBlockV250）");
+        return NO;
+    }
+    return gAevonOrigLockUI ? gAevonOrigLockUI(self_, _cmd, source, options) : NO;
+}
+
+static BOOL AevonLockUICompletionHook(id self_, SEL _cmd, NSInteger source, id options, id completion) {
+    if (AevonShouldBlockLock(source)) {
+        AevonLogFromC("[熄屏] 已拦下一次空闲锁屏请求（带 completion；浮窗还在）"
+                      "（AevonLockBlockV250）");
+        return NO;
+    }
+    return gAevonOrigLockUICompletion
+        ? gAevonOrigLockUICompletion(self_, _cmd, source, options, completion) : NO;
+}
+
+static BOOL gAevonLockBlockInstalled = NO;
+
+BOOL AevonInstallLockBlock(void) {
+    if (gAevonLockBlockInstalled) { return YES; }
+    @try {
+        Class cls = NSClassFromString(@"SBLockScreenManager");
+        if (cls == Nil) { return NO; }
+        BOOL installed = NO;
+        SEL sel = NSSelectorFromString(@"lockUIFromSource:withOptions:");
+        Method m = class_getInstanceMethod(cls, sel);
+        if (m != NULL && !gAevonOrigLockUI) {
+            gAevonOrigLockUI = (BOOL (*)(id, SEL, NSInteger, id))method_getImplementation(m);
+            method_setImplementation(m, (IMP)AevonLockUIHook);
+            installed = YES;
+        }
+        SEL sel2 = NSSelectorFromString(@"lockUIFromSource:withOptions:completion:");
+        Method m2 = class_getInstanceMethod(cls, sel2);
+        if (m2 != NULL && !gAevonOrigLockUICompletion) {
+            gAevonOrigLockUICompletion =
+                (BOOL (*)(id, SEL, NSInteger, id, id))method_getImplementation(m2);
+            method_setImplementation(m2, (IMP)AevonLockUICompletionHook);
+            installed = YES;
+        }
+        gAevonLockBlockInstalled = installed;
+        return installed;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
 /* ── V0.2.49 标记锚（Aevon(24) 九项）────────────────────────────────────────
  * 这些常量本身不参与逻辑，只保证标记串进二进制 —— 字节复检用 strings 逐条命中。
  * （C 函数名与 Swift 常量名都不在 __TEXT 内容里，只靠源码 grep 抓不到产物。） */
@@ -1121,3 +1233,16 @@ __attribute__((used)) static const char AevonRelayoutKickV249Marker[] = "AevonRe
 __attribute__((used)) static const char AevonUnlockGuardV249Marker[] = "AevonUnlockGuardV249";
 __attribute__((used)) static const char AevonDarkGuardV249Marker[] = "AevonDarkGuardV249";
 __attribute__((used)) static const char AevonCloseSettleV249Marker[] = "AevonCloseSettleV249";
+
+/* ── V0.2.50 标记锚（Aevon(25) 七项）────────────────────────────────────────
+ * 与上面同一用途：凡只以「Swift 类型名 / 常量名 / 函数名」存在的，源码里 grep 得到、
+ * 产物里 grep 不到，必须落一个 used 常量才能被字节复检抓到。 */
+__attribute__((used)) static const char AevonDockColumnV250Marker[] = "AevonDockColumnV250";
+__attribute__((used)) static const char AevonDockDropV250Marker[] = "AevonDockDropV250";
+__attribute__((used)) static const char AevonHintCleanV250Marker[] = "AevonHintCleanV250";
+__attribute__((used)) static const char AevonMoveShadowOffV250Marker[] = "AevonMoveShadowOffV250";
+__attribute__((used)) static const char AevonDarkGuardV250Marker[] = "AevonDarkGuardV250";
+__attribute__((used)) static const char AevonNoAutoLockV250Marker[] = "AevonNoAutoLockV250";
+__attribute__((used)) static const char AevonFloatRestoreV250Marker[] = "AevonFloatRestoreV250";
+__attribute__((used)) static const char AevonRingGripV250Marker[] = "AevonRingGripV250";
+__attribute__((used)) static const char AevonDockSnapshotV250Marker[] = "AevonDockSnapshotV250";
