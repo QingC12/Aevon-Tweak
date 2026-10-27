@@ -291,11 +291,11 @@ enum AevonWindowManager {
                 let ok = AevonMainSceneSetFrame(scene, Double(size.width), Double(size.height))
                 mainResized = ok
                 AevonLog.info("[场景] 主场景改画布：\(bundleID) 目标=\(Int(size.width))x\(Int(size.height))"
-                    + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene))）（AevonMainSceneResizeV242）")
+                    + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
                 for delay in [0.35, 1.2, 2.5] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak scene] in
                         guard let target = scene else { return }
-                        let state = AevonMainSceneFrameState(target)
+                        let state = AevonMainSceneFrameState(target) ?? ""
                         let expected = "frame=\(Int(size.width))x\(Int(size.height))"
                         let kept = state.contains(expected)
                         if !kept {

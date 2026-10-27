@@ -216,7 +216,7 @@ final class AevonSceneHost {
             let screen = UIScreen.main.bounds.size
             let ok = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
             AevonLog.info("[场景] 主场景画布已还原 \(Int(screen.width))x\(Int(screen.height))"
-                + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene))）（AevonMainSceneResizeV242）")
+                + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
         }
         teardownPresenter()
         // V0.2.28（AevonSelfSceneV228）：自建场景必须 destroyScene 收尾，
@@ -241,7 +241,7 @@ final class AevonSceneHost {
         } else if mainResized {
             let ok = AevonMainSceneSetFrame(scene, Double(width), Double(height))
             AevonLog.info("[场景] 主场景画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")，"
-                + "读回 \(AevonMainSceneFrameState(scene))）（AevonMainSceneResizeV242）")
+                + "读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
         }
     }
 
