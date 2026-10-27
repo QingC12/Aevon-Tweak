@@ -372,10 +372,25 @@ enum AevonWindowManager {
                     // ③ 三拍重申前台（LiveContainer #942 同款）：FBSSceneObserver 会
                     //   优先发 resignActive / SB 重算会把 foreground 写回 0（round8
                     //   档案：cs 2→0、layers 2→0 = 黑），三拍对抗。
+                    //
+                    // V0.2.54（AevonReassertGuardV254，用户 Aevon(28)「开过一次浮窗，
+                    // 系统手势失效只能点屏幕」）：三拍是裸 asyncAfter，**关窗不撤销** ——
+                    // 用户 3 秒内关窗（底边双击是常态操作）时，+1.2s/+3.0s 两拍会落在
+                    // 「自建场景已销毁」**之后**，对已销毁 FBScene 继续写
+                    // updateSettings{foreground=YES, deactivationReasons=0}
+                    // （Aevon(28) 日志 19.920「已销毁」→ 19.980「+1.2s 已提交」铁证）。
+                    // 这是关窗后唯一还在碰 FrontBoard 场景状态机的路径：场景已不存在，
+                    // 这笔幽灵更新会把场景呈现/激活状态卡住 → 主屏翻页、上滑回桌面、
+                    // 通知中心/控制中心这些**系统手势**（全部经场景呈现层判定）失效，
+                    // 而普通点按走 hit-test 直达图标，不受影响 —— 与用户症状逐字吻合。
+                    // 修法：弱持有 + 开火前核对登记表身份。关窗已注销登记 / 已换新场景
+                    // （快速关开）→ 直接哑火；停靠不注销登记，行为不变。
                     for delay in [0.3, 1.2, 3.0] {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                            let ok = AevonSelfSceneReassertForeground(hostScene)
-                            AevonLog.info("[场景] 重申自建场景前台（+\(delay)s，\(ok ? "已提交" : "失败")）（AevonSelfSceneFGV232）")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak hostScene] in
+                            guard let hs = hostScene,
+                                  AevonSceneHelper.selfScene(for: bundleID) === hs else { return }
+                            let ok = AevonSelfSceneReassertForeground(hs)
+                            AevonLog.info("[场景] 重申自建场景前台（+\(delay)s，\(ok ? "已提交" : "失败")）（AevonSelfSceneFGV232 AevonReassertGuardV254）")
                         }
                     }
                     // V0.2.35（AevonSceneRouteV235）：连接取证（只读）。
