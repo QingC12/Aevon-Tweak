@@ -160,6 +160,54 @@
 			<key>footerText</key>
 			<string>可调范围 6% ~ 100%，默认 60（= 只覆盖下半屏，从屏高 40% 到底部，上半屏右侧完全不受影响）。6% ≈ 底部 56pt 的右下角一小块，最不容易误触；拉到 100 = 整条右缘都能呼出，代价是顶部右侧按钮也点不到。拖动时橙色框的上边界实时升降。急救：任何界面三根手指同时按下 = 立刻释放全部接管并退出。</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>浮窗路线（0.2.42）</string>
+			<key>footerText</key>
+			<string>浮窗怎么让 App 按窗大小排版，两条路：S2 改主场景画布（默认开，改的是 App 已在运行的那个场景，老式 App 也收得到）；S1 是试验档（老式 App 也走自建场景 + 打开 App 端场景闸），默认关，只在排查时打开。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>MainSceneResize</string>
+			<key>label</key>
+			<string>主场景改画布（S2）</string>
+			<key>infoText</key>
+			<string>浮窗打开老式 App（Sileo / Filza / 抖音 / 微信这类）时，直接把这个 App **已经在运行的主场景**画布改成浮窗尺寸，让它按浮窗大小重新排版（0.2.42 新增，默认开）。
+
+原理：App 的主场景本来就有一个「画布尺寸」，系统分屏（Slide Over）就是改这个值让 App 重排的。以前我们不动它，App 按 430×932 整屏渲染，浮窗里只能裁切显示，所以「内容显示不全」。这一版直接改 settings.frame 提交，App 收到一次 resize。
+
+与「自建场景」的关系：两条路互不依赖。自建场景要 App 接受第二场景（老式 App 不接受），改主场景画布不需要——老式 App 也能收到。关浮窗时会把画布还原成全屏（不还原的话，之后全屏打开只有浮窗那么大）。
+
+判读：日志里「主场景改画布：…读回 frame=WxH」读回等于目标值 = 提交成功；跟着的首帧「呈现视图 WxH，首个子视图 WxH」两者相等 = App 真重排了。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>SceneRouteForceSelf</string>
+			<key>label</key>
+			<string>S1 试验：老式 App 也走自建场景</string>
+			<key>infoText</key>
+			<string>**试验档，默认关**。0.2.42 新增，用来一次验证「场景请求闸」。
+
+打开后：所有 App（包括能力登记为 0 的老式 App）都走自建场景，同时 App 侧会打开两个闸 —— UIApplication.supportsMultipleScenes 强制回 YES、并给老式 AppDelegate 补一个 configurationForConnecting。这两条来自 TrollPad（开源，iOS 14+ 的 iPad 多任务移植）的实现。
+
+为什么值得试：0.2.34 窗口搬家失败的死因是「自建场景没连上 App 端」（connectedScenes 里 8 秒都没有它）。如果闸是那个死因，打开后日志会看到『已搬入自建场景』并且出画面 —— 那就是终极解（原生重排，不依赖 App 类型）。
+
+代价：老式 App **如果闸还是不够，会再黑一次**（黑窗，不崩）。所以它默认关；测的时候只开一个 App 试，测完关掉就回到上面的 S2 路线。</string>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>细节调整</string>

@@ -41,6 +41,16 @@ BOOL AevonSelfSceneResize(id scene, double w, double h);
 /// presenter 请先走 AevonPresenterDestroy（deactivate + invalidate）。
 BOOL AevonSelfSceneDestroy(id scene);
 
+/// V0.2.42（AevonMainSceneResizeV242）：S2 —— 改「已在运行的主场景」画布。
+/// 只写 settings.frame（括号外不写 foreground / deactivationReasons，主场景前台状态
+/// 归系统，写它就是抢状态机）。开源参照 MilkyWayReborn scaleMode 同一条
+/// updateSettings 通路。返回 YES = 已提交（是否生效必须用 AevonMainSceneFrameState 复查）。
+BOOL AevonMainSceneSetFrame(id scene, double w, double h);
+
+/// V0.2.42（AevonMainSceneResizeV242）：只读取回 —— "frame=WxH fg=? cs=?"
+/// 用于判 S2 是否提交成功、是否被 FrontBoard 回弹。
+NSString *AevonMainSceneFrameState(id scene);
+
 /// V0.2.32（AevonSelfSceneFGV232）：重申自建场景前台 —— updateSettings 内
 /// foreground=YES + deactivationReasons=0（LiveContainer #942 同款：FBSSceneObserver
 /// 会优先发 resignActive，必须重申）。只许对自建场景调用；主场景绝不碰。

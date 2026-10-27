@@ -32,6 +32,11 @@ final class AevonSceneHost {
     /// 自建场景上 settings 写入是受支持通路（画布可改 = 真重排），关闭时要 destroyScene。
     let isSelfBuilt: Bool
 
+    /// V0.2.42（AevonMainSceneResizeV242）：true = 走 S2（主场景改画布）。
+    /// 主场景是系统自己的场景，画布改动可能被 FrontBoard 回弹，关闭时必须还原
+    /// 到全屏尺寸（否则 App 之后全屏打开只有浮窗那么大）。
+    let mainResized: Bool
+
     /// 屏幕尺寸的普通容器；浮窗只对它做等比缩放，不改它的尺寸。
     let container: UIView
 
@@ -48,8 +53,10 @@ final class AevonSceneHost {
     /// V0.2.32（AevonForegroundProbeV232）：假首帧只记一次，避免刷屏
     private var fakeAliveLogged = false
 
-    init?(scene: AnyObject, sceneID: String, bundleID: String, isSelfBuilt: Bool = false) {
+    init?(scene: AnyObject, sceneID: String, bundleID: String,
+          isSelfBuilt: Bool = false, mainResized: Bool = false) {
         self.isSelfBuilt = isSelfBuilt
+        self.mainResized = mainResized
         // presenter 标识必须唯一：系统的 SpringBoard 自己也在为这个场景建 presenter，
         // 用同一个 id 会撞车。
         let identifier = "Aevon-\(bundleID)-\(UUID().uuidString.prefix(8))"
@@ -203,6 +210,14 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         invalidated = true
         onFirstContent = nil
+        // V0.2.42（AevonMainSceneResizeV242）：S2 必须还原主场景画布 ——
+        // 否则关窗后 App 再被全屏打开只有浮窗那么大（系统不会替我们改回来）。
+        if mainResized {
+            let screen = UIScreen.main.bounds.size
+            let ok = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+            AevonLog.info("[场景] 主场景画布已还原 \(Int(screen.width))x\(Int(screen.height))"
+                + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene))）（AevonMainSceneResizeV242）")
+        }
         teardownPresenter()
         // V0.2.28（AevonSelfSceneV228）：自建场景必须 destroyScene 收尾，
         // 否则 respring 后 FBSceneManager 里残留同名场景（创建前会先销毁遗留，但别依赖它）。
@@ -216,10 +231,18 @@ final class AevonSceneHost {
     /// V0.2.28（AevonSelfSceneV228）：改自建场景画布 = 真重排
     /// （updateSettingsWithBlock 内 frame = 0,0,w×h，App 随之重新布局）。
     /// 仅 isSelfBuilt 时有效；调用时机 = 缩放抬手提交真实 frame 后（一次一调，天然单飞）。
+    /// V0.2.42（AevonMainSceneResizeV242）：S2（主场景改画布）走同一条路 ——
+    /// 只写 frame，不写前台状态。
     func resizeCanvasTo(width: CGFloat, height: CGFloat) {
-        guard isSelfBuilt, !invalidated else { return }
-        let ok = AevonSelfSceneResize(scene, Double(width), Double(height))
-        AevonLog.info("[场景] 画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")）（AevonSelfSceneV228）")
+        guard !invalidated else { return }
+        if isSelfBuilt {
+            let ok = AevonSelfSceneResize(scene, Double(width), Double(height))
+            AevonLog.info("[场景] 画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")）（AevonSelfSceneV228）")
+        } else if mainResized {
+            let ok = AevonMainSceneSetFrame(scene, Double(width), Double(height))
+            AevonLog.info("[场景] 主场景画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")，"
+                + "读回 \(AevonMainSceneFrameState(scene))）（AevonMainSceneResizeV242）")
+        }
     }
 
     private func teardownPresenter() {

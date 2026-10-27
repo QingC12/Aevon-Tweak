@@ -185,9 +185,38 @@ enum AevonWindowManager {
             let routeDump = AevonSelfSceneRouteDump(bundleID)
             let capVerdict = AevonSelfSceneAppCapVerdict(bundleID)
             AevonLog.info("[场景] 能力登记：\(bundleID) cap=\(capVerdict)（1=scene App 可自建，0=老式必拒，-1=未登记）（AevonSceneCapsV241）")
-            if capVerdict == 0 {
-                AevonLog.info("[场景] 分流：\(bundleID) 能力登记 cap=0 → 全屏接管旧路径；取证：\(routeDump)（AevonSceneRouteV238）")
-            } else if AevonPrefs.bool("SelfBuiltScene", default: true) {
+            // ── V0.2.42（AevonSceneRouteV242 / AevonMainSceneResizeV242）──────────
+            // 0.2.41 真机（Aevon(17)）三点判读：
+            //   ① 能力登记表工作正常（/var/mobile/aevon_caps.txt：Sileo/Filza/
+            //      BatteryInfo=0，设置/Spotlight=1），cap=0 的 App 全走旧路径、无黑屏。
+            //   ② 但 cap=-1（该 App 进程还是旧版 dylib 起的，没登记）照样走自建场景，
+            //      老式 App 于是又黑一次（Sileo 10:00:42 建场景、2 秒后销毁、13 秒后
+            //      才读到 cap=0）—— -1 不能再当「可自建」用。
+            //   ③ 旧路径形态问题依旧：整屏渲染顶左裁切 = 用户说的「内容显示不全」。
+            // 本版同时验两条从未试过的通路（开源交叉调研 2026-10-27 报告）：
+            //   S2（主刀，默认开｜MainSceneResize）：改「已在运行的主场景」settings.frame
+            //     —— MilkyWayReborn scaleMode 同一条 updateSettings 通路，不需要第二场景，
+            //     与「App 是否接受第二场景」完全无关；老式单场景 App 也能收到这次 resize
+            //     （系统 Slide Over 就是这么让它重排的）。关窗还原全屏画布。
+            //   S1（试验档｜SceneRouteForceSelf，默认关）：连老式 App 也走自建场景，
+            //     同时 App 侧打开场景请求闸（AevonSceneGateV242：supportsMultipleScenes
+            //     强制 YES + 补 configurationForConnecting），硬判据 = App 端
+            //     connectedScenes 出现自建场景（0.2.34 窗口搬家的前提）。
+            // 历史分流判据链（AevonSceneRouteV235/V236/V237/V238/V239/V240）：
+            // 五版静态判据（manifest 有无 / supportsMultipleScenes / delegate 类名 /
+            // SBApplication.sceneSpecification / 二进制扫描）全被真机证伪，统一收敛到
+            // AevonSelfSceneAppCapVerdict 读进程内登记表。
+            let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: true)
+            let forceSelf = AevonPrefs.bool("SceneRouteForceSelf", default: false)
+            let mainResizeOn = AevonPrefs.bool("MainSceneResize", default: true)
+            let routeSelf = selfSceneOn && (capVerdict == 1 || forceSelf)
+            let routeMain = !routeSelf && mainResizeOn
+            let routeName = routeSelf ? "自建场景" : (routeMain ? "主场景改画布(S2)" : "全屏接管旧路径")
+            AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)（AevonSceneRouteV242）")
+            if !routeSelf {
+                AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
+            }
+            if routeSelf {
                 let size = AevonWindowView.plannedContentSize()
                 // V0.2.29（AevonSelfSceneRetryV229）：`launchApplicationWithIdentifier:suspended:`
                 // 刚拉起的进程，processHandle 可能还没在 SBApplication 上登记好
@@ -252,6 +281,32 @@ enum AevonWindowManager {
                 }
             }
 
+            // ── V0.2.42（AevonMainSceneResizeV242）：S2 主场景改画布 ──────────────
+            // 生效条件：本轮没走自建（cap=0/-1、或 S1 档未开、或自建创建失败）。
+            // 只写 settings.frame（主场景前台状态机归系统，绝不写）；FrontBoard 可能
+            // 把 frame 重算回全屏，三拍复查 + 补写（防回弹）。关窗由承载器还原。
+            var mainResized = false
+            if !usedSelfScene && mainResizeOn {
+                let size = AevonWindowView.plannedContentSize()
+                let ok = AevonMainSceneSetFrame(scene, Double(size.width), Double(size.height))
+                mainResized = ok
+                AevonLog.info("[场景] 主场景改画布：\(bundleID) 目标=\(Int(size.width))x\(Int(size.height))"
+                    + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene))）（AevonMainSceneResizeV242）")
+                for delay in [0.35, 1.2, 2.5] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak scene] in
+                        guard let target = scene else { return }
+                        let state = AevonMainSceneFrameState(target)
+                        let expected = "frame=\(Int(size.width))x\(Int(size.height))"
+                        let kept = state.contains(expected)
+                        if !kept {
+                            _ = AevonMainSceneSetFrame(target, Double(size.width), Double(size.height))
+                        }
+                        AevonLog.info("[场景] 主场景画布复查（+\(delay)s）：\(state)"
+                            + "（\(kept ? "仍在画布" : "被回弹已补写")）（AevonMainSceneResizeV242）")
+                    }
+                }
+            }
+
             AevonSceneHelper.setForeground(hostScene, true)
 
             // 关键：`launchApplicationWithIdentifier:suspended:` 拉起的进程是挂起态，
@@ -265,8 +320,15 @@ enum AevonWindowManager {
                 ? ((selfSceneIDOut as String?) ?? "sceneID:com.aevon.float-\(bundleID)")
                 : ((AevonRuntime.send(scene, Selector(("identifier"))) as? String) ?? sceneID ?? "")
             guard let sceneHost = AevonSceneHost(scene: hostScene, sceneID: sceneIdentifier,
-                                                 bundleID: bundleID, isSelfBuilt: usedSelfScene) else {
+                                                 bundleID: bundleID, isSelfBuilt: usedSelfScene,
+                                                 mainResized: mainResized) else {
                 AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
+                if mainResized {
+                    // V0.2.42（AevonMainSceneResizeV242）：承载不了就把主场景画布还原，
+                    // 不能把 App 的主场景留在浮窗尺寸上
+                    let screen = UIScreen.main.bounds.size
+                    _ = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+                }
                 if usedSelfScene {
                     _ = AevonSelfSceneDestroy(hostScene)
                     AevonSceneHelper.unregisterSelfScene(bundleID)

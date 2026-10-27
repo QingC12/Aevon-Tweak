@@ -1347,6 +1347,72 @@ static void AevonAppSceneCapRegistry(void) {
     }
 }
 
+/* V0.2.42（AevonSceneGateV242）：S1 —— 打开 App 端「场景请求闸」。
+ * 来源：TrollPad（khanhduytran0，开源 iOS 14+，把 iPad 多任务移植到 iPhone）的两条 hook。
+ * 0.2.34 窗口搬家失败的死因是「自建场景根本没连上 App 端」（connectedScenes 8 秒里
+ * 没有它），而 UIKit 拒绝外部场景请求的两道闸都在 App 进程内：
+ *   ① UIApplication.supportsMultipleScenes —— 老式 App 恒 NO（无 manifest 即 NO）；
+ *   ② delegate 的 application:configurationForConnectingSceneSession:options: ——
+ *      老式 AppDelegate 没实现，UIKit 自动桥接只认主场景。
+ * 本函数在开关打开时把两道闸都放开：① swizzle 成 YES；② 给老式 delegate 补实现，
+ * 返回一个 delegateClass=UIResponder 的空配置（内容由 0.2.34 窗口搬家搬进来）。
+ * 只在 SceneRouteForceSelf=YES（S1 试验档）时生效；默认关 —— 日常使用一个字节都不碰，
+ * 也就不可能影响 App 的主场景启动路径（补方法是有污染面的一步，所以必须锁在试验档里）。 */
+__attribute__((used)) static const char AevonSceneGateV242Marker[] = "AevonSceneGateV242";
+
+static BOOL (*gAevonOrigSupportsMultipleScenes)(id, SEL) = NULL;
+
+static BOOL AevonGateSupportsMultipleScenes(id self, SEL _cmd) {
+    if (!AevonAppPrefBool(@"SceneRouteForceSelf", NO)) {
+        return gAevonOrigSupportsMultipleScenes ? gAevonOrigSupportsMultipleScenes(self, _cmd) : NO;
+    }
+    return YES;
+}
+
+static id AevonGateConfigurationForConnecting(id self, SEL _cmd,
+                                              id application, id session, id options) {
+    UISceneConfiguration *config =
+        [[UISceneConfiguration alloc] initWithName:@"AevonSelfScene"
+                                       sessionRole:@"UIWindowSceneSessionRoleApplication"];
+    Class sceneCls = NSClassFromString(@"UIWindowScene");
+    if (sceneCls != Nil) { config.sceneClass = sceneCls; }
+    Class delCls = NSClassFromString(@"UIResponder");
+    if (delCls != Nil) { config.delegateClass = delCls; }
+    AevonAppLog(@"场景闸：已为外部场景请求返回配置（session=%@，scene=%d，delegate=%d）（AevonSceneGateV242）",
+                session ? NSStringFromClass([session class]) : @"nil",
+                sceneCls != Nil ? 1 : 0, delCls != Nil ? 1 : 0);
+    return config;
+}
+
+static void AevonAppSceneGateApply(void) {
+    if (!AevonAppPrefBool(@"SceneRouteForceSelf", NO)) {
+        AevonAppLog(@"场景闸：未开（SceneRouteForceSelf=NO，S1 试验档未启用）（AevonSceneGateV242）");
+        return;
+    }
+    @try {
+        Method m = class_getInstanceMethod([UIApplication class], @selector(supportsMultipleScenes));
+        if (m != NULL && gAevonOrigSupportsMultipleScenes == NULL) {
+            gAevonOrigSupportsMultipleScenes = (BOOL (*)(id, SEL))method_getImplementation(m);
+            method_setImplementation(m, (IMP)AevonGateSupportsMultipleScenes);
+            AevonAppLog(@"场景闸：supportsMultipleScenes 已强制 YES（AevonSceneGateV242）");
+        }
+        id delegate = [[UIApplication sharedApplication] delegate];
+        SEL sel = NSSelectorFromString(@"application:configurationForConnectingSceneSession:options:");
+        if (delegate != nil && ![delegate respondsToSelector:sel]) {
+            Class cls = [delegate class];
+            BOOL added = class_addMethod(cls, sel,
+                                         (IMP)AevonGateConfigurationForConnecting, "@@:@@@");
+            AevonAppLog(@"场景闸：给 %@ 补 configurationForConnecting（added=%d）（AevonSceneGateV242）",
+                        NSStringFromClass(cls), added ? 1 : 0);
+        } else if (delegate != nil) {
+            AevonAppLog(@"场景闸：delegate %@ 本就实现 configurationForConnecting，不用补（AevonSceneGateV242）",
+                        NSStringFromClass([delegate class]));
+        }
+    } @catch (NSException *exception) {
+        AevonAppLog(@"场景闸异常：%@（AevonSceneGateV242）", exception.name);
+    }
+}
+
 - (void)start {
     /* V0.2.4（AevonAppAllAppsV204）：filter 已放开到全部 App（Classes=[UIApplication]），
      * 「进哪些进程」由 plist 管，「在进程里做不做」由这里的分支管：
@@ -1367,6 +1433,10 @@ static void AevonAppSceneCapRegistry(void) {
                    dispatch_get_main_queue(), ^{
         AevonAppSceneCapRegistry();
     });
+    /* V0.2.42（AevonSceneGateV242）：S1 试验档的场景闸。必须在任何场景请求到达前装好
+     * （SB 拉起 App 后 ~0.15s 才建自建场景，start 在更早的 UIApplication 初始化期跑）；
+     * 开关关闭时只打一行日志、一个字节都不碰。 */
+    AevonAppSceneGateApply();
     NSArray<NSString *> *excluded = AevonAppExcludePrefixes();
     for (NSString *prefix in excluded) {
         if ([gAevonAppBundleID hasPrefix:prefix]) {

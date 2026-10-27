@@ -2139,6 +2139,47 @@ jobs:
           grep -q 'AevonSelfSceneAppCapVerdict' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧未切到能力登记判据"; exit 1; }
           echo "V0.2.41 校验: 能力登记表判据（进程内 respondsToSelector + 落盘 aevon_caps）已就位"
+          # ── V0.2.42 校验（AevonMainSceneResizeV242 / AevonSceneRouteV242 /
+          #    AevonSceneGateV242）：一轮同时验 S1 + S2、开关分档。
+          # 0.2.41 真机（Aevon(17)）三点：①能力登记表工作正常（caps：Sileo/Filza/
+          # BatteryInfo=0，设置/Spotlight=1）；②cap=-1（旧 dylib 进程）照样走自建 →
+          # 老式 App 又黑一次，-1 不能再当可自建；③旧路径整屏裁切 = 「显示不全」。
+          # S2（默认开｜MainSceneResize）= 改已在运行的主场景 settings.frame
+          # （MilkyWayReborn scaleMode 同款 updateSettings 通路，不需要第二场景，
+          # 老式 App 也收得到），关窗还原全屏画布。S1（试验档｜SceneRouteForceSelf，
+          # 默认关）= 老式 App 也自建 + App 侧场景闸（supportsMultipleScenes 强制 YES
+          # + 补 configurationForConnecting）。只加不改。
+          for s in AevonMainSceneResizeV242 AevonSceneRouteV242; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.42 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'AevonMainSceneSetFrame' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺 S2 主场景改画布函数"; exit 1; }
+          grep -q 'AevonMainSceneFrameState' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::垫片缺 S2 读回复查函数"; exit 1; }
+          grep -q 'AevonMainSceneSetFrame' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::承载器缺 S2 接入（改画布/还原）"; exit 1; }
+          grep -q 'AevonMainSceneResizeV242' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺 S2 分流与防回弹"; exit 1; }
+          grep -q 'AevonSceneRouteV242' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧缺 V242 分流锚"; exit 1; }
+          grep -q 'AevonSceneGateV242' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.42 App 侧缺场景闸"; exit 1; }
+          grep -q 'supportsMultipleScenes' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺 supportsMultipleScenes 闸"; exit 1; }
+          grep -q 'configurationForConnectingSceneSession' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧缺 configurationForConnecting 补实现"; exit 1; }
+          grep -q 'AevonAppSceneGateApply' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::App 侧未在 start 里安装场景闸"; exit 1; }
+          grep -q 'MainSceneResize' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 缺 S2 开关"; exit 1; }
+          grep -q 'SceneRouteForceSelf' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::Detail.plist 缺 S1 试验档开关"; exit 1; }
+          grep -q 'MainSceneResize' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧未读 S2 开关"; exit 1; }
+          grep -q 'SceneRouteForceSelf' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::Swift 侧未读 S1 档开关"; exit 1; }
+          echo "V0.2.42 校验: S2 主场景改画布（默认开）+ S1 场景闸试验档（默认关）已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

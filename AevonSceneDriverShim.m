@@ -24,6 +24,7 @@ typedef void (*AevonSDVoidFn0)(id, SEL);
 typedef void (*AevonSDVoidFnBool1)(id, SEL, BOOL);
 typedef void (*AevonSDVoidFnInt1)(id, SEL, NSInteger);
 typedef void (*AevonSDVoidFnRect1)(id, SEL, CGRect);
+typedef CGRect (*AevonSDRectFn0)(id, SEL);
 typedef void (*AevonSDVoidFnInsets1)(id, SEL, UIEdgeInsets);
 typedef void (*AevonSDVoidFnBlock1)(id, SEL, void (^)(id));
 
@@ -91,6 +92,13 @@ __attribute__((used)) static const char AevonSceneRouteV238Marker[] = "AevonScen
 __attribute__((used)) static const char AevonSceneRouteV239Marker[] = "AevonSceneRouteV239";
 __attribute__((used)) static const char AevonSceneRouteV240Marker[] = "AevonSceneRouteV240";
 __attribute__((used)) static const char AevonSceneCapsV241Marker[] = "AevonSceneCapsV241";
+/* V0.2.42（AevonMainSceneResizeV242）：S2 —— 改「已在运行的主场景」画布。
+ * 开源参照 MilkyWayReborn（34306，开源 iOS 17~26）scaleMode 通路：
+ *   [scene mutableSettings] → setFrame: → updateSettings:withTransitionContext:completion:
+ * 本项目此前所有「事后改尺寸」失败的记录（V63/V64/V87）改的是
+ * displayConfiguration（显示配置）与呈现上下文开关，不是场景自身 settings.frame；
+ * S2 走的是另一层，二者不构成互证。老式单场景 App 也能收到——不需要第二场景。 */
+__attribute__((used)) static const char AevonMainSceneResizeV242Marker[] = "AevonMainSceneResizeV242";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -381,6 +389,63 @@ BOOL AevonSelfSceneResize(id scene, double w, double h) {
         return YES;
     } @catch (NSException *exception) {
         return NO;
+    }
+}
+
+/* V0.2.42（AevonMainSceneResizeV242）：S2 —— 把「已在运行的主场景」画布改成画布尺寸。
+ * 只写 frame，绝不写 foreground / deactivationReasons —— 主场景的前台状态机归系统
+ * （写它就是抢同一份状态，归档(12)(13)(14) 的 SIGTRAP 来源）。
+ * 走 updateSettingsWithBlock:（与自建场景 resize 同一条 API，SB 进程内可用）；
+ * 主场景可能被 FrontBoard 重算回写，调用方要做读回复查（防回弹）。 */
+BOOL AevonMainSceneSetFrame(id scene, double w, double h) {
+    @try {
+        if (scene == nil || w < 50 || h < 50) return NO;
+        SEL sel = NSSelectorFromString(@"updateSettingsWithBlock:");
+        if (![scene respondsToSelector:sel]) return NO;
+        __block BOOL wrote = NO;
+        ((AevonSDVoidFnBlock1)objc_msgSend)(scene, sel, ^(id settings) {
+            @try {
+                AevonSDSetRect(settings, "frame", CGRectMake(0, 0, w, h));
+                wrote = YES;
+            } @catch (NSException *exception) {
+                // 单次写入失败：由读回复查暴露，不在这里抛
+            }
+        });
+        return wrote;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+/// 只读取回：主场景 settings.frame 与 foreground / contentState（判 S2 是否被回弹）。
+NSString *AevonMainSceneFrameState(id scene) {
+    @try {
+        if (scene == nil) { return @"frame=nil"; }
+        NSString *frameText = @"?";
+        SEL setSel = NSSelectorFromString(@"settings");
+        if ([scene respondsToSelector:setSel]) {
+            id settings = ((AevonSDIdFn0)objc_msgSend)(scene, setSel);
+            SEL fSel = NSSelectorFromString(@"frame");
+            if (settings != nil && [settings respondsToSelector:fSel]) {
+                CGRect f = ((AevonSDRectFn0)objc_msgSend)(settings, fSel);
+                frameText = [NSString stringWithFormat:@"%dx%d",
+                             (int)(f.size.width + 0.5), (int)(f.size.height + 0.5)];
+            }
+            BOOL fg = NO;
+            SEL fgSel = NSSelectorFromString(@"foreground");
+            if ([settings respondsToSelector:fgSel]) {
+                fg = ((AevonSDIntFn0)objc_msgSend)(settings, fgSel) != 0;
+            }
+            NSInteger cs = -1;
+            SEL csSel = NSSelectorFromString(@"contentState");
+            if ([scene respondsToSelector:csSel]) {
+                cs = ((AevonSDIntFn0)objc_msgSend)(scene, csSel);
+            }
+            return [NSString stringWithFormat:@"frame=%@ fg=%d cs=%ld", frameText, fg ? 1 : 0, (long)cs];
+        }
+        return [NSString stringWithFormat:@"frame=%@ fg=? cs=?", frameText];
+    } @catch (NSException *exception) {
+        return [NSString stringWithFormat:@"frame=exc(%@)", exception.name];
     }
 }
 
