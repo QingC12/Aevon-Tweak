@@ -56,6 +56,15 @@ enum AevonEdgeEntry {
     // V0.2.57（AevonZombieSealV257）：被吞过 began 的触摸「终身封印」状态。
     private static var zombieSealID: UInt = 0
     private static var zombieSealUntil: CFTimeInterval = 0
+    // V0.2.58（AevonGripFeedCleanV258）：把手收养指纹 —— began 已投递过 UIKit 的那根。
+    // Aevon(32) 定论：把手是真实控件，滑动呼盘那根手指的 began 在圆盘展开前就已
+    // 投递 UIKit；旧逻辑却把它的 moved / ended 全吞（圆盘展开期吞 + 抬手帧也吞）
+    // = 每次滑动呼盘给 UIKit 留一根「有 began 无 ended」的在途触摸，把手 pan
+    // 识别器收不到收尾帧。0.2.49 结构干净的根本原因：呼盘走纯 sendEvent 通道，
+    // began 也吞，整根触摸对 UIKit 不可见。这根手指的触摸窗口在 begin 时刻就
+    // 绑定入口窗口（UIKit 规则永不改绑），moved/ended 投递只可能到达把手自己的
+    // 识别器，物理上不可能漏给桌面 / App —— 全程放行是零风险补全。
+    private static var gripAdoptedTouchID: UInt = 0
     /// V0.2.8（AevonSelectionCoolV208）：圆盘选中开窗后 1.5 秒冷静期（防双呼）
     private static var selectionCoolUntil: CFTimeInterval = 0
     private static var lastTriggerAt: CFTimeInterval = 0
@@ -96,7 +105,7 @@ enum AevonEdgeEntry {
         let sealed = zombieSealID != 0 && CACurrentMediaTime() <= zombieSealUntil
         return "拖拽=\(floatGestureActive ? 1 : 0)/待定=\(floatBarPending ? 1 : 0)"
             + "/圆盘=\(AevonRingMenu.isPresented ? 1 : 0)/全局=\(globalTouchID != 0 ? 1 : 0)"
-            + "/封印=\(sealed ? 1 : 0)"
+            + "/封印=\(sealed ? 1 : 0)/收养=\(gripAdoptedTouchID != 0 ? 1 : 0)"
     }
 
     /// 圆盘指针最近位置（AevonRingMenu 悬停高亮等要用）。
@@ -183,6 +192,7 @@ enum AevonEdgeEntry {
                 ownsTouch = true
                 ringSource = "global"
                 swallowDeadline = CACurrentMediaTime() + swallowLimit
+                gripAdoptedTouchID = 0
                 ring.beginRemoteTracking(at: point, source: "global")
                 return
             }
@@ -219,7 +229,9 @@ enum AevonEdgeEntry {
                 globalStart = point
                 globalFired = true
                 lastTouchPoint = point
-                AevonLog.info("[圆盘] 收养把手手指（只登记喂圆盘、不吞）→ 继续喂圆盘（AevonEdgeAdoptV207 AevonGripOnlyV251）")
+                gripAdoptedTouchID = touchID
+                AevonLog.info("[圆盘] 收养把手手指（只登记喂圆盘、不吞）→ 继续喂圆盘"
+                    + "（AevonEdgeAdoptV207 AevonGripOnlyV251 AevonGripFeedCleanV258）")
             }
             guard touchID == globalTouchID else { return }
             lastTouchPoint = point
@@ -243,6 +255,7 @@ enum AevonEdgeEntry {
                     ownsTouch = false
                     swallowDeadline = 0
                     globalOwnedAt = 0
+                    gripAdoptedTouchID = 0
                 }
             }
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: false) { return }
@@ -258,7 +271,9 @@ enum AevonEdgeEntry {
                 globalTouchID = touchID
                 globalFired = true
                 lastTouchPoint = point
-                AevonLog.info("[圆盘] 收养把手手指（抬手）→ 圆盘收起（AevonEdgeAdoptV207）")
+                gripAdoptedTouchID = touchID
+                AevonLog.info("[圆盘] 收养把手手指（抬手）→ 圆盘收起"
+                    + "（AevonEdgeAdoptV207 AevonGripFeedCleanV258）")
             }
             guard touchID == globalTouchID else { return }
             if let ring = AevonRingMenu.presented {
@@ -277,6 +292,7 @@ enum AevonEdgeEntry {
                     ownsTouch = false
                     swallowDeadline = 0
                     globalOwnedAt = 0
+                    gripAdoptedTouchID = 0
                 }
             }
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: true) { return }
@@ -367,6 +383,10 @@ enum AevonEdgeEntry {
                 return true
             }
         }
+        // V0.2.58（AevonGripFeedCleanV258）：把手收养指纹全程放行 ——
+        // began 已投递 UIKit 的触摸，剩下的帧必须补全投递，绝不再半路吞。
+        // 这根手指的触摸窗口恒为入口窗口，投递只到把手识别器，不可能误伤系统。
+        if gripAdoptedTouchID != 0, touchID == gripAdoptedTouchID { return false }
         // V0.0.41（AevonFloatGlobalV41）：浮窗拖拽期间这根手指完全归浮窗。
         if floatGestureActive, touchID == floatTouchID,
            CACurrentMediaTime() <= floatDeadline {
@@ -640,6 +660,7 @@ enum AevonEdgeEntry {
         globalOwnedAt = 0
         ringExtraTouchID = 0
         ringExtraDeadline = 0
+        gripAdoptedTouchID = 0
         AevonNotifySetRing(0)
         // V0.2.51（AevonGripOnlyV251）：ringopen/ringclose Darwin 广播已随 App 侧
         // 识别器退役 —— 监听方全部删除，圆盘状态只走 notify(3) 共享内存位。

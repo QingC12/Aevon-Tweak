@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.57（arm64e / roothide）。用法：拖出浮窗后，窗口边缘的**圆盘把手**是呼盘唯一入口（0.2.51 起，AevonGripOnlyV251）：点按把手或在其上左滑 ≥14pt → 圆盘出来 → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。主悬浮窗左右边条**轻点**=吸附停靠，停靠后再点=装回。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
+			<string>Aevon 0.2.58（arm64e / roothide）。用法：拖出浮窗后，窗口边缘的**圆盘把手**是呼盘唯一入口（0.2.51 起，AevonGripOnlyV251）：点按把手或在其上左滑 ≥14pt → 圆盘出来 → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。主悬浮窗左右边条**轻点**=吸附停靠，停靠后再点=装回。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -26,6 +26,20 @@
 			<key>infoText</key>
 			<string>总开关（0.2.17 起默认开）。关掉后不创建入口窗口、不挂任何触摸通道：浮窗和圆盘把手都不再出现。开关改动要注销（或重启桌面）才生效。
 它管的是「有没有 Aevon 这个人」，下面那些开关管的是「它怎么动」。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>RingGripEnabled</string>
+			<key>label</key>
+			<string>圆盘把手（隔离实验开关）</string>
+			<key>infoText</key>
+			<string>0.2.58 新增的诊断开关（AevonGripToggleV258），默认开。关掉后圆盘把手整体摘除、呼盘入口停用（浮窗也随之无法呼出），用于 A/B 定位「滑动手势失效」是否与把手链路相关：关掉 → 注销 → 正常使用一轮，若失效不再出现即锁定把手；若仍出现则与把手无关。开关改动要注销生效。定位完成后请恢复打开。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

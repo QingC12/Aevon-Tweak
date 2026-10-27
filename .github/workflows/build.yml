@@ -974,13 +974,16 @@ jobs:
               || { echo "::error::V0.2.17 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
           done
           # ② V0.2.17 曾固定 6 个开关；V0.2.51（AevonGripOnlyV251）：EdgeGestureEnabled /
-          #    AppSideEnabled 随触发手势退役 —— 一级页必须正好 4 个开关
+          #    AppSideEnabled 随触发手势退役 —— 一级页正好 4 个开关
           #    （Enabled / LogEnabled / CrashGuard / ProbeV107）。
+          #    V0.2.58（AevonGripToggleV258）反转：新增隔离实验开关 RingGripEnabled
+          #    （用户 Aevon(32) 要求可临时屏蔽把手做 A/B 定位）→ 下限改 5。
           ROOT_SW="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(sum(1 for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
-          [ "$ROOT_SW" -eq 4 ] || { echo "::error::一级页开关数不是 4（实际 $ROOT_SW）—— 0.2.51 清单固定为 Enabled/LogEnabled/CrashGuard/ProbeV107"; exit 1; }
+          [ "$ROOT_SW" -eq 5 ] || { echo "::error::一级页开关数不是 5（实际 $ROOT_SW）—— 0.2.58 清单：Enabled/LogEnabled/CrashGuard/ProbeV107/RingGripEnabled"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
-          [ "$ROOT_KEYS" = "Enabled,LogEnabled,CrashGuard,ProbeV107" ] \
+          # V0.2.58（AevonGripToggleV258）反转：+RingGripEnabled（隔离实验开关）
+          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,LogEnabled,CrashGuard,ProbeV107" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
           grep -q 'AevonPrefs.bool("Enabled", default: true)' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
@@ -2194,6 +2197,32 @@ jobs:
           grep -q 'static func touchTriggeredProbeIfDue' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.57 缺失效瞬间探针实现"; exit 1; }
           echo "V0.2.57 校验: 孤儿帧封印(七弃管点) + 失效瞬间探针(began触发/3s节流) 已就位"
+
+          # ── V0.2.58 校验（AevonGripFeedCleanV258 / AevonGripToggleV258）──
+          # Aevon(32) 用户定位实锤：不开浮窗、只碰把手 → 桌面滑动失效。
+          # 机制定论：把手滑动呼盘那根手指的 began 已投递 UIKit（把手是真实控件，
+          # 投递发生在圆盘展开之前），但圆盘展开期间收养逻辑把它的 moved/ended
+          # 全吞（shouldSwallow 圆盘在场段 + 抬手帧也吞）= 每次滑动呼盘给 UIKit
+          # 留一根「有 began 无 ended」的在途触摸 + 把手 pan 收不到收尾帧。
+          # 0.2.49 干净的根本原因：呼盘走纯 sendEvent 通道，began 也吞，整根触摸
+          # 对 UIKit 不可见。修复：收养指纹（gripAdoptedTouchID）全程放行补全投递
+          # —— 该触摸窗口恒为入口窗口，物理上不可能漏给桌面/App。
+          for s in AevonGripFeedCleanV258 AevonGripToggleV258; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.58 缺标记 $s"; exit 1; }
+          done
+          # ①收养指纹放行：shouldSwallow 里必须先于圆盘在场段放行
+          grep -q 'if gripAdoptedTouchID != 0, touchID == gripAdoptedTouchID { return false }' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.58 收养指纹放行缺失"; exit 1; }
+          # ②指纹登记点（moved 收养 / ended 收养）与清理点（ended defer / cancelled
+          #   defer / ringDidDismiss / 接管清零）必须齐全（定义 + 2 登记 + 4 清理）
+          GCOUNT=$(grep -c 'gripAdoptedTouchID' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" || true)
+          [ "$GCOUNT" -ge 9 ] \
+            || { echo "::error::0.2.58 收养指纹状态机不完整（实得 $GCOUNT 处）"; exit 1; }
+          # ③隔离实验开关：把手安装入口必须先查 RingGripEnabled
+          grep -q 'AevonPrefs.bool("RingGripEnabled", default: true)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.58 把手隔离开关缺失"; exit 1; }
+          echo "V0.2.58 校验: 收养指纹全程放行(补全投递) + 把手隔离实验开关 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

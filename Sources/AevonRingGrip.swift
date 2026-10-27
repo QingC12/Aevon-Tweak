@@ -172,7 +172,20 @@ enum AevonRingGrip {
 
     /// 装到入口容器最上层（容器会搬进全屏 App 的画面容器，所以全屏 App 里也在）。
     /// 幂等：重复调用只做一次真正的安装。
+    /// V0.2.58（AevonGripToggleV258）：偏好 RingGripEnabled（默认开）= 隔离实验开关
+    ///（用户 Aevon(32)：「先暂时屏蔽把手，看看问题还会出现吗」）——
+    /// 关闭时把手整体摘除、呼盘入口禁用（浮窗也无法呼出，专用于 A/B 定位）；
+    /// 改动后需注销生效。
     static func installIfNeeded(force: Bool = false) {
+        if !AevonPrefs.bool("RingGripEnabled", default: true) {
+            if let existing = grip, existing.superview != nil {
+                existing.removeFromSuperview()
+                grip = nil
+                AevonLog.warn("[圆盘] 把手已按偏好屏蔽（RingGripEnabled=否，呼盘入口停用；"
+                    + "重新打开需注销）（AevonGripToggleV258）")
+            }
+            return
+        }
         if let existing = grip, existing.superview != nil, !force {
             existing.setNeedsLayout()
             return
