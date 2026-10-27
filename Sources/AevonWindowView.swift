@@ -438,13 +438,12 @@ final class AevonWindowView: UIView {
         //   · `SBLockScreenManager -lockUIFromSource:withOptions:` 兜底拦截（电源键放行）。
         // 8 秒 ≪ 系统最短「自动锁定 30 秒」，既压得住又不会每秒烧一次私有 API。
         let lockBlock = AevonInstallLockBlock()
-        // V0.2.51（AevonDeactGateV251，用户 Aevon(26) #3）：回桌面守画 ——
-        // 拦截浮窗场景的停用登记（Stheno 方向），回桌面后浮窗直接是实时画面。
-        let deactGate = AevonInstallDeactivationGate()
+        // V0.2.53（AevonDeactGateRetiredV253）：0.2.51 的「回桌面守画闸」退役 ——
+        // 真机日志实锤它一次都没拦到（场景照常 deactivation），却站在系统场景
+        // 状态机的登记路径上（系统手势失效的头号嫌疑）。黑屏交给守卫兜底。
         AevonLog.info("[窗口] 熄屏压制已启动（\(AevonWindowView.idleKickMaskText(mask))，"
-            + "锁屏拦截=\(lockBlock ? "已装" : "不可用")，"
-            + "回桌面守画=\(deactGate ? "已装" : "不可用")，之后每 8 秒重申一次）"
-            + "（AevonNoAutoLockV249 AevonNoAutoLockV250 AevonDeactGateV251）")
+            + "锁屏拦截=\(lockBlock ? "已装" : "不可用")，之后每 8 秒重申一次）"
+            + "（AevonNoAutoLockV249 AevonNoAutoLockV250）")
         let timer = Timer(timeInterval: 8.0, repeats: true) { [weak self] _ in
             let now = AevonWindowView.kickIdleTimerIfNeeded()
             guard let self, now != self.idleKickMask else { return }
@@ -961,17 +960,18 @@ final class AevonWindowView: UIView {
                 let doubleTap = UITapGestureRecognizer(target: self,
                                                        action: #selector(handleBottomDoubleTap(_:)))
                 doubleTap.numberOfTapsRequired = 2
+                doubleTap.cancelsTouchesInView = false
+                doubleTap.delaysTouchesBegan = false
+                doubleTap.delaysTouchesEnded = false
                 handle.addGestureRecognizer(doubleTap)
             }
-            if edges == .left || edges == .right {
-                // V0.2.51（AevonDockTapV251，用户 Aevon(26) #1）：左右缘**轻点** = 吸附停靠。
-                // 主诉：「修改主悬浮窗的手势热区左右边缘点击时触发吸附停靠」。
-                // 拖到边缘松手吸附照旧保留（AevonDockDropV250），轻点是第二个入口；
-                // 停靠态轻点任意边条 = 装回主窗。pan 需要位移才 began，原地轻点不会触发拖动。
-                let tap = UITapGestureRecognizer(target: self,
-                                                 action: #selector(handleEdgeTap(_:)))
-                handle.addGestureRecognizer(tap)
-            }
+            // V0.2.53（AevonDockArbiterV253，用户 Aevon(27) #2）：0.2.51 给左右边条
+            // 加的边条轻点识别器 **整建制退役** ——
+            // 真机日志实锤它和全局通道对同一次轻点各响应一次：全局通道先 dock
+            // （34.570），视图 tap 12ms 后看见 isDocked=true 又 restoreDocked
+            // （34.582）→ 用户体感「轻点停靠没效果、吸附后自动还原主窗」。
+            // 轻点停靠唯一入口 = 全局通道（AevonEdgeEntry.handleFloatGestureEnded
+            // 的轻点分支），桌面 / 全屏 App 它都收得到（sendEvent 是总入口）。
         }
     }
 
@@ -1123,23 +1123,6 @@ final class AevonWindowView: UIView {
                 layoutIfNeeded()
             }
         }
-    }
-
-    /// 左 / 右缘轻点 = 吸附停靠 / 装回主窗（V0.2.51，AevonDockTapV251）。
-    /// 全局通道那条路（App 前台时窗外触摸只有 sendEvent 能收到）在
-    /// `AevonEdgeEntry.handleFloatGestureEnded` 的轻点分支里做同一件事。
-    @objc private func handleEdgeTap(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended,
-              !isLiveResizing, !isBarHoldMoving else { return }
-        guard let handle = gesture.view as? AevonEdgeHandleView,
-              handle.edges == .left || handle.edges == .right else { return }
-        if isDocked {
-            AevonWindowManager.restoreDocked(bundleID: bundleID)
-            return
-        }
-        let side: AevonDockSide = handle.edges == .left ? .left : .right
-        AevonLog.info("[窗口] 边条轻点 → 吸附停靠到屏幕\(side.title)侧（AevonDockTapV251）")
-        _ = AevonWindowManager.dockCurrent(side: side)
     }
 
     /// 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）。
@@ -1589,9 +1572,16 @@ final class AevonWindowView: UIView {
         case .some(true):
             darkTicks = 0
             renderTicks += 1
-            // 0.4 秒（2 拍）稳定后才撤：0.2.49 的「一看到 cs=2 立刻撤」在
-            // 「cs 先报 2、远程表面还没画出来」时会把黑窗露出来（第 7 条的残留成因）。
-            if renderTicks >= 2 { removeDarkFreeze(reason: "布防：内容已回画（cs=2 连续 2 拍）") }
+            // V0.2.53（AevonDarkGuardV253，用户 Aevon(27) #5）：0.2.50 的「稳定 2 拍
+            // （0.4s）才撤」防的是「cs 先报 2、表面还没画」。现在第一拍就**现场验证**：
+            // drawHierarchy 抓得到真画面 = 远程表面确实在画 → 立刻撤冻结；
+            // 抓不到就按老规矩等满 2 拍（抓不到 ≠ 黑，宁可持续定格也不露黑窗）。
+            if renderTicks >= 2 {
+                removeDarkFreeze(reason: "布防：内容已回画（cs=2 连续 2 拍）")
+            } else if darkFreezeView != nil, captureSnapshotImage() != nil {
+                renderTicks = 2
+                removeDarkFreeze(reason: "布防：cs=2 且现场抓到真画面（第一拍验证，AevonDarkGuardV253）")
+            }
         case .some(false):
             renderTicks = 0
             darkTicks += 1

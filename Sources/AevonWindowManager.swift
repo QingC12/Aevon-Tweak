@@ -56,6 +56,21 @@ enum AevonWindowManager {
     /// 同 App 全屏画面一律认作副作用，不关窗。
     private static var lastOpenedAt: CFTimeInterval = 0
 
+    // ── V0.2.53（AevonDockArbiterV253，用户 Aevon(27) #2）：停靠/装回手势仲裁 ──
+    // 症状（真机日志 17:42:34.570→34.582 实锤）：边条轻点 → 停靠成功，12ms 后立刻
+    // 「已从停靠列装回主窗」；拖到边缘松手吸附后也一样被装回。根因是**同一次手势
+    // 被两条路各处理一次**：全局通道（sendEvent）与视图层手势识别器先后到达，
+    // 第二条路看到 isDocked 已被第一条路翻成 true，就执行了相反的动作（装回）。
+    // 修法 = 状态机防抖：dock 落地后 0.8 秒内的 restore 请求一律拒绝
+    // （人手不可能在 0.8 秒内完成「点停靠→再点装回」，0.8s 内来的必然是同一次
+    // 手势的重复响应）。restore 后同样防抖 dock。
+    private static var lastDockAt: CFTimeInterval = 0
+    private static var lastDockedBundleID: String = ""
+    private static var lastRestoreAt: CFTimeInterval = 0
+    private static var lastRestoredBundleID: String = ""
+    /// 同一 App 两次停靠/装回动作的最小间隔（人手节奏下限）。
+    private static let dockArbiterWindow: CFTimeInterval = 0.8
+
     /// App 全屏画面出现时调用（来自 `AevonEntryHost.appSceneAppeared`）。
     ///
     /// 背景：0.1.5 之后「浮窗开着设置 → 回桌面点设置图标」不再注销了，但浮窗会黑屏 ——
@@ -389,7 +404,16 @@ enum AevonWindowManager {
             // 一次」、直接浮窗打开会断层 —— 差别就在 App 进程有没有以整屏画布完成过
             // 第一遍排版。刚由 launchAndOpen 拉起的场景是「生」的：这里先按整屏画布让
             // App 渲染一拍（等价用户先全屏开一次），1.0 秒后再切浮窗画布。
+            // V0.2.53（AevonDouyinWarmupFixV253，用户 Aevon(27) #3）：预热只对
+            // **主场景路线**有意义 —— 那里的 App 刚被拉起、主场景还是整屏、App 按
+            // 整屏排过一拍。真机日志实锤（17:42:31.380）：自建场景路线下这段代码
+            // 不进 `!usedSelfScene && routeMain`，mainCanvas 恒为 0x0，1.0s 后把
+            // 0x0 写给主场景（失败），且 `!warmupCanvas` 把开窗时的 kickRelayout
+            // 也跳了 → 真重排根本没发生 → 抖音断层。0.2.49 正常正因为没有预热。
+            // 自建场景的画布在创建时就是 430x737，App 第一遍排版就在小画布上，
+            // 不需要也不允许「先整屏一拍」。
             let warmupCanvas = warmupFullscreenFirst && !screenAspectOn
+                && !usedSelfScene
             if !usedSelfScene && routeMain {
                 // V0.2.43（AevonCanvasScaleV243）：画布 = 窗口 × k（不再等于窗口本身）
                 // V0.2.44（AevonScreenAspectV244）：屏幕比例档 → 画布 = 整屏原生尺寸
@@ -668,6 +692,14 @@ enum AevonWindowManager {
     static func dockCurrent(side: AevonDockSide) -> Bool {
         guard let view = currentView else { return false }
         let bundleID = view.bundleID
+        // V0.2.53（AevonDockArbiterV253）：刚装回主窗 0.8 秒内的停靠请求 = 同一次
+        // 手势的重复响应（restore 完，另一条路的 .ended 又看见 !isDocked）→ 拒绝。
+        let now0 = CACurrentMediaTime()
+        if bundleID == lastRestoredBundleID, now0 - lastRestoreAt < dockArbiterWindow {
+            AevonLog.info("[停靠] \(bundleID) 装回后 \(String(format: "%.2f", now0 - lastRestoreAt))s 内的停靠请求被仲裁吸收"
+                + "（同一次手势的重复响应，AevonDockArbiterV253）")
+            return false
+        }
         var column = dockedViews.filter { $0.dockedSide == side }
         if column.count >= AevonDock.maxCount {
             if let oldest = column.first {
@@ -691,6 +723,9 @@ enum AevonWindowManager {
             + "（该侧现有 \(dockedViews.filter { $0.dockedSide == side }.count) 个，"
             + "尺寸 \(Int(AevonDock.size.width))x\(Int(AevonDock.size.height))，顶部起依次向下）"
             + "（AevonDockColumnV250 AevonDockDropV250）")
+        // V0.2.53（AevonDockArbiterV253）：记录本次停靠，供 0.8s 防抖窗用。
+        lastDockAt = CACurrentMediaTime()
+        lastDockedBundleID = bundleID
         return true
     }
 
@@ -699,6 +734,15 @@ enum AevonWindowManager {
     /// 如果主窗里已经有别的 App，先把它降到它现在更靠近的那一侧（不丢窗）。
     static func restoreDocked(bundleID: String) {
         guard let view = dockedViews.first(where: { $0.bundleID == bundleID }) else { return }
+        // V0.2.53（AevonDockArbiterV253）：刚停靠成功 0.8 秒内的装回请求 = 同一次
+        // 手势的重复响应（真机日志实锤：17:42:34.570 停靠成功 → 34.582 装回主窗，
+        // 12ms，全局通道 dock 完、视图层 .ended 又看见 isDocked）→ 拒绝。
+        let now0 = CACurrentMediaTime()
+        if bundleID == lastDockedBundleID, now0 - lastDockAt < dockArbiterWindow {
+            AevonLog.info("[停靠] \(bundleID) 停靠后 \(String(format: "%.2f", now0 - lastDockAt))s 内的装回请求被仲裁吸收"
+                + "（同一次手势的重复响应，AevonDockArbiterV253）")
+            return
+        }
         let columnSide = view.dockedSide
         if let main = currentView, main.bundleID != bundleID {
             let side = AevonDock.side(forDropAt: main.frame) ?? columnSide.opposite
@@ -723,6 +767,9 @@ enum AevonWindowManager {
         }
         AevonLog.info("[窗口] \(bundleID) 已从停靠列装回主窗（画面不中断，未重建场景）"
             + "（AevonDockColumnV250）")
+        // V0.2.53（AevonDockArbiterV253）：记录本次装回，供 0.8s 防抖窗用。
+        lastRestoreAt = CACurrentMediaTime()
+        lastRestoredBundleID = bundleID
     }
 
     /// 关掉一个停靠小窗（满员挤掉 / 面板关闭 / 插件停用）。
@@ -839,28 +886,4 @@ enum AevonWindowManager {
 @_cdecl("AevonFloatActive")
 func aevonFloatActive() -> Bool {
     return AevonWindowManager.hasAnyWindow
-}
-
-/// V0.2.51（AevonDeactGateV251，用户 Aevon(26) #3）：给 ObjC 停用登记拦截钩子用的
-/// 「这个场景正被浮窗 / 停靠列承载吗」。
-///
-/// Stheno 方向（blueprint-2026-10-13 UIApplicationSceneDeactivationManagerHook）：
-/// 回桌面那一刻系统会给场景登记停用原因，浮窗里那个 App 的场景被一起停用，
-/// 远程表面回收 → 事后重申前台要 1.5 秒才回画。在登记那一刻拦住，画面全程不中断。
-/// 场景对不上（类型不同 / 已不在浮窗）一律返回 false = 完全透传（fail-closed）。
-@_cdecl("AevonFloatGuardsScene")
-func aevonFloatGuardsScene(_ scene: UnsafeMutableRawPointer?) -> Bool {
-    guard let scene = scene else { return false }
-    let candidate = Unmanaged<AnyObject>.fromOpaque(scene).takeUnretainedValue()
-    var bundleIDs: [String] = []
-    if let open = AevonWindowManager.openBundleID { bundleIDs.append(open) }
-    for view in AevonWindowManager.allWindows where view.isDocked {
-        bundleIDs.append(view.bundleID)
-    }
-    for bundleID in bundleIDs {
-        if let ours = AevonSceneHelper.scene(for: bundleID), ours === candidate {
-            return true
-        }
-    }
-    return false
 }

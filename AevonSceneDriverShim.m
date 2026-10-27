@@ -1328,122 +1328,30 @@ BOOL AevonInstallLockBlock(void) {
     }
 }
 
-/* ── V0.2.51（AevonDeactGateV251）：回桌面守画 —— 在停用登记那一刻拦住 ─────
+/* ── V0.2.53（AevonDeactGateRetiredV253）：回桌面守画闸整建制退役 ────────────
  *
- * Aevon(26) 第 3 条：「全屏 app 中开悬浮窗回桌面时，悬浮窗并不会直接出现实时画面」。
- * 0.2.50 日志 14:38:17 全过程钉死了病根：回桌面时 SpringBoard 经
- * `UIApplicationSceneDeactivationManager` 给场景登记停用原因，浮窗里那个 App 的
- * 场景一起被停用 → 远程表面被回收 → cs 掉 0 → 我们事后重申前台，1.5 秒后才回画
- * （中间靠最后一帧冻结顶着）。**事后补救永远有 1.5 秒窗**。
+ * 【历史】这个 hook（UIApplicationSceneDeactivationManager 的
+ * `_setDeactivationReasons:onScene:withSettings:reason:`，类型编码
+ * v48@0:8Q16@24@32@40 —— 第一个真实参数是 uint64 停用原因位掩码）在工程里三进三出：
+ *   · V0.0.37（git 5e7aa97）：Swift 侧以正确的 UInt64 参数调用；
+ *   · V0.1.3（git 2f22147）：整体移除，提交信息明写「安全模式崩溃源」；
+ *   · 0.2.51（AevonDeactGateV251）：加回来但把位掩码形参写成对象指针 → ARC retain
+ *     野指针 → SIGSEGV → 自动安全模式（四证合一，见交付说明 V0.2.52）；
+ *   · 0.2.52（AevonDeactGateV252）：签名纠错（uint64_t + 类型编码自检 fail-closed
+ *     + 清零后仍调原实现）。
  *
- * Stheno 逆向给的方向（blueprint-2026-10-13：UIApplicationSceneDeactivationManagerHook
- * + `_setDeactivationReasons:onScene:withSettings:reason:`）：在**登记那一刻**拦住
- * —— 被浮窗承载的场景不给登记停用原因，场景一直前台，回桌面后浮窗直接是实时画面。
- *
- * 与铁律「主场景只许写 foreground、deactivationReasons 只给自建场景」不冲突：
- * 那条禁的是**我们主动写** settings diff（归档(14) SIGTRAP 来源，0.1.3 起铁律）；
- * 这里是**拦截系统自己的登记调用**，一个字节的设置都不写。
- *
- * 纪律：
- *   · 幂等，开窗时装一次，关窗不卸载 —— 钩子里先问
- *     `AevonFloatGuardsScene(scene)`（Swift 侧比对此场景是否正被浮窗/停靠列承载），
- *     不承载 = 完全透传，对系统零改动；
- *   · 类或方法不存在 → 返回 NO（日志「不可用」），0.2.50 的守卫照常兜底；
- *   · 被拦的场景类型对不上（fail-closed）→ 透传。
+ * 【退役】用户 Aevon(27) 第 4 条：「手机的系统手势会无辜失效，桌面无法滑动」。
+ * 真机日志（Aevon(27)）实锤 0.2.52 的闸**一次都没拦到**（场景照常 deactivation：
+ * 17:42:56.517「容器已搬家，原因=App 场景消失」）—— 它没兑现「回桌面直接实时
+ * 画面」，却持续站在 SpringBoard 场景状态机的关键登记路径上，是系统手势失效的
+ * 头号嫌疑。与 V0.1.3 的历史结论第三次一致：**这个 hook 族不值得装**。
+ * 黑屏交给回桌面守卫 + 周期快照缓存兜底（观感 = 定格而非黑屏），
+ * 从此不再碰系统场景状态机。
+ * 类型编码解析工具（AevonEncArgType 等）保留 —— 锁屏 hook 的签名自检还在用。
  */
 __attribute__((used)) static const char AevonDeactGateV251Marker[] = "AevonDeactGateV251";
 __attribute__((used)) static const char AevonDeactGateV252Marker[] = "AevonDeactGateV252";
-
-
-/// Swift 侧（AevonWindowManager）：这个场景是否正被浮窗 / 停靠列承载。
-extern BOOL AevonFloatGuardsScene(void *scene);
-
-/* ── V0.2.52（AevonDeactGateV252）：签名纠错 —— 这是 0.2.51 安全模式崩溃的真凶 ──
- *
- * 【事故】0.2.51 装了这个 hook 之后，用户真机连崩 4 次（归档(15)）：
- *   信号 11（SIGSEGV）→ SpringBoard 退出 → 系统判定插件崩 SpringBoard → 自动注销（安全模式）。
- *   4 次崩溃栈**完全一致**：frame 3 恒为 Aevon.dylib、frame 4 恒为 UIKitCore。
- *
- * 【根因】这个 UIKit 私有方法的真实类型编码是
- *     v48@0:8Q16@24@32@40
- *   —— 第一个参数是 **Q（uint64 位掩码：停用原因集合）**，不是对象指针。
- *   0.2.51 我们把 hook 的第一个形参写成了「对象指针 id」：
- *     static void AevonSetDeactReasonsHook(id self_, SEL _cmd, id <位掩码形参>, ...)
- *   （注意：这里不写出错误签名的字面量，是为了让 CI 的「禁止旧错签名」断言不被注释豁免）
- *   工程开着 -fobjc-arc，ARC 看到 `id` 参数就当成**对象所有权**处理：
- *   进函数 objc_retain(reasons)、出函数 objc_release(reasons)。
- *   而 reasons 真身是个位掩码（0/1/2/4…），被 objc_retain 当指针解引用 → **野指针 SIGSEGV**。
- *
- *   反汇编实锤（交付 dylib，模块内偏移 0x97b0 = 崩溃 PC，正好是那次 bl 的返回地址）：
- *     0x979c: mov  x19, x2      ← x2 = reasons（uint64 位掩码）
- *     0x97ac: bl   <objc_retain> ← ARC 把它当对象 retain → 野指针
- *     0x97b0: mov  x19, x0      ●● CRASH
- *
- *   为什么日志里「守画」成功拦了 8 次才崩：那 8 次 reasons == 0，
- *   objc_retain(NULL) 无害；直到回桌面真正登记**非零**停用原因，才第一次踩到野指针。
- *
- * 【历史】V0.0.37（git 5e7aa97）实现过同一个 hook，用的是**正确的** `_ reasons: UInt64`；
- *   V0.1.3（git 2f22147）把整族「场景停用门控」移除，提交信息明写
- *   「安全模式崩溃源」。0.2.51 把它加了回来，却用错了签名 —— 同一个坑踩第二次。
- *
- * 【修法】① 第一个参数改成 uint64_t（真身），ARC 不再碰它；
- *   ② 安装前用 method_getTypeEncoding 自检：签名必须是 v48@0:8Q16@24@32@40 形态
- *      （第 3 段是 Q），对不上就**不装**（fail-closed），iOS 改签名也不会再崩；
- *   ③ 拦截语义改成 V0.0.37 的做法：**把 reasons 清零后照常调原实现**
- *      （原来 0.2.51 是「直接 return 不调原实现」—— 那会让 manager 的状态机
- *       少走一步，本就不该那么干）。
- */
-static void (*gAevonOrigSetDeactReasons)(id, SEL, uint64_t, id, id, id) = NULL;
-
-static void AevonSetDeactReasonsHook(id self_, SEL _cmd, uint64_t reasons,
-                                     id scene, id settings, id reason) {
-    uint64_t finalReasons = reasons;
-    if (reasons != 0 && scene != nil &&
-        AevonFloatGuardsScene((void *)(__bridge void *)scene)) {
-        finalReasons = 0;   // 清零停用原因 = 场景保持前台（V0.0.37 同款语义）
-        AevonLogFromC("[守画] 已拦下一次场景停用登记（浮窗承载中，回桌面画面不中断）"
-                      "（AevonDeactGateV251 AevonDeactGateV252）");
-    }
-    if (gAevonOrigSetDeactReasons) {
-        gAevonOrigSetDeactReasons(self_, _cmd, finalReasons, scene, settings, reason);
-    }
-}
-
-static BOOL gAevonDeactGateInstalled = NO;
-
-/// V0.2.52：安装前核对真实类型编码。
-/// 必须是 `v48@0:8Q16@24@32@40` 形态 —— 第 1 个真实形参是 Q（uint64 位掩码）。
-/// 只要它不是 64 位整数（比如被改成 id 或别的标量），我们就**不装**这个 hook：
-/// 宁可少一条功能，也不能拿错误的 ABI 去调系统私有方法（= 安全模式）。
-static BOOL AevonDeactSignatureOK(Method m) {
-    char t = AevonEncArgType(m, 0);
-    if (t == 'Q' || t == 'q') { return YES; }
-    // 32 位整数也不接受：位掩码集合可能超 32 位，截断会把语义搞坏。
-    return NO;
-}
-
-BOOL AevonInstallDeactivationGate(void) {
-    if (gAevonDeactGateInstalled) { return YES; }
-    @try {
-        Class cls = NSClassFromString(@"UIApplicationSceneDeactivationManager");
-        if (cls == Nil) { return NO; }
-        SEL sel = NSSelectorFromString(@"_setDeactivationReasons:onScene:withSettings:reason:");
-        Method m = class_getInstanceMethod(cls, sel);
-        if (m == NULL || gAevonOrigSetDeactReasons) { return NO; }
-        if (!AevonDeactSignatureOK(m)) {
-            AevonLogFromC("[守画] 场景停用登记 hook 未安装（方法签名与预期不符，拒绝按错误 ABI 拦截）"
-                          "（AevonDeactGateV252）");
-            return NO;
-        }
-        gAevonOrigSetDeactReasons =
-            (void (*)(id, SEL, uint64_t, id, id, id))method_getImplementation(m);
-        method_setImplementation(m, (IMP)AevonSetDeactReasonsHook);
-        gAevonDeactGateInstalled = YES;
-        return YES;
-    } @catch (NSException *exception) {
-        return NO;
-    }
-}
+__attribute__((used)) static const char AevonDeactGateRetiredV253Marker[] = "AevonDeactGateRetiredV253";
 
 /* ── V0.2.49 标记锚（Aevon(24) 九项）────────────────────────────────────────
  * 这些常量本身不参与逻辑，只保证标记串进二进制 —— 字节复检用 strings 逐条命中。
@@ -1479,3 +1387,8 @@ __attribute__((used)) static const char AevonDouyinWarmupV251Marker[] = "AevonDo
 __attribute__((used)) static const char AevonEdgeStripRetiredV251Marker[] = "AevonEdgeStripRetiredV251";
 __attribute__((used)) static const char AevonAppTakeoverRetiredV251Marker[] = "AevonAppTakeoverRetiredV251";
 __attribute__((used)) static const char AevonSysEdgeRetiredV251Marker[] = "AevonSysEdgeRetiredV251";
+
+/* ── V0.2.53 标记锚（Aevon(27) 五项修复）──────────────────────────────────── */
+__attribute__((used)) static const char AevonDockArbiterV253Marker[] = "AevonDockArbiterV253";
+__attribute__((used)) static const char AevonDouyinWarmupFixV253Marker[] = "AevonDouyinWarmupFixV253";
+__attribute__((used)) static const char AevonDarkGuardV253Marker[] = "AevonDarkGuardV253";

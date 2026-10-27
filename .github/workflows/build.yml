@@ -1989,21 +1989,23 @@ jobs:
           echo "V0.2.50 校验: 左右停靠列（92x158 / 5 格 / 顶部 10% 起）+ 圆盘可见把手（外扩 40）+ 拖动关投影 + 常驻守卫 2 拍确认 + 熄屏锁屏拦截（电源键放行）+ 提示文案沉底 + 关窗事件驱动重排 + 1.05s 挂起 + 9 标记 已就位"
 
           # ── V0.2.51 校验（AevonGripOnlyV251）：把手-only + 边条轻点停靠 + 回桌面守画 + 抖音预热 ──
+          # V0.2.53（AevonDeactGateRetiredV253）：停用闸与视图层轻点识别器已退役，
+          # 下面三条 0.2.51 的正向断言按「断言与产品冲突 → 反转断言」翻转为防回退网。
           for s in AevonGripOnlyV251 AevonDockTapV251 AevonDouyinWarmupV251 AevonDeactGateV251 \
                    AevonEdgeStripRetiredV251 AevonAppTakeoverRetiredV251 AevonSysEdgeRetiredV251; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.51 缺标记 $s"; exit 1; }
           done
-          grep -q 'AevonInstallDeactivationGate' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
-            || { echo "::error::0.2.51 缺场景停用闸安装入口（回桌面守画）"; exit 1; }
-          grep -q 'AevonFloatGuardsScene' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.51 缺浮窗场景判据（Swift 侧）"; exit 1; }
+          ! grep -q 'AevonInstallDeactivationGate' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.51 停用闸已随 0.2.53 退役，不许回装（安全模式崩溃源 + 手势失效嫌疑）"; exit 1; }
+          ! grep -q 'AevonFloatGuardsScene' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.51 浮窗场景判据已随停用闸退役（Swift 侧死代码不留）"; exit 1; }
           grep -q 'canvasWarmupDelay' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.51 缺画布预热豁免参数"; exit 1; }
           grep -q '边条轻点 → 吸附停靠' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::0.2.51 全局通道缺边条轻点停靠分支"; exit 1; }
-          grep -q 'handleEdgeTap' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.51 视图层缺边条轻点识别器"; exit 1; }
+          ! grep -q 'handleEdgeTap' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.51 视图层轻点识别器已随 0.2.53 退役（与全局通道双响应）"; exit 1; }
           test ! -f "$GITHUB_WORKSPACE/Sources/AevonSystemGestureV104.swift" \
             || { echo "::error::0.2.51 旧系统手势文件应已删除"; exit 1; }
           test ! -f "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
@@ -2014,29 +2016,27 @@ jobs:
             || { echo "::error::0.2.51 系统手势垫片应已删除"; exit 1; }
           echo "V0.2.51 校验: 把手-only（呼盘唯一入口）+ 边条轻点停靠（双通道）+ 场景停用闸（回桌面守画，Stheno 方向）+ 抖音整屏预热 + 三通道退役 + App 侧识别器退役 + 设置页瘦身 已就位"
 
-          # ---- V0.2.52（AevonDeactGateV252）：安全模式崩溃修复 —— 停用登记 hook 签名纠错 ----
-          # 【事故】0.2.51 把 UIApplicationSceneDeactivationManager 的
-          #   `-_setDeactivationReasons:onScene:withSettings:reason:` 第一个形参（uint64 位掩码）
-          #   写成了对象指针；工程开着 -fobjc-arc → ARC 入口对该形参做 objc_retain →
-          #   把整数当指针解引用 → SIGSEGV → SpringBoard 退出 → 系统判定插件有罪 →
-          #   自动注销（安全模式）。真机连崩 4 次，4 次栈完全一致。
-          # 【修法】① 形参改 uint64_t（真身）；② 安装前用 method_getTypeEncoding 自检真实
-          #   签名，对不上就**不装**（fail-closed：宁少功能也不能拿错 ABI 调系统私有方法）；
-          #   ③ 拦截后清零并**照常调原实现**（裸 return 会让 manager 状态机少走一步）。
+          # ---- V0.2.52 → V0.2.53（AevonDeactGateRetiredV253）：停用登记 hook 整建制退役 ----
+          # 【历史】0.2.51 把 uint64 位掩码形参写成对象指针 → ARC retain 野指针 →
+          #   SIGSEGV → 安全模式（连崩 4 次）；0.2.52 签名纠错后真机日志实锤：
+          #   闸一次都没拦到（场景照常 deactivation），却持续站在 SpringBoard 场景
+          #   状态机的登记路径上 —— 用户 Aevon(27) 第 4 条「系统手势无辜失效、桌面
+          #   无法滑动」的头号嫌疑。与 V0.1.3「安全模式崩溃源」的历史结论第三次一致，
+          #   0.2.53 起整建制退役（下面的正向断言全部翻转为防回退网）。
           strings "$DYLIB" | grep -q 'AevonDeactGateV252' \
-            || { echo "::error::0.2.52 缺标记 AevonDeactGateV252（停用登记 hook 签名纠错未进产物）"; exit 1; }
-          grep -q 'uint64_t reasons' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
-            || { echo "::error::0.2.52 停用登记 hook 的位掩码形参必须写成 uint64_t（写 id 会被 ARC 当对象 retain → 野指针 → 崩 SpringBoard → 安全模式）"; exit 1; }
-          grep -q 'gAevonOrigSetDeactReasons)(id, SEL, uint64_t, id, id, id)' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
-            || { echo "::error::0.2.52 原实现函数指针签名必须与真实 ABI 一致（uint64_t 打头）"; exit 1; }
-          grep -q 'gAevonOrigSetDeactReasons(self_, _cmd, finalReasons' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
-            || { echo "::error::0.2.52 拦截后必须清零并照常调原实现（裸 return 会让 manager 状态机少走一步）"; exit 1; }
+            || { echo "::error::0.2.52 缺标记 AevonDeactGateV252（历史校验串，退役后仍须收容在产物）"; exit 1; }
+          strings "$DYLIB" | grep -q 'AevonDeactGateRetiredV253' \
+            || { echo "::error::0.2.53 缺退役标记 AevonDeactGateRetiredV253"; exit 1; }
+          ! grep -q 'AevonInstallDeactivationGate' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.53 停用登记 hook 已退役，不许回装（干扰系统场景状态机 → 手势失效；三次历史结论一致）"; exit 1; }
+          ! grep -q 'AevonSetDeactReasonsHook' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.53 停用登记 hook 体已退役，不许回装"; exit 1; }
+          ! grep -q 'AevonDeactSignatureOK' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.53 停用闸签名自检已随 hook 退役（锁屏自检 AevonLockSignatureOK 保留）"; exit 1; }
           grep -q 'method_getTypeEncoding' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.52 缺类型编码自检（签名对不上也硬装 = 再崩安全模式）"; exit 1; }
           grep -q 'AevonEncArgType' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.52 缺类型编码解析器 AevonEncArgType"; exit 1; }
-          grep -q 'AevonDeactSignatureOK' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
-            || { echo "::error::0.2.52 缺停用闸签名自检"; exit 1; }
           grep -q 'AevonLockSignatureOK' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.52 锁屏 hook 也必须装前自检（options 若变成整型位掩码，同样是 ARC 野指针）"; exit 1; }
           ! grep -q 'id reasons' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
@@ -2054,7 +2054,33 @@ jobs:
             END { exit (bad > 0) }
           ' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.52 手写 hook 缺类型编码自检（每个 method_setImplementation 前必须有 SignatureOK）"; exit 1; }
-          echo "V0.2.52 校验: 停用登记 hook 签名纠错（uint64_t）+ 类型编码自检（fail-closed）+ 清零后仍调原实现 + 锁屏 hook 自检 + 全量 method_setImplementation 自检覆盖 已就位"
+          echo "V0.2.52/53 校验: 停用登记 hook 退役（防回退网四条）+ 类型编码工具保留（锁屏自检用）+ 全量 method_setImplementation 自检覆盖 已就位"
+
+          # ---- V0.2.53（Aevon(27) 五项修复）----
+          # ① 停靠仲裁：dock 落地 0.8s 内的装回请求一律拒绝（真机日志实锤同一次
+          #   手势被全局通道与视图层手势各响应一次 → 停靠 12ms 后被装回主窗）。
+          strings "$DYLIB" | grep -q 'AevonDockArbiterV253' \
+            || { echo "::error::0.2.53 缺标记 AevonDockArbiterV253（停靠手势仲裁）"; exit 1; }
+          grep -q 'AevonDockArbiterV253' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.53 缺停靠仲裁源码标记"; exit 1; }
+          grep -q 'restoreDocked(bundleID: String)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            && grep -q 'now0 - lastDockAt < dockArbiterWindow' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.53 restoreDocked 缺 0.8s 停靠防抖窗"; exit 1; }
+          # ② 视图层冗余轻点手势退役（双响应元凶）：
+          ! grep -q 'handleEdgeTap' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.53 视图层 handleEdgeTap 已退役（与全局通道双响应 = 停靠后立刻装回）"; exit 1; }
+          # ③ 预热只对主场景路线生效（自建路线 mainCanvas 恒 0x0 → 写 0x0 + 跳过 kickRelayout = 断层）：
+          strings "$DYLIB" | grep -q 'AevonDouyinWarmupFixV253' \
+            || { echo "::error::0.2.53 缺标记 AevonDouyinWarmupFixV253（预热条件修正）"; exit 1; }
+          grep -q 'let warmupCanvas = warmupFullscreenFirst && !screenAspectOn' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            && grep -A1 'let warmupCanvas = warmupFullscreenFirst && !screenAspectOn' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" | grep -q '&& !usedSelfScene' \
+            || { echo "::error::0.2.53 warmupCanvas 必须含 !usedSelfScene（自建路线预热 = 写 0x0 画布 + 跳过真重排）"; exit 1; }
+          # ④ 黑屏守卫撤帧提速：第一拍现场验证：
+          strings "$DYLIB" | grep -q 'AevonDarkGuardV253' \
+            || { echo "::error::0.2.53 缺标记 AevonDarkGuardV253（守卫第一拍现场验证）"; exit 1; }
+          grep -q '第一拍验证，AevonDarkGuardV253' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.53 缺守卫第一拍现场验证（captureSnapshotImage 验证后撤冻结）"; exit 1; }
+          echo "V0.2.53 校验: 停靠手势仲裁 + 视图轻点退役 + 预热条件修正（!usedSelfScene）+ 守卫第一拍验证 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
