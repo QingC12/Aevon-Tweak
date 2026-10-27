@@ -301,9 +301,14 @@ jobs:
           if grep -q 'BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
             echo "::error::Root.plist 又出现 BandTakeoverFromBegan（0.2.17 已撤，整指吞不许回到设置页）"; exit 1
           fi
-          # 抬手清状态必须连 globalTouchID 一起清（按下即接管模式下两套状态共用一根手指）
-          test "$(grep -c 'if touchID == globalTouchID {' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 2 \
-            || { echo "::error::带内抬手/取消只清 bandTouchID —— 会留下指向已释放 UITouch 的 globalTouchID"; exit 1; }
+          # 抬手清状态必须连 globalTouchID 一起清（0.2.51 重写后为 defer 归还模式：
+          # ended / cancelled 各一条 heldGlobal 判定 + defer 内 globalTouchID = 0）
+          grep -q 'let endedHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::ended 分支缺 heldGlobal 判定 —— 带内抬手可能漏清 globalTouchID"; exit 1; }
+          grep -q 'let cancelledHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::cancelled 分支缺 heldGlobal 判定 —— 带内取消可能漏清 globalTouchID"; exit 1; }
+          test "$(grep -c 'globalTouchID = 0' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift")" -ge 5 \
+            || { echo "::error::globalTouchID 清零点不足 5 处（ended/cancelled 的 defer+显式 + ringDidDismiss）"; exit 1; }
           echo "V0.1.13 校验: 识别器停手（断延迟补投）+ 起手窗两态（默认不干预 / 开关按下即接管）"
           # V0.1.14（AevonProbeP7V114 / 宿主审计）：**只加探针，不改行为**。
           # 0.1.5~0.1.13 九个版本都在改「策略」，却从没量过一件事：
