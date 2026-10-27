@@ -1,4 +1,7 @@
 import UIKit
+// V0.2.45（AevonCornerRadiusV245）：圆角过渡用 CATransaction / CAMediaTimingFunction，
+// 显式导入 QuartzCore（UIKit 虽会间接带入，但不依赖隐式传递更稳）。
+import QuartzCore
 
 /// 缩放 / 移动手柄（V0.0.37）：带方向标记的透明视图。
 /// 挂在浮窗**外侧**（Stheno 同款：手势区域为边缘外侧，绝不占窗内触摸）。
@@ -67,43 +70,44 @@ final class AevonWindowView: UIView {
     /// 自建场景回退看门狗（8 秒无首帧 → 换主场景，单场景 App 可能拒绝连接第二个场景）
     private var selfSceneFallbackTimer: Timer?
 
-    /// 内容区宽高比（宽 ÷ 高）。V0.2.22（AevonFloat53PortraitV222）：5:3 = 高5:宽3（竖窗）。
-    /// Aevon(106) 用户纠偏：0.2.21 曾按「宽:高」做成 1.667 横长条，实为竖窗 0.6。
-    /// V0.2.44（AevonScreenAspectV244）：本常量是「5:3 真重排档」的比例；实际生效值
-    /// 走 `contentAspectCurrent`（屏幕比例档 = 屏宽 / 屏高）。CI 断言钉的是本行。
+    /// 历史常量：V0.2.22 的 5:3 竖窗比例（宽 ÷ 高 = 0.6）。
+    /// V0.2.45（AevonRatio58V245）：**已不再是生效比例** —— 0.2.44 之前的默认形态
+    /// 在这里只做历史记录保留（CI 1785 行断言钉住本行，按「历史串只加不改」规则不动）。
+    /// 生效比例见 `contentAspect58` / `contentAspectCurrent`。
     static let contentAspect: CGFloat = 3.0 / 5.0
 
-    /// V0.2.44（AevonScreenAspectV244）：内容比例档 —— 是否跟随屏幕比例（默认是）。
+    /// V0.2.45（AevonRatio58V245）：**真重排档的生效比例 = 5:8 = 0.625**。
     ///
-    /// 0.2.43 真机（Aevon(19)）判读：滑到 1.58 档后抖音右侧栏回来了（画布宽 = 屏宽），
-    /// 但画面「整体上移、视频不在正中、底部黑一大片」。根因是比例而不是倍数：
-    /// 5:3 竖窗的逻辑画布是 430×716，比整屏 430×932 矮 216pt，抖音这类「整页按整屏
-    /// 高度排版」的 App 只能露出上半页 —— 顶栏贴窗顶、视频被挤到上中部、底部文案与
-    /// 底栏被切（日志：`首个子视图 430x716`）。
+    /// 依据：参考视频逐像素实测（`交付/分析-主悬浮窗比例与圆角-2026-10-27/`）——
+    /// 主窗 470×754 px = 0.623 ≈ 5:8（误差 0.3%），换算到 430pt 机型是 343×550 pt。
+    /// 视频里抖音在这个窗口里拿到 **313×503 pt 的画布后自己重排**（顶栏 33pt、底栏 33pt、
+    /// 底部安全区 36pt、右侧图标列 48pt 全落在原生 pt 上），不是整屏缩放也不是裁切。
     ///
-    /// 5:3（0.6）与「整屏内容完整可见」（0.4614）在数学上互斥，所以这一档把**窗口比例**
-    /// 换成屏幕比例：画布 = 整屏原生尺寸 → App 的排版与全屏逐像素一致（顶栏 / 底栏 /
-    /// 右侧栏全部在位、视频在原生位置居中、上下黑边天然等量），呈现层再按 1/k 把整屏
-    /// 画面等比缩进窗口（X/Y 系数天然相等 → 不裁切、不变形、不留 letterbox）。
+    /// 与 5:3（0.6）的差别：宽 4% 而高多 4%，正是让抖音那类「按屏宽摆位 + 整页高排版」
+    /// 的 App 在窗内既放得下右侧栏、又不至于把底栏挤出画布的关键。
+    static let contentAspect58: CGFloat = 5.0 / 8.0
+
+    /// V0.2.44（AevonScreenAspectV244）：内容比例档 —— 是否跟随屏幕比例。
     ///
-    /// 关掉 = 回到 0.2.43 的 5:3 真重排（画布 = 窗口 × 画布倍数）。
-    ///
-    /// 注意：本属性在缩放手势里是**每帧**读取（clampedCornerWidth 用比例算上限），
-    /// 所以偏好值必须缓存 0.5s —— 绝不能每帧一次 CFPreferences IPC（那是锁 + 跨进程）。
+    /// **V0.2.45（AevonRatio58V245）改默认值：true → false。**
+    /// 0.2.44 真机对测（Aevon(20)）结论：屏幕比例档是「整屏按 1/k 缩进窗口」，
+    /// 三栏虽然都在位，但本质是整屏缩放，字号与浮窗尺寸脱钩、拖动窗口时内容只是
+    /// 被整体拉伸，没有「真重排」的手感。用户定档：走 5:8 真重排（画布 = 窗口），
+    /// 这才是参考视频的形态。屏幕比例档保留为可选（开 = 回到 0.2.44 行为）。
     static var usesScreenAspect: Bool {
         let now = ProcessInfo.processInfo.systemUptime
         if now - aspectFlagStamp >= 0.5 {
             aspectFlagStamp = now
             AevonPrefs.synchronize()
-            aspectFlag = AevonPrefs.bool("ContentScreenAspect", default: true)
+            aspectFlag = AevonPrefs.bool("ContentScreenAspect", default: false)
         }
         return aspectFlag
     }
 
-    private static var aspectFlag: Bool = true
+    private static var aspectFlag: Bool = false
     private static var aspectFlagStamp: TimeInterval = 0
 
-    /// 当前生效的内容区宽高比：屏幕比例档 = 屏宽 / 屏高；否则 5:3 竖窗。
+    /// 当前生效的内容区宽高比：屏幕比例档 = 屏宽 / 屏高；否则 5:8 真重排（0.625）。
     /// 结果按「档位 + 屏幕尺寸」缓存（同一台设备上比例只可能被偏好改变）。
     static var contentAspectCurrent: CGFloat {
         let mode = usesScreenAspect
@@ -115,7 +119,8 @@ final class AevonWindowView: UIView {
         if mode, screen.width > 1, screen.height > 1 {
             value = screen.width / screen.height
         } else {
-            value = contentAspect
+            // V0.2.45（AevonRatio58V245）：5:3 → 5:8（生效比例只此一处）
+            value = contentAspect58
         }
         cachedAspect = value
         cachedAspectMode = mode
@@ -124,11 +129,26 @@ final class AevonWindowView: UIView {
     }
 
     private static var cachedAspect: CGFloat = 0
-    private static var cachedAspectMode = true
+    private static var cachedAspectMode = false
     private static var cachedAspectScreen: CGSize = .zero
 
     private static let minContentWidth: CGFloat = 240
-    private static let cornerRadius: CGFloat = 12
+
+    /// V0.2.45（AevonCornerRadiusV245）：圆角半径 = **窗宽 × 11.1%**，夹在 [20, 44]。
+    ///
+    /// 依据：参考视频逐像素拟合（圆弧最小二乘，残差 0.13px）——
+    /// 470px 宽窗 → r = 52px ≈ 35pt（393pt 机型）/ 38pt（430pt 机型）= 窗宽的 11.1%；
+    /// 被拉到 567px 宽时 r 仍是 54~60px，说明它是**固定 pt 量级**而不是随宽度等比放大，
+    /// 所以用百分比 + 上下夹来模拟（344 宽 → 38pt，与视频的 38pt 完全一致）。
+    ///
+    /// 历史：0.2.44 之前是写死的 12pt（窗宽的 4.5%），比参考视频小 3 倍。
+    static func cornerRadius(for width: CGFloat) -> CGFloat {
+        guard width.isFinite, width > 1 else { return 20 }
+        return min(44, max(20, (width * 0.111).rounded()))
+    }
+
+    /// V0.2.45（AevonCornerRadiusV245）：当前已应用的圆角（去重，避免每帧重写 layer）
+    private var appliedCornerRadius: CGFloat = 0
     /// 外侧手势区厚度（边条）与外角块边长（pt）。Stheno 的 edgeWidth 同位概念。
     /// V0.2.23（AevonFloatWideGripV223）：Aevon(107) 反馈「不容易触发」，18/34 → 26/44。
     /// V0.2.26（AevonFloatSthenoEdgeV226）：26 → 30 —— 对齐 Stheno edgeWidth 默认值
@@ -192,7 +212,11 @@ final class AevonWindowView: UIView {
         contentClip.frame = bounds
         contentClip.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         contentClip.clipsToBounds = true
-        contentClip.layer.cornerRadius = AevonWindowView.cornerRadius
+        // V0.2.45（AevonCornerRadiusV245）：圆角 = 窗宽 × 11.1%（先按初始宽度落一次，
+        // 之后每次布局/缩放抬手都会在 updateCornerRadius 里跟随）
+        let initialRadius = AevonWindowView.cornerRadius(for: restored.width)
+        contentClip.layer.cornerRadius = initialRadius
+        appliedCornerRadius = initialRadius
         contentClip.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
         addSubview(contentClip)
 
@@ -238,7 +262,7 @@ final class AevonWindowView: UIView {
         startAspectWatch()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "5:3 = 宽3:高5 竖窗")"
+            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "5:8 = 宽5:高8 竖窗（参考视频同尺寸）")"
             + "（AevonFloat53V221 AevonFloat53PortraitV222），"
             + "内容=整屏场景呈现（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
             + "真重排唯一通路=自建场景路线，P0 探测 AevonPiPProbeV226），"
@@ -248,10 +272,11 @@ final class AevonWindowView: UIView {
             + "全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
-        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "5:3 真重排档")"
+        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "5:8 真重排档（画布 = 窗口 × 倍数）")"
             + "，比例 \(String(format: "%.4f", appliedAspect))"
             + "，画布 \(Int(AevonWindowView.canvasSize(for: restored.size).width))x\(Int(AevonWindowView.canvasSize(for: restored.size).height))"
-            + "（AevonScreenAspectV244）")
+            + "，圆角 \(Int(AevonWindowView.cornerRadius(for: restored.width)))pt"
+            + "（AevonScreenAspectV244 AevonRatio58V245 AevonCornerRadiusV245）")
     }
 
     required init?(coder: NSCoder) {
@@ -297,7 +322,11 @@ final class AevonWindowView: UIView {
     private static func defaultFrame() -> CGRect {
         let screen = UIScreen.main.bounds
         let aspect = contentAspectCurrent
-        let width = max(minContentWidth, min(screen.width * 0.62,
+        // V0.2.45（AevonRatio58V245）：默认窗宽 0.62 → **0.80 屏宽**。
+        // 依据参考视频实测：窗宽占屏宽 79.7%（470/590），即 430pt 机型 344×550pt。
+        // 这个尺寸下画布 = 窗口（倍数 1.00）时抖音拿到的就是它原生排版的尺寸，
+        // 顶栏 / 底栏 / 右侧图标列全部落在画布内。
+        let width = max(minContentWidth, min(screen.width * 0.80,
                                              (screen.height * 0.92) * aspect))
         let height = width / aspect
         return CGRect(x: (screen.width - width) / 2.0,
@@ -318,12 +347,11 @@ final class AevonWindowView: UIView {
     /// 但画布 = 窗口尺寸时 App 的逻辑宽度只有 272pt —— 比任何一台 iPhone 都窄，
     /// 而字号是固定 pt 值 → 用户看到的就是「文字比全屏大、显示的内容变少」。
     ///
-    /// 解法：把**逻辑画布放大 k 倍**，呈现时再把整套内容缩回 1/k。
-    /// 同一块窗口面积里因此塞得下 k 倍宽的排版，字号等比变小、内容变多。
-    ///   k = 1.00 → 字号与全屏一致（0.2.42 形态）
-    ///   k = 1.30 → 标准（默认，逻辑宽 ≈354pt，接近 iPhone SE 的 375）
-    ///   k = 1.58 → 逻辑宽正好占满屏宽 430（抖音这类按 UIScreen 排满画面的 App 最友好）
-    /// 上限由屏宽夹住（画布宽绝不超屏宽），5:3 比例不变 → 无变形、无黑边、无 letterbox。
+    /// V0.2.45（AevonRatio58V245）：**默认值 1.30 → 1.00**。
+    /// 0.2.44 之后窗口比例改成 5:8、默认宽 344pt，逻辑宽已经落在原生手机区间
+    /// （参考视频里抖音拿到的就是 313pt 画布，排版完全正常），不再需要放大倍数来
+    /// 伪装密度 —— 倍数 > 1 反而会把字压小、把画布推离「App 原生排版」的形态。
+    /// 滑杆保留：想在一屏里塞更多内容时可以再放大（画布宽仍被屏宽夹住）。
     static var canvasScale: CGFloat {
         // 设置 App 是另一个进程：CFPreferences 在本进程有缓存，不失效就读到旧值。
         // 这里是布局热路径（App 每帧都会间接走到），所以 0.5s 节流 —— 拖滑杆后
@@ -333,7 +361,7 @@ final class AevonWindowView: UIView {
             lastCanvasScaleSync = now
             AevonPrefs.synchronize()
         }
-        let raw = AevonPrefs.double("ContentCanvasScale", default: 1.30)
+        let raw = AevonPrefs.double("ContentCanvasScale", default: 1.00)
         let clamped = max(1.0, min(1.60, CGFloat(raw)))
         // 量化到 0.05：滑杆产生的 1.2837 不进日志、不进画布
         return (clamped * 20).rounded() / 20
@@ -408,6 +436,25 @@ final class AevonWindowView: UIView {
         newHost.startSyncing()
         AevonLog.info("[场景] 已切换到主场景承载（回退完成）（AevonSelfSceneFallbackV228）")
     }
+
+    /// V0.2.45（AevonFloatFadeInV245）：窗口出现时轻微淡入。
+    ///
+    /// 参考视频里浮窗是渐显出现的，直接硬切会有「整块内容突然闪现」的观感。
+    /// 只动 alpha（**不动 frame / transform**，因此不触发任何布局与画布提交），
+    /// 起始值取 0.35 而不是 0 —— alpha < 0.01 的 UIView 会被 hitTest 跳过，
+    /// 开窗瞬间的手势不能失效。每窗口只做一次。
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, !hasFadedIn else { return }
+        hasFadedIn = true
+        alpha = 0.35
+        UIView.animate(withDuration: 0.18, delay: 0,
+                       options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
+            self?.alpha = 1.0
+        }
+    }
+
+    private var hasFadedIn = false
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -487,11 +534,47 @@ final class AevonWindowView: UIView {
             container.layer.position = .zero
             container.transform = shrink
         }
+        // V0.2.45（AevonRatio58V245）：画布 = 窗口（倍数 1.00）时 k == 1，
+        // shrink 本身就是恒等矩阵 —— 上面的分支已经把残留矩阵清成 identity，
+        // 这里不再额外处理（少一层判断，避免掩盖正常路径）。
+        // 圆角跟随窗宽（344 宽 → 38pt，与参考视频一致）
+        updateCornerRadius(animated: true)
         // 画布变了（首次布局 / 滑杆改了倍数 / 缩放手势提交）→ 场景跟着改画布，
         // App 才会按新尺寸真正重排（而不是被拉伸）。
         if canvas != appliedCanvasSize {
             appliedCanvasSize = canvas
             sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
+        }
+    }
+
+    /// V0.2.45（AevonCornerRadiusV245）：圆角随窗宽更新。
+    ///
+    /// 缩放进行中（isLiveResizing）不改 —— 那时窗口走 transform，bounds 没变，
+    /// 改了反而会让四角在放大过程中「跳一下」。抬手提交 frame 后再一次性跟随，
+    /// 用 0.2s 隐式动画过渡（参考视频里窗口被拖动缩放时圆角是渐变的，不突变）。
+    private func updateCornerRadius(animated: Bool) {
+        let width = contentClip.bounds.width > 1 ? contentClip.bounds.width : frame.width
+        let radius = AevonWindowView.cornerRadius(for: width)
+        guard abs(radius - appliedCornerRadius) > 0.4 else { return }
+        appliedCornerRadius = radius
+        let apply = { [weak self] in
+            guard let self else { return }
+            self.contentClip.layer.cornerRadius = radius
+            self.resizeSnapshotView?.layer.cornerRadius = radius
+        }
+        if animated, !isLiveResizing, window != nil {
+            // 用 CATransaction 而不是 UIView.animate：只改 layer 的 cornerRadius，
+            // 不碰 frame/bounds，因此在 layoutSubviews 里调用也不会引发布局循环。
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.20)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            apply()
+            CATransaction.commit()
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            apply()
+            CATransaction.commit()
         }
     }
 
@@ -510,8 +593,13 @@ final class AevonWindowView: UIView {
     /// 比例变了 → 宽保持不变（用户在旧档里拉到的宽度就是他想要的），高度按新比例重算，
     /// 夹进屏内；画布跟着重提一次，App 按新画布重排。
     ///
-    /// 两个档的差别：屏幕比例档画布 = 整屏原生尺寸（App 与全屏一致），5:3 档画布 =
+    /// 两个档的差别：屏幕比例档画布 = 整屏原生尺寸（App 与全屏一致），5:8 档画布 =
     /// 窗口 × 倍数（App 在小逻辑尺寸上原生重排）。
+    ///
+    /// V0.2.45（AevonRatio58V245）：这里**故意不做 frame 动画** —— 动画期间
+    /// applyContentLayout 会被逐帧调用，画布尺寸每帧都在变，等于每帧一次跨进程
+    /// settings 写入，App 会被反复重排（比切换本身更难看）。几何即时生效，
+    /// 只让圆角走 0.2s 隐式过渡。
     private func applyAspectIfChanged() {
         guard !isLiveResizing, transform.isIdentity else { return }
         let aspect = AevonWindowView.contentAspectCurrent
@@ -538,8 +626,8 @@ final class AevonWindowView: UIView {
         scheduleSnapshotRecapture(after: 0.5)
         appliedAspect = aspect
         AevonLog.info("[窗口] 内容比例切换 → 窗口 \(Int(width))x\(Int(height))，画布 \(Int(canvas.width))x\(Int(canvas.height))"
-            + "（\(AevonWindowView.usesScreenAspect ? "屏幕比例档：整屏原生排版 + 等比缩进窗口" : "5:3 真重排档：画布 = 窗口 × 倍数")）"
-            + "（AevonScreenAspectV244）")
+            + "（\(AevonWindowView.usesScreenAspect ? "屏幕比例档：整屏原生排版 + 等比缩进窗口" : "5:8 真重排档：画布 = 窗口 × 倍数")）"
+            + "（AevonScreenAspectV244 AevonRatio58V245）")
     }
 
     // MARK: - 外侧手势区（V0.0.37，AevonSthenoEdgeBarV37）
@@ -913,7 +1001,7 @@ final class AevonWindowView: UIView {
         let snapshot = UIImageView(image: image)
         snapshot.frame = contentClip.frame
         snapshot.contentMode = .scaleToFill
-        snapshot.layer.cornerRadius = AevonWindowView.cornerRadius
+        snapshot.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
         snapshot.layer.masksToBounds = true
         snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         snapshot.isUserInteractionEnabled = false
@@ -984,8 +1072,9 @@ final class AevonWindowView: UIView {
     /// 存屏幕百分比（left / top / width），换机型 / 旋转后依然成立。
     /// 所有浮窗共享 —— 下一个开的窗就是上一个关的窗的位置与大小。
     private static func rememberedFrame(fallback: CGRect) -> CGRect {
-        guard let store = UserDefaults(suiteName: prefsSuite),
-              let raw = store.array(forKey: frameMemoryKey) as? [Double],
+        guard let store = UserDefaults(suiteName: prefsSuite) else { return fallback }
+        migrateFrameMemoryIfNeeded(store)
+        guard let raw = store.array(forKey: frameMemoryKey) as? [Double],
               raw.count >= 3 else { return fallback }
 
         let screen = UIScreen.main.bounds
@@ -996,6 +1085,36 @@ final class AevonWindowView: UIView {
         let x = max(0, min(screen.width * CGFloat(raw[0]) / 100.0, screen.width - 60))
         let y = max(0, min(screen.height * CGFloat(raw[1]) / 100.0, max(0, screen.height - 60)))
         return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// V0.2.45（AevonRatio58V245）：几何记忆一次性迁移。
+    ///
+    /// 0.2.44 及之前存下来的宽度百分比是按 5:3（0.62 屏宽起步）或屏幕比例档记的，
+    /// 换成 5:8 + 0.80 屏宽后如果不迁移，老用户永远停在 319×510，看不到参考视频的
+    /// 那个尺寸（也就看不到抖音右侧栏回来的效果）。迁移策略：**只改宽与横向居中，
+    /// 纵向落点保留**（用户熟悉的位置不动），并写标记键只做一次。
+    private static var ratio58Migrated: Bool?
+    private static func migrateFrameMemoryIfNeeded(_ store: UserDefaults) {
+        if let done = ratio58Migrated, done { return }
+        if store.bool(forKey: "AevonRatio58Migrated") {
+            ratio58Migrated = true
+            return
+        }
+        let old = (store.array(forKey: frameMemoryKey) as? [Double]) ?? []
+        // 0.80 屏宽 + 水平居中；纵向沿用旧值（没有旧值就用默认 10%）
+        let top = old.count >= 3 ? old[1] : 10.0
+        let migrated: [Double] = [10.0, top, 80.0]
+        store.set(migrated, forKey: frameMemoryKey)
+        // 偏好也一并归位到 0.2.45 默认值。PSSwitchCell / PSSliderCell 的 default
+        // 只对「从没写过这个键」的设备生效 —— 0.2.44 对测时这两个键都被写过
+        // （屏幕比例开过、倍数拉到 1.58），不显式回写的话升级后仍是旧值。
+        store.set(false, forKey: "ContentScreenAspect")
+        store.set(1.00, forKey: "ContentCanvasScale")
+        store.set(true, forKey: "AevonRatio58Migrated")
+        store.synchronize()
+        ratio58Migrated = true
+        AevonLog.info("[窗口] 几何记忆迁移到 5:8 默认尺寸：宽 80% 屏宽（\(String(format: "%.0f", top))% 顶边）"
+            + "（AevonRatio58V245）")
     }
 
     private func persistFrame() {

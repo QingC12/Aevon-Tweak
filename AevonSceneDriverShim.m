@@ -124,6 +124,25 @@ __attribute__((used)) static const char AevonContentTreeV243Marker[] = "AevonCon
  * 右侧栏全在位、视频在原生位置居中、上下黑边天然等量），呈现层按 1/k 等比缩进
  * 窗口（X/Y 系数天然相等 → 不裁切、不变形、不留 letterbox）。关掉 = 5:3 真重排。 */
 __attribute__((used)) static const char AevonScreenAspectV244Marker[] = "AevonScreenAspectV244";
+/* V0.2.45（AevonRatio58V245 / AevonCornerRadiusV245 / AevonFloatFadeInV245）：
+ * 按参考视频逐像素实测定档（交付/分析-主悬浮窗比例与圆角-2026-10-27/）。
+ *
+ * 实测：主窗 470×754 px（多帧一致，0.623 ≈ 5:8）、圆角 52px ≈ 35/38pt
+ * = 窗宽的 11.1%（被拉大到 567px 宽时仍是 54~60px → 近似固定 pt 量级）。
+ * 窗内抖音各区块高度全部落在原生 pt 上（顶栏 33 / 底栏 33 / 底部安全区 36 /
+ * 右侧图标列 48）→ App 拿到 313×503 pt 的画布**自己排了一次版**，
+ * 不是整屏缩放、也不是裁切。这就是 0.2.42 验证过的 S2 真重排，只是当时
+ * 比例用了 5:3（窄 4%）、画布只有 272pt。
+ *
+ * 本版四刀：
+ *   ① 生效比例 5:3 → 5:8（contentAspect58）；历史 5:3 常量原样保留（CI 1785 钉住）
+ *   ② 画布倍数默认 1.30 → 1.00（画布 = 窗口，App 拿到 344×550 的原生尺寸）
+ *   ③ 默认窗宽 0.62 → 0.80 屏宽 + 几何记忆一次性迁移（老记忆停在 319 宽）
+ *   ④ 圆角 12pt 写死 → 窗宽 × 11.1%（夹 20~44），随缩放跟随 + 0.2s 隐式过渡；
+ *      开窗 0.18s 淡入（只动 alpha，不触发布局与画布提交） */
+__attribute__((used)) static const char AevonRatio58V245Marker[] = "AevonRatio58V245";
+__attribute__((used)) static const char AevonCornerRadiusV245Marker[] = "AevonCornerRadiusV245";
+__attribute__((used)) static const char AevonFloatFadeInV245Marker[] = "AevonFloatFadeInV245";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {

@@ -2245,6 +2245,42 @@ jobs:
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.44 反转：屏幕比例档画布不是整屏尺寸"; exit 1; }
           echo "V0.2.44 校验: 内容比例跟随屏幕（整屏原生排版 + 1/k 等比缩进）+ 5:3 真重排档可切回"
+          # ── V0.2.45 校验（AevonRatio58V245）：按参考视频实测把主窗改到 5:8 真重排。
+          # 实测（交付/分析-主悬浮窗比例与圆角-2026-10-27/）：470×754 px = 5:8（0.623）、
+          # 圆角 52px ≈ 35/38pt = 窗宽 11.1%、窗内抖音各区块落在原生 pt 上 →
+          # App 拿到约 313×503 pt 画布自己排版（不是缩放/裁切）。
+          for s in AevonRatio58V245 AevonCornerRadiusV245 AevonFloatFadeInV245; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.45 SB 侧缺标记 $s"; exit 1; }
+          done
+          # 生效比例必须是 5:8（历史 5:3 常量仍在，但只能出现在 contentAspect58 之外）
+          grep -q 'contentAspect58: CGFloat = 5.0 / 8.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 生效比例不是 5:8"; exit 1; }
+          grep -q 'value = contentAspect58' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 contentAspectCurrent 未采用 5:8"; exit 1; }
+          # 圆角必须是按窗宽算的函数（11.1%，夹 20~44），不许退回写死值
+          grep -q 'width \* 0.111' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 圆角未按窗宽 11.1% 计算"; exit 1; }
+          grep -q 'static let cornerRadius: CGFloat = 12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.45 圆角写死 12pt 不许回潮"; exit 1; }
+          # 默认窗宽 0.80 屏宽 + 画布倍数默认 1.00 + 屏幕比例档默认关
+          grep -q 'screen.width \* 0.80' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 默认窗宽不是 0.80 屏宽"; exit 1; }
+          grep -q 'AevonPrefs.double("ContentCanvasScale", default: 1.00)' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 画布倍数默认不是 1.00（画布 = 窗口）"; exit 1; }
+          grep -q 'AevonPrefs.bool("ContentScreenAspect", default: false)' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 屏幕比例档默认未关（默认要 5:8 真重排）"; exit 1; }
+          # 老记忆/老偏好必须一次性归位（PSSwitchCell 的 default 只影响没写过键的设备）
+          grep -q 'AevonRatio58Migrated' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 缺几何记忆与偏好的迁移标记"; exit 1; }
+          grep -q 'AevonCornerRadiusV245' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 缺圆角标记锚"; exit 1; }
+          # 反转断言：几何动画不许做（逐帧布局会把画布尺寸逐帧跨进程写）
+          grep -q '这里\*\*故意不做 frame 动画\*\*' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.45 比例切换的几何动画约定被改"; exit 1; }
+          echo "V0.2.45 校验: 5:8 真重排（画布 = 窗口 344x550）+ 圆角 11.1% + 默认窗宽 0.80 + 记忆迁移 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
