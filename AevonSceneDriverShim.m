@@ -143,6 +143,33 @@ __attribute__((used)) static const char AevonScreenAspectV244Marker[] = "AevonSc
 __attribute__((used)) static const char AevonRatio58V245Marker[] = "AevonRatio58V245";
 __attribute__((used)) static const char AevonCornerRadiusV245Marker[] = "AevonCornerRadiusV245";
 __attribute__((used)) static const char AevonFloatFadeInV245Marker[] = "AevonFloatFadeInV245";
+/* V0.2.46（AevonCanvasScaleV246 / AevonRatioTallV246 / AevonFloatGlowV246 /
+ * AevonFloatGripGlobalV246 / AevonCanvasHandoffV246）：Aevon(21) 真机四项。
+ *
+ *  ① 画布倍数默认 1.00 → **1.30**（AevonCanvasScaleV246）。
+ *     用户三档对测：1.00（画布 = 窗口 315×504）字依旧很大、一屏装不下；
+ *     1.30（画布被屏宽夹到 430×688，k = 0.80）字正常、内容确实重排；1.60 与 1.30
+ *     同一张 430 宽画布（只是缩放更糊）。字号是固定 pt —— 画布逻辑宽越接近真机 430，
+ *     排出来的字越和全屏一致。老用户旧值 1.00 一次性回写（用户自选档不动）。
+ *  ② 窗比例 5:8（0.625）→ **7:12（0.5833，高 +7%）**（AevonRatioTallV246）。
+ *     用户：5:8 看着「有点胖」，高度加 5%~10%。画布仍 = 窗口 × 倍数、按 1/k 等比缩回
+ *     → 比例不变形、不出黑边；画布高 688 → 737，抖音视频区跟着变高、更靠中间。
+ *  ③ 深色模式浮窗四周看不清 → **外缘发光圈**（AevonFloatGlowV246）。
+ *     Stheno / ScreenCore 侧证据：`SCFloatingContainerView` 有整只 `_sceneGlowView`
+ *     （配 sceneGlow 居中/定尺寸约束）+ `sc_isDarkAppearance` +
+ *     `sc_updateCornerRadiusAndShadowPath` —— 发光圈跟几何、按深浅外观切换。
+ *  ④ 全屏 App 上开浮窗时窗外手柄全失效（拖不动/关不掉/缩不了）
+ *     （AevonFloatGripGlobalV246）。根因：浮窗父视图是全屏 App 画面容器，
+ *     其命中测试不把窗外的点交给我们（V0.0.23 / V0.0.41 两度实锤），手柄 pan 永不 begun。
+ *     修法：全局触摸通道在「交回浮窗」早退之前先做手柄判定并整段接管（吞 SB 份事件，
+ *     不会与 pan 双触发）。
+ *  AevonCanvasHandoffV246：主场景改画布日志里点名「App 拿到 WxH 独立画布自己排版」，
+ *  作为「所有走 S2 的 App 都能自排版」的正面证据。 */
+__attribute__((used)) static const char AevonCanvasScaleV246Marker[] = "AevonCanvasScaleV246";
+__attribute__((used)) static const char AevonRatioTallV246Marker[] = "AevonRatioTallV246";
+__attribute__((used)) static const char AevonFloatGlowV246Marker[] = "AevonFloatGlowV246";
+__attribute__((used)) static const char AevonFloatGripGlobalV246Marker[] = "AevonFloatGripGlobalV246";
+__attribute__((used)) static const char AevonCanvasHandoffV246Marker[] = "AevonCanvasHandoffV246";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {

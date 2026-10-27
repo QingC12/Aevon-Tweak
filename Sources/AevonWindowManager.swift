@@ -319,10 +319,13 @@ enum AevonWindowManager {
                             + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
                             + "（AevonScreenAspectV244）")
                     } else {
+                        // V0.2.46（AevonCanvasHandoffV246）：这一行就是「App 拿到一块独立画布
+                        // 自己重排」的正面证据 —— 对所有走 S2 的 App 一视同仁（不分系统 / 第三方）。
                         AevonLog.info("[场景] 主场景改画布：\(bundleID) 窗口=\(Int(windowSize.width))x\(Int(windowSize.height))"
                             + " × \(String(format: "%.2f", AevonWindowView.canvasScale)) → 画布=\(Int(size.width))x\(Int(size.height))"
-                            + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
-                            + "（AevonMainSceneResizeV242 AevonCanvasScaleV243）")
+                            + "（App 拿到 \(Int(size.width))x\(Int(size.height)) 的独立画布自己排版，不是缩放/裁切；"
+                            + "\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                            + "（AevonMainSceneResizeV242 AevonCanvasScaleV243 AevonCanvasHandoffV246）")
                     }
                 }
                 // 三拍复查（0.35 / 1.2 / 2.5s）由承载器持有：关窗 invalidate 之后

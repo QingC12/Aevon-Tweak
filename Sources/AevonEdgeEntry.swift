@@ -1580,6 +1580,21 @@ enum AevonEdgeEntry {
             // （浮窗的右边缘不是屏幕右边缘）。所以这里既不接管也不吞，连「观察」都不做 ——
             // 只登记一个位置给日志用，然后立刻返回。
             if floatUp, AevonEntryHost.pointHitsFloatingWindow(at: point) {
+                // V0.2.46（AevonFloatGripGlobalV246）：**先给外侧手柄一次机会**。
+                //
+                // Aevon(21) 真机：浮窗开在全屏 App 之上时，窗外四周的手势全部失效
+                // （拖不动、关不掉、缩不了）。手柄并没有消失，是它的 pan 永远等不到
+                // began —— 浮窗的父视图此时是全屏 App 画面容器
+                // （`SBDeviceApplicationSceneViewController.view`），那个视图的命中测试
+                // 不把窗外的点交给我们（V0.0.23 / V0.0.41 两度实锤，见 AevonWindowView.grab 注释）。
+                // 桌面宿主时视图命中正常（pan 能起），所以这个 bug 只在 App 前台复现。
+                //
+                // 修法：把手柄判定**提到这条早退之前**，由事件总入口（sendEvent）驱动。
+                // 不会双触发：一旦 grab 成立，`shouldSwallowGlobalTouch` 的
+                // `floatGestureActive` 分支会把这根手指的 SB 份事件整个丢掉，
+                // 手柄自己的 pan 连 began 都收不到；两条路径最终也只调用同一套
+                // grabBegin / grabUpdate / grabEnd。
+                if handleFloatGestureBegan(point: point, touchID: touchID) { return }
                 lastTouchPoint = point
                 let nowFloat = CACurrentMediaTime()
                 if nowFloat - globalLastLogAt > 2.0 {

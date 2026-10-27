@@ -2256,7 +2256,10 @@ jobs:
           # 生效比例必须是 5:8（历史 5:3 常量仍在，但只能出现在 contentAspect58 之外）
           grep -q 'contentAspect58: CGFloat = 5.0 / 8.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 生效比例不是 5:8"; exit 1; }
-          grep -q 'value = contentAspect58' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+          # V0.2.46 反转（AevonRatioTallV246）：生效比例由 5:8 改为 5:8 加高 7%（7:12）。
+          # 用户 Aevon(21) 定档「5:8 看着有点胖，高度加 5%~10%」→ 旧断言
+          # `value = contentAspect58` 与产品冲突，按「反转断言、不改产品」改为 contentAspectTall。
+          grep -q 'value = contentAspectTall' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 contentAspectCurrent 未采用 5:8"; exit 1; }
           # 圆角必须是按窗宽算的函数（11.1%，夹 20~44），不许退回写死值
           grep -q 'width \* 0.111' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -2266,7 +2269,10 @@ jobs:
           # 默认窗宽 0.80 屏宽 + 画布倍数默认 1.00 + 屏幕比例档默认关
           grep -q 'screen.width \* 0.80' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 默认窗宽不是 0.80 屏宽"; exit 1; }
-          grep -q 'AevonPrefs.double("ContentCanvasScale", default: 1.00)' \
+          # V0.2.46 反转（AevonCanvasScaleV246）：画布倍数默认 1.00 → 1.30。
+          # Aevon(21) 三档对测：1.00 画布 = 窗口（315×504）字依旧很大、内容更少；
+          # 1.30 画布被屏宽夹到 430×688（k=0.80）字正常且确实重排。旧断言与产品冲突，反转。
+          grep -q 'AevonPrefs.double("ContentCanvasScale", default: 1.30)' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 画布倍数默认不是 1.00（画布 = 窗口）"; exit 1; }
           grep -q 'AevonPrefs.bool("ContentScreenAspect", default: false)' \
@@ -2281,6 +2287,48 @@ jobs:
           grep -q '这里\*\*故意不做 frame 动画\*\*' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 比例切换的几何动画约定被改"; exit 1; }
           echo "V0.2.45 校验: 5:8 真重排（画布 = 窗口 344x550）+ 圆角 11.1% + 默认窗宽 0.80 + 记忆迁移 已就位"
+          # ── V0.2.46 校验（AevonCanvasScaleV246 / AevonRatioTallV246 /
+          #    AevonFloatGlowV246 / AevonFloatGripGlobalV246 / AevonCanvasHandoffV246）
+          # Aevon(21) 真机四项：
+          #   ① 画布倍数默认 1.30（1.00 字大内容少，1.30 字正常且真重排）+ 老值一次性回写
+          #   ② 窗比例 7:12（5:8 高 7%），画布仍 = 窗口 × 倍数、1/k 缩回 → 不变形不出黑边
+          #   ③ 深色模式外缘发光圈（Stheno / ScreenCore 的 sceneGlowView 同思路）
+          #   ④ 全屏 App 上开浮窗时窗外手柄失效 → 全局通道在「交回浮窗」早退前先抓手柄
+          for s in AevonCanvasScaleV246 AevonRatioTallV246 AevonFloatGlowV246 \
+                   AevonFloatGripGlobalV246 AevonCanvasHandoffV246; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.46 SB 侧缺标记 $s"; exit 1; }
+          done
+          grep -q 'contentAspectTall: CGFloat = 7.0 / 12.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.46 窗比例不是 7:12（5:8 加高 7%）"; exit 1; }
+          grep -q 'if old <= 1.05' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.46 缺画布倍数一次性回写（老用户会停在 1.00）"; exit 1; }
+          # Detail.plist 的画布倍数默认值必须真的是 1.3（不是文案里写 1.3）
+          python3 -c "import plistlib,sys; items=plistlib.load(open(sys.argv[1],'rb'))['items']; h=[i for i in items if i.get('key')=='ContentCanvasScale']; assert h and abs(float(h[0].get('default',0))-1.3)<1e-6, h; assert float(h[0].get('maxValue',0))>=1.6, h" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::0.2.46 Detail.plist 画布倍数默认不是 1.3"; exit 1; }
+          # 发光圈：独立的非交互视图 + shadowPath 轮廓（深色白色柔光）
+          grep -q 'final class AevonGlowRingView' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.46 缺外缘发光圈视图"; exit 1; }
+          grep -q 'layer.shadowPath' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.46 发光圈没有 shadowPath 轮廓（画不出光晕）"; exit 1; }
+          grep -q 'refreshEdgeGlowIfAppearanceChanged' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.46 深浅外观切换未重刷发光圈"; exit 1; }
+          # 反转断言：不许用 traitCollectionDidChange（iOS 17 SDK 已废弃，警告会断构建）
+          grep -q 'override func traitCollectionDidChange' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.46 用了废弃的 traitCollectionDidChange"; exit 1; }
+          # 反转断言：发光圈绝不能参与命中（否则窗外 12pt 会吃掉 App 触摸）
+          grep -q 'glowRing.isUserInteractionEnabled = false' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.46 发光圈可交互（会吃掉窗外触摸）"; exit 1; }
+          # ④ 的关键是**顺序**：手柄判定必须排在「交回浮窗」早退之前
+          GRAB_LINE=$(grep -n 'if handleFloatGestureBegan(point: point, touchID: touchID) { return }' \
+                        "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | head -n1 | cut -d: -f1)
+          PASS_LINE=$(grep -n '触摸落在浮窗上' \
+                        "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$GRAB_LINE" ] || [ -z "$PASS_LINE" ] || [ "$GRAB_LINE" -ge "$PASS_LINE" ]; then
+            echo "::error::0.2.46 手柄判定没排在「交回浮窗」之前（全屏 App 里窗外手势仍会失效）"
+            exit 1
+          fi
+          echo "V0.2.46 校验: 画布倍数默认 1.30（+老值回写）+ 窗比例 7:12 + 深色边缘发光 + 全屏 App 手柄接管 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

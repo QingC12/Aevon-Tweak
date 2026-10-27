@@ -16,6 +16,46 @@ final class AevonEdgeHandleView: UIView {
     }
 }
 
+/// 浮窗外缘发光圈（V0.2.46，AevonFloatGlowV246）。
+///
+/// Aevon(21) 用户反馈：**深色模式下浮窗四周看不清**（窗是深灰、壁纸/App 也是深色，
+/// 边缘糊在一起）。Stheno / ScreenCore 的做法正是给浮窗加一层「边缘发光」：
+/// `SCFloatingContainerView` 身上有一整个 `_sceneGlowView`（配 4 条约束居中/定尺寸）
+/// 和 `sc_isDarkAppearance` / `sc_updateCornerRadiusAndShadowPath` —— 也就是
+/// **发光圈跟随窗几何、并且按深浅外观切换**。这里照同一思路实现：
+///   · 一个比窗口四周各外扩 12pt 的透明圈，走 `shadowPath` 描圆角矩形轮廓；
+///   · 深色外观：白色柔光（border 1.0 / shadow 白 0.9 / radius 9）；
+///   · 浅色外观：黑色极淡的立体边（border 0.8 / shadow 黑 0.22 / radius 6），
+///     目的是「有个边」而不是「发光」。
+/// 圈加在内容层**下面**（index 0），完全被内容遮住，只在窗口外沿露出光晕 ——
+/// 不占窗内任何像素、不参与命中（hitTest 恒 nil）。
+final class AevonGlowRingView: UIView {
+    /// 光晕外扩宽度（pt）：窗口四周各留这么多给「发光」呼吸。
+    static let halo: CGFloat = 12
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
+    /// 按当前几何 + 外观刷新（幂等；参数没变时内部直接返回）。
+    func apply(width: CGFloat, height: CGFloat, radius: CGFloat, dark: Bool) {
+        let halo = AevonGlowRingView.halo
+        let target = CGRect(x: -halo, y: -halo,
+                            width: width + halo * 2, height: height + halo * 2)
+        if frame != target { frame = target }
+        let corner = max(1, radius + halo)
+        layer.cornerRadius = corner
+        layer.borderWidth = dark ? 1.0 : 0.8
+        layer.borderColor = (dark ? UIColor(white: 1.0, alpha: 0.55)
+                                  : UIColor(white: 0.0, alpha: 0.10)).cgColor
+        layer.shadowColor = (dark ? UIColor.white : UIColor.black).cgColor
+        layer.shadowOpacity = Float(dark ? 0.90 : 0.22)
+        layer.shadowRadius = dark ? 9 : 6
+        layer.shadowOffset = .zero
+        // 直接赋 path（不做相等比较：CGPath 的相等判断要走 CF 层，这里几何变才调用，
+        // 调用频率由 updateEdgeGlow 的去重保证）
+        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: corner).cgPath
+    }
+}
+
 /// 浮窗上被按住的位置（V0.0.41，AevonFloatGlobalV41）。
 ///
 /// 全局触摸通道拿不到 `UIPanGestureRecognizer`，只能拿到坐标，所以命中结果用这个
@@ -87,6 +127,17 @@ final class AevonWindowView: UIView {
     /// 的 App 在窗内既放得下右侧栏、又不至于把底栏挤出画布的关键。
     static let contentAspect58: CGFloat = 5.0 / 8.0
 
+    /// V0.2.46（AevonRatioTallV246）：**当前生效比例 = 5:8 再加高 7%**（7:12 = 0.5833）。
+    ///
+    /// Aevon(21) 用户定档：0.2.45 的 5:8（0.625）看着「有一点胖」，要求在**不破坏真重排、
+    /// 不出黑边**的前提下把高度加 5%~10%。取 7%：
+    ///   344 宽 → 高 550 → **590**（+40pt），画布 430 宽 → 高 688 → **737**。
+    /// 为什么加高不会出黑边：画布仍是「窗口 × 倍数」并按 1/k 等比缩回窗口
+    /// （canvasSize / applyContentLayout 全链同比例），画布与窗口同比例 → 永远 1:1 贴合。
+    /// 为什么对抖音有帮助：它的视频区高度跟着画布高走，画布越高、视频越靠中间，
+    /// 「视频堆在中上部分」的观感随之减弱（剩下的是抖音自己把视频区锚在页面上部）。
+    static let contentAspectTall: CGFloat = 7.0 / 12.0
+
     /// V0.2.44（AevonScreenAspectV244）：内容比例档 —— 是否跟随屏幕比例。
     ///
     /// **V0.2.45（AevonRatio58V245）改默认值：true → false。**
@@ -120,7 +171,8 @@ final class AevonWindowView: UIView {
             value = screen.width / screen.height
         } else {
             // V0.2.45（AevonRatio58V245）：5:3 → 5:8（生效比例只此一处）
-            value = contentAspect58
+            // V0.2.46（AevonRatioTallV246）：5:8 → 5:8 加高 7%（7:12），用户定档
+            value = contentAspectTall
         }
         cachedAspect = value
         cachedAspectMode = mode
@@ -166,6 +218,12 @@ final class AevonWindowView: UIView {
 
     private let contentClip = UIView()
     private let hintLabel = UILabel()
+    /// V0.2.46（AevonFloatGlowV246）：边缘发光圈（深色模式看清窗口四周）
+    private let glowRing = AevonGlowRingView()
+    /// 上一次应用发光圈的参数（几何 / 圆角 / 深浅外观任一变化才重刷）
+    private var appliedGlowKey = ""
+    /// 上一次应用发光圈时的外观（深色 = true），供外观巡检比较
+    private var appliedGlowDark: Bool?
 
     private var moveOriginFrame: CGRect = .zero
     private var moveOriginPoint: CGPoint = .zero
@@ -218,6 +276,11 @@ final class AevonWindowView: UIView {
         contentClip.layer.cornerRadius = initialRadius
         appliedCornerRadius = initialRadius
         contentClip.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
+        // V0.2.46（AevonFloatGlowV246）：边缘发光圈先加 → 永远在内容层下面，
+        // 只在窗口外沿露出光晕（深色模式靠它把窗口边和背景分开）。
+        glowRing.isUserInteractionEnabled = false
+        glowRing.backgroundColor = .clear
+        addSubview(glowRing)
         addSubview(contentClip)
 
         contentClip.addSubview(sceneHost.container)
@@ -262,7 +325,7 @@ final class AevonWindowView: UIView {
         startAspectWatch()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "5:8 = 宽5:高8 竖窗（参考视频同尺寸）")"
+            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "5:8 加高 7% = 宽7:高12 竖窗（0.2.46 用户定档，比 5:8 高 7%）")"
             + "（AevonFloat53V221 AevonFloat53PortraitV222），"
             + "内容=整屏场景呈现（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
             + "真重排唯一通路=自建场景路线，P0 探测 AevonPiPProbeV226），"
@@ -272,11 +335,17 @@ final class AevonWindowView: UIView {
             + "全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
-        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "5:8 真重排档（画布 = 窗口 × 倍数）")"
+        let initCanvas = AevonWindowView.canvasSize(for: restored.size)
+        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "5:8+7% 真重排档（画布 = 窗口 × 倍数）")"
             + "，比例 \(String(format: "%.4f", appliedAspect))"
-            + "，画布 \(Int(AevonWindowView.canvasSize(for: restored.size).width))x\(Int(AevonWindowView.canvasSize(for: restored.size).height))"
+            + "，窗口 \(Int(restored.width))x\(Int(restored.height))"
+            + "，画布 \(Int(initCanvas.width))x\(Int(initCanvas.height))"
+            + "，倍数 \(String(format: "%.2f", AevonWindowView.canvasScale))"
+            + "（缩放 \(String(format: "%.2f", initCanvas.width / max(1, restored.width)))）"
             + "，圆角 \(Int(AevonWindowView.cornerRadius(for: restored.width)))pt"
-            + "（AevonScreenAspectV244 AevonRatio58V245 AevonCornerRadiusV245）")
+            + "，外观 \(traitCollection.userInterfaceStyle == .dark ? "深色·边缘发光" : "浅色·淡描边")"
+            + "（AevonScreenAspectV244 AevonRatio58V245 AevonRatioTallV246 AevonCanvasScaleV246 AevonCornerRadiusV245 AevonFloatGlowV246）")
+        updateEdgeGlow()
     }
 
     required init?(coder: NSCoder) {
@@ -352,6 +421,16 @@ final class AevonWindowView: UIView {
     /// （参考视频里抖音拿到的就是 313pt 画布，排版完全正常），不再需要放大倍数来
     /// 伪装密度 —— 倍数 > 1 反而会把字压小、把画布推离「App 原生排版」的形态。
     /// 滑杆保留：想在一屏里塞更多内容时可以再放大（画布宽仍被屏宽夹住）。
+    ///
+    /// **V0.2.46（AevonCanvasScaleV246）：默认值 1.00 → 1.30（Aevon(21) 真机对测）。**
+    /// 用户在 1.00 / 1.30 / 1.60 三档实测：1.00（画布 = 窗口 315×504）**字依旧很大、
+    /// 一屏装不下内容**；1.30（画布 430×688，被屏宽夹住 → 实际 431→430 宽、k = 0.80）
+    /// 「字正常了，而且内容确实重排」。原因是字号是固定 pt：画布逻辑宽越接近真实手机
+    /// 宽度（430），排出来的字与全屏一致，再按 1/k 缩进窗口 → 观感正常。
+    /// 1.60 与 1.30 都被屏宽夹到同一张 430 宽画布（只是缩放系数不同），
+    /// 所以 1.30 是「画布吃满屏宽 + 缩放系数最不糊」的那个甜点，定为默认。
+    /// 升级老用户的一次性回写见 migrateCanvasScaleIfNeeded（键值 1.00 才改，
+    /// 用户自己拉到别的档不动）。
     static var canvasScale: CGFloat {
         // 设置 App 是另一个进程：CFPreferences 在本进程有缓存，不失效就读到旧值。
         // 这里是布局热路径（App 每帧都会间接走到），所以 0.5s 节流 —— 拖滑杆后
@@ -361,7 +440,7 @@ final class AevonWindowView: UIView {
             lastCanvasScaleSync = now
             AevonPrefs.synchronize()
         }
-        let raw = AevonPrefs.double("ContentCanvasScale", default: 1.00)
+        let raw = AevonPrefs.double("ContentCanvasScale", default: 1.30)
         let clamped = max(1.0, min(1.60, CGFloat(raw)))
         // 量化到 0.05：滑杆产生的 1.2837 不进日志、不进画布
         return (clamped * 20).rounded() / 20
@@ -466,6 +545,36 @@ final class AevonWindowView: UIView {
             contentClip.frame = bounds
         }
         applyContentLayout()
+        // V0.2.46（AevonFloatGlowV246）：外缘发光圈跟窗几何（幂等）
+        updateEdgeGlow()
+    }
+
+    /// V0.2.46（AevonFloatGlowV246）：刷新外缘发光圈。
+    /// 只有「窗宽 / 窗高 / 圆角 / 深浅外观」任一变化才真正重刷 —— 缩放提交、
+    /// 比例切换、系统外观切换都会走到这里，逐帧空调用不会产生 CA 提交。
+    private func updateEdgeGlow() {
+        let width = bounds.width
+        let height = bounds.height
+        guard width > 1, height > 1 else { return }
+        let radius = AevonWindowView.cornerRadius(for: width)
+        let dark = traitCollection.userInterfaceStyle == .dark
+        let key = "\(Int(width))x\(Int(height))/\(Int(radius))/\(dark ? 1 : 0)"
+        guard key != appliedGlowKey else { return }
+        appliedGlowKey = key
+        appliedGlowDark = dark
+        glowRing.apply(width: width, height: height, radius: radius, dark: dark)
+    }
+
+    /// 系统外观切换（设置里换深/浅色）不会重建窗口 —— 由 0.5 秒的比例/外观巡检
+    /// 一起刷（见 startAspectWatch）。**故意不用 `traitCollectionDidChange:`**：
+    /// 它在 iOS 17 SDK 已标记废弃，本项目编译期对警告不留情面（历史上有警告断构建的先例）。
+    private func refreshEdgeGlowIfAppearanceChanged() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        guard dark != appliedGlowDark else { return }
+        appliedGlowDark = dark
+        appliedGlowKey = ""
+        updateEdgeGlow()
+        AevonLog.info("[窗口] 外观切换 → 重刷边缘发光圈（\(dark ? "深色·白色柔光" : "浅色·淡描边")）（AevonFloatGlowV246）")
     }
 
     /// 触摸落在本窗口时把自己提到最前（多窗重叠时点哪个哪个在上）。
@@ -585,6 +694,8 @@ final class AevonWindowView: UIView {
     private func startAspectWatch() {
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.applyAspectIfChanged()
+            // V0.2.46（AevonFloatGlowV246）：外观巡检 —— 系统切深/浅色时重刷发光圈
+            self?.refreshEdgeGlowIfAppearanceChanged()
         }
         RunLoop.main.add(timer, forMode: .common)
         aspectWatchTimer = timer
@@ -1074,6 +1185,7 @@ final class AevonWindowView: UIView {
     private static func rememberedFrame(fallback: CGRect) -> CGRect {
         guard let store = UserDefaults(suiteName: prefsSuite) else { return fallback }
         migrateFrameMemoryIfNeeded(store)
+        migrateCanvasScaleIfNeeded(store)
         guard let raw = store.array(forKey: frameMemoryKey) as? [Double],
               raw.count >= 3 else { return fallback }
 
@@ -1115,6 +1227,35 @@ final class AevonWindowView: UIView {
         ratio58Migrated = true
         AevonLog.info("[窗口] 几何记忆迁移到 5:8 默认尺寸：宽 80% 屏宽（\(String(format: "%.0f", top))% 顶边）"
             + "（AevonRatio58V245）")
+    }
+
+    /// V0.2.46（AevonCanvasScaleV246）：画布倍数一次性归位到 1.30。
+    ///
+    /// 为什么需要回写：0.2.45 的迁移**显式写过** `ContentCanvasScale = 1.00`
+    /// （那是当时定档），而 PSSliderCell 的 `default` 只对「从没写过这个键」的设备生效
+    /// —— 不显式改，所有老用户升级后仍停在 1.00，也就仍然是「字大、内容少」。
+    /// 只改「旧值 ≤ 1.05」这一种（= 0.2.45 写下的 1.00 或用户没动过），
+    /// 用户自己拉到 1.20 / 1.58 的档一律保留。
+    private static var canvasScaleMigrated: Bool?
+    private static func migrateCanvasScaleIfNeeded(_ store: UserDefaults) {
+        if let done = canvasScaleMigrated, done { return }
+        if store.bool(forKey: "AevonCanvasScaleV246") {
+            canvasScaleMigrated = true
+            return
+        }
+        var note = "无旧值 → 直接落默认 1.30"
+        if let old = store.object(forKey: "ContentCanvasScale") as? Double {
+            if old <= 1.05 {
+                store.set(1.30, forKey: "ContentCanvasScale")
+                note = "旧值 \(String(format: "%.2f", old))（0.2.45 定档 1.00）→ 1.30"
+            } else {
+                note = "旧值 \(String(format: "%.2f", old)) 保持不变（用户自选档）"
+            }
+        }
+        store.set(true, forKey: "AevonCanvasScaleV246")
+        store.synchronize()
+        canvasScaleMigrated = true
+        AevonLog.info("[窗口] 画布倍数归位：\(note)（AevonCanvasScaleV246）")
     }
 
     private func persistFrame() {
