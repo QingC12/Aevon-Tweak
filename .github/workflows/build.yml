@@ -2103,6 +2103,40 @@ jobs:
             || { echo "::error::0.2.54 连接取证闭包缺弱持有"; exit 1; }
           echo "V0.2.54 校验: 三拍重申前台弱持有 + 登记表身份核对（关窗后幽灵更新哑火）已就位"
 
+          # ── V0.2.55 校验（AevonRingGripV255 / AevonGestureProbeV255 / AevonDockTapAnywhereV255 / AevonDarkGuardV255 / AevonGripHealV255）──
+          # Aevon(29) 四项：①系统 pan 失效 → 把手物理化（识别器移到真实控件）+ 手势探针取证
+          # + 吞咽可观测 + 拖拽状态残留自愈；②停靠小窗任意位置轻点=装回主窗；
+          # ③回桌面黑屏提速（重申拍 0.9s→0.35s 加密）；④把手位置改到从底部起 30%。
+          for s in AevonRingGripV255 AevonGestureProbeV255 AevonDockTapAnywhereV255 AevonDarkGuardV255 AevonGripHealV255; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.55 缺标记 $s"; exit 1; }
+          done
+          # 把手：识别器必须挂在 handle（真实控件）上，全屏宿主零识别器
+          grep -q 'handle.addGestureRecognizer(pan)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.55 把手 pan 识别器必须挂 handle（全屏宿主持识别器 = Aevon(29) pan 失效的头号结构嫌疑）"; exit 1; }
+          grep -q 'handle.addGestureRecognizer(tap)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.55 把手 tap 识别器必须挂 handle"; exit 1; }
+          grep -q 'centerRatio: CGFloat = 0.70' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.55 把手位置必须是从底部起 30%（centerRatio=0.70，用户 Aevon(29) #4）"; exit 1; }
+          # 把手 hitTest 命中时返回 handle 而非宿主自身
+          grep -q 'return handle' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.55 把手 hitTest 命中必须返回 handle（touch.view 不再落在全屏宿主上）"; exit 1; }
+          # 手势探针：窗口栈打印必须带识别器扫描
+          grep -q 'dumpGestureRecognizerProbe' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.55 缺手势诊断探针（pan 失效取证依赖它）"; exit 1; }
+          # 拖拽状态残留自愈：2 秒无 moved 强制清场
+          grep -q 'now - lastFloatMovedAt > 2.0' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.55 缺浮窗拖拽状态残留自愈（UITouch 槽位地址复用会让新手指被误吞）"; exit 1; }
+          # 停靠小窗任意位置轻点 = 装回
+          grep -q 'AevonDockTapAnywhereV255' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.55 缺停靠小窗任意位置轻点装回"; exit 1; }
+          # 回桌面重申拍加密：0.35/0.7/1.05，间隔下限 0.35
+          grep -q 'for delay in \[0.35, 0.7, 1.05\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.55 缺重申拍加密（回桌面黑屏提速）"; exit 1; }
+          grep -q 'now - lastReassertAt < 0.35' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.55 重申间隔下限必须是 0.35s"; exit 1; }
+          echo "V0.2.55 校验: 把手物理化+位置30% + 手势探针 + 拖拽残留自愈 + 停靠任意点装回 + 回桌面重申加密 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

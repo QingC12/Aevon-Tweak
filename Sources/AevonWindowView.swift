@@ -331,6 +331,18 @@ final class AevonWindowView: UIView {
         addSubview(glowRing)
         addSubview(contentClip)
 
+        // V0.2.55（AevonDockTapAnywhereV255，用户 Aevon(29) #2）：停靠小窗**任意位置
+        // 轻点 = 装回主窗**，不再只有边条能点。停靠态内容层交互已关
+        // （`setContentInteraction(false)`，不会误转发进 App），这里把 tap 挂在窗口
+        // 本体上：dock 态才生效；非 dock 态一举一动都不管（guard 掉）。
+        // 与全局通道「点边条装回」语义相同、幂等（restoreDocked 有 0.8s 仲裁防抖）。
+        let dockTap = UITapGestureRecognizer(target: self,
+                                             action: #selector(handleDockTapAnywhere(_:)))
+        dockTap.cancelsTouchesInView = false
+        dockTap.delaysTouchesBegan = false
+        dockTap.delaysTouchesEnded = false
+        addGestureRecognizer(dockTap)
+
         contentClip.addSubview(sceneHost.container)
 
         // 等待画面提示（拿到第一帧后自动消失）
@@ -1478,8 +1490,14 @@ final class AevonWindowView: UIView {
             installDarkFreeze(reason: "离场")
         }
         reassertContentForeground(tag: "立即")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-            self?.reassertContentForeground(tag: "+0.9s")
+        // V0.2.55（AevonDarkGuardV255，用户 Aevon(29) #3）：回桌面 1~2 秒卡顿提速。
+        // Aevon(29) 日志：布防立即重申 cs 0→1，+0.9s 那拍重申后 0.36s cs 才到 2 ——
+        // cs=2（真出画）卡在「等下一拍重申把场景彻底推醒」。把拍距从 0.9s 压到 0.35s，
+        // 桶还是 4 次（0.1.5 的有界纪律不变：一次布防最多 4 次写入）。
+        for delay in [0.35, 0.7, 1.05] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.reassertContentForeground(tag: String(format: "+%.2fs", delay))
+            }
         }
     }
 
@@ -1509,12 +1527,12 @@ final class AevonWindowView: UIView {
         guardTimer = nil
     }
 
-    /// 重申浮窗里这个场景的前台（有界：一次布防最多 4 次，间隔 ≥0.9 秒）。
+    /// 重申浮窗里这个场景的前台（有界：一次布防最多 4 次，V0.2.55 起间隔 ≥0.35 秒）。
     private func reassertContentForeground(tag: String) {
         guard guardArmedUntil > 0, window != nil else { return }
         guard reassertCount < 4 else { return }
         let now = CACurrentMediaTime()
-        if reassertCount > 0, now - lastReassertAt < 0.9 { return }
+        if reassertCount > 0, now - lastReassertAt < 0.35 { return }
         reassertCount += 1
         lastReassertAt = now
         let before = sceneHost.stateSummary()
@@ -1877,6 +1895,14 @@ final class AevonWindowView: UIView {
         AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧第 \(index + 1) 格"
             + "（\(Int(target.width))x\(Int(target.height))，顶部起向下排列，最多 \(AevonDock.maxCount) 格）"
             + "（AevonDockColumnV250）")
+    }
+
+    /// V0.2.55（AevonDockTapAnywhereV255，用户 Aevon(29) #2）：停靠小窗任意位置
+    /// 轻点 = 装回主窗（这是 dock 态唯一的手势语义；点边条与点内容等价，同为装回）。
+    @objc private func handleDockTapAnywhere(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, isDocked else { return }
+        AevonLog.info("[停靠] 小窗轻点（任意位置）→ 装回主窗（AevonDockTapAnywhereV255）")
+        AevonWindowManager.restoreDocked(bundleID: bundleID)
     }
 
     /// 离开停靠：装回主窗（几何回到主窗记忆）。

@@ -561,6 +561,56 @@ enum AevonEntryHost {
         let mount = container?.superview.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "无"
         let size = container?.bounds.size ?? .zero
         AevonLog.info("[诊断] 窗口栈（\(tag)）：\(hostState) | 容器挂载=\(mount) \(Int(size.width))x\(Int(size.height)) | \(parts.joined(separator: " | "))")
+        dumpGestureRecognizerProbe(tag: tag)
+    }
+
+    // MARK: - 手势诊断探针（V0.2.55，AevonGestureProbeV255）
+
+    /// Aevon(29) 主诉「开一次浮窗后全系统 pan 失效、tap 正常」—— 静态审计全部窗口 /
+    /// 视图 / hitTest / 识别器路径都没找到必现机制，所以把**取证**做进产物：
+    /// 每次窗口栈打印时顺带扫一遍 SB 所有窗口视图树里的 UIGestureRecognizer，
+    /// 重点报「非 possible 状态」「cancelsTouchesInView=YES」「挂在异常宿主上」的识别器。
+    /// 下次日志一复现，谁在抢 pan 一目了然。
+    private static func dumpGestureRecognizerProbe(tag: String) {
+        guard AevonPrefs.bool("GestureProbe", default: true) else { return }
+        var lines: [String] = []
+        func walk(_ view: UIView, _ windowName: String, depth: Int) {
+            guard depth <= 6 else { return }
+            for gesture in view.gestureRecognizers ?? [] {
+                let stateText: String
+                switch gesture.state {
+                case .possible: stateText = "可能"
+                case .began: stateText = "已开始"
+                case .changed: stateText = "进行中"
+                case .ended: stateText = "已结束"
+                case .cancelled: stateText = "已取消"
+                case .failed: stateText = "已失败"
+                @unknown default: stateText = "?"
+                }
+                let suspicious = gesture.state != .possible || gesture.cancelsTouchesInView
+                if suspicious {
+                    lines.append(String(format: "%@/%@[%@] cancels=%d delays=%d state=%@",
+                                        windowName,
+                                        AevonSafeClassName(gesture) ?? "?",
+                                        AevonSafeClassName(view) ?? "?",
+                                        gesture.cancelsTouchesInView ? 1 : 0,
+                                        gesture.delaysTouchesBegan ? 1 : 0,
+                                        stateText))
+                }
+            }
+            for sub in view.subviews { walk(sub, windowName, depth: depth + 1) }
+        }
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows where !w.isHidden {
+                let name = String(format: "L%d:%@", w.windowLevel.rawValue,
+                                  AevonSafeClassName(w) ?? "?")
+                walk(w, name, depth: 0)
+            }
+        }
+        if !lines.isEmpty {
+            let joined = lines.prefix(12).joined(separator: " | ")
+            AevonLog.info("[诊断] 手势探针（\(tag)）：\(lines.count) 个可疑识别器 → \(joined)（AevonGestureProbeV255）")
+        }
     }
 }
 

@@ -49,6 +49,8 @@ enum AevonEdgeEntry {
     private static let globalOwnHardLimit: CFTimeInterval = 12
     private static let healIdleWindow: CFTimeInterval = 1.5
     private static var lastHealLogAt: CFTimeInterval = 0
+    /// V0.2.55（AevonGripHealV255）：吞咽日志节流
+    private static var lastSwallowLogAt: CFTimeInterval = 0
     /// V0.2.8（AevonSelectionCoolV208）：圆盘选中开窗后 1.5 秒冷静期（防双呼）
     private static var selectionCoolUntil: CFTimeInterval = 0
     private static var lastTriggerAt: CFTimeInterval = 0
@@ -61,6 +63,13 @@ enum AevonEdgeEntry {
     private static var floatGrab: AevonFloatGrab?
     private static var floatDeadline: CFTimeInterval = 0
     private static let floatDragLimit: CFTimeInterval = 30
+    /// V0.2.55（AevonGripHealV255）：最后一次浮窗拖拽 moved 的时刻。
+    /// 抬手帧万一没送到（sendEvent 链路任何一环丢帧），floatTouchID 会带着 30 秒
+    /// deadline 残留 —— 而 touchID 就是 UITouch 指针，UIKit 的触摸槽位会复用地址，
+    /// 同一根手指的下一次滑动会被误判成「拖拽中」整段吞掉（began 放行、moved 全吞
+    /// = pan 死、点按活的经典形态）。这里记录 moved 时刻，自愈检查里 2 秒没动静
+    /// 就强制清场（Aevon(29) 手势失效的头号可自愈嫌疑）。
+    private static var lastFloatMovedAt: CFTimeInterval = 0
     /// V0.2.21（AevonFloatBarHoldV221）：边条「落指即拖」的延迟与误触半径
     private static var floatBarPending = false
     private static var floatBarHoldPoint: CGPoint = .zero
@@ -252,6 +261,15 @@ enum AevonEdgeEntry {
     /// 全系统触摸的必经之路上做巡检：圆盘已不在场还挂着的接管 → 立刻归还。
     private static func healGlobalTakeoverIfNeeded() {
         let now = CACurrentMediaTime()
+        // V0.2.55（AevonGripHealV255）：浮窗拖拽状态残留自愈 ——
+        // 2 秒没有 moved 续期却仍 active = 抬手帧丢了，强制清场。
+        // （touchID 是 UITouch 指针，槽位地址复用会让新手指被误吞。）
+        if floatGestureActive, lastFloatMovedAt > 0,
+           now - lastFloatMovedAt > 2.0 {
+            AevonLog.warn("[自愈] 浮窗拖拽状态残留（2 秒无移动，touchID=\(floatTouchID)）→ 强制清场"
+                + "（AevonGripHealV255）")
+            clearFloatGesture()
+        }
         let holding = (ownsTouch || globalTouchID != 0)
         if holding {
             if globalTouchID != globalOwnedForTouch || globalOwnedAt == 0 {
@@ -296,6 +314,14 @@ enum AevonEdgeEntry {
         // V0.0.41（AevonFloatGlobalV41）：浮窗拖拽期间这根手指完全归浮窗。
         if floatGestureActive, touchID == floatTouchID,
            CACurrentMediaTime() <= floatDeadline {
+            // V0.2.55（AevonGripHealV255）：吞咽可观测 —— Aevon(29) 的「tap 活 pan 死」
+            // 如果真是吞咽泄漏，日志会直接说。
+            let now = CACurrentMediaTime()
+            if now - lastSwallowLogAt > 2.0 {
+                lastSwallowLogAt = now
+                AevonLog.warn("[边缘] 吞掉触摸 \(touchID)（浮窗拖拽中，剩 \(String(format: "%.1f", floatDeadline - now))s）"
+                    + "（AevonGripHealV255）")
+            }
             return true
         }
         // V0.0.29：圆盘展开期间被吞掉的「额外手指」
@@ -350,6 +376,7 @@ enum AevonEdgeEntry {
         floatWindow = hit.window
         floatGrab = hit.grab
         floatDeadline = now + floatDragLimit
+        lastFloatMovedAt = now   // V0.2.55：began 也算一次「在场」，丢 ended 时自愈才有锚
         switch hit.grab {
         case .bar:
             // V0.2.27（AevonFloatEdgeGripV227）：落指即拖（延迟 0）——
@@ -380,6 +407,7 @@ enum AevonEdgeEntry {
             clearFloatGesture()
             return false
         }
+        lastFloatMovedAt = now
         if floatBarPending {
             if now >= floatBarHoldDeadline {
                 floatBarPending = false
@@ -457,6 +485,7 @@ enum AevonEdgeEntry {
         floatDeadline = 0
         floatBarPending = false
         floatBarHoldDeadline = 0
+        lastFloatMovedAt = 0
     }
 
     // MARK: - 圆盘呼出 / 收起

@@ -1392,3 +1392,8 @@ __attribute__((used)) static const char AevonSysEdgeRetiredV251Marker[] = "Aevon
 __attribute__((used)) static const char AevonDockArbiterV253Marker[] = "AevonDockArbiterV253";
 __attribute__((used)) static const char AevonDouyinWarmupFixV253Marker[] = "AevonDouyinWarmupFixV253";
 __attribute__((used)) static const char AevonDarkGuardV253Marker[] = "AevonDarkGuardV253";
+
+/* ── V0.2.55 标记锚（Aevon(29) 四项修复）────────────────────────────────────
+ * AevonDarkGuardV255 在 Swift 侧只出现在注释里（重申拍加密的逻辑改动无新日志串），
+ * 按铁律「Swift 侧标记用 ObjC used 常量承接」在这里补锚。 */
+__attribute__((used)) static const char AevonDarkGuardV255Marker[] = "AevonDarkGuardV255";
