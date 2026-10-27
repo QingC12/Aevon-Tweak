@@ -2211,8 +2211,12 @@ jobs:
           fi
           grep -q 'AevonContentTreeV243' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::缺子视图超宽取证（抖音右侧栏判据）"; exit 1; }
-          grep -q 'ContentCanvasScale' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
-            || { echo "::error::Detail.plist 缺画布倍数滑杆"; exit 1; }
+          # V0.2.47 反转（AevonPrefsFixedV247）：画布倍数滑杆已从设置页删除
+          # （用户定档「改为默认状态并移除开关」）。旧断言要求 Detail.plist 里必须有
+          # 这个单元，与产品冲突 → 反转成「必须不存在」。
+          if grep -q 'ContentCanvasScale' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist"; then
+            echo "::error::0.2.47 反转：设置页仍残留画布倍数滑杆"; exit 1
+          fi
           echo "V0.2.43 校验: 画布倍数（1.00/1.30/1.58）+ 关窗残留复查修复 + 超宽取证已就位"
           # ── V0.2.44 校验（AevonScreenAspectV244）：窗口比例跟随屏幕。
           # Aevon(19) 判读：1.58 档后抖音右侧栏回来了，但「内容整体上移、视频不在
@@ -2229,8 +2233,10 @@ jobs:
             || { echo "::error::缺动态内容比例（窗口比例跟随屏幕）"; exit 1; }
           grep -q 'ContentScreenAspect' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::Swift 侧未读内容比例开关"; exit 1; }
-          grep -q 'ContentScreenAspect' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
-            || { echo "::error::Detail.plist 缺内容比例开关"; exit 1; }
+          # V0.2.47 反转（AevonPrefsFixedV247）：内容比例开关已从设置页删除。
+          if grep -q 'ContentScreenAspect' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist"; then
+            echo "::error::0.2.47 反转：设置页仍残留内容比例开关"; exit 1
+          fi
           grep -q 'AevonScreenAspectV244' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧缺 0.2.44 分流锚"; exit 1; }
           if grep -q 'AevonScreenAspectV244' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" && \
@@ -2272,12 +2278,19 @@ jobs:
           # V0.2.46 反转（AevonCanvasScaleV246）：画布倍数默认 1.00 → 1.30。
           # Aevon(21) 三档对测：1.00 画布 = 窗口（315×504）字依旧很大、内容更少；
           # 1.30 画布被屏宽夹到 430×688（k=0.80）字正常且确实重排。旧断言与产品冲突，反转。
-          grep -q 'AevonPrefs.double("ContentCanvasScale", default: 1.30)' \
+          # V0.2.47 反转（AevonPrefsFixedV247）：画布倍数与内容比例**改成写死的常量**
+          # （用户定档「改为默认状态并移除设置里的开关」）。两条读偏好的断言与产品
+          # 冲突 → 反转成「必须读常量」。旧键仍会被一次性回写（卫生动作），见
+          # fixContentPrefsIfNeeded。
+          grep -q 'static let canvasScaleDefault: CGFloat = 1.30' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.45 画布倍数默认不是 1.00（画布 = 窗口）"; exit 1; }
-          grep -q 'AevonPrefs.bool("ContentScreenAspect", default: false)' \
+            || { echo "::error::0.2.47 画布倍数不是写死的 1.30"; exit 1; }
+          grep -q 'static var canvasScale: CGFloat { canvasScaleDefault }' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.45 屏幕比例档默认未关（默认要 5:8 真重排）"; exit 1; }
+            || { echo "::error::0.2.47 画布倍数仍从偏好读取（应写死 1.30）"; exit 1; }
+          grep -q 'static var usesScreenAspect: Bool { false }' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 内容比例仍可切换（应写死真重排档）"; exit 1; }
           # 老记忆/老偏好必须一次性归位（PSSwitchCell 的 default 只影响没写过键的设备）
           grep -q 'AevonRatio58Migrated' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 缺几何记忆与偏好的迁移标记"; exit 1; }
@@ -2301,11 +2314,17 @@ jobs:
           done
           grep -q 'contentAspectTall: CGFloat = 7.0 / 12.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.46 窗比例不是 7:12（5:8 加高 7%）"; exit 1; }
-          grep -q 'if old <= 1.05' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.46 缺画布倍数一次性回写（老用户会停在 1.00）"; exit 1; }
-          # Detail.plist 的画布倍数默认值必须真的是 1.3（不是文案里写 1.3）
-          python3 -c "import plistlib,sys; items=plistlib.load(open(sys.argv[1],'rb'))['items']; h=[i for i in items if i.get('key')=='ContentCanvasScale']; assert h and abs(float(h[0].get('default',0))-1.3)<1e-6, h; assert float(h[0].get('maxValue',0))>=1.6, h" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
-            || { echo "::error::0.2.46 Detail.plist 画布倍数默认不是 1.3"; exit 1; }
+          # V0.2.47 反转：0.2.46 那条「只改旧值 ≤1.05」的分支已被无条件定档取代
+          # （设置页没有滑杆了，不存在「用户自选档」可言）。改成钉新函数名。
+          grep -q 'private static func fixContentPrefsIfNeeded' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 缺内容偏好一次性定档（老设备会停在旧倍数）"; exit 1; }
+          grep -q 'AevonPrefsFixedV247' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 缺内容偏好定档标记"; exit 1; }
+          # V0.2.47 反转：原本校验「Detail.plist 的 ContentCanvasScale 默认值是 1.3」，
+          # 现在这两个单元必须整体不存在（用户要求移除开关）。
+          python3 -c "import plistlib,sys; items=plistlib.load(open(sys.argv[1],'rb'))['items']; bad=[i.get('key') for i in items if i.get('key') in ('ContentCanvasScale','ContentScreenAspect')]; assert not bad, bad" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
+            || { echo "::error::0.2.47 设置页仍残留画布倍数/内容比例单元"; exit 1; }
           # 发光圈：独立的非交互视图 + shadowPath 轮廓（深色白色柔光）
           grep -q 'final class AevonGlowRingView' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.46 缺外缘发光圈视图"; exit 1; }
@@ -2329,6 +2348,80 @@ jobs:
             exit 1
           fi
           echo "V0.2.46 校验: 画布倍数默认 1.30（+老值回写）+ 窗比例 7:12 + 深色边缘发光 + 全屏 App 手柄接管 已就位"
+
+          # ── V0.2.47 校验（AevonDarkGuardV247 / AevonGlowEdgeV247 /
+          #    AevonPrefsFixedV247 / AevonRingGripGuardV247）
+          # Aevon(22) 真机四项：
+          #   ① 全屏 App 里开浮窗 → 上滑回桌面 → 浮窗**有概率黑屏**，必须关掉重开。
+          #      机制：浮窗承载的是 App 的主场景，回桌面时系统把这个 App 置后台、
+          #      远程表面回收（cs/layers 归 0）；开窗时的前台补偿只补 8 次（约 7 秒），
+          #      于是「7 秒内回桌面能活、过一会儿回桌面就黑」= 「有概率」。
+          #      修法：全屏 App 画面离场 → 浮窗布防 4 秒 + 有界重申前台（0/0.75/2.0s）
+          #      + 真的不出画时盖最后一帧（点一下可手动再要）；全程 fail-open。
+          #   ② 发光圈太明显 → 外扩 12pt → 2pt、0.90 → 0.42、半径 9 → 5，只留贴边光晕。
+          #   ③ 画布倍数 / 内容比例「改回默认 + 删设置开关」（上面几段已反转旧断言）。
+          #   ④ 拖右下角缩放误呼圆盘 → 系统手势通道起手落在浮窗上就 Failed 归还。
+          for s in AevonDarkGuardV247 AevonGlowEdgeV247 AevonPrefsFixedV247 AevonRingGripGuardV247; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.47 SB 侧缺标记 $s"; exit 1; }
+          done
+          # ① 只读探针必须是独立的 ObjC 函数（Swift 侧不许自己摸私有选择子）
+          grep -q 'NSInteger AevonSceneContentState(id scene) {' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.47 缺 contentState 只读探针"; exit 1; }
+          grep -q 'NSInteger AevonSceneLayerCount(id scene) {' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.47 缺 layers 只读探针"; exit 1; }
+          # 探针读不到必须返回 -1（调用方据此 fail-open，绝不当成黑屏）
+          grep -q 'return -1;' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.47 探针不区分「读不到」与「读得到 0」"; exit 1; }
+          grep -q 'var contentLooksRendering: Bool?' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.47 缺 fail-open 判据（可选布尔）"; exit 1; }
+          grep -q 'func armBackgroundGuard' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 缺回桌面守卫入口"; exit 1; }
+          grep -q 'installDarkFreeze' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 缺最后一帧兜底（黑屏时没有东西盖）"; exit 1; }
+          # 事件驱动：App 画面离场必须真把布防转给浮窗
+          grep -q 'AevonWindowManager.noteForegroundSceneLost()' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.47 场景离场没有通知浮窗布防"; exit 1; }
+          grep -q 'static func noteForegroundSceneLost' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.47 缺场景离场转接"; exit 1; }
+          # 反转断言：主场景重申只许写 foreground，不许碰 deactivationReasons
+          # （归档(14) SIGTRAP 教训）—— 重申函数必须走两条分开的口径
+          grep -q 'if isSelfBuilt {' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.47 重申前台没有区分自建/主场景"; exit 1; }
+          LOST_LINE=$(grep -n 'AevonWindowManager.noteForegroundSceneLost()' \
+                        "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" | head -n1 | cut -d: -f1)
+          ROOT_LINE=$(grep -n 'attachToWindowRoot(reason: "App 场景消失")' \
+                        "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$LOST_LINE" ] || [ -z "$ROOT_LINE" ] || [ "$LOST_LINE" -le "$ROOT_LINE" ]; then
+            echo "::error::0.2.47 布防没挂在「App 场景消失」这条路径上"
+            exit 1
+          fi
+          # ② 发光贴边：外扩 2pt + 亮度 0.42（0.2.46 的 12pt/0.90 回潮即断构建）
+          grep -q 'static let halo: CGFloat = 2' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 发光圈没有贴边（halo 不是 2pt）"; exit 1; }
+          grep -q 'dark ? 0.42 : 0.12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.47 发光亮度不是压暗后的 0.42/0.12"; exit 1; }
+          grep -q 'static let halo: CGFloat = 12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.47 发光外扩 12pt 不许回潮"; exit 1; }
+          # ④ 系统手势通道：起手落在浮窗上必须 Failed，且这条判定要排在热区判定之前
+          grep -q 'AevonEntryHost.pointHitsFloatGrip(at: point)' \
+            "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" \
+            || { echo "::error::0.2.47 系统手势通道没做浮窗让路（拖角块会呼盘）"; exit 1; }
+          GRIP_LINE=$(grep -n 'pointHitsFloatGrip' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | head -n1 | cut -d: -f1)
+          BAND_LINE=$(grep -n 'bandRejectReason(for: point)' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$GRIP_LINE" ] || [ -z "$BAND_LINE" ] || [ "$GRIP_LINE" -ge "$BAND_LINE" ]; then
+            echo "::error::0.2.47 浮窗让路没排在热区判定之前"
+            exit 1
+          fi
+          # 反转断言：系统手势通道不许在「起手落浮窗」之前就呼盘
+          if grep -q 'triggerFromSystemGesture' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift"; then
+            TRIG_LINE=$(grep -n 'triggerFromSystemGesture' "$GITHUB_WORKSPACE/Sources/AevonSysEdgeV213.swift" | head -n1 | cut -d: -f1)
+            if [ "$GRIP_LINE" -ge "$TRIG_LINE" ]; then
+              echo "::error::0.2.47 浮窗让路排在呼盘之后（等于没做）"
+              exit 1
+            fi
+          fi
+          echo "V0.2.47 校验: 回桌面黑屏守卫（事件布防+有界重申+最后一帧）+ 发光贴边压暗 + 偏好定档删项 + 圆盘浮窗让路 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

@@ -66,6 +66,17 @@ BOOL AevonSelfSceneContentAlive(id scene);
 /// "fg=? cs=? layers=? dr=? idle=?"（全 @try，取不到写 "?"），供日志判黑在哪一层。
 NSString *AevonSelfSceneDebugState(id scene);
 
+/// V0.2.47（AevonDarkGuardV247）：只读 —— 场景 contentState。
+/// 返回值语义（与 0.2.42 起日志里的 cs= 同一字段）：2 = 内容已就绪正在画；
+/// 0/1 = 准备中或已被回收（App 被系统置后台时就是这一档）；
+/// **-1 = 取不到**（调用方必须 fail-open：不许把「读不到」当成「没在画」）。
+NSInteger AevonSceneContentState(id scene);
+
+/// V0.2.47（AevonDarkGuardV247）：只读 —— layerManager.layers 的数量。
+/// 返回 -1 = 取不到。0 = 远程表面已被回收（黑窗的直接形态）。
+/// 与 contentState 交叉判读：两个都掉了才是真黑，单个掉了只记日志不动手。
+NSInteger AevonSceneLayerCount(id scene);
+
 /// V0.2.35/36/37（AevonSceneRouteV235/236/237）：创建前分流判据 —— 目标 App 是否 scene 生命周期。
 /// 查 LSApplicationProxy 的 Info.plist，三档细判（0.2.37 权威判据 = App 侧 scene
 /// 探针实锤：delegate 实现 configurationForConnecting 才会接受第二场景连接；

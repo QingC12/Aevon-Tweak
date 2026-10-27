@@ -55,6 +55,19 @@ enum AevonWindowManager {
         close(bundleID: bundleID, releaseOnly: true)
     }
 
+    /// V0.2.47（AevonDarkGuardV247）：全屏 App 画面离场（回桌面 / 切 App）时调用。
+    ///
+    /// 浮窗里承载的是 App 自己的**主场景**（S2 路线）或自建场景，两种场景的前台
+    /// 状态都跟着系统的 App 状态走。一上滑回桌面，这个 App 就被置后台、远程表面
+    /// 被回收 → presenter 没东西可画 → 用户看到黑窗（关掉重开才恢复，因为开窗会
+    /// 重新推一次前台）。这里把「离场」这个事件转给浮窗，让它布防 + 有界重申。
+    ///
+    /// 只在浮窗还在时动作；没有浮窗就是一次函数调用，零副作用。
+    static func noteForegroundSceneLost() {
+        guard let view = currentView else { return }
+        view.armBackgroundGuard(reason: "全屏 App 画面离场")
+    }
+
     /// 这个 App 是否正装在这个唯一浮窗里。
     static func isWindowed(_ bundleID: String) -> Bool {
         return currentView != nil && currentBundleID == bundleID

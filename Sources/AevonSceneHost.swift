@@ -291,6 +291,60 @@ final class AevonSceneHost {
         }
     }
 
+    // MARK: - 回桌面黑屏守卫（V0.2.47，AevonDarkGuardV247）
+
+    /// 只读：App 的 `contentState`（2 = 已就绪在画；0/1 = 准备中或已被回收；-1 = 取不到）。
+    ///
+    /// 为什么用它当「还在不在画」的判据：0.2.42 起的日志里每一条主场景读回串都带
+    /// `cs=`，实测「开窗瞬间 1 → 首帧后 2」，与「画面出来没有」一一对应；而
+    /// `settings.foreground` 在主场景上**恒读 0**（哪怕内容正常在画，见 0.2.46 日志
+    /// `读回 frame=429x735 fg=0 cs=2`），所以 foreground 不能当判据。
+    var contentStateNow: Int {
+        guard !invalidated else { return -1 }
+        return Int(AevonSceneContentState(scene))
+    }
+
+    /// 只读：远程表面数量（-1 = 取不到）。与 contentState 交叉判读，只进日志。
+    var layerCountNow: Int {
+        guard !invalidated else { return -1 }
+        return Int(AevonSceneLayerCount(scene))
+    }
+
+    /// 内容是否还在画。**nil = 信号不可用 → 调用方 fail-open**（绝不当成黑屏处理）。
+    var contentLooksRendering: Bool? {
+        let cs = contentStateNow
+        guard cs >= 0 else { return nil }
+        return cs == 2
+    }
+
+    /// 一行状态串（fg / cs / layers），给守卫日志做前后对照。
+    func stateSummary() -> String {
+        guard !invalidated else { return "已释放" }
+        var fg = "?"
+        if let settings = AevonRuntime.send(scene, Selector(("settings"))),
+           let value = AevonRuntime.bool(settings, key: "foreground") {
+            fg = value ? "1" : "0"
+        }
+        return "fg=\(fg) cs=\(contentStateNow) layers=\(layerCountNow)"
+    }
+
+    /// 重申浮窗里这个场景的前台。
+    ///
+    /// 两档口径刻意分开（归档(14) SIGTRAP 教训：主场景的 deactivation 状态机绝不碰）：
+    ///   · 自建场景 → `AevonSelfSceneReassertForeground`（foreground=YES + deactivationReasons=0，
+    ///     LiveContainer #942 同款）；
+    ///   · 主场景（S2）→ 只写 foreground=YES（`AevonSceneHelper.setForeground`），
+    ///     不碰 deactivationReasons，与 0.1.5 以来的前台补偿完全同一条写入。
+    @discardableResult
+    func reassertForegroundForFloat() -> Bool {
+        guard !invalidated else { return false }
+        if isSelfBuilt {
+            return AevonSelfSceneReassertForeground(scene)
+        }
+        AevonSceneHelper.setForeground(scene, true)
+        return true
+    }
+
     private func teardownPresenter() {
         stopProbing()
         hasContent = false

@@ -170,6 +170,36 @@ __attribute__((used)) static const char AevonRatioTallV246Marker[] = "AevonRatio
 __attribute__((used)) static const char AevonFloatGlowV246Marker[] = "AevonFloatGlowV246";
 __attribute__((used)) static const char AevonFloatGripGlobalV246Marker[] = "AevonFloatGripGlobalV246";
 __attribute__((used)) static const char AevonCanvasHandoffV246Marker[] = "AevonCanvasHandoffV246";
+/* V0.2.47（AevonDarkGuardV247 / AevonGlowEdgeV247 / AevonPrefsFixedV247 /
+ * AevonRingGripGuardV247）：Aevon(22) 真机四项。
+ *
+ *  ① **回桌面后浮窗黑屏**（AevonDarkGuardV247）。现象：全屏 App 里开浮窗 →
+ *     上滑回桌面 → 浮窗有概率整块变黑，必须关掉重开才恢复。
+ *     机制：S2 路线承载的是 App 的**主场景**，它的前台状态全归 SpringBoard ——
+ *     一上滑回桌面，这个 App 就被系统置后台，远程表面被回收（cs / layers 归 0），
+ *     presenter 立刻没东西可画；而 0.1.5 的前台补偿只补开窗后 8 次（约 7 秒），
+ *     之后再不写，所以「开窗 7 秒内回桌面」能活、「过一会儿再回桌面」就黑 ——
+ *     这正是用户说的「有概率」。修法两段：
+ *       · 事件驱动：`appSceneDisappeared`（全屏 App 画面离场 = 回桌面 / 切 App）
+ *         时对浮窗场景重申一次前台（+0 / +0.75 / +2.0s 三拍，全部有界）；
+ *       · 兜底：布防 4 秒内若 contentState 真的不在了（连续两拍 cs<2 且 cs 可读）
+ *         → 把最后一帧快照盖上去（永不黑屏），点一下浮窗即撤销并再重申。
+ *  ② **发光圈太扎眼**（AevonGlowEdgeV247）：0.2.46 的 12pt 外扩 + 白 0.90/半径 9
+ *     被用户判为「太明显、不贴边」。改为贴边 2pt、亮度 0.42、半径 5，只留
+ *     shadowPath 光晕（浅色 0.12/半径 4），窗内一个像素都不占。
+ *  ③ **偏好定档**（AevonPrefsFixedV247）：用户要求「画布倍数等开关改回默认状态，
+ *     并把设置里的开关移除」。画布倍数写死 1.30、内容比例写死 7:12 真重排档，
+ *     Detail.plist 删掉这两组单元，盘上旧值一次性回写（含 0.2.46 迁移留下的 1.30）。
+ *  ④ **拖右下角缩放误呼圆盘**（AevonRingGripGuardV247）：圆盘有三条触发通道
+ *     （桌面手势条 / 系统手势管线 / 全局通道），前两条都做了浮窗让路，唯独
+ *     **系统手势管线那条没有** —— 它由 BackBoard 直投，不经过我们的 hitTest。
+ *     右下角角块正好压在右缘 30pt 边缘区里，拖动时 dx 为负 → 判向成立 → 呼盘。
+ *     修法：该通道 `.began` 时先问「起手是否落在浮窗（含外侧手柄）范围内」，
+ *     是则立刻 Failed 归还，一根头发都不扣。 */
+__attribute__((used)) static const char AevonDarkGuardV247Marker[] = "AevonDarkGuardV247";
+__attribute__((used)) static const char AevonGlowEdgeV247Marker[] = "AevonGlowEdgeV247";
+__attribute__((used)) static const char AevonPrefsFixedV247Marker[] = "AevonPrefsFixedV247";
+__attribute__((used)) static const char AevonRingGripGuardV247Marker[] = "AevonRingGripGuardV247";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -517,6 +547,36 @@ NSString *AevonMainSceneFrameState(id scene) {
         return [NSString stringWithFormat:@"frame=%@ fg=? cs=?", frameText];
     } @catch (NSException *exception) {
         return [NSString stringWithFormat:@"frame=exc(%@)", exception.name];
+    }
+}
+
+/// V0.2.47（AevonDarkGuardV247）：只读 —— contentState（-1 = 取不到）。
+NSInteger AevonSceneContentState(id scene) {
+    @try {
+        if (scene == nil) { return -1; }
+        SEL csSel = NSSelectorFromString(@"contentState");
+        if (![scene respondsToSelector:csSel]) { return -1; }
+        return ((AevonSDIntFn0)objc_msgSend)(scene, csSel);
+    } @catch (NSException *exception) {
+        return -1;
+    }
+}
+
+/// V0.2.47（AevonDarkGuardV247）：只读 —— layerManager.layers 数量（-1 = 取不到）。
+NSInteger AevonSceneLayerCount(id scene) {
+    @try {
+        if (scene == nil) { return -1; }
+        SEL lmSel = NSSelectorFromString(@"layerManager");
+        if (![scene respondsToSelector:lmSel]) { return -1; }
+        id lm = ((AevonSDIdFn0)objc_msgSend)(scene, lmSel);
+        if (lm == nil) { return -1; }
+        SEL layersSel = NSSelectorFromString(@"layers");
+        if (![lm respondsToSelector:layersSel]) { return -1; }
+        id layers = ((AevonSDIdFn0)objc_msgSend)(lm, layersSel);
+        if (![layers isKindOfClass:[NSArray class]]) { return -1; }
+        return (NSInteger)[(NSArray *)layers count];
+    } @catch (NSException *exception) {
+        return -1;
     }
 }
 

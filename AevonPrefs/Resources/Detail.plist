@@ -212,65 +212,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>0.2.45 按参考视频实测定档：主窗 470×754 px（宽高比 5:8 = 0.625、圆角 = 窗宽 11.1%），画布 = 窗口（倍数 1.00），App 拿到约 344×550 pt 的画布后**自己重新排版** —— 这正是视频里抖音「顶栏 / 底栏 / 右侧图标列全在位、视频居中、上下黑边等量」的形态。
-
-本页两个开关的优先级：①「内容比例跟随屏幕」优先（开 = 整屏原生排版后等比缩进窗口，0.2.44 形态，不是真重排）；②关掉它 = 5:8 真重排（默认），此时「画布倍数」才起作用。</string>
+			<string>**0.2.47 起这两项定档，设置页不再提供开关。** 窗口尺寸、画布倍数、内容比例都是按真机实测钉死的：窗宽 = 80% 屏宽、比例 7:12（比参考视频的 5:8 高 7%）、画布倍数 1.30（画布被屏宽夹到 430 宽，App 按真机宽度排版后再缩回窗口），所以字号与全屏一致、顶栏/底栏/右侧栏都在。—— 少了这几根滑条，就不会再出现「字大了、字小了、内容少了」的反复。</string>
 			<key>label</key>
-			<string>内容比例（0.2.45）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>infoText</key>
-			<string>默认**关** = 真重排档（0.2.46：窗口 344×590 pt = 7:12，画布 = 窗口 × 1.30 并夹到屏宽 430 → 430×737）。App 按这个画布自己排版（真重排，不是拉伸），再按 1/1.30 缩进窗口：字号与全屏一致、抖音顶栏 / 底栏 / 右侧点赞头像栏全部落在画布内。
-
-打开 = 回到 0.2.44 的屏幕比例档：窗口按整屏比例（430×932）变细长，画布恒为整屏原生尺寸，App 与全屏逐像素同排版，再把整屏画面等比缩进窗口。这一档不是真重排（字号与窗口尺寸脱钩），只作为对照保留。
-
-切换后 0.5 秒内自动重算窗口几何，不用重开浮窗。</string>
-			<key>key</key>
-			<string>ContentScreenAspect</string>
-			<key>label</key>
-			<string>内容比例跟随屏幕（整屏缩进，非真重排）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>画布 = 窗口 × 倍数。默认 **1.30**：画布宽被屏宽 430 夹住，App 按真机宽度排版（字号与全屏一致），再按 1/1.30 缩回窗口 —— 字正常、内容变多，且是真重排。
-
-调大倍数 = App 认为自己是更大的手机（按 k 倍宽排版，呈现时缩回 1/k）。画布宽上限是屏宽，比例仍是 7:12，不拉伸不留黑边。</string>
-			<key>label</key>
-			<string>内容画布（0.2.43，仅真重排档生效；默认 1.30）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSliderCell</string>
-			<key>default</key>
-			<real>1.3</real>
-			<key>footerText</key>
-			<string>可调范围 1.00 ~ 1.60，按 0.05 取整。
-
-1.30 = 默认（0.2.46 起）。画布 = 窗口 × 1.30 并夹到屏宽 430 → App 认为自己是 430×737 的手机，字号与全屏一致，再按 1/1.30 缩进窗口：字正常、内容变多、布局是真重排（不是拉伸、不留黑边）。
-1.00 = 画布 = 窗口本身（344×590）；画布逻辑宽只有 344pt，字号按固定 pt 排 → 字偏大、一屏装得下的内容变少。
-1.60 = 与 1.30 同一张 430 宽画布（都被屏宽夹住），只是缩放系数更大、字更小更糊。
-
-提示：改完 0.5 秒内生效，窗口内容会按新画布重排一次。</string>
-			<key>key</key>
-			<string>ContentCanvasScale</string>
-			<key>label</key>
-			<string>画布倍数</string>
-			<key>max</key>
-			<real>1.6</real>
-			<key>maxValue</key>
-			<real>1.6</real>
-			<key>min</key>
-			<real>1.0</real>
-			<key>minValue</key>
-			<real>1.0</real>
+			<string>浮窗几何（0.2.47 定档，只读）</string>
 		</dict>
 	</array>
 	<key>title</key>

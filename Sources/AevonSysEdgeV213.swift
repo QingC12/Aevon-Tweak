@@ -206,6 +206,26 @@ final class AevonSysEdgeV213: NSObject {
             fired = false
             tracking = true
             beganPoint = point
+            // V0.2.47（AevonRingGripGuardV247）：**起手落在浮窗上 → 立刻 Failed**。
+            //
+            // Aevon(22) 主诉：「浮窗打开时拖动右下角缩放，容易触发圆盘手势」。
+            // 圆盘一共三条触发通道：桌面手势条（hitTest 里 `isPureDesktop` 让路）、
+            // 全局通道（`pointHitsFloatingWindow` 早退）、以及本通道。前两条都做了
+            // 浮窗让路，唯独本通道没有 —— 它由 BackBoard 直投进系统手势窗口，
+            // 根本不经过我们的视图命中测试，所以 `AevonEdgeStripView.hitTest` 那句
+            // 「浮窗开着就 return nil」对它完全无效。
+            // 几何上必撞：右下角角块在窗外 0~34pt，正好压在右缘 30pt 边缘区里；
+            // 拖角块缩放时手指往左下走，dx 为负、横向占优 → 判向成立 → 圆盘跳出。
+            // 修法与另两条通道对齐：起手在浮窗（含外侧手柄）范围内就让路，
+            // 连 began 都不扣住（Fail 后 UIKit 立刻把触摸还给 App / 浮窗）。
+            if AevonEntryHost.pointHitsFloatGrip(at: point) {
+                cancelBegunGuard()
+                tracking = false
+                AevonSysEdgeForceFail(gesture)
+                AevonLog.info("[系统手势] 起手落在浮窗上 (x=\(Int(point.x)),\(Int(point.y)))"
+                    + " → Failed 归还（缩放/拖动优先，不呼盘）（AevonRingGripGuardV247）")
+                return
+            }
             // V0.2.19（AevonSysEdgeBandGateV219）：**先验热区，再谈方向**。
             //
             // 这一行就是「整个屏幕右侧都能呼盘」的修复点。带外则 tracking 保持 false、

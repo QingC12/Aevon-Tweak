@@ -119,6 +119,21 @@ enum AevonEntryHost {
         return false
     }
 
+    /// V0.2.47（AevonRingGripGuardV247）：这个点是不是落在「浮窗自己的手势范围」里
+    /// （窗口本体 + 外侧手柄外扩 barThickness）。
+    ///
+    /// 为什么单独包一层：调用方是**系统手势管线**那条通道（AevonSysEdgeV213）——
+    /// 它由 BackBoard 直接喂触摸，完全不经过我们的 hitTest，所以
+    /// `AevonEdgeStripView.hitTest` 里那句「浮窗开着就 return nil」对它无效。
+    /// 结果就是：右下角角块正好压在右缘 30pt 边缘区里，往下拖缩放时 dx 为负 →
+    /// 判向成立 → 圆盘跳出来（Aevon(22) 主诉）。这里给它同一套让路判据。
+    ///
+    /// 只在**有浮窗**时才返回 true（没浮窗时右缘行为一字不变）。
+    static func pointHitsFloatGrip(at point: CGPoint) -> Bool {
+        guard AevonWindowManager.openBundleID != nil else { return false }
+        return pointHitsFloatingWindow(at: point)
+    }
+
     /// 屏幕点 → 命中的浮窗与抓取目标（V0.0.41，AevonFloatGlobalV41）。
     ///
     /// 全屏 App 时视图层收不到窗外的触摸（see `AevonWindowView.grab`），
@@ -430,6 +445,12 @@ enum AevonEntryHost {
         appSceneView = nil
         currentForegroundBundleID = ""   // V0.2.7（AevonAppBlindDiagV207）：回桌面即清
         attachToWindowRoot(reason: "App 场景消失")
+        // V0.2.47（AevonDarkGuardV247）：全屏 App 画面离场 = 回桌面 / 切 App。
+        //
+        // 这一刻浮窗里那个 App 的场景也会被系统一起置后台，远程表面随即被回收
+        // （0.2.46 真机：浮窗整块变黑，必须关掉重开）。开窗时的前台补偿只补 8 次
+        // （约 7 秒），过了就没人管 —— 这就是「有概率」的由来。这里让浮窗重新布防。
+        AevonWindowManager.noteForegroundSceneLost()
     }
 
     /// 搬回入口窗口根视图。
