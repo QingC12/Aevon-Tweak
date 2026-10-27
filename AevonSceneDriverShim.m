@@ -87,6 +87,7 @@ __attribute__((used)) static const char AevonSceneRouteV238Marker[] = "AevonScen
  * （AevonAppInfo 已验证同款链路）→ SBApplication 的 sceneSpecification ——
  * SB 自己解析好的 manifest，老式 App 为 nil，与 roothide 文件系统补丁无关。 */
 __attribute__((used)) static const char AevonSceneRouteV239Marker[] = "AevonSceneRouteV239";
+__attribute__((used)) static const char AevonSceneRouteV240Marker[] = "AevonSceneRouteV240";
 
 /// 给类发无参工厂消息。
 static id AevonSDClassFactory(NSString *clsName, NSString *selName) {
@@ -541,40 +542,123 @@ NSString *AevonSelfSceneDebugState(id scene) {
     }
 }
 
+/* V0.2.40（AevonSceneRouteV240）：二进制扫描 —— 权威判据落地。
+ * 0.2.39 真机定论：①SBApplication 对 sceneSpecification/applicationSceneSpecification
+ * **两个选择子都不响应**（sbApp=SBApplication 拿到了，sel=no/no）→ 全部 -1 → 全回退；
+ * ②LSApplicationProxy→bundleURL→直接读 Info.plist 文件**完全可用**（plist=ok(40)）；
+ * ③设置的 manifest 真容 = uiSceneDel=no uiMulti=0（**根本没有 scene delegate 类名**）
+ * ——但它照样实现了 configurationForConnecting（0.2.33 App 侧探针）且真重排成功。
+ * ⇒ 判据不在 manifest，在 **App 可执行文件是否实现该选择子**。选择子字符串以明文
+ * 存于 __objc_methname 段 → 读 App 二进制 memmem 扫
+ * "configurationForConnectingSceneSession"。分块扫（1MB+尾部重叠）防大文件爆内存；
+ * 加密 App Store 应用扫不到 → 0/-1 → 保守旧路径（方向安全：它们本来就拒连）。
+ * 返回 2 = 含（自建）/ 0 = 读毕未含（旧路径）/ -1 = 判不了（保守旧路径）。
+ * 结果按 bundleID 缓存（判分与取证串共用，避免重复扫几百 MB）。 */
+static NSMutableDictionary *AevonRouteScanCache = nil;
+static NSObject *AevonRouteScanLock = nil;
+
+static NSInteger AevonScanBinaryForSelector(NSString *path) {
+    @try {
+        FILE *f = fopen(path.fileSystemRepresentation, "rb");
+        if (f == NULL) { return -1; }
+        static const char needle[] = "configurationForConnectingSceneSession";
+        const size_t nlen = sizeof(needle) - 1;
+        const size_t CHUNK = 1u << 20;
+        NSMutableData *buf = [NSMutableData dataWithLength:CHUNK + nlen];
+        NSInteger verdict = -1;
+        size_t carry = 0;
+        for (;;) {
+            size_t got = fread((char *)buf.mutableBytes + carry, 1, CHUNK, f);
+            size_t total = carry + got;
+            if (total >= nlen) {
+                if (memmem(buf.bytes, total, needle, nlen) != NULL) { verdict = 2; break; }
+            }
+            if (got == 0) { verdict = ferror(f) ? -1 : 0; break; }
+            carry = nlen - 1;
+            memmove(buf.mutableBytes, (const char *)buf.bytes + total - carry, carry);
+        }
+        fclose(f);
+        return verdict;
+    } @catch (NSException *exception) {
+        return -1;
+    }
+}
+
+NSInteger AevonSelfSceneAppBinarySupport(NSString *bundleID) {
+    if (AevonRouteScanLock == nil) { AevonRouteScanLock = [NSObject new]; }
+    @synchronized (AevonRouteScanLock) {
+        if (AevonRouteScanCache == nil) { AevonRouteScanCache = [NSMutableDictionary dictionary]; }
+        NSNumber *cached = AevonRouteScanCache[bundleID];
+        if (cached != nil) { return cached.integerValue; }
+    }
+    NSInteger verdict = -1;
+    @try {
+        if (bundleID.length == 0) { return -1; }
+        Class lsCls = NSClassFromString(@"LSApplicationProxy");
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        if (lsCls == nil || ![(id)lsCls respondsToSelector:proxySel]) { return -1; }
+        id proxy = ((AevonSDIdFn1)objc_msgSend)((id)lsCls, proxySel, bundleID);
+        if (proxy == nil) { return -1; }
+        SEL urlSel = NSSelectorFromString(@"bundleURL");
+        if (![proxy respondsToSelector:urlSel]) { return -1; }
+        NSURL *bundleURL = ((AevonSDIdFn0)objc_msgSend)(proxy, urlSel);
+        if (![bundleURL isKindOfClass:[NSURL class]]) { return -1; }
+        NSURL *plURL = [bundleURL URLByAppendingPathComponent:@"Info.plist"];
+        NSDictionary *pl = [NSDictionary dictionaryWithContentsOfURL:plURL];
+        NSString *exe = pl[@"CFBundleExecutable"];
+        if (exe.length == 0) { return -1; }
+        NSURL *binURL = [bundleURL URLByAppendingPathComponent:exe];
+        verdict = AevonScanBinaryForSelector(binURL.path);
+    } @catch (NSException *exception) {
+        verdict = -1;
+    }
+    @synchronized (AevonRouteScanLock) {
+        if (AevonRouteScanCache == nil) { AevonRouteScanCache = [NSMutableDictionary dictionary]; }
+        AevonRouteScanCache[bundleID] = @(verdict);
+    }
+    return verdict;
+}
+
 /* V0.2.35~38 历史（AevonSceneRouteV235/236/237/238）：LSApplicationProxy 路线三连翻车。
  * 0.2.38 取证实锤：proxy 拿到了、infoDictionary respondsToSelector=ok，但**调用即抛
  * NSInvalidArgumentException**（roothide SB 进程）→ 三版黑屏组与成功组**全部 -1**，
  * 分流从未生效（0.2.38 白名单制把 -1 全挡旧路径 = 全部回退整屏，用户实测）。
  *
- * V0.2.39（AevonSceneRouteV239）：主路线换 SB 自己解析好的 manifest ——
- * SBApplicationController.sharedInstance → applicationWithBundleIdentifier:
- * （AevonAppInfo 已验证同款链路，实例方法勿发类上）→ SBApplication 的
- * sceneSpecification / applicationSceneSpecification（选择子探测，两个名字都试）。
- * SB 内部数据源，roothide 无关；老式 App（Sileo/Filza）spec 为 nil。
+ * V0.2.39（AevonSceneRouteV239）：主路线换 SBApplication.sceneSpecification ——
+ * 0.2.40 真机再定论：SBApplication 对两个选择子都**不响应**（sel=no/no）→ 也全 -1。
+ *
+ * V0.2.40（AevonSceneRouteV240）现行结构：
+ *   A 路线 = SBApplication.sceneSpecification（选择子响应才用，其他 iOS 版本兜底）；
+ *   B 路线 = App 二进制扫 "configurationForConnectingSceneSession"（新主路线，见上）。
  * 返回值语义：
- *   2 = SB 认为它是 scene App（spec 非 nil）→ 可走自建场景
- *   0 = spec 为 nil（老式 App）→ 走旧路径
- *  -1 = 链路断点（controller/app nil 或选择子全缺）→ 保守走旧路径（Swift 侧白名单制） */
+ *   2 = 确证 scene App（可走自建场景，真重排）
+ *   0 = 确证老式 App（走旧路径）
+ *  -1 = 判不了（保守走旧路径，Swift 侧白名单制） */
 NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID) {
     @try {
         if (bundleID.length == 0) { return -1; }
         Class ctlCls = NSClassFromString(@"SBApplicationController");
-        if (ctlCls == nil) { return -1; }
-        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
-        if (![(id)ctlCls respondsToSelector:sharedSel]) { return -1; }
-        id controller = ((AevonSDIdFn0)objc_msgSend)((id)ctlCls, sharedSel);
-        if (controller == nil) { return -1; }
-        SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
-        if (![controller respondsToSelector:appSel]) { return -1; }
-        id app = ((AevonSDIdFn1)objc_msgSend)(controller, appSel, bundleID);
-        if (app == nil) { return -1; }
-        for (NSString *selName in @[@"sceneSpecification", @"applicationSceneSpecification"]) {
-            SEL sel = NSSelectorFromString(selName);
-            if (![app respondsToSelector:sel]) { continue; }
-            id spec = ((AevonSDIdFn0)objc_msgSend)(app, sel);
-            return (spec != nil) ? 2 : 0;
+        if (ctlCls != nil) {
+            SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+            if ([(id)ctlCls respondsToSelector:sharedSel]) {
+                id controller = ((AevonSDIdFn0)objc_msgSend)((id)ctlCls, sharedSel);
+                if (controller != nil) {
+                    SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+                    if ([controller respondsToSelector:appSel]) {
+                        id app = ((AevonSDIdFn1)objc_msgSend)(controller, appSel, bundleID);
+                        if (app != nil) {
+                            for (NSString *selName in @[@"sceneSpecification", @"applicationSceneSpecification"]) {
+                                SEL sel = NSSelectorFromString(selName);
+                                if (![app respondsToSelector:sel]) { continue; }
+                                id spec = ((AevonSDIdFn0)objc_msgSend)(app, sel);
+                                return (spec != nil) ? 2 : 0;
+                            }
+                        }
+                    }
+                }
+            }
         }
-        return -1; /* 两个选择子 SBApplication 上都不在 */
+        return AevonSelfSceneAppBinarySupport(bundleID);
     } @catch (NSException *exception) {
         return -1;
     }
@@ -671,6 +755,35 @@ NSString *AevonSelfSceneRouteDump(NSString *bundleID) {
             } @catch (NSException *e3) {
                 [out appendFormat:@"LS=%@(%@) ", e3.name, e3.reason ?: @"-"];
             }
+        }
+        /* V0.2.40（AevonSceneRouteV240）：二进制扫描结果（判分主路线，带缓存） */
+        @try {
+            NSInteger binVerdict = AevonSelfSceneAppBinarySupport(bundleID);
+            NSString *exeInfo = @"?";
+            Class lsCls2 = NSClassFromString(@"LSApplicationProxy");
+            SEL proxySel2 = NSSelectorFromString(@"applicationProxyForIdentifier:");
+            if (lsCls2 && [(id)lsCls2 respondsToSelector:proxySel2]) {
+                id proxy2 = ((AevonSDIdFn1)objc_msgSend)((id)lsCls2, proxySel2, bundleID);
+                SEL urlSel2 = NSSelectorFromString(@"bundleURL");
+                if (proxy2 && [proxy2 respondsToSelector:urlSel2]) {
+                    NSURL *bURL = ((AevonSDIdFn0)objc_msgSend)(proxy2, urlSel2);
+                    if ([bURL isKindOfClass:[NSURL class]]) {
+                        NSDictionary *pl2 = [NSDictionary dictionaryWithContentsOfURL:
+                                             [bURL URLByAppendingPathComponent:@"Info.plist"]];
+                        NSString *exe = pl2[@"CFBundleExecutable"];
+                        if (exe.length) {
+                            NSURL *binURL = [bURL URLByAppendingPathComponent:exe];
+                            NSDictionary *attr = [NSFileManager.defaultManager
+                                                  attributesOfItemAtPath:binURL.path error:NULL];
+                            exeInfo = [NSString stringWithFormat:@"%@(%@B)", exe,
+                                       attr[NSFileSize] ?: @"?"];
+                        }
+                    }
+                }
+            }
+            [out appendFormat:@"bin=%@ scan=%ld ", exeInfo, (long)binVerdict];
+        } @catch (NSException *e4) {
+            [out appendFormat:@"BIN=%@(%@) ", e4.name, e4.reason ?: @"-"];
         }
         return out;
     } @catch (NSException *exception) {

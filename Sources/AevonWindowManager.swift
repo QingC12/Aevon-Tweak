@@ -167,6 +167,12 @@ enum AevonWindowManager {
             // roothide SB 进程调用即抛 NSInvalidArgumentException（三版全 -1 同路，
             // 0.2.38 白名单制因此全回退）。主路线换 SBApplication.sceneSpecification
             // （SB 自己解析的 manifest，AevonAppInfo 已验证链路），Swift 判据不变。
+            // V0.2.40（AevonSceneRouteV240）：0.2.39 真机定论 SBApplication 两个 spec
+            // 选择子都不响应（仍全 -1 全回退）；且设置的 manifest uiSceneDel=no
+            // uiMulti=0 却实现了 configurationForConnecting → 判据在 App 二进制不在
+            // manifest。垫片内部升级为 A 路线（SBApplication，其他版本兜底）+ B 路线
+            // （二进制扫 configurationForConnectingSceneSession，主路线），Swift 判据
+            // 仍只有确证 2 才自建（AevonSelfSceneAppBinarySupport 已由垫片内部调用）。
             let routeDump = AevonSelfSceneRouteDump(bundleID)
             let sceneSupport = AevonSelfSceneAppSceneSupport(bundleID)
             if sceneSupport != 2 {

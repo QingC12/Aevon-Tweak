@@ -83,6 +83,19 @@ NSInteger AevonSelfSceneAppSceneSupport(NSString *bundleID);
 /// （infoDictionary 抛异常的备选，只取证）。返回串仅供日志。
 NSString *AevonSelfSceneRouteDump(NSString *bundleID);
 
+/// V0.2.40（AevonSceneRouteV240）：二进制扫描判据（现行主路线）。
+/// 0.2.39 真机定论：SBApplication 两个 spec 选择子都不响应（全 -1）；设置的
+/// manifest 无 scene delegate 类名（uiSceneDel=no uiMulti=0）却实现了
+/// configurationForConnecting → 判据在 App 可执行文件不在 manifest。
+/// 读 App 二进制（LSApplicationProxy.bundleURL→Info.plist→CFBundleExecutable，
+/// 直读文件通路 0.2.39 真机已验证可用）分块 memmem 扫
+/// "configurationForConnectingSceneSession"（__objc_methname 明文）：
+///   返回 2 = 含（delegate 实现该选择子 → 自建场景可走）；
+///   返回 0 = 读毕未含（老式 App → 旧路径）；
+///   返回 -1 = 判不了（proxy/plist/exe/读文件任一失败，含加密扫不到的形态）→
+///           调用方保守走旧路径（白名单制）。结果按 bundleID 缓存。
+NSInteger AevonSelfSceneAppBinarySupport(NSString *bundleID);
+
 /// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段
 /// （client / clientPort，全 @try，取不到写 nil），区分「FB 层就没客户端」与
 /// 「App 端 UIKit 拒绝」。返回串仅供日志。
