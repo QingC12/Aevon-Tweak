@@ -349,8 +349,8 @@ final class AevonWindowView: UIView {
             + "，外观 \(traitCollection.userInterfaceStyle == .dark ? "深色·边缘发光" : "浅色·淡描边")"
             + "（AevonScreenAspectV244 AevonRatio58V245 AevonRatioTallV246 AevonCanvasScaleV246 AevonCanvasFixedV248 AevonCornerRadiusV245 AevonFloatGlowV246）")
         updateEdgeGlow()
-        // V0.2.48（AevonIdleGuardV248）：浮窗在 → 不让系统按自动锁定暗屏/锁屏
-        AevonWindowView.beginIdleGuard()
+        // V0.2.48（AevonNoAutoLockV248）：浮窗在 → 不让系统按自动锁定暗屏/锁屏
+        AevonWindowView.beginNoAutoLock()
     }
 
     required init?(coder: NSCoder) {
@@ -1426,7 +1426,7 @@ final class AevonWindowView: UIView {
             + "（AevonPrefsFixedV247）")
     }
 
-    // MARK: - 浮窗存在期间禁止空闲锁屏（V0.2.48，AevonIdleGuardV248）
+    // MARK: - 浮窗存在期间禁止空闲锁屏（V0.2.48，AevonNoAutoLockV248）
 
     /// 原始 `isIdleTimerDisabled`（nil = 当前没在守）。
     private static var idleTimerSaved: Bool?
@@ -1441,7 +1441,7 @@ final class AevonWindowView: UIView {
     /// `sharedApplication` 返回 nil 就是**必崩**（SB 崩 = 注销）。改为
     /// 运行时取类 + `responds(to:)` 先验 + KVC 读写 —— KVC 会自动按属性类型装箱，
     /// 不会出现 `perform(_:with:)` 把 BOOL 当对象指针传（那样 `false` 会变成 YES）的坑。
-    static func beginIdleGuard() {
+    static func beginNoAutoLock() {
         guard idleTimerSaved == nil else { return }
         var saved = false
         var applied = false
@@ -1455,15 +1455,15 @@ final class AevonWindowView: UIView {
         }
         guard exception == nil, applied else {
             AevonLog.warn("[窗口] 禁用空闲锁屏失败（取不到 UIApplication / 键不存在，异常已拦，继续运行）"
-                + "（AevonIdleGuardV248）")
+                + "（AevonNoAutoLockV248）")
             return
         }
         idleTimerSaved = saved
         AevonLog.info("[窗口] 浮窗期间禁用空闲锁屏（原值 \(saved ? "已禁用" : "未禁用") → 禁用）"
-            + "（AevonIdleGuardV248）")
+            + "（AevonNoAutoLockV248）")
     }
 
-    static func endIdleGuard() {
+    static func endNoAutoLock() {
         guard let saved = idleTimerSaved else { return }
         idleTimerSaved = nil
         let exception = AevonShieldRun {
@@ -1474,7 +1474,7 @@ final class AevonWindowView: UIView {
         }
         if exception != nil { return }
         AevonLog.info("[窗口] 浮窗已关，空闲锁屏还原为原值（\(saved ? "禁用" : "启用")）"
-            + "（AevonIdleGuardV248）")
+            + "（AevonNoAutoLockV248）")
     }
 
     private func persistFrame() {
@@ -1513,8 +1513,8 @@ final class AevonWindowView: UIView {
     func teardown() {
         // 关窗前把最终位置记下来
         persistFrame()
-        // V0.2.48（AevonIdleGuardV248）：浮窗没了 → 空闲锁屏还原
-        AevonWindowView.endIdleGuard()
+        // V0.2.48（AevonNoAutoLockV248）：浮窗没了 → 空闲锁屏还原
+        AevonWindowView.endNoAutoLock()
         selfSceneFallbackTimer?.invalidate()
         selfSceneFallbackTimer = nil
         // V0.2.47（AevonDarkGuardV247）：守卫与冻结层一起收尾

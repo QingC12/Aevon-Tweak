@@ -1869,8 +1869,11 @@ jobs:
             || { echo "::error::左边条缺失（0.2.27 左右补回，AevonFloatEdgeGripV227）"; exit 1; }
           grep -q 'CGRect(x: width - o, y: 0, width: b + o' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::右边条缺失（0.2.27 左右补回，AevonFloatEdgeGripV227）"; exit 1; }
-          grep -q 'installResizeSnapshot' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::缩放快照冻结缺失（AevonFloatSnapResizeV226）"; exit 1; }
+          # V0.2.48 反转（AevonCanvasFixedV248）：`installResizeSnapshot`（缩放起手冻结成
+          # 静态图）已被删除 —— 用户要「缩放时实时出画」。这条旧断言改为钉**保留下来的
+          # 抓帧能力**（黑屏守卫的最后一帧兜底就靠它）。
+          grep -q 'private func captureSnapshotImage' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::抓帧能力缺失（黑屏守卫没有最后一帧可盖，AevonFloatSnapResizeV226）"; exit 1; }
           grep -q '_createSceneWithDefinition:settings:' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::P0 场景路线探测缺失（AevonPiPProbeV226）"; exit 1; }
           echo "V0.2.26 校验: Stheno 手势布置 + 快照冻结 + P0 探测 已就位"
@@ -2442,7 +2445,7 @@ jobs:
           fi
           echo "V0.2.47 校验: 回桌面黑屏守卫（事件布防+有界重申+最后一帧）+ 发光贴边压暗 + 偏好定档删项 + 圆盘浮窗让路 已就位"
 
-          # ── V0.2.48 校验（AevonCanvasFixedV248 / AevonIdleGuardV248 /
+          # ── V0.2.48 校验（AevonCanvasFixedV248 / AevonNoAutoLockV248 /
           #    AevonFrameMemoryV248 / AevonMainSceneFixedV248 /
           #    AevonMainCanvasRestoreV248 / AevonSelfSceneRestoreV248）
           # Aevon(23) 十项，本轮落地其中八项（①~④⑥⑧⑨⑩；⑤ 见交付说明分析）：
@@ -2459,7 +2462,7 @@ jobs:
           #   ⑨ 主场景改画布开关写死 + 删设置项。
           #   ⑩ 关窗后全屏打开 App 黑屏 → 主场景还原后抖动复位两拍；自建场景销毁前
           #      先把画布还原成整屏并等 0.35 秒，让 App 完成一次「回到大尺寸」的重排。
-          for s in AevonCanvasFixedV248 AevonIdleGuardV248 AevonFrameMemoryV248 \
+          for s in AevonCanvasFixedV248 AevonNoAutoLockV248 AevonFrameMemoryV248 \
                    AevonMainSceneFixedV248 AevonMainCanvasRestoreV248 AevonSelfSceneRestoreV248; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.48 SB 侧缺标记 $s"; exit 1; }
@@ -2487,13 +2490,13 @@ jobs:
             echo "::error::0.2.48 反转：缩放期间又跳过布局（内容不会跟手）"; exit 1
           fi
           # ④ 空闲锁屏守卫
-          grep -q 'static func beginIdleGuard' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+          grep -q 'static func beginNoAutoLock' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.48 缺空闲锁屏守卫（浮窗放视频会被系统锁屏）"; exit 1; }
-          grep -q 'static func endIdleGuard' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+          grep -q 'static func endNoAutoLock' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.48 空闲锁屏守卫没有还原路径（会永久禁止锁屏）"; exit 1; }
-          grep -q 'AevonWindowView.beginIdleGuard()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+          grep -q 'AevonWindowView.beginNoAutoLock()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.48 空闲锁屏守卫没被调用"; exit 1; }
-          grep -q 'AevonWindowView.endIdleGuard()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+          grep -q 'AevonWindowView.endNoAutoLock()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.48 空闲锁屏守卫没在关窗时还原"; exit 1; }
           # ⑥⑧ 记忆必须同步落盘（注销是 SIGKILL，不 synchronize 就丢）
           grep -q 'store.synchronize()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
