@@ -533,10 +533,13 @@ enum AevonWindowManager {
             // 而旧代码紧接着就把 App 挂起（sleep），那两拍根本没被执行 → App 留在
             // 「浮窗尺寸的布局」上，下次无论全屏打开还是再开浮窗，看到的都是残局。
             // 现在把 sleep 推迟到 0.75 秒（> 0.40s + 一帧余量），期间若又开窗则取消。
+            // 同时把「释放 RBS 保活断言」也一起推迟 —— 断言一旦释放，系统随时可以把
+            // App 挂起，那 0.75 秒的等待就白等了（断言是唯一能按住它的东西）。
             scheduleSleep(bundleID: bundleID, after: 0.75)
         }
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
-        if let pid = AevonAppInfo.pid(bundleID: bundleID) {
+        if releaseOnly, let pid = AevonAppInfo.pid(bundleID: bundleID) {
+            // 交接给系统全屏拉起：这一刻必须立刻放手，不能拖（FrontBoard 正在接管）
             AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
         }
         AevonLog.info("[窗口] \(bundleID) 已关闭\(releaseOnly ? "（交接给系统全屏拉起，未写场景前台标记）" : "")")
@@ -552,10 +555,15 @@ enum AevonWindowManager {
         pendingSleep[bundleID]?.cancel()
         let work = DispatchWorkItem {
             pendingSleep[bundleID] = nil
-            // 期间又被装进浮窗 → 不挂了（画面在上面）
+            // 期间又被装进浮窗 → 不挂了（画面在上面），断言留给重新开窗那一侧
             guard openBundleID != bundleID else {
                 AevonLog.info("[窗口] \(bundleID) 在挂起前又被装回浮窗 → 取消挂起（AevonCloseSettleV249）")
                 return
+            }
+            // 顺序：先放手（释放 RBS 断言）→ 再挂起。反过来会在「还按着断言」时
+            // 挂起，FrontBoard 与 RunningBoard 各持一个立场，容易留下悬挂状态。
+            if let pid = AevonAppInfo.pid(bundleID: bundleID) {
+                AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
             }
             AevonSceneHelper.sleep(bundleID)
             AevonLog.info("[窗口] \(bundleID) 场景已挂起（画布还原与抖动都已完成，再开窗不会断层）"
@@ -568,7 +576,13 @@ enum AevonWindowManager {
     private static func cancelPendingSleep(bundleID: String) {
         guard let work = pendingSleep.removeValue(forKey: bundleID) else { return }
         work.cancel()
-        AevonLog.info("[窗口] 取消 \(bundleID) 的待挂起任务（马上要重新开窗）（AevonCloseSettleV249）")
+        // 任务被撤销 = 这个 App 马上要重新开窗：断言还挂在它身上，这里先放一次，
+        // 由 open() 末尾重新获取 —— 不放会留下一条永不释放的保活（App 永远不睡）。
+        if let pid = AevonAppInfo.pid(bundleID: bundleID) {
+            AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
+        }
+        AevonLog.info("[窗口] 取消 \(bundleID) 的待挂起任务（马上要重新开窗，保活断言转交新窗口）"
+            + "（AevonCloseSettleV249）")
     }
 
     /// V0.1.4（AevonIconLaunchV104）：桌面图标被点、要把这个 App 全屏拉起时调用。
