@@ -647,6 +647,40 @@ enum AevonEntryHost {
                 + "（AevonGestureProbeV2V256）")
         }
     }
+
+    // MARK: - 失效瞬间探针（V0.2.57，AevonTouchProbeV257）
+
+    /// 0.2.56 探针是 30 秒周期采样：Aevon(31) 全程只采到一次、且采样时刻一切健康
+    /// —— 失效瞬间再次错过。触发端改为**每根 began 触发**（3 秒节流）：手势失效时
+    /// 用户仍在触屏（点按可用），began 必达全局通道 → 取证必中失效瞬间。
+    /// 输出 = 状态位 + 入口窗口四点命中与浮窗命中判定（链路级）+ 周期探针三路（识别器级）。
+    private static var lastTouchProbeAt: CFTimeInterval = 0
+    static func touchTriggeredProbeIfDue() {
+        guard AevonPrefs.bool("GestureProbe", default: true) else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastTouchProbeAt >= 3.0 else { return }
+        lastTouchProbeAt = now
+        let screen = UIScreen.main.bounds
+        let probes: [(String, CGPoint)] = [
+            ("中", CGPoint(x: screen.midX, y: screen.midY)),
+            ("右", CGPoint(x: screen.maxX - 6, y: screen.midY)),
+            ("底", CGPoint(x: screen.midX, y: screen.maxY - 12)),
+            ("右下", CGPoint(x: screen.maxX - 6, y: screen.maxY - 110)),
+        ]
+        var parts: [String] = []
+        for (label, pt) in probes {
+            let hit = window?.hitTest(pt, with: nil)
+            let hitName = hit.map { AevonSafeClassName($0) ?? "?" } ?? "穿透"
+            let floatHit = pointHitsFloatingWindow(at: pt) ? 1 : 0
+            parts.append("\(label)=\(hitName)/浮\(floatHit)")
+        }
+        let layerCount = floatLayer?.subviews.count ?? 0
+        let mount = container?.superview.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "无"
+        AevonLog.info("[诊断] 失效瞬间探针：\(AevonEdgeEntry.forensicStateText) | 入口命中 "
+            + parts.joined(separator: " ") + " | 浮窗层子视图=\(layerCount) 容器挂载=\(mount)"
+            + "（AevonTouchProbeV257）")
+        dumpGestureRecognizerProbe(tag: "began触发")
+    }
 }
 
 // MARK: - C 入口（供 AevonSceneHook.m 调用）

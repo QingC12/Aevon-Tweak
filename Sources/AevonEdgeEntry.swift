@@ -53,6 +53,9 @@ enum AevonEdgeEntry {
     private static var lastSwallowLogAt: CFTimeInterval = 0
     /// V0.2.56（AevonDedupBeganV256）：重投 began 静默消费的节流日志
     private static var lastDedupLogAt: CFTimeInterval = 0
+    // V0.2.57（AevonZombieSealV257）：被吞过 began 的触摸「终身封印」状态。
+    private static var zombieSealID: UInt = 0
+    private static var zombieSealUntil: CFTimeInterval = 0
     /// V0.2.8（AevonSelectionCoolV208）：圆盘选中开窗后 1.5 秒冷静期（防双呼）
     private static var selectionCoolUntil: CFTimeInterval = 0
     private static var lastTriggerAt: CFTimeInterval = 0
@@ -87,6 +90,14 @@ enum AevonEdgeEntry {
 
     /// 手势条已删除（0.2.51），入口可用性 = 全局通道已装（浮窗手势依赖它）。
     static var isVisible: Bool { return globalInstalled }
+
+    /// V0.2.57（AevonTouchProbeV257）：探针取证用状态快照（纯位标志，无几何）。
+    static var forensicStateText: String {
+        let sealed = zombieSealID != 0 && CACurrentMediaTime() <= zombieSealUntil
+        return "拖拽=\(floatGestureActive ? 1 : 0)/待定=\(floatBarPending ? 1 : 0)"
+            + "/圆盘=\(AevonRingMenu.isPresented ? 1 : 0)/全局=\(globalTouchID != 0 ? 1 : 0)"
+            + "/封印=\(sealed ? 1 : 0)"
+    }
 
     /// 圆盘指针最近位置（AevonRingMenu 悬停高亮等要用）。
     static var currentPointerPoint: CGPoint { return lastTouchPoint }
@@ -129,6 +140,11 @@ enum AevonEdgeEntry {
         let screen = UIScreen.main.bounds
         switch phase {
         case .began:
+            // V0.2.57（AevonTouchProbeV257）：失效瞬间探针，每根 began 触发（3 秒节流）。
+            AevonEntryHost.touchTriggeredProbeIfDue()
+            // V0.2.57（AevonZombieSealV257）：已封印触摸的重投 began 一并静默消费
+            //（UIKit 不应看到它的任何帧，见 sealZombieTouch 注释）。
+            if touchID == zombieSealID, CACurrentMediaTime() <= zombieSealUntil { return }
             // V0.2.56（AevonDedupBeganV256）：浮窗拖拽已认领的手指，重投的 began 静默消费。
             // Aevon(30) 真机日志实锤同一根手指 3ms 内两条 began（14.969「落指即拖」→
             // 14.972 又一条同点 began 走了交回分支）——重投让 handleFloatGestureBegan
@@ -293,6 +309,7 @@ enum AevonEdgeEntry {
            now - lastFloatMovedAt > 2.0 {
             AevonLog.warn("[自愈] 浮窗拖拽状态残留（2 秒无移动，touchID=\(floatTouchID)）→ 强制清场"
                 + "（AevonGripHealV255）")
+            sealZombieTouch(floatTouchID)
             clearFloatGesture()
         }
         let holding = (ownsTouch || globalTouchID != 0)
@@ -336,6 +353,20 @@ enum AevonEdgeEntry {
         guard AevonPrefs.bool("Enabled", default: true) else { return false }
         guard touchID != 0 else { return false }
         healGlobalTakeoverIfNeeded()
+        // V0.2.57（AevonZombieSealV257）：封印期触摸的 began/moved 一律吞到抬手；
+        // ended/cancelled 放行 —— 孤儿 ended 对 UIKit 无害（没见过 began 就被忽略），
+        // 而经重投副本见过 began 的那一路恰好需要这帧 ended 收尾，吞了反而留脏簿记。
+        if zombieSealID != 0, touchID == zombieSealID {
+            if CACurrentMediaTime() > zombieSealUntil {
+                zombieSealID = 0
+                zombieSealUntil = 0
+            } else if phase == 3 || phase == 4 {
+                zombieSealID = 0
+                zombieSealUntil = 0
+            } else {
+                return true
+            }
+        }
         // V0.0.41（AevonFloatGlobalV41）：浮窗拖拽期间这根手指完全归浮窗。
         if floatGestureActive, touchID == floatTouchID,
            CACurrentMediaTime() <= floatDeadline {
@@ -379,8 +410,10 @@ enum AevonEdgeEntry {
             if lastFloatMovedAt > 0, now0 - lastFloatMovedAt > 1.5 {
                 AevonLog.warn("[自愈] 浮窗拖拽残留（接管盾 1.5s，touchID=\(floatTouchID)）→ 清场重判"
                     + "（AevonStaleShieldV256）")
+                sealZombieTouch(floatTouchID)
                 clearFloatGesture()
             } else if now0 > floatDeadline {
+                sealZombieTouch(floatTouchID)
                 clearFloatGesture()
             } else {
                 return false
@@ -447,6 +480,7 @@ enum AevonEdgeEntry {
         let now = CACurrentMediaTime()
         guard now <= floatDeadline else {
             win.grabCancel()
+            sealZombieTouch(touchID)
             clearFloatGesture()
             return false
         }
@@ -455,6 +489,7 @@ enum AevonEdgeEntry {
             if now >= floatBarHoldDeadline {
                 floatBarPending = false
                 guard let grab = floatGrab, case .bar = grab else {
+                    sealZombieTouch(touchID)
                     clearFloatGesture()
                     return false
                 }
@@ -463,6 +498,7 @@ enum AevonEdgeEntry {
             } else if hypot(point.x - floatBarHoldPoint.x,
                             point.y - floatBarHoldPoint.y) > floatBarHoldRadius {
                 floatBarPending = false
+                sealZombieTouch(touchID)
                 clearFloatGesture()
                 AevonLog.info("[窗口] 边条按住未达时长即移动 → 放弃接管（AevonFloatBarHoldV221）")
                 return false
@@ -531,6 +567,23 @@ enum AevonEdgeEntry {
         lastFloatMovedAt = 0
     }
 
+    /// V0.2.57（AevonZombieSealV257）：把一根「began 已被本通道吞掉」的触摸封印到抬手。
+    ///
+    /// 协议（AevonTouchHook.m）：began/moved 先上报再询问、ended 先询问再上报，
+    /// 吞咽 = 整条事件不投递。于是只要吞过某根手指的 began，UIKit 就**永远没见过它**；
+    /// 此时任何中途弃管（放弃接管 / 30s 超时 / 残留盾清场 / 关窗强制解除）都会让
+    /// 后续帧以「孤儿」身份转发给 UIKit —— 有 began 没簿记的帧序列污染手势环境
+    ///（识别器全部健康但 pan 死、点按活的头号嫌疑；Aevon(31) 探针全健康反向证实
+    /// 杀手不在识别器层）。封印后：该指针的 began/moved 一律吞到 ended 为止，
+    /// 绝不漏孤儿帧；ended/cancelled 放行（无害且能替重投副本收尾）。硬上限 30 秒。
+    private static func sealZombieTouch(_ touchID: UInt) {
+        guard touchID != 0 else { return }
+        zombieSealID = touchID
+        zombieSealUntil = CACurrentMediaTime() + 30
+        AevonLog.warn("[边缘] 触摸 \(touchID) 的 began 已被吞、现在中途弃管 → 封印到抬手，不再漏孤儿帧给 UIKit"
+            + "（AevonZombieSealV257）")
+    }
+
     /// V0.2.56（AevonCloseDisarmV256）：浮窗生命周期收尾（关窗 / 关停靠小窗）强制解除
     /// 全局通道的拖拽吞咽状态 —— 窗口没了，残留的 floatTouchID 只剩「误吞同槽位
     /// 新触摸」一种结局（UITouch 槽位地址复用已被 Aevon(30) 日志实锤：同一地址
@@ -538,6 +591,7 @@ enum AevonEdgeEntry {
     static func forceDisarmFloatGesture(reason: String) {
         guard floatGestureActive || floatBarPending else { return }
         let held = floatTouchID
+        sealZombieTouch(held)
         clearFloatGesture()
         AevonLog.warn("[边缘] \(reason) → 强制解除拖拽吞咽状态（touchID=\(held)）"
             + "（AevonCloseDisarmV256）")

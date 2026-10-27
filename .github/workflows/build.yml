@@ -2170,6 +2170,31 @@ jobs:
             || { echo "::error::0.2.56 旧探针 prefix(12) 截断必须移除（取证失败根源）"; exit 1; }
           echo "V0.2.56 校验: 重投began静默 + 残留盾 + 双击自愈锚点 + 关窗强制解除 + 探针V2 已就位"
 
+          # ── V0.2.57 校验（AevonZombieSealV257 / AevonTouchProbeV257）──
+          # Aevon(31)：探针 V2 周期采样全健康（识别器无一卡住）→ 杀手不在识别器层，
+          # 机制锁定为「吞过 began 的触摸中途弃管后，后续帧以孤儿身份漏给 UIKit」
+          #（began/moved 先上报再询问 + 吞咽=整条不投递 + 中途清场 = UIKit 收到
+          # 没 began 簿记的帧序列，污染手势环境 → pan 死点按活）。
+          # ①封印：七个弃管点（自愈残留/接管盾/超时清场/拖拽超时/角块失配/边条放弃/
+          #   关窗强制解除）一律先把该指针封印到抬手，began/moved 绝不漏孤儿帧；
+          # ②失效瞬间探针：每根 began 触发（3s 节流），点按可达 → 取证必中失效瞬间。
+          for s in AevonZombieSealV257 AevonTouchProbeV257; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.57 缺标记 $s"; exit 1; }
+          done
+          # ①封印实现与调用点数量（定义 + 七个弃管点）
+          grep -q 'private static func sealZombieTouch' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.57 缺封印实现"; exit 1; }
+          SCOUNT=$(grep -c 'sealZombieTouch(' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" || true)
+          [ "$SCOUNT" -ge 8 ] \
+            || { echo "::error::0.2.57 封印调用点不足（定义+七个弃管点，实得 $SCOUNT）"; exit 1; }
+          # ②失效瞬间探针：触发端（EdgeEntry）与实现端（EntryHost）都在
+          grep -q 'touchTriggeredProbeIfDue' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.57 began 触发端未接入"; exit 1; }
+          grep -q 'static func touchTriggeredProbeIfDue' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.57 缺失效瞬间探针实现"; exit 1; }
+          echo "V0.2.57 校验: 孤儿帧封印(七弃管点) + 失效瞬间探针(began触发/3s节流) 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
