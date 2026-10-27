@@ -327,27 +327,30 @@ final class AevonWindowView: UIView {
         startAspectWatch()
 
         AevonLog.info("[窗口] 浮窗外壳已创建 \(bundleID)"
-            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "5:8 加高 7% = 宽7:高12 竖窗（0.2.46 用户定档，比 5:8 高 7%）")"
+            + "（外侧手势区，内容比例 \(AevonWindowView.usesScreenAspect ? "跟随屏幕（整屏等比缩进窗口）" : "7:12 竖窗（0.2.46 用户定档：比 5:8 高 7%）")"
             + "（AevonFloat53V221 AevonFloat53PortraitV222），"
             + "内容=整屏场景呈现（AevonFloatSceneLayoutV224 AevonFloatHostedResizeV225，"
             + "真重排唯一通路=自建场景路线，P0 探测 AevonPiPProbeV226），"
             + "手势区=左/右/底全宽 30/44+压边10 落指即拖（AevonFloatWideGripV223"
             + " AevonFloatGripOverlapV224 AevonFloatSthenoEdgeV226 AevonFloatEdgeGripV227，顶边条已删），"
-            + "缩放快照冻结+空闲预抓缓存（AevonFloatSnapResizeV226 AevonFloatSnapCacheV227）"
+            + "缩放=实时改窗宽 + 呈现层等比缩放，不改 App 画布也不冻结画面（AevonCanvasFixedV248），"
+            + "快照能力转为黑屏守卫兜底（AevonFloatSnapResizeV226 AevonFloatSnapCacheV227）"
             + "全程圆角（AevonFloatRoundResizeV224），"
             + "内容 \(Int(restored.width))x\(Int(restored.height))，"
             + "\(sizeSource)）（AevonSthenoEdgeBarV37）")
         let initCanvas = AevonWindowView.canvasSize(for: restored.size)
-        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "5:8+7% 真重排档（画布 = 窗口 × 倍数）")"
+        AevonLog.info("[窗口] 内容比例：\(AevonWindowView.usesScreenAspect ? "屏幕比例档（整屏原生排版 + 等比缩进窗口）" : "7:12 真重排档（画布恒 = 屏宽 × 屏宽/比例，与窗口尺寸脱钩）")"
             + "，比例 \(String(format: "%.4f", appliedAspect))"
             + "，窗口 \(Int(restored.width))x\(Int(restored.height))"
             + "，画布 \(Int(initCanvas.width))x\(Int(initCanvas.height))"
             + "，倍数 \(String(format: "%.2f", AevonWindowView.canvasScale))"
-            + "（缩放 \(String(format: "%.2f", initCanvas.width / max(1, restored.width)))）"
+            + "（实际缩放 \(String(format: "%.2f", initCanvas.width / max(1, restored.width)))）"
             + "，圆角 \(Int(AevonWindowView.cornerRadius(for: restored.width)))pt"
             + "，外观 \(traitCollection.userInterfaceStyle == .dark ? "深色·边缘发光" : "浅色·淡描边")"
-            + "（AevonScreenAspectV244 AevonRatio58V245 AevonRatioTallV246 AevonCanvasScaleV246 AevonCornerRadiusV245 AevonFloatGlowV246）")
+            + "（AevonScreenAspectV244 AevonRatio58V245 AevonRatioTallV246 AevonCanvasScaleV246 AevonCanvasFixedV248 AevonCornerRadiusV245 AevonFloatGlowV246）")
         updateEdgeGlow()
+        // V0.2.48（AevonIdleGuardV248）：浮窗在 → 不让系统按自动锁定暗屏/锁屏
+        AevonWindowView.beginIdleGuard()
     }
 
     required init?(coder: NSCoder) {
@@ -449,21 +452,28 @@ final class AevonWindowView: UIView {
     /// App 的排版与全屏逐像素一致；呈现层按 1/k 等比缩进窗口（见 applyContentLayout，
     /// 那里 k = 画布宽 / 窗口宽，高度同系数 → 绝不会出现 X/Y 不等比的拉伸）。
     /// 5:3 档 → 等比放大 k 倍，宽不超屏宽（0.2.43 行为）。
+    ///
+    /// **V0.2.48（AevonCanvasFixedV248）：画布与窗口尺寸脱钩，恒等于「屏宽 × 屏宽/比例」。**
+    ///
+    /// Aevon(23) 三条反馈其实同源，全部指向「画布跟着窗口缩」这一个决定：
+    ///   ① 「缩到最小时字体反而变大」—— 画布 = 窗口 × 1.30，窗口 240 时画布只有 312，
+    ///      App 的字号是**固定 pt**（抖音 17pt 不随画布宽缩放），312 宽画布上 17pt 字
+    ///      占的比例比 430 宽画布上大得多，再按 1/1.30 缩回窗口 → 字相对窗口更大了。
+    ///   ② 「右侧点赞栏显示不全 / 不显示」—— 抖音的右侧图标列按 **UIScreen 屏宽**摆位，
+    ///      画布 312 / 396 都比屏宽 430 窄，图标列被画布右边界裁掉（截图为证）。
+    ///   ③ 「缩放时整窗黑屏」—— 每次缩放提交都要写一次场景画布，App 重排期间表面重绘，
+    ///      于是拖动过程中看到的是黑。
+    ///
+    /// 三者一起改掉：**画布恒定 = 屏宽（430）× 屏宽/比例（737）**，于是
+    ///   · App 永远拿到和真机一样宽的画布 → 字号比例恒定、右侧栏永远在画布内；
+    ///   · 窗口缩放只改「窗口 frame + 呈现层 scale(窗口宽/画布宽)」，**一次场景写都不发生**
+    ///     → 拖动过程实时出画、不黑、不重排，也不会把 App 的内部布局弄坏（断层/黑屏）。
     static func canvasSize(for windowSize: CGSize) -> CGSize {
-        guard windowSize.width > 1, windowSize.height > 1 else { return windowSize }
+        _ = windowSize   // 保留形参：全链调用点与历史日志口径不变（画布已与窗口脱钩）
         let screen = UIScreen.main.bounds.size
-        if usesScreenAspect {
-            return CGSize(width: floor(screen.width), height: floor(screen.height))
-        }
-        var width = min(windowSize.width * canvasScale, screen.width)
-        var height = width / contentAspectCurrent
-        if height > screen.height {
-            // 极端（窗口已经很高 + 大倍数）：按屏高反推，仍保持 5:3
-            height = screen.height
-            width = height * contentAspectCurrent
-        }
-        let rounded = floor(width)
-        return CGSize(width: rounded, height: rounded / contentAspectCurrent)
+        let width = floor(max(1, screen.width))
+        let aspect = max(0.2, contentAspectCurrent)
+        return CGSize(width: width, height: floor(width / aspect))
     }
 
     /// 首帧到达（主场景 / 自建场景共用）。
@@ -531,10 +541,10 @@ final class AevonWindowView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // 缩放进行中不允许布局（手势只会改 transform，走到这里说明有外部触发，
-        // 一旦在这里改内部几何就又退回到卡顿的老路，直接跳过）
-        if isLiveResizing { return }
-
+        // V0.2.48（AevonCanvasFixedV248）：缩放进行中**也走布局** —— 现在缩放改的是
+        // 真实 window.frame，内容区跟着 bounds 变，呈现层按「画布宽/窗口宽」等比缩放。
+        // 因为画布恒定（屏宽 × 屏宽/比例），这条路径里一次场景写都不会发生，
+        // 逐帧成本只有一次 CALayer transform 赋值，远低于旧的「冻结快照 + 逐帧矩阵」。
         if contentClip.frame != bounds {
             contentClip.frame = bounds
         }
@@ -663,7 +673,6 @@ final class AevonWindowView: UIView {
         let apply = { [weak self] in
             guard let self else { return }
             self.contentClip.layer.cornerRadius = radius
-            self.resizeSnapshotView?.layer.cornerRadius = radius
         }
         if animated, !isLiveResizing, window != nil {
             // 用 CATransaction 而不是 UIView.animate：只改 layer 的 cornerRadius，
@@ -913,12 +922,11 @@ final class AevonWindowView: UIView {
             frame = moveOriginFrame
         case .corner:
             if isLiveResizing {
+                // V0.2.48（AevonCanvasFixedV248）：缩放期间改的是真实 frame，
+                // 取消就整块 frame 退回起手几何（不再有矩阵/锚点要复位）。
                 isLiveResizing = false
-                removeResizeSnapshot()
-                transform = .identity
-                layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-                frame = resizeOriginFrame
-                setNeedsLayout()
+                frame = AevonWindowView.clampedToScreen(resizeOriginFrame)
+                layoutIfNeeded()
             }
         }
     }
@@ -937,18 +945,19 @@ final class AevonWindowView: UIView {
     // MARK: - 边条移动
 
     /// 移动的纯计算部分（V0.0.41 拆出来）：长按拖动与全局通道共用同一套夹边逻辑。
+    ///
+    /// V0.2.48（AevonCanvasFixedV248）：从「留 60pt 可见」改成**完整夹进屏幕**——
+    /// 手柄挂在窗口外面，窗口有一部分在屏外时那侧手柄就抓不到（用户体感 = 拖丢）。
     private func applyBarMove(to point: CGPoint) {
         let dx = point.x - moveOriginPoint.x
         let dy = point.y - moveOriginPoint.y
-        let screen = UIScreen.main.bounds
-        var center = CGPoint(x: moveOriginFrame.midX + dx, y: moveOriginFrame.midY + dy)
-        // 至少留 60pt 在屏幕内，避免拖丢
-        let halfW = moveOriginFrame.width / 2.0
-        let halfH = moveOriginFrame.height / 2.0
-        center.x = max(60 - halfW, min(center.x, screen.width - 60 + halfW))
-        center.y = max(60 - halfH, min(center.y, screen.height - 60 + halfH))
+        let target = CGRect(x: moveOriginFrame.minX + dx,
+                            y: moveOriginFrame.minY + dy,
+                            width: moveOriginFrame.width,
+                            height: moveOriginFrame.height)
+        let clamped = AevonWindowView.clampedToScreen(target)
         // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
-        self.center = center
+        self.center = CGPoint(x: clamped.midX, y: clamped.midY)
     }
 
     // MARK: - 外角缩放（V0.0.36 起，V0.0.37 移到窗外角块）
@@ -984,14 +993,25 @@ final class AevonWindowView: UIView {
         }
     }
 
-    /// 缩放的纯计算部分（V0.0.41 拆出来）：只动外层矩阵，pan 与全局通道共用。
+    /// 缩放的纯计算部分（V0.0.41 拆出来）：pan 与全局通道共用。
+    ///
+    /// **V0.2.48（AevonCanvasFixedV248）：不再动外层矩阵，直接改真实 frame。**
+    /// 因为画布恒定，改 frame 只影响两件本地的事：内容区 bounds（→ 呈现层 scale）
+    /// 与外缘发光圈几何；App 侧一次 resize 都收不到，画面始终是活的。
+    /// 固定点 = 手势起手 frame 里锚点对应的那一点（拖右下角 → 左上角不动）。
     private func applyCornerResize(to point: CGPoint, edges: UIRectEdge) {
         let dx = point.x - resizeOriginPoint.x
         let dy = point.y - resizeOriginPoint.y
         let width = clampedCornerWidth(dx: dx, dy: dy, base: resizeOriginFrame, edges: edges)
-        let factor = max(0.05, width / max(1, resizeOriginFrame.width))
-        // 只动外层矩阵，内部的 App 画面图层树完全不碰
-        transform = CGAffineTransform(scaleX: factor, y: factor)
+        let height = width / AevonWindowView.contentAspectCurrent
+        let anchor = resizeAnchor
+        let fixed = CGPoint(x: resizeOriginFrame.minX + anchor.x * resizeOriginFrame.width,
+                            y: resizeOriginFrame.minY + anchor.y * resizeOriginFrame.height)
+        let target = CGRect(x: fixed.x - anchor.x * width,
+                            y: fixed.y - anchor.y * height,
+                            width: width, height: height)
+        frame = target
+        layoutIfNeeded()   // 立即把 bounds/圆角/呈现层缩放落到位（拖动要跟手）
     }
 
     /// 只有「宽度」一个自由度：高度 = 宽度 × 5/3（高:宽 = 5:3，AevonFloat53V221）。
@@ -1022,28 +1042,32 @@ final class AevonWindowView: UIView {
         return result
     }
 
-    /// 进入「实时缩放」：锚点挪到固定点，内部一个属性都不动。
-    /// V0.2.24（AevonFloatRoundResizeV224）：Aevon(108) 反馈缩放中四角变直角 ——
-    /// 不再临时关圆角/裁剪（圆角全程保持，场景原生布局后离屏合成成本也可控）。
-    /// V0.2.26（AevonFloatSnapResizeV226）：Aevon(1) 反馈缩放依旧卡顿 ——
-    /// 实时内容是跨进程远程图层（整屏 430×932@3x），每帧都被圆角掩膜重采样，
-    /// 这是卡顿的根源。手势开始时把当前画面冻结成一张静态图接管显示
-    /// （PullOverX freezeVideoFrameForInteraction / setInteractiveRenderingPerformanceMode
-    /// 同款），抬手恢复真实内容 —— 逐帧成本从「远程大表面+掩膜」降为「一张本地小图」。
+    /// 进入「实时缩放」。
+    ///
+    /// V0.0.24（AevonFloatRoundResizeV224）：Aevon(108) 反馈缩放中四角变直角 ——
+    /// 不再临时关圆角/裁剪（圆角全程保持）。
+    /// V0.2.26（AevonFloatSnapResizeV226）：Aevon(1) 反馈缩放卡顿 → 起手冻结成静态图。
+    /// **V0.2.48（AevonCanvasFixedV248）：Aevon(23) 反馈「缩放时整窗黑屏、必须松手才出画」——
+    /// 冻结图这条路彻底退出缩放手势。**
+    ///
+    /// 为什么现在可以不冻结：画布恒定 = 屏宽 × 屏宽/比例，缩放不再写 App 画布，
+    /// 「实时内容」只是一层本地 CALayer transform（scale = 窗口宽/屏宽），
+    /// 逐帧成本与一张静态图同级，却**始终是活画面** —— 黑屏的成因（每次提交后
+    /// App 远程表面重绘）根本不再发生。
+    /// 只保留 `captureSnapshotImage` / `cachedSnapshotImage` 这一层，改由
+    /// 回桌面黑屏守卫使用（那里需要「最后一帧」兜底）。
     private func beginLiveResize(anchor: CGPoint) {
         isLiveResizing = true
         resizeAnchor = anchor
-        installResizeSnapshot()
-        // 改锚点后必须立刻补位置，否则窗口会跳：position = 固定点在父视图的坐标
-        let fixed = CGPoint(x: frame.origin.x + anchor.x * frame.width,
-                            y: frame.origin.y + anchor.y * frame.height)
-        layer.anchorPoint = anchor
-        layer.position = fixed
     }
 
-    // MARK: - 缩放快照冻结（V0.2.26，AevonFloatSnapResizeV226；V0.2.27 缓存化 AevonFloatSnapCacheV227）
+    // MARK: - 缩放快照（V0.2.26，AevonFloatSnapResizeV226；V0.2.27 缓存化 AevonFloatSnapCacheV227）
+    //
+    // V0.2.48（AevonCanvasFixedV248）：**缩放手势不再使用快照**（画布恒定后缩放只改本地
+    // 矩阵，活画面比静态图更好）。`installResizeSnapshot` / `removeResizeSnapshot` /
+    // `resizeSnapshotView` 随之删除；只保留「抓一帧 + 空闲预抓缓存」这一层，
+    // 由回桌面黑屏守卫拿去当「最后一帧」兜底。
 
-    private var resizeSnapshotView: UIImageView?
     /// 空闲时预抓的内容快照（V0.2.27，AevonFloatSnapCacheV227）
     private var cachedSnapshotImage: UIImage?
     private var snapshotRecaptureWork: DispatchWorkItem?
@@ -1090,80 +1114,49 @@ final class AevonWindowView: UIView {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// 缩放开始时把当前画面冻结成静态图盖在最上层。
+    /// 抬手：几何在拖动过程中已经实时生效，这里只做「夹回屏幕 + 落盘 + 刷圆角/发光」。
     ///
-    /// V0.2.27（AevonFloatSnapCacheV227）：0.2.26 的两处残余卡顿都在这里修 ——
-    /// ① 手势 .began 上同步 layer.render 整屏 430×932@3x（主线程几百毫秒的起手顿挫）
-    ///    → 改为**空闲时预抓进缓存**，落指时直接用图，零同步渲染；
-    /// ② 快照盖在上面但 contentClip（远程大表面 + 圆角掩膜）仍在逐帧合成，GPU 没省
-    ///    → 快照有效时**隐藏 contentClip**，逐帧合成从远程大表面降为一张本地小图。
-    /// 兜底：缓存未就绪才现场抓一帧（0.2.26 行为）；抓不到（全透明/异常）→ 不盖快照
-    /// 也不隐藏实时内容，行为退回 0.2.25，绝不黑屏。
-    private func installResizeSnapshot() {
-        guard resizeSnapshotView == nil else { return }
-        let bounds = contentClip.bounds
-        guard bounds.width > 1, bounds.height > 1 else { return }
-        var image = cachedSnapshotImage
-        if image == nil { image = captureSnapshotImage() }
-        guard let image else { return }
-        let snapshot = UIImageView(image: image)
-        snapshot.frame = contentClip.frame
-        snapshot.contentMode = .scaleToFill
-        snapshot.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
-        snapshot.layer.masksToBounds = true
-        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        snapshot.isUserInteractionEnabled = false
-        addSubview(snapshot)
-        resizeSnapshotView = snapshot
-        contentClip.isHidden = true
-    }
-
-    private func removeResizeSnapshot() {
-        contentClip.isHidden = false
-        resizeSnapshotView?.removeFromSuperview()
-        resizeSnapshotView = nil
-    }
-
-    /// 抬手：把矩阵换成真实 frame，只在这一下做一次完整布局。
+    /// V0.2.48（AevonCanvasFixedV248）：不再有 `transform → frame` 的换算，
+    /// 也不再有「抬手后重排一次画布」那一步（画布恒定）。
     private func finishEdgeResize() {
         guard isLiveResizing else { return }
-        let factor = max(0.05, transform.a)
         isLiveResizing = false
-        removeResizeSnapshot()
-
-        let anchor = resizeAnchor
-        transform = .identity
-        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-
-        let screen = UIScreen.main.bounds
-        let aspect = AevonWindowView.contentAspectCurrent
-        var width = max(AevonWindowView.minContentWidth,
-                        min(resizeOriginFrame.width * factor, screen.width * 0.95))
-        width = min(width, screen.height * 0.92 * aspect)
-        let height = width / aspect
-
-        // 固定点 = 原始 frame 里锚点对应的那一点；新 frame 以它为基准反推 origin
-        let fixed = CGPoint(x: resizeOriginFrame.minX + anchor.x * resizeOriginFrame.width,
-                            y: resizeOriginFrame.minY + anchor.y * resizeOriginFrame.height)
-        var origin = CGPoint(x: fixed.x - anchor.x * width,
-                             y: fixed.y - anchor.y * height)
-        // 夹回屏幕：窗口至少留 60pt 在屏内，顶部至少 24pt 可见
-        origin.x = max(60 - width, min(origin.x, screen.width - 60))
-        origin.y = max(24 - height + 60, min(origin.y, screen.height - 60))
-        frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
-        setNeedsLayout()
+        let clamped = AevonWindowView.clampedToScreen(frame)
+        if clamped != frame {
+            frame = clamped
+            layoutIfNeeded()
+        }
         persistFrame()
-        // V0.2.28（AevonSelfSceneV228）：自建场景 → 提交新画布 = App 按新尺寸真重排
-        // （这是缩放的根治：不再是整屏渲染缩放，而是 App 原生布局到新尺寸）。
-        // V0.2.43（AevonCanvasScaleV243）：窗口尺寸 × k = 场景画布；主场景（S2）与
-        // 自建场景走同一条提交路径。先记下已提交的画布，layoutSubviews 不再重复写。
-        let canvas = AevonWindowView.canvasSize(for: CGSize(width: width, height: height))
-        appliedCanvasSize = canvas
-        sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
-        // V0.2.27（AevonFloatSnapCacheV227）：尺寸已提交，旧快照作废，空闲后重抓
-        cachedSnapshotImage = nil
-        scheduleSnapshotRecapture(after: 0.8)
-        AevonLog.info("[窗口] 缩放到 \(Int(width))x\(Int(height))（AevonEdgeResizeV37）")
+        updateCornerRadius(animated: true)
+        updateEdgeGlow()
+        let canvas = AevonWindowView.canvasSize(for: frame.size)
+        AevonLog.info("[窗口] 缩放到 \(Int(frame.width))x\(Int(frame.height))"
+            + "（实时缩放：画布恒 \(Int(canvas.width))x\(Int(canvas.height)) 未变，"
+            + "呈现层缩放 \(String(format: "%.2f", canvas.width / max(1, frame.width)))）"
+            + "（AevonEdgeResizeV37 AevonCanvasFixedV248）")
+    }
+
+    /// V0.2.48（AevonCanvasFixedV248）：把窗口**完整夹进屏幕**。
+    ///
+    /// Aevon(23)：「设定一个值，悬浮窗永远不能移出手机屏幕，必须保留左右或者底部一方在屏幕内，
+    /// 避免出现无法拖动的问题」。旧逻辑是「留 60pt 可见」，但手柄是挂在窗口**外面**的边条，
+    /// 窗口有一半在屏外时那侧手柄就点不到了 —— 用户体感就是「拖丢了、救不回来」。
+    /// 完整夹进屏内后，四条边条的 10pt 压边（向窗内）始终在屏幕里，随时能再抓住它。
+    /// 这同时根治了「有时自动跑到右下角」：旧逻辑允许把窗口停在只露 60pt 的位置，
+    /// 那个位置被当成记忆落盘（x 86% / y 92%），下次开窗就「跑到右下角」。
+    static func clampedToScreen(_ rect: CGRect) -> CGRect {
+        let screen = UIScreen.main.bounds
+        guard screen.width > 4, screen.height > 4, rect.width > 1, rect.height > 1 else { return rect }
+        let aspect = max(0.2, contentAspectCurrent)
+        var width = min(rect.width, screen.width)
+        var height = width / aspect
+        if height > screen.height {
+            height = screen.height
+            width = height * aspect
+        }
+        let x = min(max(0, rect.minX), max(0, screen.width - width))
+        let y = min(max(0, rect.minY), max(0, screen.height - height))
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     // MARK: - 回桌面黑屏守卫（V0.2.47，AevonDarkGuardV247）
@@ -1172,6 +1165,8 @@ final class AevonWindowView: UIView {
     private var guardArmedUntil: TimeInterval = 0
     /// 连续「没在画」的拍数（0.5s 一拍）
     private var darkTicks = 0
+    /// 连续「在画」的拍数（V0.2.48：撤冻结要两拍确认，避免一来一回地闪）
+    private var aliveTicks = 0
     /// 盖上来的「最后一帧」快照（永不黑屏的兜底层）
     private var darkFreezeView: UIImageView?
     /// 本次布防里已经重申过几次前台 / 上一次重申的时刻
@@ -1187,31 +1182,38 @@ final class AevonWindowView: UIView {
     /// 为什么是「布防 + 有界重申」而不是「每秒无限重申」：0.1.5 的历史结论写得很清楚
     /// —— 无限次往 FrontBoard 的场景状态机写 settings 是归档(14) SIGTRAP 的成因之一，
     /// 所以前台补偿一直是「开窗后头 8 次」的有界写法。这里沿用同一条纪律：
-    /// 只在明确发生「场景离场」这个事件时补三拍，其他时候一次都不写。
+    /// 只在明确发生「场景离场」这个事件时补两拍，其他时候一次都不写。
+    ///
+    /// V0.2.48（AevonCanvasFixedV248）：Aevon(23) 报「回桌面时浮窗要闪好几次黑才出来」。
+    /// 0.2.47 是「先重申、等连续 2 拍确认掉帧才盖图」—— 那 1 秒里用户看到的就是
+    /// 从黑到黑到黑的闪烁。现在改成 **布防当场就盖最后一帧**（画面还在时立刻定格，
+    /// 视觉上连续），重申与恢复在冻结层底下进行，**连续 2 拍确认在画**才撤图。
+    /// 同时对「离场」这个事件少写一次：只补 立即 / +0.9s 两拍（原 3 拍），
+    /// 表面重建次数减半，闪烁窗口随之缩短。
     func armBackgroundGuard(reason: String) {
         guard window != nil else { return }
         guard sceneHost.hasContent else { return }   // 还没出过首帧：交给首帧探测，别掺和
         beginGuardWindow(reason: reason)
+        installDarkFreeze()                          // 先定格，再在底下抢救
         reassertContentForeground(tag: "立即")
-        for delay in [0.75, 2.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.reassertContentForeground(tag: "+\(delay)s")
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+            self?.reassertContentForeground(tag: "+0.9s")
         }
     }
 
     private func beginGuardWindow(reason: String) {
         guardArmedUntil = CACurrentMediaTime() + 4.0
         darkTicks = 0
+        aliveTicks = 0
         reassertCount = 0
-        AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：4 秒内若内容不再出画就盖最后一帧"
+        AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：当场盖最后一帧，4 秒内连续 2 拍在画才撤图"
             + "（当前 \(sceneHost.stateSummary())）（AevonDarkGuardV247）")
     }
 
-    /// 重申浮窗里这个场景的前台（有界：一次布防最多 6 次，间隔 ≥1 秒）。
+    /// 重申浮窗里这个场景的前台（有界：一次布防最多 4 次，间隔 ≥1 秒）。
     private func reassertContentForeground(tag: String) {
         guard guardArmedUntil > 0, window != nil else { return }
-        guard reassertCount < 6 else { return }
+        guard reassertCount < 4 else { return }
         let now = CACurrentMediaTime()
         if reassertCount > 0, now - lastReassertAt < 1.0 { return }
         reassertCount += 1
@@ -1223,29 +1225,39 @@ final class AevonWindowView: UIView {
             + "\(before) → \(after)（AevonDarkGuardV247）")
     }
 
-    /// 每 0.5 秒一拍：布防期里盯 contentState —— 真的不在了才盖图，读不到一律不动手。
+    /// 每 0.5 秒一拍：布防期里盯 contentState —— 读不到一律不动手；撤图要两拍确认。
     private func checkBackgroundGuard() {
         guard guardArmedUntil > 0 else { return }
         let now = CACurrentMediaTime()
+        // nil = 信号不可用（contentState 读不到）→ fail-open：当「在画」处理，绝不盖黑
+        let alive = sceneHost.contentLooksRendering
         if now > guardArmedUntil + 1.0 {
-            // 布防期结束：内容在画就撤图；仍不在画则保留冻结（宁可冻着也不黑着）
+            // 布防期结束：在画（或读不到）就撤图；确认不在画则保留冻结（宁可冻着也不黑着）
             guardArmedUntil = 0
             darkTicks = 0
-            if sceneHost.contentLooksRendering != false {
+            aliveTicks = 0
+            if alive != false {
                 removeDarkFreeze()
             }
             return
         }
-        guard window != nil, !isLiveResizing else { return }
-        // nil = 信号不可用（contentState 读不到）→ fail-open，绝不盖图
-        guard let alive = sceneHost.contentLooksRendering else { return }
-        if alive {
-            darkTicks = 0
-            removeDarkFreeze()
+        guard window != nil else { return }
+        guard let alive else {
+            aliveTicks = 1   // 读不到：按「疑似在画」推进一拍，够两拍就撤图（fail-open）
+            if aliveTicks >= 2 { removeDarkFreeze() }
             return
         }
+        if alive {
+            aliveTicks += 1
+            darkTicks = 0
+            // V0.2.48：连续 2 拍在画才撤 —— 撤早了会「图层一恢复又掉」来回闪
+            if aliveTicks >= 2 {
+                removeDarkFreeze()
+            }
+            return
+        }
+        aliveTicks = 0
         darkTicks += 1
-        guard darkTicks >= 2 else { return }
         if darkFreezeView == nil {
             installDarkFreeze()
         }
@@ -1291,9 +1303,11 @@ final class AevonWindowView: UIView {
             + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247）")
         guardArmedUntil = CACurrentMediaTime() + 4.0
         darkTicks = 0
+        aliveTicks = 0
         reassertCount = 0
         lastReassertAt = 0
-        removeDarkFreeze()
+        // V0.2.48：点一下之后**继续盖着**（画面回来两拍才撤），
+        // 否则撤图的瞬间又是一次「黑 — 出画」的闪。
         reassertContentForeground(tag: "手动点击")
         for delay in [0.6, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -1345,12 +1359,14 @@ final class AevonWindowView: UIView {
 
         let screen = UIScreen.main.bounds
         let aspect = contentAspectCurrent
-        let width = max(minContentWidth,
-                        min(screen.width * CGFloat(raw[2]) / 100.0, screen.width * 0.95))
+        let width = max(minContentWidth, min(screen.width * CGFloat(raw[2]) / 100.0, screen.width))
         let height = width / aspect
-        let x = max(0, min(screen.width * CGFloat(raw[0]) / 100.0, screen.width - 60))
-        let y = max(0, min(screen.height * CGFloat(raw[1]) / 100.0, max(0, screen.height - 60)))
-        return CGRect(x: x, y: y, width: width, height: height)
+        let x = screen.width * CGFloat(raw[0]) / 100.0
+        let y = screen.height * CGFloat(raw[1]) / 100.0
+        // V0.2.48（AevonCanvasFixedV248）：恢复时也完整夹进屏幕 ——
+        // 旧版本可能存下过「只露 60pt」的位置（x 86% / y 92%），
+        // 那正是 Aevon(23) 说的「有时自动跑到右下角」。夹一次就永久根治。
+        return clampedToScreen(CGRect(x: x, y: y, width: width, height: height))
     }
 
     /// V0.2.45（AevonRatio58V245）：几何记忆一次性迁移。
@@ -1410,15 +1426,82 @@ final class AevonWindowView: UIView {
             + "（AevonPrefsFixedV247）")
     }
 
+    // MARK: - 浮窗存在期间禁止空闲锁屏（V0.2.48，AevonIdleGuardV248）
+
+    /// 原始 `isIdleTimerDisabled`（nil = 当前没在守）。
+    private static var idleTimerSaved: Bool?
+
+    /// Aevon(23)：「用浮窗播放抖音视频时，手机会根据系统的锁屏时间来暗屏和锁屏」。
+    ///
+    /// 浮窗里放视频时用户的手不碰屏幕（否则系统会重置空闲计时），于是系统照常
+    /// 按「自动锁定」暗屏 → 锁屏 → 视频停。这里在浮窗存在期间把空闲锁屏关掉，
+    /// 关窗时**还原成原值**（不假设用户设置里自动锁定是开还是关）。
+    ///
+    /// 为什么不用 `UIApplication.shared`：那是非可选属性，SpringBoard 里万一
+    /// `sharedApplication` 返回 nil 就是**必崩**（SB 崩 = 注销）。改为
+    /// 运行时取类 + `responds(to:)` 先验 + KVC 读写 —— KVC 会自动按属性类型装箱，
+    /// 不会出现 `perform(_:with:)` 把 BOOL 当对象指针传（那样 `false` 会变成 YES）的坑。
+    static func beginIdleGuard() {
+        guard idleTimerSaved == nil else { return }
+        var saved = false
+        var applied = false
+        let exception = AevonShieldRun {
+            guard let app = AevonRuntime.sendClass("UIApplication", Selector(("sharedApplication"))) as? NSObject,
+                  app.responds(to: Selector(("setIdleTimerDisabled:")))
+            else { return }
+            saved = (app.value(forKey: "idleTimerDisabled") as? Bool) ?? false
+            app.setValue(true, forKey: "idleTimerDisabled")
+            applied = true
+        }
+        guard exception == nil, applied else {
+            AevonLog.warn("[窗口] 禁用空闲锁屏失败（取不到 UIApplication / 键不存在，异常已拦，继续运行）"
+                + "（AevonIdleGuardV248）")
+            return
+        }
+        idleTimerSaved = saved
+        AevonLog.info("[窗口] 浮窗期间禁用空闲锁屏（原值 \(saved ? "已禁用" : "未禁用") → 禁用）"
+            + "（AevonIdleGuardV248）")
+    }
+
+    static func endIdleGuard() {
+        guard let saved = idleTimerSaved else { return }
+        idleTimerSaved = nil
+        let exception = AevonShieldRun {
+            guard let app = AevonRuntime.sendClass("UIApplication", Selector(("sharedApplication"))) as? NSObject,
+                  app.responds(to: Selector(("setIdleTimerDisabled:")))
+            else { return }
+            app.setValue(saved, forKey: "idleTimerDisabled")
+        }
+        if exception != nil { return }
+        AevonLog.info("[窗口] 浮窗已关，空闲锁屏还原为原值（\(saved ? "禁用" : "启用")）"
+            + "（AevonIdleGuardV248）")
+    }
+
     private func persistFrame() {
         guard !isLiveResizing, transform.isIdentity else { return }
         guard let store = UserDefaults(suiteName: AevonWindowView.prefsSuite) else { return }
         let screen = UIScreen.main.bounds
         guard screen.width > 1, screen.height > 1, frame.width > 1 else { return }
-        let xp = Double(frame.minX / screen.width * 100.0)
-        let yp = Double(frame.minY / screen.height * 100.0)
-        let wp = Double(frame.width / screen.width * 100.0)
+        // V0.2.48（AevonCanvasFixedV248）：落盘前先夹屏 —— 只存「合法几何」，
+        // 免得把「停在屏边只露一角」的状态写进记忆，下次开窗又跑到边角去。
+        let safe = AevonWindowView.clampedToScreen(frame)
+        guard safe.height > 1 else { return }
+        let xp = Double(safe.minX / screen.width * 100.0)
+        let yp = Double(safe.minY / screen.height * 100.0)
+        let wp = Double(safe.width / screen.width * 100.0)
+        let previous = (store.array(forKey: AevonWindowView.frameMemoryKey) as? [Double]) ?? []
         store.set([xp, yp, wp], forKey: AevonWindowView.frameMemoryKey)
+        // V0.2.48：**必须 synchronize**。0.2.47 及以前只 set 不落盘，
+        // 注销（respring 是 SIGKILL）时未刷盘的写入直接丢失 → 用户体感
+        // 「每次注销后位置尺寸都回到默认」。一次同步写成本可忽略，只在落盘时发生。
+        store.synchronize()
+        var text = "[窗口] 几何已记忆 \(Int(safe.width))x\(Int(safe.height))"
+            + " 左上 (\(Int(safe.minX)),\(Int(safe.minY)))"
+            + " = \(String(format: "%.1f", xp))%/\(String(format: "%.1f", yp))%/宽 \(String(format: "%.1f", wp))%"
+        if previous.count >= 3 {
+            text += "（上次 \(String(format: "%.1f", previous[0]))%/\(String(format: "%.1f", previous[1]))%/\(String(format: "%.1f", previous[2]))%）"
+        }
+        AevonLog.info(text + "（AevonFrameMemoryV248）")
     }
 
     // MARK: - 关闭
@@ -1430,6 +1513,8 @@ final class AevonWindowView: UIView {
     func teardown() {
         // 关窗前把最终位置记下来
         persistFrame()
+        // V0.2.48（AevonIdleGuardV248）：浮窗没了 → 空闲锁屏还原
+        AevonWindowView.endIdleGuard()
         selfSceneFallbackTimer?.invalidate()
         selfSceneFallbackTimer = nil
         // V0.2.47（AevonDarkGuardV247）：守卫与冻结层一起收尾

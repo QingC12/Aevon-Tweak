@@ -1882,8 +1882,12 @@ jobs:
           done
           grep -q 'cachedSnapshotImage' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::快照预抓缓存缺失（AevonFloatSnapCacheV227）"; exit 1; }
-          grep -q 'contentClip.isHidden = true' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::缩放期间必须隐藏实时远程表面（AevonFloatSnapCacheV227）"; exit 1; }
+          # V0.2.48 反转（AevonCanvasFixedV248）：Aevon(23)「缩放时整窗黑屏、必须松手才出画」。
+          # 旧断言要求「缩放期间隐藏实时远程表面、改盖静态图」，与「实时出画」直接冲突 →
+          # 反转成：不许再在缩放路径里隐藏内容区（列表里谁把 contentClip 藏了，谁就是回退）。
+          if grep -q 'contentClip.isHidden = true' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.48 反转：缩放又隐藏实时画面了（用户要实时出画）"; exit 1
+          fi
           grep -q 'handleBarPan' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::边条落指即拖缺失（AevonFloatEdgeGripV227）"; exit 1; }
           echo "V0.2.27 校验: 左右底落指即拖 + 顶边条删除 + 快照预抓缓存 已就位"
@@ -2171,8 +2175,16 @@ jobs:
             || { echo "::error::App 侧缺 configurationForConnecting 补实现"; exit 1; }
           grep -q 'AevonAppSceneGateApply' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧未在 start 里安装场景闸"; exit 1; }
-          grep -q 'MainSceneResize' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
-            || { echo "::error::Detail.plist 缺 S2 开关"; exit 1; }
+          # V0.2.48 反转（AevonMainSceneFixedV248）：Aevon(23)「主场景改画布开关也默认
+          # 写入代码中，并移除开关项」→ 设置页不许再有这个开关，且 Swift 侧必须写成常量。
+          if grep -q 'MainSceneResize' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist"; then
+            echo "::error::0.2.48 反转：设置页仍残留主场景改画布开关"; exit 1
+          fi
+          grep -q 'let mainResizeOn = true' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.48 主场景改画布没写死成常量（又被偏好读回去了）"; exit 1; }
+          if grep -q 'AevonPrefs.bool("MainSceneResize"' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.48 反转：主场景改画布仍在读偏好"; exit 1
+          fi
           grep -q 'SceneRouteForceSelf' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist" \
             || { echo "::error::Detail.plist 缺 S1 试验档开关"; exit 1; }
           grep -q 'MainSceneResize' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -2247,9 +2259,16 @@ jobs:
           grep -q 'selfSceneOn && !screenAspectOn' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.44 反转：屏幕比例档仍会走自建场景"; exit 1; }
           # 反转断言：屏幕比例档的画布必须是整屏原生尺寸（不是窗口 × 倍数）
-          grep -q 'return CGSize(width: floor(screen.width), height: floor(screen.height))' \
+          # V0.2.48 反转（AevonCanvasFixedV248）：屏幕比例档整段退休 —— 两种档位的
+          # 画布统一成「屏宽 × 屏宽/比例」常量，这条旧断言（要求整屏 WxH 分支在位）
+          # 与新实现冲突，改钉新口径：画布宽必须只由 screen.width 决定，
+          # 绝不允许再出现「windowSize × 倍数」这种随窗口缩的画布。
+          grep -q 'let width = floor(max(1, screen.width))' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.44 反转：屏幕比例档画布不是整屏尺寸"; exit 1; }
+            || { echo "::error::0.2.48 画布宽不是由屏宽决定（又回到随窗口缩）"; exit 1; }
+          if grep -q 'windowSize.width \* canvasScale' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.48 反转：画布又变成「窗口 × 倍数」（缩放会改画布 → 黑屏/右侧栏被裁）"; exit 1
+          fi
           echo "V0.2.44 校验: 内容比例跟随屏幕（整屏原生排版 + 1/k 等比缩进）+ 5:3 真重排档可切回"
           # ── V0.2.45 校验（AevonRatio58V245）：按参考视频实测把主窗改到 5:8 真重排。
           # 实测（交付/分析-主悬浮窗比例与圆角-2026-10-27/）：470×754 px = 5:8（0.623）、
@@ -2422,6 +2441,78 @@ jobs:
             fi
           fi
           echo "V0.2.47 校验: 回桌面黑屏守卫（事件布防+有界重申+最后一帧）+ 发光贴边压暗 + 偏好定档删项 + 圆盘浮窗让路 已就位"
+
+          # ── V0.2.48 校验（AevonCanvasFixedV248 / AevonIdleGuardV248 /
+          #    AevonFrameMemoryV248 / AevonMainSceneFixedV248 /
+          #    AevonMainCanvasRestoreV248 / AevonSelfSceneRestoreV248）
+          # Aevon(23) 十项，本轮落地其中八项（①~④⑥⑧⑨⑩；⑤ 见交付说明分析）：
+          #   ① 缩到最小「字体反而变大」② 抖音右侧栏显示不全/不显示 —— **同一根因**：
+          #      画布 = 窗口 × 1.30，窗口越小画布越窄（240 → 312），而字号是固定 pt、
+          #      抖音右侧栏按 UIScreen 屏宽摆位 → 字占比变大、右栏被裁到画布外。
+          #      修法：画布恒定 = 屏宽 × 屏宽/比例（430×737），与窗口尺寸彻底脱钩。
+          #   ③ 缩放时整窗黑屏 → 缩放不再改画布（原来每次都写 settings 触发 App 重排），
+          #      改为实时改 window.frame + 呈现层 scale，画面全程是活的。
+          #   ④ 播放视频时按系统锁屏时间暗屏 → 浮窗存在期间禁用空闲锁屏，关窗还原。
+          #   ⑥ 位置/大小记忆 + 永不移出屏幕 → 落盘 synchronize + 完整夹屏。
+          #   ⑧ 有时自动跑到右下角 → 旧逻辑允许「只露 60pt」并把那个位置写进记忆，
+          #      恢复时 x/y 就是 86%/92%；夹屏后不可能再出现。
+          #   ⑨ 主场景改画布开关写死 + 删设置项。
+          #   ⑩ 关窗后全屏打开 App 黑屏 → 主场景还原后抖动复位两拍；自建场景销毁前
+          #      先把画布还原成整屏并等 0.35 秒，让 App 完成一次「回到大尺寸」的重排。
+          for s in AevonCanvasFixedV248 AevonIdleGuardV248 AevonFrameMemoryV248 \
+                   AevonMainSceneFixedV248 AevonMainCanvasRestoreV248 AevonSelfSceneRestoreV248; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.48 SB 侧缺标记 $s"; exit 1; }
+          done
+          # ①② 画布必须与窗口尺寸脱钩（只由屏宽决定）
+          grep -q 'let width = floor(max(1, screen.width))' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 画布宽不是由屏宽决定"; exit 1; }
+          if grep -q 'windowSize.width \* canvasScale' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.48 反转：画布又变成「窗口 × 倍数」"; exit 1
+          fi
+          # ③ 缩放必须是「实时改 frame」而不是「外层 matrix + 冻结快照」
+          grep -q 'static func clampedToScreen' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 缺夹屏函数（窗口能被拖出屏幕）"; exit 1; }
+          if grep -q 'transform = CGAffineTransform(scaleX: factor' \
+               "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.48 反转：缩放又回到外层矩阵（缩放中画面会被冻结/发黑）"; exit 1
+          fi
+          if grep -q 'func installResizeSnapshot' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.48 反转：缩放又开始冻结快照（用户要求实时出画）"; exit 1
+          fi
+          grep -q 'frame = target' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 缩放没有实时提交新 frame"; exit 1; }
+          # ③ 缩放行必须不在 layoutSubviews 里被 isLiveResizing 挡掉
+          if grep -q 'if isLiveResizing { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
+            echo "::error::0.2.48 反转：缩放期间又跳过布局（内容不会跟手）"; exit 1
+          fi
+          # ④ 空闲锁屏守卫
+          grep -q 'static func beginIdleGuard' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 缺空闲锁屏守卫（浮窗放视频会被系统锁屏）"; exit 1; }
+          grep -q 'static func endIdleGuard' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 空闲锁屏守卫没有还原路径（会永久禁止锁屏）"; exit 1; }
+          grep -q 'AevonWindowView.beginIdleGuard()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 空闲锁屏守卫没被调用"; exit 1; }
+          grep -q 'AevonWindowView.endIdleGuard()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 空闲锁屏守卫没在关窗时还原"; exit 1; }
+          # ⑥⑧ 记忆必须同步落盘（注销是 SIGKILL，不 synchronize 就丢）
+          grep -q 'store.synchronize()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 几何记忆没有落盘（注销后回到默认）"; exit 1; }
+          # ⑦ 布防即盖帧：installDarkFreeze 必须排在第一次 reassert 之前
+          FREEZE_LINE=$(grep -n 'installDarkFreeze()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
+          REASSERT_LINE=$(grep -n 'reassertContentForeground(tag: "立即")' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$FREEZE_LINE" ] || [ -z "$REASSERT_LINE" ] || [ "$FREEZE_LINE" -ge "$REASSERT_LINE" ]; then
+            echo "::error::0.2.48 回桌面守卫没先盖帧（会先闪几下黑才出画）"
+            exit 1
+          fi
+          grep -q 'aliveTicks' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.48 撤冻结没有两拍确认（会来回闪）"; exit 1; }
+          # ⑩ 关窗还原：主场景抖动复位 + 自建场景销毁前先还原整屏
+          grep -q 'Double(screen.width) + dx' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.48 主场景还原后没有抖动复位（App 会缓存浮窗尺寸 → 全屏黑）"; exit 1; }
+          grep -q 'AevonSelfSceneRestoreV248' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.48 自建场景销毁前没有还原整屏（全屏视频会断层）"; exit 1; }
+          echo "V0.2.48 校验: 画布恒定（脱钩窗口）+ 实时缩放 + 防熄屏 + 几何落盘夹屏 + 布防即盖帧 + 关窗抖动复位 已就位"
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

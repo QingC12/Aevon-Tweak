@@ -221,7 +221,11 @@ enum AevonWindowManager {
             // AevonSelfSceneAppCapVerdict 读进程内登记表。
             let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: true)
             let forceSelf = AevonPrefs.bool("SceneRouteForceSelf", default: false)
-            let mainResizeOn = AevonPrefs.bool("MainSceneResize", default: true)
+            // V0.2.48（AevonMainSceneFixedV248）：Aevon(23)「设置中的主场景改画布开关也
+            // 默认写入代码中，并且移除开关项」→ 从偏好读取降级为常量 true。
+            // 这个开关本来默认就是开、且是「真重排」唯一可用通路（cap=-1 的老式 App 只能走它），
+            // 暴露在设置里只会让用户把它关掉、然后觉得浮窗「内容显示不全」。
+            let mainResizeOn = true
             // ── V0.2.44（AevonScreenAspectV244）：内容比例跟随屏幕档 ──────────────
             // 这一档的画布 = **整屏原生尺寸**，App 的排版与全屏逐像素一致，呈现层只做
             // 等比缩进窗口。所以自建场景（第二场景）在这档没有任何意义：它的画布也是
@@ -233,7 +237,8 @@ enum AevonWindowManager {
             let routeName = routeSelf
                 ? "自建场景"
                 : (screenAspectOn ? "整屏等比缩放（屏幕比例档）" : (routeMain ? "主场景改画布(S2)" : "全屏接管旧路径"))
-            AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)（AevonSceneRouteV242 AevonScreenAspectV244）")
+            AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)"
+                + "（S2 主场景改画布已定档常开，设置页开关已移除）（AevonSceneRouteV242 AevonScreenAspectV244 AevonMainSceneFixedV248）")
             if !routeSelf {
                 AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
             }

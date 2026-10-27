@@ -164,29 +164,11 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>浮窗怎么让 App 按窗大小排版，两条路：S2 改主场景画布（默认开，改的是 App 已在运行的那个场景，老式 App 也收得到）；S1 是试验档（老式 App 也走自建场景 + 打开 App 端场景闸），默认关，只在排查时打开。</string>
+			<string>浮窗怎么让 App 按窗大小排版，两条路：S2 改主场景画布（改的是 App 已在运行的那个场景，老式 App 也收得到）；S1 是试验档（老式 App 也走自建场景 + 打开 App 端场景闸），默认关，只在排查时打开。
+
+**0.2.48 起 S2 已定档为唯一默认路线，开关移除**（Aevon(23) 用户要求「默认写入代码中并移除开关项」）：它是 cap=-1 那批老式 App 唯一的真重排通路，暴露出来只会被误关。</string>
 			<key>label</key>
 			<string>浮窗路线（0.2.42）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>infoText</key>
-			<string>浮窗打开老式 App（Sileo / Filza / 抖音 / 微信这类）时，直接把这个 App **已经在运行的主场景**画布改成浮窗尺寸，让它按浮窗大小重新排版（0.2.42 新增，默认开）。
-
-原理：App 的主场景本来就有一个「画布尺寸」，系统分屏（Slide Over）就是改这个值让 App 重排的。以前我们不动它，App 按 430×932 整屏渲染，浮窗里只能裁切显示，所以「内容显示不全」。这一版直接改 settings.frame 提交，App 收到一次 resize。
-
-与「自建场景」的关系：两条路互不依赖。自建场景要 App 接受第二场景（老式 App 不接受），改主场景画布不需要——老式 App 也能收到。关浮窗时会把画布还原成全屏（不还原的话，之后全屏打开只有浮窗那么大）。
-
-判读：日志里「主场景改画布：…读回 frame=WxH」读回等于目标值 = 提交成功；跟着的首帧「呈现视图 WxH，首个子视图 WxH」两者相等 = App 真重排了。</string>
-			<key>key</key>
-			<string>MainSceneResize</string>
-			<key>label</key>
-			<string>主场景改画布（S2）</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -212,7 +194,13 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>**0.2.47 起这两项定档，设置页不再提供开关。** 窗口尺寸、画布倍数、内容比例都是按真机实测钉死的：窗宽 = 80% 屏宽、比例 7:12（比参考视频的 5:8 高 7%）、画布倍数 1.30（画布被屏宽夹到 430 宽，App 按真机宽度排版后再缩回窗口），所以字号与全屏一致、顶栏/底栏/右侧栏都在。—— 少了这几根滑条，就不会再出现「字大了、字小了、内容少了」的反复。</string>
+			<string>**0.2.47 起几何定档，设置页不再提供开关；0.2.48 起画布也与窗口尺寸脱钩。**
+
+窗口默认 344×590（80% 屏宽、比例 7:12 = 比参考视频的 5:8 高 7%），**画布恒定 = 屏宽 × 屏宽/比例（430×737）**：App 永远按真机宽度排版（右侧栏永远在画布内），窗口缩放只改「窗口 + 呈现层等比缩放」，因此缩放时画面实时、不黑、不重排。
+
+浮窗大小与位置会记住（注销也保留），并且**永远不会被移出屏幕**。
+
+—— 少了这些开关，就不会再出现「字大了、字小了、内容少了」的反复。</string>
 			<key>label</key>
 			<string>浮窗几何（0.2.47 定档，只读）</string>
 		</dict>

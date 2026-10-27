@@ -157,7 +157,7 @@ final class AevonSceneHost {
             let overflow = presentationView.subviews.contains { $0.frame.width > canvas.width + 1 }
             let line = "[场景] 画布/视图核对：画布 \(Int(canvas.width))x\(Int(canvas.height))"
                 + " 一级子视图 [\(views.joined(separator: " "))]"
-                + " 倍数 \(String(format: "%.2f", AevonWindowView.canvasScale))"
+                + " 画布/窗宽比 \(String(format: "%.2f", AevonWindowView.canvasScale))（常量档）"
                 + "\(overflow ? " 超宽=是（按 UIScreen 排版，右侧会被裁）" : " 超宽=否")"
             if overflow {
                 AevonLog.warn(line + "（AevonContentTreeV243）")
@@ -236,20 +236,48 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         invalidated = true
         onFirstContent = nil
+        let screen = UIScreen.main.bounds.size
         // V0.2.42（AevonMainSceneResizeV242）：S2 必须还原主场景画布 ——
         // 否则关窗后 App 再被全屏打开只有浮窗那么大（系统不会替我们改回来）。
+        //
+        // V0.2.48（AevonCanvasFixedV248）：Aevon(23)「关浮窗后再全屏打开 App 会黑屏
+        // （设置 App 出现过）」。原因是一次「430x932 → 422x723 → 430x932」的尺寸往返
+        // 里，App 可能把最后一次布局结果缓存住，还原那一笔读回虽然是 430x932，
+        // App 端却还停在浮窗尺寸上 → 全屏是黑的。
+        // 这里加**有界抖动复位**：先还原，再 +0.15s 写 (w-1)x(h-1)，+0.4s 写回 (w)x(h)。
+        // 两次尺寸都不同 → App 一定会重新走一遍布局；总写入 3 次（有界，不碰 deactivationReasons）。
         if mainResized {
-            let screen = UIScreen.main.bounds.size
             let ok = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
             AevonLog.info("[场景] 主场景画布已还原 \(Int(screen.width))x\(Int(screen.height))"
-                + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
+                + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                + "（AevonMainSceneResizeV242）")
+            for (delay, dx, dy) in [(0.15, -1.0, -1.0), (0.40, 0.0, 0.0)] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [scene] in
+                    _ = AevonMainSceneSetFrame(scene, Double(screen.width) + dx, Double(screen.height) + dy)
+                    if dx == 0 {
+                        AevonLog.info("[场景] 主场景抖动复位收尾 \(Int(screen.width))x\(Int(screen.height))"
+                            + "（读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                            + "（AevonCanvasFixedV248 AevonMainCanvasRestoreV248）")
+                    }
+                }
+            }
         }
         teardownPresenter()
         // V0.2.28（AevonSelfSceneV228）：自建场景必须 destroyScene 收尾，
         // 否则 respring 后 FBSceneManager 里残留同名场景（创建前会先销毁遗留，但别依赖它）。
+        //
+        // V0.2.48：销毁前**先把自建场景画布还原成整屏**，等 0.35 秒让 App 完成一次
+        // 「回到大尺寸」的重排，再销毁 —— Aevon(23) 报的「关闭浮窗后全屏打开抖音，
+        // 画面断层（有时 1 秒后自己好、有时不好）」就是这里缺的那一步：
+        // 视频渲染层带着 422x723 的布局状态被销毁，App 回到主场景后没有触发重算。
         if isSelfBuilt {
-            let destroyed = AevonSelfSceneDestroy(scene)
-            AevonLog.info("[场景] 自建场景已销毁（\(destroyed ? "成功" : "失败")）（AevonSelfSceneV228）")
+            let restored = AevonSelfSceneResize(scene, Double(screen.width), Double(screen.height))
+            AevonLog.info("[场景] 自建场景关窗前先还原整屏画布 \(Int(screen.width))x\(Int(screen.height))"
+                + "（\(restored ? "已提交" : "失败")，0.35s 后销毁）（AevonCanvasFixedV248 AevonSelfSceneRestoreV248）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [scene] in
+                let destroyed = AevonSelfSceneDestroy(scene)
+                AevonLog.info("[场景] 自建场景已销毁（\(destroyed ? "成功" : "失败")）（AevonSelfSceneV228）")
+            }
         }
         AevonLog.info("[场景] 已释放 presenter（\(bundleID)）")
     }
