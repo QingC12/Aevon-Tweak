@@ -738,6 +738,8 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
     DispatchQueue.main.async {
         // 设置里可能刚改过圆盘 App 列表 / 顺序 —— V0.0.31：带快照防漂移地刷新
         AevonRingStore.refreshFromSettings()
+        // V0.2.59（AevonGripCustomV259）：把手位置 / 长度滑条改动 → 竖条实时重排
+        AevonRingGrip.refreshFromPrefs()
     }
 }
 

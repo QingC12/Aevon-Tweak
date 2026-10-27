@@ -933,3 +933,41 @@ void AevonNotifySetFloatStage(NSString *bundleID) {
     } @catch (NSException *exception) {
     }
 }
+
+/* ── V0.2.59（AevonDockStageV259）：停靠集合广播 ─────────────────────────────
+ *
+ * 问题（用户 Aevon(33) #2）：点停靠小窗装回主窗时，小窗里的 App 内容**也被点了一下**
+ * —— backboardd 双投（SB + 直投 App），SB 侧 `setContentInteraction(false)` 只断了
+ * presenter 转发路径，直投 App 的那份照落在 App 自己的主窗口上 = 内容点击。
+ * SB 侧任何手段都拦不住直投那份（0.2.20 起的实测结论），唯一拦截点 = App 进程内。
+ *
+ * 方案：每个停靠窗的 bundleID 散列写进 5 个 notify 状态位
+ * `com.aevon.dockstage0..4`（一列 5 格是 0.0.50 定档结构），再广播一次
+ * `com.aevon.dockstage`。App 侧（AevonAppSide.m）比对自己的散列：命中 = 本 App
+ * 正在停靠 → 主窗口 isUserInteractionEnabled=NO（直投触摸被 UIKit 整根丢弃，
+ * 无 began 无 ended，零孤儿帧；画面照常渲染）；不在集合 = 恢复交互。
+ * 保险丝：App 侧 didBecomeActive 强制恢复（停靠中的 App 被全屏拉起时信号必经
+ * restoreDocked 清位，但即便通知丢失，回到前台这一步也必然解锁交互）。 */
+void AevonNotifyPublishDockStages(NSArray<NSString *> *bundleIDs) {
+    @try {
+        static int tokens[5] = {-1, -1, -1, -1, -1};
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            for (int i = 0; i < 5; i++) {
+                notify_register_check([[NSString stringWithFormat:@"com.aevon.dockstage%d", i]
+                                       UTF8String], &tokens[i]);
+            }
+        });
+        for (int i = 0; i < 5; i++) {
+            uint32_t hash = 0;
+            if (i < (int)bundleIDs.count) {
+                hash = AevonFloatStageHash(bundleIDs[i]);
+            }
+            if (tokens[i] >= 0) {
+                notify_set_state(tokens[i], (uint64_t)hash);
+            }
+        }
+        notify_post("com.aevon.dockstage");
+    } @catch (NSException *exception) {
+    }
+}

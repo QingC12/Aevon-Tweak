@@ -53,6 +53,10 @@ private func initializeAevon() {
      */
     AevonBootstrap.start()
 
+    // 3.5) V0.2.59（AevonDockStageV259）：停靠集合广播启动清场（notify state 不随 SB
+    //      重启清零，上次注销前的停靠 App 会被活着残留的进程误认为「还在停靠」）。
+    AevonWindowManager.clearDockStagesOnBoot()
+
     /*
      * V0.2.0（AevonAppSideBridgeV200）：App 侧探针日志桥。
      * 路 B（把吞摸点搬进 App 进程）的第一版，只读、不改任何触摸行为。

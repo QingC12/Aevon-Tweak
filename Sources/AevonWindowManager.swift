@@ -744,6 +744,9 @@ enum AevonWindowManager {
         // V0.2.53（AevonDockArbiterV253）：记录本次停靠，供 0.8s 防抖窗用。
         lastDockAt = CACurrentMediaTime()
         lastDockedBundleID = bundleID
+        // V0.2.59（AevonDockStageV259）：停靠集合广播 —— App 侧据此把主窗口交互关掉，
+        // 拦掉 backboardd 直投的触摸（点停靠小窗不再触发小窗里 App 的内容点击）。
+        publishDockStages()
         return true
     }
 
@@ -788,6 +791,8 @@ enum AevonWindowManager {
         // V0.2.53（AevonDockArbiterV253）：记录本次装回，供 0.8s 防抖窗用。
         lastRestoreAt = CACurrentMediaTime()
         lastRestoredBundleID = bundleID
+        // V0.2.59（AevonDockStageV259）：该 App 已离开停靠集合 → App 侧恢复主窗口交互。
+        publishDockStages()
     }
 
     /// 关掉一个停靠小窗（满员挤掉 / 面板关闭 / 插件停用）。
@@ -805,6 +810,24 @@ enum AevonWindowManager {
         relayoutDock(side: side, animated: true)
         AevonLog.info("[停靠] \(bundleID) 已从停靠列关闭（\(reason)，该侧剩 "
             + "\(dockedViews.filter { $0.dockedSide == side }.count) 个）（AevonDockColumnV250）")
+        // V0.2.59（AevonDockStageV259）：该 App 已不在停靠集合 → App 侧恢复交互。
+        publishDockStages()
+    }
+
+    /// V0.2.59（AevonDockStageV259）：把当前停靠集合广播给各 App 进程。
+    /// 幂等：集合没变时 App 侧的状态比对会吸收（只在翻转时动作）。
+    private static func publishDockStages() {
+        let ids = dockedViews.map { $0.bundleID }
+        AevonNotifyPublishDockStages(ids as NSArray)
+    }
+
+    /// V0.2.59（AevonDockStageV259）：SpringBoard 启动时清掉停靠集合的 notify 残留。
+    /// notify state 是内核共享内存，SB 重启不会自动清零 —— 上次注销前如果还有停靠窗，
+    /// 那几个 App 的进程（若还活着）会一直以为自己「正在停靠」而交互关闭。
+    /// SB 启动 = 停靠列必空（视图都没了），直接广播空集合。
+    static func clearDockStagesOnBoot() {
+        AevonNotifyPublishDockStages([] as NSArray)
+        AevonLog.info("[停靠] 启动清场：停靠集合广播已复位（AevonDockStageV259）")
     }
 
     /// 重排某一侧：按加入顺序重新分配 0..n 号槽位（顶部起依次向下）。
@@ -881,6 +904,8 @@ enum AevonWindowManager {
             scheduleSleep(bundleID: view.bundleID, after: 0.6)
         }
         dockedViews.removeAll()
+        // V0.2.59（AevonDockStageV259）：集合清空必须广播（notify state 不随清理自动归零）。
+        publishDockStages()
     }
 
     /// App 的图层列表更新时通知浮窗重排。

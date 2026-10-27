@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.58（arm64e / roothide）。用法：拖出浮窗后，窗口边缘的**圆盘把手**是呼盘唯一入口（0.2.51 起，AevonGripOnlyV251）：点按把手或在其上左滑 ≥14pt → 圆盘出来 → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。主悬浮窗左右边条**轻点**=吸附停靠，停靠后再点=装回。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
+			<string>Aevon 0.2.59（arm64e / roothide）。用法：拖出浮窗后，屏幕右缘的**圆盘把手**（贴边小短竖条，0.2.59 起，AevonGripCustomV259）是呼盘唯一入口（0.2.51 起，AevonGripOnlyV251）：点按把手或在其上左滑 ≥14pt → 圆盘出来 → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。主悬浮窗左右边条**轻点**=吸附停靠，停靠后再点=装回。名字后面带 ⓘ 的开关，点一下就是它的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -40,6 +40,50 @@
 			<string>圆盘把手（隔离实验开关）</string>
 			<key>infoText</key>
 			<string>0.2.58 新增的诊断开关（AevonGripToggleV258），默认开。关掉后圆盘把手整体摘除、呼盘入口停用（浮窗也随之无法呼出），用于 A/B 定位「滑动手势失效」是否与把手链路相关：关掉 → 注销 → 正常使用一轮，若失效不再出现即锁定把手；若仍出现则与把手无关。开关改动要注销生效。定位完成后请恢复打开。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>圆盘把手外观（0.2.59 起：贴边小短竖条）</string>
+			<key>footerText</key>
+			<string>0.2.59 起（AevonGripCustomV259）把手从圆角块改成贴屏幕右缘的小短竖条，位置和长短都可以调，改动即时生效（不用注销）。把手再窄，可点热区也向屏幕内侧延伸约 40pt、上下各多出 14pt —— 手指不必精确按在竖条上。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>30</real>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripY</string>
+			<key>label</key>
+			<string>位置：从底部起 %</string>
+			<key>min</key>
+			<real>10</real>
+			<key>max</key>
+			<real>90</real>
+			<key>infoText</key>
+			<string>把手竖条中心在屏幕右缘的高度：10 = 贴近底部，90 = 贴近顶部。默认 30（单手最顺手）。拖动滑条立刻生效。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>64</real>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripLen</string>
+			<key>label</key>
+			<string>长度：pt</string>
+			<key>min</key>
+			<real>36</real>
+			<key>max</key>
+			<real>120</real>
+			<key>infoText</key>
+			<string>把手竖条的长度（36–120pt）。默认 64。拖动滑条立刻生效。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

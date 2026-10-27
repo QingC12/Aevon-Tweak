@@ -1,6 +1,7 @@
 import UIKit
 
-/// 圆盘呼出把手（V0.2.50，AevonRingGripV250；V0.2.55 物理化重构 AevonRingGripV255）。
+/// 圆盘呼出把手（V0.2.50，AevonRingGripV250；V0.2.55 物理化重构 AevonRingGripV255；
+/// V0.2.59 竖条化 + 自定义 AevonGripCustomV259）。
 ///
 /// 为什么改成「可见把手」而不是继续调热区数值
 /// ------------------------------------------
@@ -18,34 +19,31 @@ import UIKit
 /// 真正能把「命中归属」还给我们的只有一条路 —— **那里放一个真实的、属于我们的视图**。
 /// （MilkyWayReborn 的 `MWWindowView` / TweakPilot 的侧边气泡同款做法。）
 ///
-/// V0.2.55（AevonRingGripV255）为什么把识别器从全屏宿主移到 handle 子视图上
-/// ------------------------------------------------------------------------
-/// 0.2.50 起把手是「一个 frame=容器全屏的宿主视图 + hitTest 只在把手矩形返回 self」，
-/// 两个识别器（pan / tap）挂在**宿主**上。命中归属在教科书规则下没问题
-/// （识别器只收 hitTest 命中链上的触摸），但 Aevon(29) 实测「tap 活、全系统 pan 死」
-/// —— SB 进程里挂着「全屏视图 + 常驻识别器」是唯一的结构性异常，
-/// PullOver 逆向（POHandle）与 PassThroughWindow（Livsy90）的成熟做法都是
-/// **识别器挂在真实控件上、宿主不持有任何识别器**。本版照做：
-///   · 宿主 view 依旧全屏透明，hitTest 只在命中区返回 handle（不返回宿主自身）；
-///   · handle 是 frame = 命中区（74×62）的真实控件，pan / tap 都挂在它上面；
-///   · 手势参与范围从「全屏宿主的 hitTest 链」收窄为「74×62 的 handle 一块」；
-///   · 位置定档（用户 Aevon(29) #4）：屏幕右缘、**从底部起 30% 高度**处
-///     （0.2.50 的 0.45 单手够不着）。
+/// V0.2.55（AevonRingGripV255）：识别器挂在真实控件 handle 上，全屏宿主零识别器。
+///
+/// V0.2.59（AevonGripCustomV259，用户 Aevon(33) #3）：
+///   · 形状从「34pt 圆角块 + 图标」改成**贴边小短竖条**（宽 5pt × 高可调）；
+///   · 位置（从底部起的百分比）与长度（pt）进设置页，**实时生效**（prefschanged）；
+///   · 命中区依旧向屏幕内侧外扩 40pt、上下各 14pt —— 可点性不因竖条变窄而缩水。
 final class AevonRingGripView: UIView {
-    /// 视觉尺寸
-    static let handleSize: CGFloat = 34
-    /// 命中区外扩：向屏幕内侧 40pt、上下各 14pt
+    /// 竖条视觉宽度（pt）。贴屏幕右缘。
+    static let barWidth: CGFloat = 5
+    /// 命中区外扩：向屏幕内侧 40pt、上下各 14pt（0.2.50 定档，不变）
     static let hitOutsetX: CGFloat = 40
     static let hitOutsetY: CGFloat = 14
-    /// 垂直位置（占屏幕高度比例）—— V0.2.55 定档：从屏幕底部起 30%。
-    /// （0.2.50 是 0.45，用户 Aevon(29) #4：「移动到屏幕右侧从下开始计算的 30% 处」。）
-    static let centerRatio: CGFloat = 0.70
+    /// 长度可调区间（pt）与默认值
+    static let lenMin: CGFloat = 36
+    static let lenMax: CGFloat = 120
+    static let lenDefault: CGFloat = 64
+    /// 位置可调区间（占屏幕高度比例，从底部起）与默认值
+    static let ratioMin: CGFloat = 0.10
+    static let ratioMax: CGFloat = 0.90
+    static let ratioDefault: CGFloat = 0.30
 
     /// 命中与手势的承载视图（V0.2.55）：frame = 命中区，识别器都挂在它上面。
     private let handle = UIView()
-    /// 视觉块（34pt 圆角块 + 图标），挂在 handle 里居中，不参与交互。
+    /// 视觉竖条（5pt 宽 × 长可调），贴 handle 右缘 = 贴屏幕右缘，不参与交互。
     private let visual = UIView()
-    private let glyph = UIImageView()
     private var didSummon = false
 
     var onSummon: ((String) -> Void)?
@@ -62,18 +60,13 @@ final class AevonRingGripView: UIView {
         addSubview(handle)
 
         visual.isUserInteractionEnabled = false
-        visual.backgroundColor = UIColor(white: 1.0, alpha: 0.14)
-        visual.layer.cornerRadius = AevonRingGripView.handleSize * 0.28
+        visual.backgroundColor = UIColor(white: 1.0, alpha: 0.32)
+        visual.layer.cornerRadius = AevonRingGripView.barWidth * 0.5
         visual.layer.cornerCurve = .continuous
         visual.layer.borderWidth = 0.5
-        visual.layer.borderColor = UIColor(white: 1.0, alpha: 0.22).cgColor
+        visual.layer.borderColor = UIColor(white: 1.0, alpha: 0.25).cgColor
         handle.addSubview(visual)
-
-        let config = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
-        glyph.image = UIImage(systemName: "chevron.left", withConfiguration: config)
-        glyph.tintColor = UIColor(white: 1.0, alpha: 0.75)
-        glyph.contentMode = .scaleAspectFit
-        visual.addSubview(glyph)
+        // 竖条只有 5pt 宽，旧版 34pt 块里的图标（glyph）放不下 —— V0.2.59 起纯视觉条。
 
         // V0.2.55（AevonRingGripV255）：识别器全部挂 handle（真实控件），
         // 全屏宿主不再持有任何识别器。
@@ -92,23 +85,41 @@ final class AevonRingGripView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let size = AevonRingGripView.handleSize
-        // 命中区中心 = 屏幕右缘向内 (size+outset)/2、纵向 centerRatio 处
-        let cy = bounds.height * AevonRingGripView.centerRatio
-        let cx = bounds.width - (size + AevonRingGripView.hitOutsetX) / 2
-        handle.frame = CGRect(x: cx - (size + AevonRingGripView.hitOutsetX) / 2,
-                              y: cy - (size + AevonRingGripView.hitOutsetY * 2) / 2,
-                              width: size + AevonRingGripView.hitOutsetX,
-                              height: size + AevonRingGripView.hitOutsetY * 2)
-        visual.frame = CGRect(x: handle.bounds.width - size,
-                              y: (handle.bounds.height - size) / 2,
-                              width: size, height: size)
-        glyph.frame = visual.bounds
+    // MARK: - 自定义参数（V0.2.59，AevonGripCustomV259）
+
+    /// 位置（从屏幕底部起的高度比例）。读偏好 GripY（10–90，默认 30）。
+    private var bottomRatio: CGFloat {
+        let raw = CGFloat(AevonPrefs.double("GripY", default: 30))
+        let clamped = min(max(raw / 100.0, AevonRingGripView.ratioMin), AevonRingGripView.ratioMax)
+        return clamped
     }
 
-    /// 命中区 = handle 的 frame（把手视觉矩形向左扩 40pt、上下各扩 14pt）。
+    /// 竖条长度（pt）。读偏好 GripLen（36–120，默认 64）。
+    private var barLength: CGFloat {
+        let raw = CGFloat(AevonPrefs.double("GripLen", default: 64))
+        return min(max(raw, AevonRingGripView.lenMin), AevonRingGripView.lenMax)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let len = barLength
+        let w = AevonRingGripView.barWidth
+        // 命中区：竖条中心纵向 = 屏幕底部 bottomRatio 处；横向贴右缘向内扩 hitOutsetX
+        let cy = bounds.height * (1.0 - bottomRatio)
+        let hitW = w + AevonRingGripView.hitOutsetX
+        let hitH = len + AevonRingGripView.hitOutsetY * 2
+        handle.frame = CGRect(x: bounds.width - hitW,
+                              y: cy - hitH / 2,
+                              width: hitW,
+                              height: hitH)
+        // 竖条贴 handle 右缘（= 贴屏幕右缘），纵向以命中区中心居中
+        visual.frame = CGRect(x: handle.bounds.width - w,
+                              y: (handle.bounds.height - len) / 2,
+                              width: w,
+                              height: len)
+    }
+
+    /// 命中区 = handle 的 frame（竖条向内扩 40pt、上下各扩 14pt）。
     private var hitRect: CGRect {
         return handle.frame
     }
@@ -202,10 +213,19 @@ enum AevonRingGrip {
         view.alpha = 0.85
         guard AevonEntryHost.attachOverlay(view) else { return }
         grip = view
-        AevonLog.info("[圆盘] 右缘可见把手已就位（\(Int(AevonRingGripView.handleSize))pt 圆角块，"
+        AevonLog.info("[圆盘] 右缘把手已就位（V0.2.59 起为贴边小短竖条，位置/长度可在设置页调，"
             + "命中区向外扩 \(Int(AevonRingGripView.hitOutsetX))pt，把手外一律不拦，"
             + "识别器挂在真实控件上，全屏宿主零识别器）"
-            + "（AevonRingGripV250 AevonRingGripV255）")
+            + "（AevonRingGripV250 AevonRingGripV255 AevonGripCustomV259）")
+    }
+
+    /// V0.2.59（AevonGripCustomV259）：设置页改了 GripY / GripLen → 实时重排。
+    /// 参数读取在 layoutSubviews 里做（每次现读偏好、带夹取），
+    /// 这里只需让把手视图重排一次。位置不落盘状态、无缓存漂移。
+    static func refreshFromPrefs() {
+        guard let grip = grip, grip.superview != nil else { return }
+        grip.setNeedsLayout()
+        grip.layoutIfNeeded()
     }
 
     /// 圆盘展开时藏起来（避免它压在圆盘上），收起后再出来。

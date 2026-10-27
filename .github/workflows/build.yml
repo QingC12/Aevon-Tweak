@@ -1839,8 +1839,10 @@ jobs:
           grep -q 'AevonUnlockGuardV249' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 缺解锁守卫标记"; exit 1; }
           # ⑥ 守卫拍子必须被压到 0.2 秒（0.5 秒一拍 + 两拍确认 = 黑屏 1 秒以上）
-          grep -q 'Timer(timeInterval: 0.2, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.49 守卫拍子不是 0.2 秒（黑屏时长压不下来）"; exit 1; }
+          # V0.2.59（AevonGuardFastV259）反转：拍子再从 0.2 压到 0.1 秒（用户 Aevon(33) #1
+          # 「回桌面还要等 1 秒才见实时画面」；0.2.49 的 0.2s 定档随提速要求退役）。
+          grep -q 'Timer(timeInterval: 0.1, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.59 守卫拍子不是 0.1 秒（V0.2.49 的 0.2s 定档已被 AevonGuardFastV259 反转）"; exit 1; }
           grep -q 'private func removeDarkFreeze(reason: String)' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 撤冻结没有原因串（分不清是哪种恢复）"; exit 1; }
@@ -2119,8 +2121,10 @@ jobs:
             || { echo "::error::0.2.55 把手 pan 识别器必须挂 handle（全屏宿主持识别器 = Aevon(29) pan 失效的头号结构嫌疑）"; exit 1; }
           grep -q 'handle.addGestureRecognizer(tap)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.55 把手 tap 识别器必须挂 handle"; exit 1; }
-          grep -q 'centerRatio: CGFloat = 0.70' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
-            || { echo "::error::0.2.55 把手位置必须是从底部起 30%（centerRatio=0.70，用户 Aevon(29) #4）"; exit 1; }
+          # V0.2.59（AevonGripCustomV259）反转：位置改偏好驱动（GripY 滑条，默认 30），
+          # 常量 centerRatio=0.70 退役 —— 默认值语义不变，只是从常量变成偏好默认。
+          grep -q 'static let ratioDefault: CGFloat = 0.30' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.59 把手默认位置必须是底部起 30%（ratioDefault=0.30，0.2.55 定档延续）"; exit 1; }
           # 把手 hitTest 命中时返回 handle 而非宿主自身
           grep -q 'return handle' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.55 把手 hitTest 命中必须返回 handle（touch.view 不再落在全屏宿主上）"; exit 1; }
@@ -2134,10 +2138,12 @@ jobs:
           grep -q 'AevonDockTapAnywhereV255' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.55 缺停靠小窗任意位置轻点装回"; exit 1; }
           # 回桌面重申拍加密：0.35/0.7/1.05，间隔下限 0.35
-          grep -q 'for delay in \[0.35, 0.7, 1.05\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.55 缺重申拍加密（回桌面黑屏提速）"; exit 1; }
-          grep -q 'now - lastReassertAt < 0.35' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.55 重申间隔下限必须是 0.35s"; exit 1; }
+          # V0.2.59（AevonGuardFastV259）反转：桶距 0.35 → 0.25（用户 Aevon(33) #1
+          # 「回桌面还要等 1 秒才见实时画面」；4 次有界桶不变，0.2.55 定档随提速退役）。
+          grep -q 'for delay in \[0.25, 0.55, 0.85\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.59 重申桶不是 0.25s 桶距（V0.2.55 的 0.35s 定档已被 AevonGuardFastV259 反转）"; exit 1; }
+          grep -q 'now - lastReassertAt < 0.25' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.59 重申间隔下限必须是 0.25s（V0.2.55 的 0.35s 已被 AevonGuardFastV259 反转）"; exit 1; }
           echo "V0.2.55 校验: 把手物理化+位置30% + 手势探针 + 拖拽残留自愈 + 停靠任意点装回 + 回桌面重申加密 已就位"
 
           # ── V0.2.56 校验（AevonDedupBeganV256 / AevonStaleShieldV256 / AevonDblTapHealV256 / AevonCloseDisarmV256 / AevonGestureProbeV2V256）──
@@ -2223,6 +2229,44 @@ jobs:
           grep -q 'AevonPrefs.bool("RingGripEnabled", default: true)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.58 把手隔离开关缺失"; exit 1; }
           echo "V0.2.58 校验: 收养指纹全程放行(补全投递) + 把手隔离实验开关 已就位"
+
+          # ── V0.2.59 校验（AevonGuardFastV259 / AevonDockHaloOffV259 / AevonGripCustomV259 / AevonDockStageV259）──
+          # Aevon(33) 四项：①回桌面定格提速 ②停靠小窗点击穿透 ③把手竖条化+自定义 ④停靠光晕闪过。
+          for s in AevonGuardFastV259 AevonDockHaloOffV259 AevonGripCustomV259 AevonDockStageV259 AevonDockFuseV259; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.59 缺标记 $s"; exit 1; }
+          done
+          # ①守卫提速：0.1s 拍 + 0.25s 重申桶距
+          grep -q 'Timer(timeInterval: 0.1, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.59 守卫拍未提速到 0.1s"; exit 1; }
+          grep -q 'for delay in \[0.25, 0.55, 0.85\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.59 重申桶距未收紧到 0.25s"; exit 1; }
+          # ②停靠光晕：enterDock 隐藏 / leaveDock 恢复
+          DHC=$(grep -c 'glowRing.isHidden' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" || true)
+          [ "$DHC" -ge 2 ] \
+            || { echo "::error::0.2.59 停靠光晕隐藏/恢复不完整（实得 $DHC 处）"; exit 1; }
+          # ③把手竖条：贴边竖条宽度常量 + 位置/长度偏好读取 + prefschanged 实时刷新
+          grep -q 'static let barWidth: CGFloat = 5' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.59 把手竖条化缺失"; exit 1; }
+          grep -q 'AevonPrefs.double("GripY", default: 30)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.59 把手位置自定义缺失"; exit 1; }
+          grep -q 'AevonPrefs.double("GripLen", default: 64)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.59 把手长度自定义缺失"; exit 1; }
+          grep -q 'AevonRingGrip.refreshFromPrefs()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.59 把手 prefschanged 实时刷新缺失"; exit 1; }
+          # ④停靠触摸拦截：SB 侧 publish（三个变更点）+ App 侧关交互 + 启动清场 + didBecomeActive 保险丝
+          grep -q 'void AevonNotifyPublishDockStages' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.59 停靠集合广播函数缺失"; exit 1; }
+          PSC=$(grep -c 'publishDockStages()' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" || true)
+          [ "$PSC" -ge 5 ] \
+            || { echo "::error::0.2.59 停靠广播调用点不齐（实得 $PSC 处，需 dock/restore/closeDocked/closeAll/publish 定义）"; exit 1; }
+          grep -q 'AevonDockInteractionRefresh' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.59 App 侧停靠交互拦截缺失"; exit 1; }
+          grep -q 'UIApplicationDidBecomeActiveNotification' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.59 didBecomeActive 保险丝缺失"; exit 1; }
+          grep -q 'AevonWindowManager.clearDockStagesOnBoot()' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
+            || { echo "::error::0.2.59 SB 启动清场缺失（notify state 残留）"; exit 1; }
+          echo "V0.2.59 校验: 回桌面提速 + 停靠光晕隐藏 + 把手竖条自定义 + 停靠触摸拦截(App侧关交互+保险丝) 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

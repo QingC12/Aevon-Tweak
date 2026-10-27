@@ -973,6 +973,8 @@ static void AevonScreenFitRefresh(void) {
     }
     gAevonScreenFitRefreshing = NO;
     if (flipped) { AevonScreenFitNudgeLayout(nowOn); }
+    /* V0.2.59（AevonDockStageV259）：0.5s 轮询兜底刷新停靠交互（事件驱动为主）。 */
+    AevonDockInteractionRefresh();
 }
 
 static CGRect AevonScreenBoundsFit(id self_, SEL _cmd) {
@@ -988,6 +990,102 @@ static CGRect AevonScreenBoundsFit(id self_, SEL _cmd) {
         return CGRectMake(real.origin.x, real.origin.y, width, height);
     } @catch (NSException *exception) {
         return real;
+    }
+}
+
+/* ── V0.2.59（AevonDockStageV259）：停靠期间把主窗口交互关掉 ─────────────────
+ *
+ * 问题（用户 Aevon(33) #2）：点停靠小窗装回主窗时，小窗里的 App 内容**也被点了一下**
+ * —— backboardd 双投（SB + 直投 App），SB 侧 `setContentInteraction(false)` 只断了
+ * presenter 转发路径，直投 App 的那份照落在 App 自己的主窗口上 = 内容点击。
+ *
+ * 判定：SB 侧把当前停靠集合的 bundleID 散列写在 `com.aevon.dockstage0..4`
+ * （notify state，沙盒必可读），本进程算自己的散列比对 —— 命中 = 正在停靠，
+ * 把本进程所有 UIWindow 的 isUserInteractionEnabled 关掉：直投触摸被 UIKit
+ * 整根丢弃（无 began 无 ended，零孤儿帧），画面照常渲染。
+ * fail-closed：读不到（全部 state=0）= 不在停靠 = 恢复交互，绝不卡死在无交互态。
+ * 保险丝：didBecomeActive（停靠中的 App 被全屏拉起，即便通知丢失也必然解锁）；
+ * 0.5s 屏幕贴合轮询顺带兜底刷新一次。 */
+__attribute__((used)) static const char AevonDockStageV259Marker[] = "AevonDockStageV259";
+__attribute__((used)) static const char AevonDockFuseV259Marker[] = "AevonDockFuseV259";
+
+static int gAevonDockStageTokens[5] = {-1, -1, -1, -1, -1};
+static int gAevonDockStageNotifyToken = -1;
+static BOOL gAevonDockStageOnce = NO;
+static BOOL gAevonDockActive = NO;
+
+static BOOL AevonAppDockCheck(void) {
+    if (!gAevonDockStageOnce) {
+        gAevonDockStageOnce = YES;
+        for (int i = 0; i < 5; i++) {
+            NSString *name = [NSString stringWithFormat:@"com.aevon.dockstage%d", i];
+            notify_register_check(name.UTF8String, &gAevonDockStageTokens[i]);
+        }
+    }
+    uint32_t mine = AevonAppFloatStageHash(gAevonAppBundleID);
+    if (mine == 0) { return NO; }
+    for (int i = 0; i < 5; i++) {
+        uint64_t state = 0;
+        if (gAevonDockStageTokens[i] >= 0 &&
+            notify_get_state(gAevonDockStageTokens[i], &state) == NOTIFY_STATUS_OK) {
+            if (state == (uint64_t)mine) { return YES; }
+        }
+    }
+    return NO;
+}
+
+static void AevonDockInteractionRefresh(void) {
+    @try {
+        BOOL docked = AevonAppDockCheck();
+        if (docked == gAevonDockActive) { return; }
+        gAevonDockActive = docked;
+        UIApplication *app = [UIApplication sharedApplication];
+        if (app == nil) { return; }
+        NSInteger touched = 0;
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                BOOL want = !docked;
+                if (window.isUserInteractionEnabled != want) {
+                    window.isUserInteractionEnabled = want;
+                    touched += 1;
+                }
+            }
+        }
+        AevonAppLog(@"停靠交互：%@（%ld 个窗口 userInteractionEnabled=%@）"
+                    @"（AevonDockStageV259）",
+                    docked ? @"本 App 进入停靠 → 主窗口交互关闭（拦 backboardd 直投触摸，"
+                            @"点停靠小窗不再触发内容点击）"
+                           : @"本 App 离开停靠 → 主窗口交互恢复",
+                    (long)touched,
+                    docked ? @"NO" : @"YES");
+    } @catch (NSException *exception) {
+        /* 刷新失败保持现状：下一次通知 / 轮询会再来 */
+    }
+}
+
+static void AevonDockInteractionInstall(void) {
+    @try {
+        if ([gAevonAppBundleID isEqualToString:@"com.apple.springboard"]) { return; }
+        if (gAevonDockStageNotifyToken < 0) {
+            notify_register_dispatch("com.aevon.dockstage", &gAevonDockStageNotifyToken,
+                                     dispatch_get_main_queue(), ^(int token) {
+                AevonDockInteractionRefresh();
+            });
+        }
+        /* 保险丝：回前台强制重判（停靠中的 App 被全屏拉起时，即使 SB 侧清位通知
+         * 丢了，这一步也必然把交互恢复回来 —— 绝不让全屏 App 变成「点不动」）。 */
+        [[NSNotificationCenter defaultCenter] addObserverForName:
+         UIApplicationDidBecomeActiveNotification
+                                                    object:nil queue:nil
+                                               usingBlock:^(NSNotification *note) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                AevonDockInteractionRefresh();
+            });
+        }];
+    } @catch (NSException *exception) {
+        AevonAppLog(@"停靠交互：安装失败 %@（不影响宿主）（AevonDockStageFailV259）",
+                    exception.reason ?: @"未知");
     }
 }
 
@@ -1020,6 +1118,8 @@ static void AevonScreenFitInstall(void) {
                 AevonScreenFitRefresh();
             });
         }
+        /* V0.2.59（AevonDockStageV259）：停靠交互拦截（事件驱动 + 保险丝）。 */
+        AevonDockInteractionInstall();
     } @catch (NSException *exception) {
         AevonAppLog(@"屏幕贴合：接管失败 %@（不影响宿主，按真实屏幕走）（AevonAppScreenFitFailV249）",
                     exception.reason ?: @"未知");

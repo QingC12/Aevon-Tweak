@@ -1494,7 +1494,11 @@ final class AevonWindowView: UIView {
         // Aevon(29) 日志：布防立即重申 cs 0→1，+0.9s 那拍重申后 0.36s cs 才到 2 ——
         // cs=2（真出画）卡在「等下一拍重申把场景彻底推醒」。把拍距从 0.9s 压到 0.35s，
         // 桶还是 4 次（0.1.5 的有界纪律不变：一次布防最多 4 次写入）。
-        for delay in [0.35, 0.7, 1.05] {
+        // V0.2.59（AevonGuardFastV259，用户 Aevon(33) #1「回桌面还要等 1 秒才见实时画面」）：
+        // Aevon(33) 日志实测布防→撤冻结仍 0.78s，其中 cs 反复 0→1→0→1→2 —— 重申密度
+        // 再收紧一档（0.25s 桶距），并配合守卫拍 0.1s（撤冻结最多晚 0.1s 检测），
+        // 预期压到 ~0.5s。剩下的时间常数是系统回桌面动画本身，不再可压。
+        for delay in [0.25, 0.55, 0.85] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.reassertContentForeground(tag: String(format: "+%.2fs", delay))
             }
@@ -1508,14 +1512,16 @@ final class AevonWindowView: UIView {
         freezeRemoveCount = 0
         reassertCount = 0
         startGuardTimerIfNeeded()
-        AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：0.2 秒一拍盯 contentState，"
-            + "不在画才盖最后一帧、cs=2 稳定 2 拍再撤（当前 \(sceneHost.stateSummary())）"
-            + "（AevonDarkGuardV247 AevonDarkGuardV249 AevonDarkGuardV250）")
+        AevonLog.info("[窗口] 回桌面守卫布防（\(reason)）：0.1 秒一拍盯 contentState，"
+            + "不在画才盖最后一帧、cs=2 抓到真画面立即撤（当前 \(sceneHost.stateSummary())）"
+            + "（AevonDarkGuardV247 AevonDarkGuardV249 AevonDarkGuardV250 AevonGuardFastV259）")
     }
 
     private func startGuardTimerIfNeeded() {
         guard guardTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+        // V0.2.59（AevonGuardFastV259）：0.2 → 0.1 秒。cs=2 达成后最多再等 0.1s
+        // 就检测到并撤冻结（原来最多等 0.2s）；抓帧验证更密也更快命中第一拍。
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.checkBackgroundGuard()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -1532,7 +1538,8 @@ final class AevonWindowView: UIView {
         guard guardArmedUntil > 0, window != nil else { return }
         guard reassertCount < 4 else { return }
         let now = CACurrentMediaTime()
-        if reassertCount > 0, now - lastReassertAt < 0.35 { return }
+        // V0.2.59（AevonGuardFastV259）：间隔下限 0.35 → 0.25（用户 Aevon(33) #1）。
+        if reassertCount > 0, now - lastReassertAt < 0.25 { return }
         reassertCount += 1
         lastReassertAt = now
         let before = sceneHost.stateSummary()
@@ -1880,6 +1887,15 @@ final class AevonWindowView: UIView {
         isDocked = true
         dockedSide = side
         sceneHost.setContentInteraction(false)
+        // V0.2.59（AevonDockHaloOffV259，用户 Aevon(33) #4「主窗变小窗的过渡中光晕闪过」）：
+        // 窗口本体走 0.22s 动画（presentation 层逐帧插值），而光晕 apply 里禁了隐式动画
+        // —— 它在动画**开始那一帧**就立刻缩到小窗尺寸。大窗还在、光晕先没了，
+        // 小窗位置又瞬间出现一小圈 = 视觉上「闪过」。停靠小窗本来就不需要光晕
+        // （还省一份每帧离屏模糊），过渡开始就整圈隐藏，装回主窗时再恢复。
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glowRing.isHidden = true
+        CATransaction.commit()
         let apply = { [weak self] in
             guard let self else { return }
             self.frame = target
@@ -1893,8 +1909,8 @@ final class AevonWindowView: UIView {
             apply()
         }
         AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧第 \(index + 1) 格"
-            + "（\(Int(target.width))x\(Int(target.height))，顶部起向下排列，最多 \(AevonDock.maxCount) 格）"
-            + "（AevonDockColumnV250）")
+            + "（\(Int(target.width))x\(Int(target.height))，顶部起向下排列，最多 \(AevonDock.maxCount) 格，"
+            + "过渡期光晕隐藏）（AevonDockColumnV250 AevonDockHaloOffV259）")
     }
 
     /// V0.2.55（AevonDockTapAnywhereV255，用户 Aevon(29) #2）：停靠小窗任意位置
@@ -1910,6 +1926,13 @@ final class AevonWindowView: UIView {
         guard isDocked else { return }
         isDocked = false
         sceneHost.setContentInteraction(true)
+        // V0.2.59（AevonDockHaloOffV259）：停靠期光晕整圈隐藏，装回主窗即刻恢复。
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glowRing.isHidden = false
+        CATransaction.commit()
+        appliedGlowKey = ""
+        updateEdgeGlow()
         let target = AevonWindowView.mainFrameForRestore()
         let apply = { [weak self] in
             guard let self else { return }
@@ -1924,7 +1947,7 @@ final class AevonWindowView: UIView {
             apply()
         }
         AevonLog.info("[停靠] \(bundleID) 已从停靠列装回主窗"
-            + "（\(Int(target.width))x\(Int(target.height))）（AevonDockColumnV250）")
+            + "（\(Int(target.width))x\(Int(target.height))，光晕恢复）（AevonDockColumnV250 AevonDockHaloOffV259）")
     }
 
     private func persistFrame() {

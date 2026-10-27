@@ -31,6 +31,12 @@ void AevonNotifySetRing(int on);
 /// （0 = 没有浮窗）。App 侧据此决定要不要把 `UIScreen.bounds` 报成画布尺寸 ——
 /// 走 notify 而不是偏好域，是因为沙盒最严的 App（抖音）读不到 com.Aevon。
 void AevonNotifySetFloatStage(NSString *bundleID);
+/// V0.2.59（AevonDockStageV259）：把当前停靠窗集合（bundleID 数组，最多 5 个）的
+/// FNV-1a 散列写进 5 个 notify 状态位 `com.aevon.dockstage0..4` 并广播
+/// `com.aevon.dockstage`。App 侧比对自己的散列决定要不要把主窗口交互关掉
+///（拦截 backboardd 直投的触摸：点停靠小窗不再触发小窗里 App 的内容点击）。
+/// 空数组 = 全清（所有停靠窗已离开，App 侧恢复交互）。
+void AevonNotifyPublishDockStages(NSArray<NSString *> *bundleIDs);
 /// V0.2.51（AevonGripOnlyV251）：GetRing 已随 App 侧识别器退役（bit39 写入保留）。
 
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
