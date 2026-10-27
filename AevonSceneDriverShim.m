@@ -1,5 +1,6 @@
 #import "AevonSceneDriverShim.h"
 #import <objc/message.h>
+#import <objc/runtime.h>
 #import <stdio.h>
 #import <string.h>
 
@@ -34,6 +35,88 @@ typedef void (*AevonSDVoidFnBlock1)(id, SEL, void (^)(id));
 typedef struct { uint32_t val[8]; } AevonSDAuditToken;
 typedef AevonSDAuditToken (*AevonSDAuditTokenGetter)(id, SEL);
 typedef void (*AevonSDAuditTokenRegister)(id, SEL, AevonSDAuditToken);
+
+/* ── V0.2.52（AevonDeactGateV252）共用工具：ObjC 方法类型编码解析 ──────────────
+ *
+ * 【为什么必须有这套工具】0.2.51 的安全模式事故：
+ *   停用登记 hook 把一个 64 位位掩码形参声明成了对象指针，工程开着 -fobjc-arc，
+ *   ARC 在函数入口对 `id` 形参做 objc_retain → 把整数当指针解引用 → SIGSEGV →
+ *   SpringBoard 退出 → 系统判定插件有罪 → 自动注销（安全模式）。
+ *
+ * 【教训】手写 method_setImplementation 之前，**必须先看这条方法的真实类型编码**，
+ *   形参是标量就不能写 id。看不见头文件的私有 API 尤其危险 —— 从 selector 名字
+ *   完全看不出参数是位掩码还是对象指针。
+ *
+ * 【怎么用】安装 hook 前一律先问这两个解析器：
+ *   · AevonEncArgType(m, index)     取第 index 个真实参数（0 基，不含 self/_cmd）的类型字符；
+ *   · AevonEncArgIsObject(m, index) 判断该参数是不是对象指针。
+ *   对不上就**不装**（fail-closed：宁少一条功能，也不能拿错误的 ABI 去调系统私有方法）。
+ */
+
+/* 类型编码形如 "v48@0:8Q16@24@32@40"：
+ *   返回类型(v) + 栈帧大小(48) + self(@0) + _cmd(:8) + 形参(类型+偏移)…
+ * 我们要跳过 self/_cmd，只数「真实形参」。 */
+static char AevonEncArgType(Method m, int index) {
+    if (m == NULL || index < 0) { return '\0'; }
+    const char *enc = method_getTypeEncoding(m);
+    if (enc == NULL) { return '\0'; }
+    const char *p = strchr(enc, '@');
+    if (p == NULL) { return '\0'; }
+    p++;                                       // 越过 self 的 '@'
+    while (*p >= '0' && *p <= '9') { p++; }    // self 的偏移
+    if (*p != ':') { return '\0'; }
+    p++;
+    while (*p >= '0' && *p <= '9') { p++; }    // _cmd 的偏移
+
+    int idx = 0;
+    while (idx <= index) {
+        char t = *p;
+        if (t == '\0') { return '\0'; }
+        // 修饰符：const / in / out / bycopy / byref / oneway / 数组
+        if (t == 'r' || t == 'n' || t == 'o' || t == 'O' || t == 'R' ||
+            t == 'V' || t == 'A') {
+            p++;
+            continue;
+        }
+        if (t == '@') {
+            p++;
+            if (*p == '"') {                   // @"Class" 形式
+                p++;
+                while (*p != '\0' && *p != '"') { p++; }
+                if (*p == '"') { p++; }
+            }
+        } else if (t == '{' || t == '(') {    // 结构体 / 联合体：跳过配对括号
+            char open = t;
+            char close = (t == '{') ? '}' : ')';
+            int depth = 0;
+            while (*p != '\0') {
+                if (*p == open) { depth++; }
+                else if (*p == close) { depth--; if (depth == 0) { p++; break; } }
+                p++;
+            }
+        } else {
+            p++;                               // 标量 / Class / SEL / 指针：单字符
+        }
+        while (*p >= '0' && *p <= '9') { p++; }  // 该形参的偏移
+        if (idx == index) { return t; }
+        idx++;
+    }
+    return '\0';
+}
+
+/// 第 index 个真实形参是不是对象指针（@ 家族）。
+static BOOL AevonEncArgIsObject(Method m, int index) {
+    char t = AevonEncArgType(m, index);
+    return (t == '@') ? YES : NO;
+}
+
+/// 第 index 个真实形参是不是整数型（位掩码 / 枚举）。
+static BOOL AevonEncArgIsInteger(Method m, int index) {
+    char t = AevonEncArgType(m, index);
+    return (t == 'c' || t == 'C' || t == 's' || t == 'S' ||
+            t == 'i' || t == 'I' || t == 'l' || t == 'L' ||
+            t == 'q' || t == 'Q') ? YES : NO;
+}
 
 /// CI 标记锚（used 常量；ObjC used 常量是 strings 检查的最可靠载体）
 __attribute__((used)) static const char AevonSelfSceneV228Marker[] = "AevonSelfSceneV228";
@@ -1196,6 +1279,17 @@ static BOOL AevonLockUICompletionHook(id self_, SEL _cmd, NSInteger source, id o
 
 static BOOL gAevonLockBlockInstalled = NO;
 
+/// V0.2.52（AevonDeactGateV252 同款纪律）：锁屏 hook 安装前核对真实类型编码。
+/// `-lockUIFromSource:withOptions:` 的形参是 (整数 source, 对象 options)；
+/// 若 iOS 哪天把 options 改成整型位掩码，我们按 id 透传就会被 ARC 野指针 —— 和
+/// 0.2.51 停用闸一模一样的坑。这里对不上就**不装**（fail-closed）。
+static BOOL AevonLockSignatureOK(Method m) {
+    if (m == NULL) { return NO; }
+    if (!AevonEncArgIsInteger(m, 0)) { return NO; }   // source 必须是整数
+    if (!AevonEncArgIsObject(m, 1)) { return NO; }     // options 必须是对象
+    return YES;
+}
+
 BOOL AevonInstallLockBlock(void) {
     if (gAevonLockBlockInstalled) { return YES; }
     @try {
@@ -1205,17 +1299,27 @@ BOOL AevonInstallLockBlock(void) {
         SEL sel = NSSelectorFromString(@"lockUIFromSource:withOptions:");
         Method m = class_getInstanceMethod(cls, sel);
         if (m != NULL && !gAevonOrigLockUI) {
-            gAevonOrigLockUI = (BOOL (*)(id, SEL, NSInteger, id))method_getImplementation(m);
-            method_setImplementation(m, (IMP)AevonLockUIHook);
-            installed = YES;
+            if (!AevonLockSignatureOK(m)) {
+                AevonLogFromC("[熄屏] 锁屏拦截 hook 未安装（方法签名与预期不符，拒绝按错误 ABI 拦截）"
+                              "（AevonDeactGateV252）");
+            } else {
+                gAevonOrigLockUI = (BOOL (*)(id, SEL, NSInteger, id))method_getImplementation(m);
+                method_setImplementation(m, (IMP)AevonLockUIHook);
+                installed = YES;
+            }
         }
         SEL sel2 = NSSelectorFromString(@"lockUIFromSource:withOptions:completion:");
         Method m2 = class_getInstanceMethod(cls, sel2);
         if (m2 != NULL && !gAevonOrigLockUICompletion) {
-            gAevonOrigLockUICompletion =
-                (BOOL (*)(id, SEL, NSInteger, id, id))method_getImplementation(m2);
-            method_setImplementation(m2, (IMP)AevonLockUICompletionHook);
-            installed = YES;
+            if (!AevonLockSignatureOK(m2)) {
+                AevonLogFromC("[熄屏] 锁屏拦截 hook（completion）未安装（方法签名与预期不符）"
+                              "（AevonDeactGateV252）");
+            } else {
+                gAevonOrigLockUICompletion =
+                    (BOOL (*)(id, SEL, NSInteger, id, id))method_getImplementation(m2);
+                method_setImplementation(m2, (IMP)AevonLockUICompletionHook);
+                installed = YES;
+            }
         }
         gAevonLockBlockInstalled = installed;
         return installed;
@@ -1248,25 +1352,75 @@ BOOL AevonInstallLockBlock(void) {
  *   · 被拦的场景类型对不上（fail-closed）→ 透传。
  */
 __attribute__((used)) static const char AevonDeactGateV251Marker[] = "AevonDeactGateV251";
+__attribute__((used)) static const char AevonDeactGateV252Marker[] = "AevonDeactGateV252";
+
 
 /// Swift 侧（AevonWindowManager）：这个场景是否正被浮窗 / 停靠列承载。
 extern BOOL AevonFloatGuardsScene(void *scene);
 
-static void (*gAevonOrigSetDeactReasons)(id, SEL, id, id, id, id) = NULL;
+/* ── V0.2.52（AevonDeactGateV252）：签名纠错 —— 这是 0.2.51 安全模式崩溃的真凶 ──
+ *
+ * 【事故】0.2.51 装了这个 hook 之后，用户真机连崩 4 次（归档(15)）：
+ *   信号 11（SIGSEGV）→ SpringBoard 退出 → 系统判定插件崩 SpringBoard → 自动注销（安全模式）。
+ *   4 次崩溃栈**完全一致**：frame 3 恒为 Aevon.dylib、frame 4 恒为 UIKitCore。
+ *
+ * 【根因】这个 UIKit 私有方法的真实类型编码是
+ *     v48@0:8Q16@24@32@40
+ *   —— 第一个参数是 **Q（uint64 位掩码：停用原因集合）**，不是对象指针。
+ *   0.2.51 我们把 hook 的第一个形参写成了「对象指针 id」：
+ *     static void AevonSetDeactReasonsHook(id self_, SEL _cmd, id <位掩码形参>, ...)
+ *   （注意：这里不写出错误签名的字面量，是为了让 CI 的「禁止旧错签名」断言不被注释豁免）
+ *   工程开着 -fobjc-arc，ARC 看到 `id` 参数就当成**对象所有权**处理：
+ *   进函数 objc_retain(reasons)、出函数 objc_release(reasons)。
+ *   而 reasons 真身是个位掩码（0/1/2/4…），被 objc_retain 当指针解引用 → **野指针 SIGSEGV**。
+ *
+ *   反汇编实锤（交付 dylib，模块内偏移 0x97b0 = 崩溃 PC，正好是那次 bl 的返回地址）：
+ *     0x979c: mov  x19, x2      ← x2 = reasons（uint64 位掩码）
+ *     0x97ac: bl   <objc_retain> ← ARC 把它当对象 retain → 野指针
+ *     0x97b0: mov  x19, x0      ●● CRASH
+ *
+ *   为什么日志里「守画」成功拦了 8 次才崩：那 8 次 reasons == 0，
+ *   objc_retain(NULL) 无害；直到回桌面真正登记**非零**停用原因，才第一次踩到野指针。
+ *
+ * 【历史】V0.0.37（git 5e7aa97）实现过同一个 hook，用的是**正确的** `_ reasons: UInt64`；
+ *   V0.1.3（git 2f22147）把整族「场景停用门控」移除，提交信息明写
+ *   「安全模式崩溃源」。0.2.51 把它加了回来，却用错了签名 —— 同一个坑踩第二次。
+ *
+ * 【修法】① 第一个参数改成 uint64_t（真身），ARC 不再碰它；
+ *   ② 安装前用 method_getTypeEncoding 自检：签名必须是 v48@0:8Q16@24@32@40 形态
+ *      （第 3 段是 Q），对不上就**不装**（fail-closed），iOS 改签名也不会再崩；
+ *   ③ 拦截语义改成 V0.0.37 的做法：**把 reasons 清零后照常调原实现**
+ *      （原来 0.2.51 是「直接 return 不调原实现」—— 那会让 manager 的状态机
+ *       少走一步，本就不该那么干）。
+ */
+static void (*gAevonOrigSetDeactReasons)(id, SEL, uint64_t, id, id, id) = NULL;
 
-static void AevonSetDeactReasonsHook(id self_, SEL _cmd, id reasons, id scene,
-                                     id settings, id reason) {
-    if (scene != nil && AevonFloatGuardsScene((void *)(__bridge void *)scene)) {
+static void AevonSetDeactReasonsHook(id self_, SEL _cmd, uint64_t reasons,
+                                     id scene, id settings, id reason) {
+    uint64_t finalReasons = reasons;
+    if (reasons != 0 && scene != nil &&
+        AevonFloatGuardsScene((void *)(__bridge void *)scene)) {
+        finalReasons = 0;   // 清零停用原因 = 场景保持前台（V0.0.37 同款语义）
         AevonLogFromC("[守画] 已拦下一次场景停用登记（浮窗承载中，回桌面画面不中断）"
-                      "（AevonDeactGateV251）");
-        return;   // 不登记停用原因 = 场景保持前台，其余状态机一概不碰
+                      "（AevonDeactGateV251 AevonDeactGateV252）");
     }
     if (gAevonOrigSetDeactReasons) {
-        gAevonOrigSetDeactReasons(self_, _cmd, reasons, scene, settings, reason);
+        gAevonOrigSetDeactReasons(self_, _cmd, finalReasons, scene, settings, reason);
     }
 }
 
 static BOOL gAevonDeactGateInstalled = NO;
+
+/// V0.2.52：安装前核对真实类型编码。
+/// 必须是 `v48@0:8Q16@24@32@40` 形态 —— 第 1 个真实形参是 Q（uint64 位掩码）。
+/// 只要它不是 64 位整数（比如被改成 id 或别的标量），我们就**不装**这个 hook：
+/// 宁可少一条功能，也不能拿错误的 ABI 去调系统私有方法（= 安全模式）。
+static BOOL AevonDeactSignatureOK(Method m) {
+    char t = AevonEncArgType(m, 0);
+    if (t == 'Q' || t == 'q') { return YES; }
+    // 32 位整数也不接受：位掩码集合可能超 32 位，截断会把语义搞坏。
+    return NO;
+}
 
 BOOL AevonInstallDeactivationGate(void) {
     if (gAevonDeactGateInstalled) { return YES; }
@@ -1276,8 +1430,13 @@ BOOL AevonInstallDeactivationGate(void) {
         SEL sel = NSSelectorFromString(@"_setDeactivationReasons:onScene:withSettings:reason:");
         Method m = class_getInstanceMethod(cls, sel);
         if (m == NULL || gAevonOrigSetDeactReasons) { return NO; }
+        if (!AevonDeactSignatureOK(m)) {
+            AevonLogFromC("[守画] 场景停用登记 hook 未安装（方法签名与预期不符，拒绝按错误 ABI 拦截）"
+                          "（AevonDeactGateV252）");
+            return NO;
+        }
         gAevonOrigSetDeactReasons =
-            (void (*)(id, SEL, id, id, id, id))method_getImplementation(m);
+            (void (*)(id, SEL, uint64_t, id, id, id))method_getImplementation(m);
         method_setImplementation(m, (IMP)AevonSetDeactReasonsHook);
         gAevonDeactGateInstalled = YES;
         return YES;
