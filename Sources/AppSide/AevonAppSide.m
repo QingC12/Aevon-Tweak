@@ -1180,7 +1180,13 @@ static CGSize AevonRealScreenSize(void) {
  * 键盘窗口扫一遍很便宜，而且只在 began 这一拍查。 */
 static BOOL AevonKeyboardVisible(void) {
     NSArray *windows = nil;
+    /* -[UIApplication windows] 在 iOS 15+ 标了 deprecated，而本工程开着 -Werror：
+     * UIWindowScene.windows 只覆盖「当前场景」，键盘窗口（UIRemoteKeyboardWindow）
+     * 未必挂在那个场景下 —— 为了不漏判，这里仍旧走全量窗口表，只把这条警告就地压掉。 */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     @try { windows = [[UIApplication sharedApplication] windows]; } @catch (NSException *e) { windows = nil; }
+#pragma clang diagnostic pop
     for (UIWindow *w in windows) {
         if (w == nil || w.hidden || w.alpha < 0.01) { continue; }
         NSString *name = NSStringFromClass([w class]) ?: @"";
