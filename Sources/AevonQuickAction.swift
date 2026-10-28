@@ -159,8 +159,9 @@ enum AevonQuickAction {
               let shared = cls.perform(NSSelectorFromString("sharedInstance"))?.takeUnretainedValue()
         else { return false }
         let sel = NSSelectorFromString("saveScreenshot:")
-        guard let m = class_getInstanceMethod(type(of: shared), sel) else { return false }
-        let types = String(cString: method_getTypeEncoding(m))
+        guard let m = class_getInstanceMethod(type(of: shared), sel),
+              let rawTypes = method_getTypeEncoding(m) else { return false }
+        let types = String(cString: rawTypes)
         // v24@0:8@16B24 = (void)(id self, SEL, BOOL)
         guard types.hasPrefix("v"), types.contains("@0:8@"), types.contains("B") else {
             AevonLog.warn("[快捷] SBScreenShotter saveScreenshot: 编码不符（\(types)）→ 走自抓帧（AevonSysShotV266）")
