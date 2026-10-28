@@ -334,7 +334,8 @@ final class AevonFrameRecorder {
         timer = ticker
         appendOffMain(first, at: CMTime(seconds: 0, preferredTimescale: 600))
         AevonLog.info("[录屏] 开始录制：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
-            + "（再点一次「录屏」结束并存相册）（AevonOwnRecorderV265 AevonQuickSystemV263）")
+            + "（再点一次「录屏」结束并存相册）"
+            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266）")
         AevonQuickToast.show("开始录屏")
     }
 

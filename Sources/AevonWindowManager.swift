@@ -1117,7 +1117,7 @@ enum AevonWindowManager {
         }
         if removed > 0 {
             AevonLog.info("[窗口] 单窗清扫完成：收掉 \(removed) 只野窗（\(reason)）"
-                + "（AevonDockNoOrphanV262）")
+                + "（AevonDockNoOrphanV262 AevonCleanSlateV266）")
         }
     }
 
