@@ -23,6 +23,7 @@
 import UIKit
 import ReplayKit
 import Photos
+import AudioToolbox
 
 /// 截图保存完成的回调目标（`UIImageWriteToSavedPhotosAlbum` 需要一个 selector）
 final class AevonQuickActionSaver: NSObject {
@@ -67,12 +68,48 @@ enum AevonQuickAction {
         }
     }
 
-    /// 圆盘图标：把 SF Symbol 渲染成白色实心图（和原生 App 图标一样铺满方框）
+    /// 圆盘图标：V0.2.64（AevonActionIconV264）改成**画成一张完整的图标**
+    /// （彩色圆角底 + 白色 SF Symbol）。用户 Aevon(38) #5.4「圆盘中的截图和录屏没有图标」——
+    /// 上一版只把 SF Symbol 当图片塞进去，底色是透明的，在白/浅色圆盘底上等于看不见。
+    /// 现在自己渲染：底色按动作区分（截图=蓝、录屏=红），符号居中，圆角率与 App 图标一致。
     static func symbolImage(bundleID: String, size: CGFloat) -> UIImage? {
-        guard let name = symbolName(for: bundleID) else { return nil }
-        let config = UIImage.SymbolConfiguration(pointSize: size * 0.56, weight: .medium)
-        guard let image = UIImage(systemName: name, withConfiguration: config) else { return nil }
-        return image.withTintColor(.white, renderingMode: .alwaysOriginal)
+        guard let name = symbolName(for: bundleID), size > 8 else { return nil }
+        let side = max(size, 12)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        format.scale = UIScreen.main.scale
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+        let image = renderer.image { context in
+            let rect = CGRect(x: 0, y: 0, width: side, height: side)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: side * 0.2237)
+            path.addClip()
+            let colors: [UIColor]
+            switch bundleID {
+            case screenshotID:
+                colors = [UIColor(red: 0.29, green: 0.52, blue: 1.00, alpha: 1),
+                          UIColor(red: 0.13, green: 0.31, blue: 0.86, alpha: 1)]
+            case recordingID:
+                colors = [UIColor(red: 1.00, green: 0.35, blue: 0.31, alpha: 1),
+                          UIColor(red: 0.78, green: 0.12, blue: 0.14, alpha: 1)]
+            default:
+                colors = [UIColor(white: 0.35, alpha: 1), UIColor(white: 0.18, alpha: 1)]
+            }
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                         colors: colors.map { $0.cgColor } as CFArray,
+                                         locations: [0, 1]) {
+                context.cgContext.drawLinearGradient(gradient,
+                                                     start: CGPoint(x: 0, y: 0),
+                                                     end: CGPoint(x: 0, y: side),
+                                                     options: [])
+            }
+            let config = UIImage.SymbolConfiguration(pointSize: side * 0.46, weight: .semibold)
+            guard let glyph = UIImage(systemName: name, withConfiguration: config)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) else { return }
+            let glyphSize = glyph.size
+            glyph.draw(at: CGPoint(x: (side - glyphSize.width) / 2,
+                                   y: (side - glyphSize.height) / 2))
+        }
+        return image
     }
 
     // MARK: - 分发
@@ -93,155 +130,198 @@ enum AevonQuickAction {
     // MARK: - 截图
 
     private typealias CreateScreenImageFunc = @convention(c) () -> Unmanaged<CGImage>?
+    private typealias ScreenUIImageFn = @convention(c) (CGFloat) -> Unmanaged<AnyObject>?
     private typealias BoolArgVoidFn = @convention(c) (AnyObject, Selector, ObjCBool) -> Void
 
-    private static func takeScreenshot() {
-        // V0.2.63（AevonQuickSystemV263，用户 Aevon(37) #3「截图和录屏失效」）：
-        // 0.2.62 走的 `UICreateScreenImage()` 在 SpringBoard 里拿到的是**空壳**
-        // （跨进程远程表面抓不到，日志却照样报「已保存」）。
-        // 参考 `其他插件逆向/ScreenCore`：它用的是 SpringBoard 自己的截图入口
-        // `-[SBUIController _takeScreenshotAndEdit:]` —— 和按侧键 + 音量键、
-        // 控制中心截图走的是同一条系统路径，存相册、带编辑界面都由系统负责。
-        if runSystemScreenshot(edit: false) { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let image = screenImage()
-            guard let image = image else {
-                AevonLog.warn("[快捷] 截图失败：SBUIController / SBScreenShotter / "
-                    + "UICreateScreenImage 三条路都拿不到画面（AevonQuickSystemV263）")
-                return
-            }
-            DispatchQueue.main.async {
-                UIImageWriteToSavedPhotosAlbum(image, AevonQuickActionSaver.shared,
-                                               #selector(AevonQuickActionSaver.image(_:didFinishSavingWithError:contextInfo:)),
-                                               nil)
-            }
-        }
-    }
-
-    /// 走系统截图（SpringBoard 自己的入口）。成功返回 true（截图由系统存相册）。
+    /* V0.2.64（AevonQuickShotV264，用户 Aevon(38) #5.4「截图成功但没有提示、
+     * 也无法和 Snapper 等工具接力」）：
+     *
+     * 上一版先试 `SBUIController -_takeScreenshotAndEdit:`，Aevon(38) 日志证明它在
+     * 本机**根本不存在**（「本系统既没有 SBUIController 截图方法」），最后落到
+     * `UICreateScreenImage` —— 那条在 SpringBoard 里是空壳（能拿到图但抓的是空白）。
+     *
+     * 改回逆向档案里 ScreenCore 的做法：`_UICreateScreenUIImageWithRotation(0)`，
+     * 这是 UIKit 的私有截图函数，返回 UIImage（不经过 CGImage 转换），在 SpringBoard
+     * 里能拿到**合成后的整屏**。拿到图之后：
+     *   ① 写相册（PHPhotoLibrary，有成功回调，不会「假成功」）；
+     *   ② 同时复制到剪贴板 —— Snapper / 长截图这类工具都从剪贴板接图；
+     *   ③ 弹一个自己的提示条（SB 里没有系统截图缩略图，只能自己给反馈）。
+     */
     @discardableResult
-    private static func runSystemScreenshot(edit: Bool) -> Bool {
-        // ① SBUIController -_takeScreenshotAndEdit:（ScreenCore 用的就是这条）
-        if let cls = NSClassFromString("SBUIController") as? NSObject.Type {
-            for accessor in ["sharedInstance", "sharedInstanceIfExists", "controller"] {
-                let sel = NSSelectorFromString(accessor)
-                guard cls.responds(to: sel),
-                      let shared = cls.perform(sel)?.takeUnretainedValue() as? NSObject else { continue }
-                let shot = NSSelectorFromString("_takeScreenshotAndEdit:")
-                if shared.responds(to: shot),
-                   let method = class_getInstanceMethod(type(of: shared), shot) {
-                    let fn = unsafeBitCast(method_getImplementation(method), to: BoolArgVoidFn.self)
-                    fn(shared, shot, ObjCBool(edit))
-                    AevonLog.info("[快捷] 走系统截图：SBUIController \(accessor) "
-                        + "-_takeScreenshotAndEdit:\(edit ? "YES" : "NO")"
-                        + "（AevonQuickSystemV263）")
-                    return true
-                }
-                let edit2 = NSSelectorFromString("takeScreenshotAndEdit:")
-                if shared.responds(to: edit2),
-                   let method = class_getInstanceMethod(type(of: shared), edit2) {
-                    let fn = unsafeBitCast(method_getImplementation(method), to: BoolArgVoidFn.self)
-                    fn(shared, edit2, ObjCBool(edit))
-                    AevonLog.info("[快捷] 走系统截图：SBUIController \(accessor) "
-                        + "-takeScreenshotAndEdit:（AevonQuickSystemV263）")
-                    return true
-                }
+    private static func captureScreenImage() -> UIImage? {
+        if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_UICreateScreenUIImageWithRotation") {
+            let fn = unsafeBitCast(symbol, to: ScreenUIImageFn.self)
+            if let image = fn(0)?.takeUnretainedValue() as? UIImage, image.size.width > 10 {
+                AevonLog.info("[快捷] 截图走 _UICreateScreenUIImageWithRotation：\(Int(image.size.width))x\(Int(image.size.height))（AevonQuickShotV264）")
+                return image
             }
         }
-        // ② 老版 SBScreenShotter -saveScreenshot:（自带存相册）
-        if let cls = NSClassFromString("SBScreenShotter") as? NSObject.Type {
-            let sel = NSSelectorFromString("sharedInstance")
-            if cls.responds(to: sel), let shared = cls.perform(sel)?.takeUnretainedValue() as? NSObject {
-                for name in ["saveScreenshot:", "saveScreenshotInPhotoLibrary:"] {
-                    let shot = NSSelectorFromString(name)
-                    guard shared.responds(to: shot),
-                          let method = class_getInstanceMethod(type(of: shared), shot) else { continue }
-                    let fn = unsafeBitCast(method_getImplementation(method), to: BoolArgVoidFn.self)
-                    fn(shared, shot, ObjCBool(true))
-                    AevonLog.info("[快捷] 走系统截图：SBScreenShotter \(name)"
-                        + "（AevonQuickSystemV263）")
-                    return true
-                }
-            }
-        }
-        AevonLog.warn("[快捷] 本系统既没有 SBUIController 截图方法，也没有 SBScreenShotter"
-            + " → 退回 UICreateScreenImage（AevonQuickSystemV263）")
-        return false
-    }
-
-    private static func screenImage() -> UIImage? {
-        // 最后兜底：UIKit 私有 C 函数（SpringBoard 里通常是空壳，只能算尽力）
         if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "UICreateScreenImage") {
             let fn = unsafeBitCast(symbol, to: CreateScreenImageFunc.self)
             if let cg = fn()?.takeUnretainedValue() {
+                AevonLog.info("[快捷] 截图走 UICreateScreenImage 兜底（AevonQuickShotV264）")
                 return UIImage(cgImage: cg)
             }
         }
         return nil
     }
 
+    private static func takeScreenshot() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let image = captureScreenImage() else {
+                AevonLog.warn("[快捷] 截图失败：_UICreateScreenUIImageWithRotation / UICreateScreenImage "
+                    + "都拿不到画面（AevonQuickShotV264）")
+                DispatchQueue.main.async { AevonQuickToast.show("截图失败") }
+                return
+            }
+            DispatchQueue.main.async {
+                UIPasteboard.general.image = image
+                AudioServicesPlaySystemSound(1108)   // 快门音（系统的截图音在 SB 里放不出来）
+            }
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }, completionHandler: { ok, error in
+                DispatchQueue.main.async {
+                    if ok {
+                        AevonLog.info("[快捷] 截图已存相册 + 已复制到剪贴板（AevonQuickShotV264）")
+                        AevonQuickToast.show("截图已保存 · 已复制")
+                    } else {
+                        AevonLog.warn("[快捷] 截图存相册失败：\(error?.localizedDescription ?? "未知")"
+                            + "（已放进剪贴板）（AevonQuickShotV264）")
+                        AevonQuickToast.show("截图已复制（相册保存失败）")
+                    }
+                }
+            })
+        }
+    }
+
     // MARK: - 录屏
 
     private static var isRecording = false
-    private typealias StartRecordFn = @convention(c) (AnyObject, Selector, ObjCBool, AnyObject?) -> Void
     private typealias StopRecordFn = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
 
-    /// 系统录屏服务（ScreenCore 里的 `startSystemRecordingWithMicrophoneEnabled:handler:`
-    /// 与 `stopSystemRecording:`，与「控制中心 → 录屏」是同一条路径）。
-    /// 类名在不同系统版本上会挪，这里按候选表找「既有 sharedInstance 又有这两个方法」的那个。
-    private static func recordingService() -> NSObject? {
-        let candidates = ["SBControlCenterController", "SBScreenRecordingService",
-                          "SBRecordingService", "SBScreenRecordingController"]
-        let accessors = ["sharedInstance", "sharedInstanceIfExists", "controller", "sharedController"]
-        for name in candidates {
-            guard let cls = NSClassFromString(name) as? NSObject.Type else { continue }
+    /// V0.2.64（AevonRecorderFindV264）：在整个进程里找「能开始/停止系统录屏」的对象。
+    ///
+    /// Aevon(38) 日志证明上一版的四个候选类名（SBControlCenterController 等）**一个都不存在**
+    /// （「没有可用的系统录屏服务」→ 退回 ReplayKit → 「无法开始录制」）。
+    /// 这次不再猜类名：直接遍历本进程所有类，挑类名含 `Record`、且能拿到单例、
+    /// 且实例上有 `startSystemRecording*` / `startRecording` / `stopSystemRecording:` 的，
+    /// 命中就把**真实类名**写进日志（下一版可以按它硬编码，省掉遍历）。
+    private typealias StartSystemRecordFn = @convention(c) (AnyObject, Selector, ObjCBool, AnyObject?) -> Void
+    private typealias StartRecordFn = @convention(c) (AnyObject, Selector) -> Void
+
+    private static var cachedRecordingService: NSObject?
+    private static var recordingServiceSearched = false
+
+    private static func dynamicRecordingService() -> NSObject? {
+        if recordingServiceSearched { return cachedRecordingService }
+        recordingServiceSearched = true
+        let accessors = ["sharedInstance", "sharedInstanceIfExists", "controller",
+                         "sharedController", "sharedRecorder", "defaultService"]
+        let startSels = ["startSystemRecordingWithMicrophoneEnabled:handler:",
+                         "startSystemRecordingWithMicrophoneEnabled:",
+                         "startRecording", "startRecordingWithHandler:"]
+        let stopSels = ["stopSystemRecording:", "stopSystemRecording", "stopRecording"]
+        var count: UInt32 = 0
+        guard let list = objc_copyClassList(&count), count > 0 else {
+            AevonLog.warn("[快捷] 录屏探测：拿不到类表（AevonRecorderFindV264）")
+            return nil
+        }
+        defer { free(UnsafeMutableRawPointer(list)) }
+        var seen: [String] = []
+        for index in 0..<Int(count) {
+            let cls: AnyClass = list[index]
+            let name = NSStringFromClass(cls)
+            guard name.lowercased().contains("record") else { continue }
+            guard let meta = cls as? NSObject.Type else { continue }
             for accessor in accessors {
                 let sel = NSSelectorFromString(accessor)
-                guard cls.responds(to: sel),
-                      let shared = cls.perform(sel)?.takeUnretainedValue() as? NSObject else { continue }
-                if shared.responds(to: NSSelectorFromString("startSystemRecordingWithMicrophoneEnabled:handler:"))
-                    || shared.responds(to: NSSelectorFromString("stopSystemRecording:")) {
-                    AevonLog.info("[快捷] 找到系统录屏服务：\(name) \(accessor)"
-                        + "（AevonQuickSystemV263）")
+                guard meta.responds(to: sel),
+                      let shared = meta.perform(sel)?.takeUnretainedValue() as? NSObject else { continue }
+                let hasStart = startSels.contains { shared.responds(to: NSSelectorFromString($0)) }
+                let hasStop = stopSels.contains { shared.responds(to: NSSelectorFromString($0)) }
+                if hasStart || hasStop {
+                    AevonLog.info("[快捷] 录屏服务命中：\(name) \(accessor)"
+                        + "（start=\(hasStart) stop=\(hasStop)）（AevonRecorderFindV264）")
+                    cachedRecordingService = shared
                     return shared
                 }
             }
+            if seen.count < 8 { seen.append(name) }
         }
+        AevonLog.warn("[快捷] 录屏探测：没有命中（候选类："
+            + (seen.isEmpty ? "无" : seen.joined(separator: ", "))
+            + "）（AevonRecorderFindV264）")
         return nil
     }
 
+    @discardableResult
+    private static func startSystemRecording(_ service: NSObject) -> Bool {
+        let specialized = NSSelectorFromString("startSystemRecordingWithMicrophoneEnabled:handler:")
+        if service.responds(to: specialized),
+           let method = class_getInstanceMethod(type(of: service), specialized) {
+            let fn = unsafeBitCast(method_getImplementation(method), to: StartSystemRecordFn.self)
+            fn(service, specialized, ObjCBool(false), nil)
+            isRecording = true
+            AevonLog.info("[快捷] 已开始系统录屏（不录麦克风；再点一次「录屏」结束并保存）"
+                + "（AevonQuickShotV264 AevonRecorderFindV264）")
+            return true
+        }
+        let candidates = ["startSystemRecordingWithMicrophoneEnabled:", "startRecording"]
+        for name in candidates {
+            let sel = NSSelectorFromString(name)
+            guard service.responds(to: sel),
+                  let method = class_getInstanceMethod(type(of: service), sel) else { continue }
+            let fn = unsafeBitCast(method_getImplementation(method), to: BoolArgVoidFn.self)
+            fn(service, sel, ObjCBool(false))
+            isRecording = true
+            AevonLog.info("[快捷] 已开始系统录屏：\(name)（AevonRecorderFindV264）")
+            return true
+        }
+        let simple = NSSelectorFromString("startRecording")
+        if service.responds(to: simple),
+           let method = class_getInstanceMethod(type(of: service), simple) {
+            let fn = unsafeBitCast(method_getImplementation(method), to: StartRecordFn.self)
+            fn(service, simple)
+            isRecording = true
+            AevonLog.info("[快捷] 已开始系统录屏：startRecording（AevonRecorderFindV264）")
+            return true
+        }
+        return false
+    }
+
+    @discardableResult
+    private static func stopSystemRecording(_ service: NSObject) -> Bool {
+        let candidates = ["stopSystemRecording:", "stopSystemRecording", "stopRecording"]
+        for name in candidates {
+            let sel = NSSelectorFromString(name)
+            guard service.responds(to: sel),
+                  let method = class_getInstanceMethod(type(of: service), sel) else { continue }
+            let fn = unsafeBitCast(method_getImplementation(method), to: StopRecordFn.self)
+            fn(service, sel, nil)
+            isRecording = false
+            AevonLog.info("[快捷] 已停止系统录屏：\(name)（视频由系统存相册）（AevonRecorderFindV264）")
+            return true
+        }
+        return false
+    }
+
     private static func toggleRecording() {
-        // V0.2.63（AevonQuickSystemV263，用户 Aevon(37) #3）：0.2.62 用 RPScreenRecorder，
-        // 真机上 `startRecording` 直接回错「无法开始录制」—— ReplayKit 在 SpringBoard
-        // 进程里没有录制宿主。改走系统录屏服务（和控制中心那颗录屏按钮同一条路）。
-        if let service = recordingService() {
+        // V0.2.64（AevonRecorderFindV264）：先动态找系统录屏服务（不再猜类名）。
+        if let service = dynamicRecordingService() {
             if isRecording {
-                let stop = NSSelectorFromString("stopSystemRecording:")
-                if service.responds(to: stop),
-                   let method = class_getInstanceMethod(type(of: service), stop) {
-                    let fn = unsafeBitCast(method_getImplementation(method), to: StopRecordFn.self)
-                    fn(service, stop, nil)
-                    isRecording = false
-                    AevonLog.info("[快捷] 已停止系统录屏（视频由系统存相册）"
-                        + "（AevonQuickSystemV263）")
+                if stopSystemRecording(service) {
+                    AevonQuickToast.show("录屏已结束")
                     return
                 }
-            } else {
-                let start = NSSelectorFromString("startSystemRecordingWithMicrophoneEnabled:handler:")
-                if service.responds(to: start),
-                   let method = class_getInstanceMethod(type(of: service), start) {
-                    let fn = unsafeBitCast(method_getImplementation(method), to: StartRecordFn.self)
-                    fn(service, start, ObjCBool(false), nil)
-                    isRecording = true
-                    AevonLog.info("[快捷] 已开始系统录屏（不录麦克风；再点一次「录屏」结束并保存）"
-                        + "（AevonQuickSystemV263）")
-                    return
-                }
+            } else if startSystemRecording(service) {
+                AevonQuickToast.show("已开始录屏")
+                return
             }
         }
         // 兜底：ReplayKit（多数 SpringBoard 上会直接失败，只留日志）
         AevonLog.warn("[快捷] 没有可用的系统录屏服务 → 退回 RPScreenRecorder"
-            + "（AevonQuickSystemV263）")
+            + "（AevonQuickShotV264）")
         let recorder = RPScreenRecorder.shared()
         guard recorder.isAvailable else {
             AevonLog.warn("[快捷] 录屏不可用：RPScreenRecorder.isAvailable = false"
@@ -290,5 +370,67 @@ enum AevonQuickAction {
         }
         AevonLog.warn("[快捷] 录屏已生成但没有可用的存相册入口（RPPreviewViewController 无 "
             + selectors.joined(separator: " / ") + "）（AevonQuickActionV262）")
+    }
+}
+
+/// V0.2.64（AevonQuickShotV264）：SpringBoard 里没有系统截图缩略图，自己给一条提示。
+/// 用户 Aevon(38) #5.4：「截图成功了，但是没有提示」—— 存相册是静默的，
+/// 这里在屏幕底部弹一条 1.6 秒的提示条（不接管触摸，不挡浮窗）。
+final class AevonQuickToast {
+    private static var window: UIWindow?
+    private static let tag = 0x7A37
+
+    static func show(_ text: String) {
+        DispatchQueue.main.async {
+            guard Thread.isMainThread else { return }
+            var overlay = window
+            if overlay == nil { overlay = AevonHostWindow.makeOverlayWindow() }
+            guard let panel = overlay else { return }
+            window = panel
+            panel.isHidden = false
+            panel.frame = UIScreen.main.bounds
+            panel.windowLevel = AevonWindowLevels.overlay + 2
+            guard let host = panel.rootViewController?.view else { return }
+            host.subviews.filter { $0.tag == tag }.forEach { $0.removeFromSuperview() }
+
+            let screen = UIScreen.main.bounds
+            let label = UILabel()
+            label.tag = tag
+            label.text = text
+            label.font = UIFont.systemFont(ofSize: 15, weight: .semibold)
+            label.textColor = .white
+            label.textAlignment = .center
+            label.numberOfLines = 2
+            label.backgroundColor = UIColor(white: 0.08, alpha: 0.86)
+            label.layer.cornerRadius = 14
+            label.layer.cornerCurve = .continuous
+            label.clipsToBounds = true
+            let maxWidth = screen.width - 64
+            let fitting = label.sizeThatFits(CGSize(width: maxWidth, height: 200))
+            let width = min(max(fitting.width + 36, 132), maxWidth)
+            let height = max(fitting.height + 20, 44)
+            label.frame = CGRect(x: (screen.width - width) / 2,
+                                 y: screen.height - height - 120,
+                                 width: width, height: height)
+            host.addSubview(label)
+
+            label.alpha = 0
+            label.transform = CGAffineTransform(translationX: 0, y: 8)
+            UIView.animate(withDuration: 0.18, delay: 0,
+                           options: [.curveEaseOut, .allowUserInteraction],
+                           animations: {
+                label.alpha = 1
+                label.transform = .identity
+            }, completion: { _ in
+                UIView.animate(withDuration: 0.28, delay: 1.5,
+                               options: [.curveEaseIn, .allowUserInteraction],
+                               animations: {
+                    label.alpha = 0
+                    label.transform = CGAffineTransform(translationX: 0, y: -6)
+                }, completion: { _ in
+                    label.removeFromSuperview()
+                })
+            })
+        }
     }
 }

@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Aevon 分屏</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.63（arm64e / roothide）。用法：屏幕右缘的**圆盘把手**（贴边小短竖条，位置/长短在下面「圆盘把手」里调）是呼盘唯一入口：**在把手上左滑 ≥14pt** → 圆盘出来（只认滑动，点击不呼盘；桌面和全屏 App 里都能用） → **手指不用抬起**，直接滑到图标上再松手就开浮窗。手指还按在屏幕上时，圆盘永远不自己收（滑到盘外也不算）；只有抬手那一刻才判定：在图标上=开窗，在圆心=打开面板，其余（盘外 / 图标之间的间隙）=收起。主悬浮窗左右边条**轻点**=吸附停靠 —— 0.2.61 起**拖到屏幕边缘松手不再自动停靠**，只有点边条才停；停靠后**点小窗任意位置**=装回（停靠态没有别的手势）。关闭浮窗仍是底部下边条**双击**，0.2.61 起只认原地轻点、两次间隔放宽到 0.45 秒，拖拽/缩放松手不会再被误判成第一击。名字后面带 ⓘ 的开关，点一下就是它的完整说明。0.2.63：手指一压在把手上，被覆盖的 App 会立即停收触摸（滑把手不会再带动 App 内操作）；圆盘里的「截图 / 录屏」现在可以在「编辑圆盘 App」里删除、拖动排序，删掉后也能从「+」加回来。</string>
+			<string>浮窗 · 圆盘 · 停靠小窗。开关后面的 ⓘ 是这一项的完整说明。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -29,6 +29,22 @@
 		</dict>
 		<dict>
 			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>ⓘ 分屏使用说明</string>
+			<key>action</key>
+			<string>aevonShowGuide</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>圆盘把手</string>
+			<key>footerText</key>
+			<string>呼盘唯一入口：把手上左滑 14pt。位置与长短在下面单独调。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
 			<true/>
@@ -37,17 +53,9 @@
 			<key>key</key>
 			<string>RingGripEnabled</string>
 			<key>label</key>
-			<string>圆盘把手（隔离实验开关）</string>
+			<string>启用圆盘把手</string>
 			<key>infoText</key>
 			<string>0.2.58 新增的诊断开关（AevonGripToggleV258），默认开。关掉后圆盘把手整体摘除、呼盘入口停用（浮窗也随之无法呼出），用于 A/B 定位「滑动手势失效」是否与把手链路相关：关掉 → 注销 → 正常使用一轮，若失效不再出现即锁定把手；若仍出现则与把手无关。开关改动要注销生效。定位完成后请恢复打开。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>圆盘把手</string>
-			<key>footerText</key>
-			<string>0.2.61 起（AevonGripPageV261）：把手的位置、长短搬进了独立页面，本页只留入口 —— 点进去调。默认值：位置 30%、长度 64pt。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -56,6 +64,30 @@
 			<string>把手位置 / 长度调整</string>
 			<key>action</key>
 			<string>aevonOpenGrip</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>细节调整</string>
+			<key>footerText</key>
+			<string>圆盘 App 列表、浮窗几何。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>圆盘 / 浮窗细节调整</string>
+			<key>action</key>
+			<string>aevonOpenDetail</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>运行与排查</string>
+			<key>footerText</key>
+			<string>Aevon 0.2.64（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -104,22 +136,6 @@
 			<string>每次 SpringBoard 启动跑一轮只读探针：类表、窗口栈、识别器宿主、宿主审计等，各打一行日志（约 70 行、6 秒）。
 
 只读、不改任何状态，排错时非常有用（右缘的很多结论都是它给的）。0.2.17 起默认关 —— 圆盘手势已经定档，日常不需要这几十行日志；要查东西时再打开。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>细节调整</string>
-			<key>footerText</key>
-			<string>圆盘 App 列表、浮窗几何说明，都在二级页。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>圆盘 / 浮窗细节调整</string>
-			<key>action</key>
-			<string>aevonOpenDetail</string>
 		</dict>
 	</array>
 	<key>title</key>

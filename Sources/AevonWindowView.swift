@@ -2198,6 +2198,30 @@ final class AevonWindowView: UIView {
             + "过渡期光晕隐藏）（AevonDockColumnV250 AevonDockHaloOffV259）")
     }
 
+    /// V0.2.64（AevonMainAvoidV264，用户 Aevon(38) #2）：主窗避让停靠栏时的平滑位移。
+    ///
+    /// 只动 frame（不动 transform / 不重建 presenter），落盘走 `persistFrame` ——
+    /// 避让后的位置就是新的「主窗记忆」，用户随后再手动拖动会覆盖它。
+    func nudgeForDockAvoidance(to target: CGRect) {
+        guard !isDocked else { return }
+        let apply = { [weak self] in
+            guard let self else { return }
+            self.frame = target
+            self.layoutIfNeeded()
+        }
+        if window != nil {
+            UIView.animate(withDuration: 0.30, delay: 0,
+                           usingSpringWithDamping: 0.9,
+                           initialSpringVelocity: 0.2,
+                           options: [.allowUserInteraction, .beginFromCurrentState],
+                           animations: apply,
+                           completion: { [weak self] _ in self?.persistFrame() })
+        } else {
+            apply()
+            persistFrame()
+        }
+    }
+
     /// V0.2.60（AevonDockTapOnlyV260）：停靠态摘除 / 装回后恢复窗外手势手柄。
     ///
     /// 摘除用 `isHidden + isUserInteractionEnabled` 两道：隐藏负责视觉与命中，

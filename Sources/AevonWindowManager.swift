@@ -125,6 +125,22 @@ enum AevonWindowManager {
             enforceSingleMainWindow(reason: "全屏恢复 \(marked)")
             return
         }
+        /* V0.2.64（AevonFullscreenRecoverV264，用户 Aevon(38) #5.1「这次完美触发，然后
+         * 第二次继续黑屏」）：第一次靠上面的「承载标记还在」兜住了；第二次标记已经被清掉，
+         * 于是这条分支不成立、一路走到自动关窗逻辑 —— 但 App 的场景画布可能仍是 430×737
+         * （上一次浮窗留下的），系统按整屏拉起来就是黑的。
+         * 判据改成「我们手上什么都没拿」：没有主窗、没有停靠窗时，这个 App 的场景就该是整屏，
+         * 无条件再写一次整屏画布（幂等；真已是整屏时读回值不变）。 */
+        if currentView == nil, dockedViews.isEmpty {
+            let screen = UIScreen.main.bounds.size
+            if screen.height > 200, let scene = AevonSceneHelper.scene(for: sceneIdentifier) {
+                _ = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+                AevonLog.info("[窗口] 全屏出现兜底：确认主场景画布 = 整屏 "
+                    + "\(Int(screen.width))x\(Int(screen.height))（读回 "
+                    + "\(AevonMainSceneFrameState(scene) ?? "")）"
+                    + "（AevonFullscreenRecoverV264）")
+            }
+        }
         // V0.2.61（AevonDockFullscreenCloseV261，用户 Aevon(35) #2「悬浮窗打开设置后，
         // 全屏启动设置有概率黑屏，必须上滑关掉后台卡片才能恢复」）：
         // 停靠小窗**同样持有那个 App 的主场景 presenter**，而 openBundleID 在停靠态恒为
@@ -239,8 +255,15 @@ enum AevonWindowManager {
                 completion?(true)
                 return
             }
-            AevonLog.info("[窗口] 单窗模式：先关掉 \(existingID)，再把 \(bundleID) 装进同一个窗（AevonSingleWindowV105）")
-            close(bundleID: existingID)
+            AevonLog.info("[窗口] 单主窗语义：\(existingID) 转成停靠小窗（不关掉），"
+                + "\(bundleID) 占用主窗（AevonSwapDockV264）")
+            let rightColumn = dockedViews.filter { $0.dockedSide == .right }.count
+            let leftColumn = dockedViews.filter { $0.dockedSide == .left }.count
+            let side: AevonDockSide = rightColumn <= leftColumn ? .right : .left
+            if !dockCurrent(side: side, force: true), !dockedViews.contains(where: { $0.bundleID == existingID }) {
+                AevonLog.warn("[窗口] \(existingID) 转停靠失败 → 只能关掉它（AevonSwapDockV264）")
+                close(bundleID: existingID)
+            }
         }
         // V0.2.49（AevonCloseSettleV249）：这个 App 若刚被关窗、正等着挂起，先撤销 ——
         // 否则 0.75 秒后它会在浮窗里被挂起（画面停住 / 断层）。
@@ -603,9 +626,28 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
+            /* V0.2.64（AevonFloatTransitionV264，用户 Aevon(38) #3「动画更流畅真实，
+             * 而不是突然出现的」）：开窗补一段入场动画 —— 淡入 + 从 0.965 弹到 1.0。
+             * 之前是 addSubview 之后 alpha 直接就是 1，视觉上「啪」地出现一块窗。 */
+            windowView.alpha = 0
+            windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
+            UIView.animate(withDuration: 0.34, delay: 0.02,
+                           usingSpringWithDamping: 0.86,
+                           initialSpringVelocity: 0.3,
+                           options: [.allowUserInteraction, .beginFromCurrentState],
+                           animations: {
+                windowView.alpha = 1
+                windowView.transform = .identity
+            }, completion: nil)
+            AevonLog.info("[窗口] 开窗入场：\(bundleID) 淡入 + 0.965→1.0 弹簧 0.34s"
+                + "（AevonFloatTransitionV264）")
             currentView = windowView
             currentBundleID = bundleID
             lastOpenedAt = CACurrentMediaTime()
+            // V0.2.64（AevonMainAvoidV264）：开窗后若左右某一侧已有停靠列 → 主窗让开那一侧。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
+                AevonWindowManager.avoidDockColumns(reason: "开窗 \(bundleID)")
+            }
             // V0.2.61（AevonDouyinRepairV261，用户 Aevon(35) #9）：开窗 2.2 秒后按画面
             // 自查一次断层（下半截整块黑），命中就做一次「全屏往返」逼 App 重排。
             //
@@ -957,6 +999,10 @@ enum AevonWindowManager {
         publishDockStages()
         // V0.2.62（AevonDockNoOrphanV262）：装回之后立刻做一次一致性清扫。
         enforceSingleMainWindow(reason: "装回 \(bundleID)")
+        // V0.2.64（AevonMainAvoidV264）：装回后若另一侧还有停靠列 → 主窗让开。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+            AevonWindowManager.avoidDockColumns(reason: "装回 \(bundleID)")
+        }
     }
 
     /// V0.2.62（AevonDockNoOrphanV262）：单窗铁律的兜底 —— 承载层里只许有
@@ -1029,6 +1075,43 @@ enum AevonWindowManager {
         for (index, view) in column.enumerated() {
             view.enterDock(side: side, index: index, animated: animated)
         }
+    }
+
+    /// V0.2.64（AevonMainAvoidV264，用户 Aevon(38) #2）：主窗避让停靠栏。
+    ///
+    /// 规则（按用户原话）：
+    ///   · 只有某一侧有停靠小窗、另一侧空着时才避让（两侧都有 = 无处可躲，保持原样）；
+    ///   · 主窗与那一列**真的重叠**才挪，不重叠不动（避免用户手动摆好后被莫名推开）；
+    ///   · 挪的位置 = 贴到另一侧留 8pt 边距，纵向位置保持不变；
+    ///   · 避让是一次性的：之后用户手动拖到哪就记哪（`persistFrame` 照常落盘），
+    ///     下一次有新停靠时才重新判一次。
+    static func avoidDockColumns(reason: String) {
+        guard let view = currentView, !view.isDocked else { return }
+        let screen = UIScreen.main.bounds
+        guard screen.width > 200 else { return }
+        let rightCount = dockedViews.filter { $0.dockedSide == .right }.count
+        let leftCount = dockedViews.filter { $0.dockedSide == .left }.count
+        guard (rightCount > 0) != (leftCount > 0) else { return }
+        let slot = AevonDock.size.width
+        let occupiedOnRight = rightCount > 0
+        var frame = view.frame
+        let columnMinX = occupiedOnRight ? screen.width - slot : 0
+        let columnMaxX = occupiedOnRight ? screen.width : slot
+        let overlaps = frame.maxX > columnMinX + 2 && frame.minX < columnMaxX - 2
+        guard overlaps else { return }
+        let margin: CGFloat = 8
+        if occupiedOnRight {
+            frame.origin.x = margin
+        } else {
+            frame.origin.x = screen.width - margin - frame.width
+        }
+        frame.origin.x = max(margin, min(frame.origin.x, screen.width - margin - frame.width))
+        guard abs(frame.origin.x - view.frame.origin.x) > 1 else { return }
+        view.nudgeForDockAvoidance(to: frame)
+        let busySide = occupiedOnRight ? "右" : "左"
+        AevonLog.info("[窗口] 主窗避让停靠栏（\(reason)）：\(busySide)侧有 "
+            + "\(max(rightCount, leftCount)) 个停靠小窗 → 主窗移到 x=\(Int(frame.origin.x))"
+            + "（AevonMainAvoidV264）")
     }
 
     /// V0.2.49（AevonCloseSettleV249）：延迟挂起（等画布还原 + 抖动完成）。

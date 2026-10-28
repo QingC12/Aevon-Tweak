@@ -2558,13 +2558,18 @@ jobs:
           # ③键盘：只认键盘窗口 + 只在场景高度 ≈ 画布时才对齐（fail-closed）
           grep -q 'UIRemoteKeyboardWindow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.62 缺键盘窗口对齐（键盘只露上半截）"; exit 1; }
-          # V0.2.63（AevonKeyFitV263）反转：键盘对齐闸门换成「浮窗承载中 + 真实键盘窗口」，
-          # 并加通知驱动的对位（Aevon(37) #4 键盘仍显示不全）。
+          # V0.2.64（AevonKeyGateV264）反转：闸门换成「画布比真屏矮」（几何判据），
+          # Aevon(38) 日志证明 0.2.63 的「浮窗承载 + 键盘窗口」一次都没命中（承载标记 150ms 一翻）。
+          grep -q 'AevonAppInShrunkCanvas() && AevonIsKeyboardWindow(self_)' \
+            "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.64 键盘对齐闸门没换成「画布比真屏矮」（承载标记会抖）"; exit 1; }
           grep -q 'AevonAppIsFloatHosted() && AevonIsKeyboardWindow(self_)' \
             "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.63 键盘对齐闸门没换成「浮窗承载 + 键盘窗口」"; exit 1; }
+            && { echo "::error::0.2.64 键盘闸门回退到「浮窗承载」（Aevon(38) 实测零命中）"; exit 1; } || true
           grep -q 'AevonKeyRepositionNow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.63 缺键盘通知对位（setFrame: 有时只改内部 layer）"; exit 1; }
+          grep -q 'AevonKeyAuditTick' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.64 缺键盘审计（0.15s×20 拍补位，防止通知那一刻窗口还没建）"; exit 1; }
           grep -q 'fabs(sceneH - canvasH) <= 8' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             && { echo "::error::0.2.63 键盘闸门又回到「场景高度 ≈ 画布」（floatstage 读不到就整段失效）"; exit 1; } || true
           # ②截图 / 录屏：动作槽必须接进圆盘与开窗入口，框架要链上
@@ -2639,12 +2644,63 @@ jobs:
           grep -q 'rangeOfString:@"TextEffects"' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             && { echo "::error::0.2.63 又把 TextEffects 当键盘了（键盘在屏判定恒真）"; exit 1; } || true
           # ③截图/录屏走系统入口
-          grep -q '_takeScreenshotAndEdit:' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
-            || { echo "::error::0.2.63 截图没走系统入口（UICreateScreenImage 在 SB 里是空壳）"; exit 1; }
+          # V0.2.64（AevonQuickShotV264）反转：Aevon(38) 日志「本系统既没有 SBUIController
+          # 截图方法」→ 改走 ScreenCore 同款 `_UICreateScreenUIImageWithRotation`。
+          grep -q '_UICreateScreenUIImageWithRotation' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.64 截图没走 _UICreateScreenUIImageWithRotation（SBUIController 在本机不存在）"; exit 1; }
+          grep -q 'PHAssetChangeRequest.creationRequestForAsset' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.64 截图没有可靠的存相册路径（PHPhotoLibrary 回调）"; exit 1; }
+          grep -q 'UIPasteboard.general.image = image' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.64 截图没复制到剪贴板（Snapper 等工具接不上）"; exit 1; }
+          grep -q 'AevonQuickToast' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.64 截图没有提示（用户看不到反馈）"; exit 1; }
+          grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.64 录屏没做动态类探测（候选类名在本机全部不存在）"; exit 1; }
           grep -q 'startSystemRecordingWithMicrophoneEnabled:handler:' \
             "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.63 录屏没走系统录屏服务（ReplayKit 在 SB 里起不来）"; exit 1; }
           echo "V0.2.63 校验: 抖音画面居中 + 停靠不误关 + 截图/录屏走系统且可编辑 + 键盘通知对位 + 残留黑屏兜底 + 回桌面藏着不闪 + 把手占用广播 已就位"
+
+          # ── V0.2.64 校验（Aevon(38) 六项）──────────────────────────────────────
+          # ①单主窗：新 App 顶替时旧主窗转停靠；②主窗避让停靠栏；③出入场动画；
+          # ④设置页去长注释；⑤抖音居中口径 / 键盘闸门 / 承载去抖 / 第二次黑屏。
+          for s in AevonCenterCanvasV264 AevonKeyGateV264 AevonKeyAuditV264 AevonFitDebounceV264; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.64 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          for s in AevonSwapDockV264 AevonMainAvoidV264 AevonFloatTransitionV264 \
+          AevonFullscreenRecoverV264 AevonQuickShotV264 AevonRecorderFindV264; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.64 主库缺标记 $s"; exit 1; }
+          done
+          # ①单主窗语义：不许再「先关掉旧窗」
+          grep -q 'dockCurrent(side: side, force: true), !dockedViews.contains(where: { $0.bundleID == existingID })' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.64 新 App 顶替时没把旧主窗转成停靠小窗"; exit 1; }
+          grep -q '单窗模式：先关掉' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            && { echo "::error::0.2.64 又回到「开新窗前先关掉旧窗」（用户要求转停靠）"; exit 1; } || true
+          # ②主窗避让停靠栏
+          grep -q 'static func avoidDockColumns' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.64 缺主窗避让停靠栏"; exit 1; }
+          grep -q 'nudgeForDockAvoidance' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.64 避让没有平滑位移（会硬跳）"; exit 1; }
+          # ③出入场动画
+          grep -q 'scaleX: 0.965' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.64 开窗还是「突然出现」（缺入场缩放）"; exit 1; }
+          # ⑤抖音居中口径 + 承载去抖
+          grep -q 'AevonAppIsFloatHostedScreenHeight()' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.64 画面居中没用画布高做口径"; exit 1; }
+          grep -q 'gAevonScreenFitPendingSince' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.64 承载状态没有去抖（150ms 抖动会制造黑屏）"; exit 1; }
+          grep -q 'AevonFullscreenRecoverV264' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.64 缺「第二次全屏黑屏」兜底"; exit 1; }
+          # ④设置页：一级菜单不许再有大段 footerText，长说明进 ⓘ 弹窗
+          grep -q 'aevonShowGuide' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::0.2.64 一级菜单没有「ⓘ 分屏使用说明」入口"; exit 1; }
+          grep -q 'aevonShowGuide' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::0.2.64 ⓘ 说明弹窗没实现"; exit 1; }
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));bad=[str(i.get('label','')) for i in d['items'] if i.get('cell')=='PSGroupCell' and len(i.get('footerText','') or '')>90];print('::error::0.2.64 一级菜单分组注释过长: '+','.join(bad)) if bad else print('V0.2.64 设置页: 分组注释全部 <=90 字');sys.exit(1 if bad else 0)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+          echo "V0.2.64 校验: 单主窗转停靠 + 主窗避让 + 出入场动画 + 设置页去长注释 + 抖音居中口径/键盘闸门/承载去抖/二次黑屏 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

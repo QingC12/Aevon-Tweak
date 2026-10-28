@@ -997,6 +997,32 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 }
 
+/* V0.2.64（AevonGuideSheetV264，用户 Aevon(38) #4）：
+ * 「前两项开关下面出现了很大一部分注释，以后注释只显示在圆圈叹号中，不得出现在一级菜单中」。
+ * 一级菜单的 PSGroupCell footerText 已收敛成一行分类说明；完整用法搬到这里 ——
+ * 点「ⓘ 分屏使用说明」弹一个可滚动的说明页，不再占一级菜单版面。 */
+- (void)aevonShowGuide {
+    NSString *title = @"Aevon 用法";
+    NSString *body =
+        @"圆盘把手（屏幕右缘那条小短竖条）是呼盘唯一入口：在把手上左滑 ≥14pt 即出盘，"
+        @"点击不呼盘。手指不用抬起，直接滑到图标上松手就开浮窗；抬手那一刻判位置 —— "
+        @"图标上=开窗，圆心=打开面板，其余=收起。\n\n"
+        @"主悬浮窗：左右边条轻点 = 吸附成停靠小窗（拖到屏幕边缘不再自动停靠）；"
+        @"停靠后点小窗任意位置 = 装回主窗；底边下边条双击 = 关闭浮窗。\n\n"
+        @"只有一个主窗：圆盘里再选一个 App 时，原来那个会自动变成停靠小窗，不会被关掉。"
+        @"某侧有停靠小窗时，主窗会自动让到另一侧；之后你手动拖到哪，就记哪。\n\n"
+        @"圆盘里的「截图 / 录屏」是动作，可以在「细节调整 → 编辑圆盘 App」里删除、拖动排序，"
+        @"删掉后也能用「+」加回来。\n\n"
+        @"名字后面带 ⓘ 的开关，点 ⓘ 就是这一项的完整说明。";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                  message:body
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"知道了"
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 @end
 
 #pragma mark - V0.0.30：二级「细节调整」页

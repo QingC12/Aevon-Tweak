@@ -878,6 +878,9 @@ static BOOL gAevonScreenFitOn = NO;
 static BOOL gAevonScreenFitLogged = NO;
 static BOOL gAevonScreenFitRefreshing = NO;
 static CFTimeInterval gAevonScreenFitCheckedAt = 0;
+/* V0.2.64（AevonFitDebounceV264）：承载状态去抖 —— 新值要稳 0.30s 才承认 */
+static BOOL gAevonScreenFitPendingOn = NO;
+static CFTimeInterval gAevonScreenFitPendingSince = 0;
 
 /* 与 SB 侧 AevonFloatStageHash 必须逐字节一致（FNV-1a 32 位，0 = 没有浮窗）。 */
 static uint32_t AevonAppFloatStageHash(NSString *text) {
@@ -1008,6 +1011,8 @@ static BOOL gAevonKeyLogged;
 static CGSize AevonAppFloatCanvasSize(void);
 static CGFloat AevonAppIsFloatHostedScreenHeight(void);
 static CGFloat AevonAppIsFloatHostedScreenWidth(void);
+static BOOL AevonAppInShrunkCanvas(void);
+static void AevonKeyAuditTick(void);
 
 static BOOL AevonIsKeyboardWindow(UIWindow *window) {
     if (window == nil) { return NO; }
@@ -1020,9 +1025,12 @@ static BOOL AevonIsKeyboardWindow(UIWindow *window) {
 static void AevonKeyFrameSwizzled(id self_, SEL _cmd, CGRect frame) {
     CGRect use = frame;
     @try {
-        // V0.2.63（AevonKeyFitV263）：闸门从 `gAevonScreenFitOn` 换成 `AevonAppIsFloatHosted()`
-        // —— 前者会随偏好读延迟来回翻（Aevon(37) 日志里同一分钟内 开/关 反复），一翻就整段失效。
-        if (AevonAppIsFloatHosted() && AevonIsKeyboardWindow(self_)) {
+        /* V0.2.64（AevonKeyGateV264）：闸门换成「本进程正被渲进一块比真屏矮的画布」。
+         * Aevon(38) 日志里本函数**一次都没命中**（整篇只有「已接管」没有「按画布底对齐」）：
+         * `AevonAppIsFloatHosted()` 在承载标记抖动的那 150ms 里回 NO，键盘正好在那一刻
+         * 出现就整段失效 —— 而用户看到的现象（只露顶部一排）正是键盘按 932 算、被 737 画布裁掉。
+         * 新判据只看几何（画布比真屏矮 40pt 以上），与承载标记是否抖无关。 */
+        if (AevonAppInShrunkCanvas() && AevonIsKeyboardWindow(self_)) {
             UIWindow *win = (UIWindow *)self_;
             CGFloat canvasH = AevonAppIsFloatHostedScreenHeight();
             CGFloat canvasW = AevonAppIsFloatHostedScreenWidth();
@@ -1037,7 +1045,8 @@ static void AevonKeyFrameSwizzled(id self_, SEL _cmd, CGRect frame) {
                         gAevonKeyLogged = YES;
                         AevonAppLog(@"[App侧] 键盘按画布底对齐：%@ → (0,%.0f,%.0f,%.0f)"
                                     @"（画布 %.0fx%.0f，系统给的是整屏坐标 y=%.0f）"
-                                    @"→ 键盘完整落在浮窗里（AevonKeyFitV262 AevonKeyFitV263）",
+                                    @"→ 键盘完整落在浮窗里"
+                                    @"（AevonKeyFitV262 AevonKeyFitV263 AevonKeyGateV264）",
                                     NSStringFromClass([win class]), targetY, canvasW, kbH,
                                     canvasW, canvasH, frame.origin.y);
                     }
@@ -1074,36 +1083,78 @@ static CGFloat AevonAppIsFloatHostedScreenWidth(void) {
     return AevonAppFloatCanvasSize().width;
 }
 
+/* V0.2.64（AevonKeyGateV264）：本进程是不是正被渲进一块「比真屏矮」的画布。
+ * 几何优先（被接管的 UIScreen.bounds 就是画布），承载标记只作兜底 ——
+ * Aevon(38) 日志里承载标记在多个 App 之间 150ms 一次地翻，靠它当闸门必然漏。 */
+static BOOL AevonAppInShrunkCanvas(void) {
+    CGSize real = AevonRealScreenSize();
+    if (real.height < 200) { return NO; }
+    CGSize hooked = [UIScreen mainScreen].bounds.size;
+    if (hooked.height > 200 && hooked.height < real.height - 40.0) { return YES; }
+    return AevonAppIsFloatHosted();
+}
+
 /* 通知驱动的一次对位：系统算好的键盘 frame 是按**真实屏幕**给的，
  * 这里按画布底重新摆一次。setFrame: 那条 swizzle 是主路（系统每次改都过），
  * 这条是「已经在屏上、只是位置不对」的补正（系统有时候只改内部 layer 不改窗口）。 */
+/* V0.2.64（AevonKeyAuditV264）：一次对位 + 一串审计。
+ *
+ * Aevon(38) 整篇日志没有一条「键盘对位」——说明通知这条路上要么闸门挡了，要么
+ * 那一刻键盘窗口还不在 `[UIApplication windows]` 里（远程键盘先建 layer 后建窗口）。
+ * 现在收到通知就开一条 0.15s × 20 的审计：每一拍把「任何原点落在画布下沿之外」的
+ * 键盘窗口拉回画布底，直到它稳定为止（幂等，无副作用）。 */
 static void AevonKeyRepositionNow(NSNotification *note) {
     @try {
-        if (!AevonAppIsFloatHosted()) { return; }
+        if (!AevonAppInShrunkCanvas()) { return; }
         CGRect end = CGRectZero;
         NSValue *value = note.userInfo[UIKeyboardFrameEndUserInfoKey];
         if ([value isKindOfClass:[NSValue class]]) { end = [value CGRectValue]; }
         CGFloat kbH = end.size.height;
-        if (kbH < 40) { return; }
         CGSize canvas = AevonAppFloatCanvasSize();
-        if (canvas.height < 200 || kbH >= canvas.height) { return; }
-        CGRect target = CGRectMake(0, canvas.height - kbH, canvas.width, kbH);
+        if (canvas.height < 200) { return; }
+        if (kbH < 40 || kbH >= canvas.height) {
+            /* 通知里没带高度（有些系统版本只给 begin/end 的差量）→ 用扫窗口的方式取 */
+            kbH = 0;
+        }
         NSArray<UIWindow *> *windows = nil;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         windows = [[UIApplication sharedApplication] windows];
 #pragma clang diagnostic pop
+        NSInteger found = 0;
+        NSInteger fixed = 0;
         for (UIWindow *w in windows) {
+            if (![w isKindOfClass:[UIWindow class]]) { continue; }
             if (!AevonIsKeyboardWindow(w)) { continue; }
+            found += 1;
+            CGFloat h = kbH > 40 ? kbH : w.bounds.size.height;
+            if (h < 40 || h >= canvas.height) { continue; }
+            CGRect target = CGRectMake(0, canvas.height - h, canvas.width, h);
             if (CGRectEqualToRect(CGRectIntegral(w.frame), CGRectIntegral(target))) { continue; }
             CGRect before = w.frame;
             w.frame = target;
             [w setNeedsLayout];
             [w layoutIfNeeded];
-            AevonAppLog(@"[App侧] 键盘通知对位：%@ %@ → %@（画布 %.0fx%.0f，键盘高 %.0f）"
-                        @"（AevonKeyFitV263）",
-                        NSStringFromClass([w class]), NSStringFromCGRect(before),
-                        NSStringFromCGRect(target), canvas.width, canvas.height, kbH);
+            fixed += 1;
+            if (fixed <= 4) {
+                AevonAppLog(@"[App侧] 键盘通知对位：%@ %@ → %@（画布 %.0fx%.0f，键盘高 %.0f）"
+                            @"（AevonKeyFitV263 AevonKeyAuditV264）",
+                            NSStringFromClass([w class]), NSStringFromCGRect(before),
+                            NSStringFromCGRect(target), canvas.width, canvas.height, h);
+            }
+        }
+        if (found == 0) {
+            AevonAppLog(@"[App侧] 键盘通知到了但没扫到键盘窗口（画布 %.0fx%.0f，通知高度 %.0f）"
+                        @"→ 交给 0.15s 审计继续盯（AevonKeyAuditV264）",
+                        canvas.width, canvas.height, kbH);
+        }
+        /* 审计：0.15s 一拍共 20 拍（3 秒），谁还没落位就补一次 */
+        for (int i = 1; i <= 20; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                         (int64_t)(0.15 * i * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                AevonKeyAuditTick();
+            });
         }
     } @catch (NSException *exception) {
         AevonAppLog(@"[App侧] 键盘通知对位异常：%@（不影响宿主）（AevonKeyFitV263）",
@@ -1111,8 +1162,40 @@ static void AevonKeyRepositionNow(NSNotification *note) {
     }
 }
 
+/* V0.2.64（AevonKeyAuditV264）：审计一拍 —— 谁还没落在画布底就补一次。
+ * 只动「原点明显在画布下沿之外」的键盘窗口，幂等。 */
+static void AevonKeyAuditTick(void) {
+    @try {
+        if (!AevonAppInShrunkCanvas()) { return; }
+        CGSize canvas = AevonAppFloatCanvasSize();
+        if (canvas.height < 200) { return; }
+        NSArray<UIWindow *> *windows = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        windows = [[UIApplication sharedApplication] windows];
+#pragma clang diagnostic pop
+        for (UIWindow *w in windows) {
+            if (![w isKindOfClass:[UIWindow class]]) { continue; }
+            if (!AevonIsKeyboardWindow(w)) { continue; }
+            CGFloat h = w.bounds.size.height;
+            if (h < 40 || h >= canvas.height) { continue; }
+            CGRect target = CGRectMake(0, canvas.height - h, canvas.width, h);
+            if (CGRectEqualToRect(CGRectIntegral(w.frame), CGRectIntegral(target))) { continue; }
+            CGRect before = w.frame;
+            w.frame = target;
+            [w setNeedsLayout];
+            [w layoutIfNeeded];
+            AevonAppLog(@"[App侧] 键盘审计补位：%@ %@ → %@（画布 %.0fx%.0f）"
+                        @"（AevonKeyAuditV264）",
+                        NSStringFromClass([w class]), NSStringFromCGRect(before),
+                        NSStringFromCGRect(target), canvas.width, canvas.height);
+        }
+    } @catch (NSException *exception) {
+        /* 审计静默失败：不影响宿主 */
+    }
+}
+
 /* ── V0.2.63（AevonCenterContentV263）：把画面中心拉回浮窗中心 ───────────────────
- *
  * 用户 Aevon(37) #1：「抖音真重排一秒后内容上移、下面黑。能不能让抖音画面的中心始终
  * 保持在悬浮窗的中心」。
  *
@@ -1175,29 +1258,51 @@ static void AevonCenterContentRefresh(BOOL floatHosted) {
             }
             return;
         }
-        CGFloat windowH = main.bounds.size.height;
-        if (windowH < 200) { return; }
-        UIView *target = AevonFindOversizeView(root, windowH);
-        if (target == nil) {
+        /* V0.2.64（AevonCenterCanvasV264）：口径换成**画布高**，不再用窗口高。
+         * Aevon(38) 日志证明这条从来没跑过（整篇 0 条「画面居中」）：当 App 的窗口
+         * 仍是 932 时 `windowH = 932`，BFS 找「比窗口高 40–240」的目标永远是 nil →
+         * 静默返回，画面还是偏上。现在两档都覆盖：
+         *   ① 窗口本身比画布高（App 没重排）→ 直接平移根视图；
+         *   ② 窗口已经贴合画布、内部还有一层按整屏排版 → 平移那一层。 */
+        CGFloat canvasH = AevonAppIsFloatHostedScreenHeight();
+        if (canvasH < 300 || canvasH >= 8000) { canvasH = 0; }
+        if (canvasH < 300) {
+            /* 兜底：按 7:12 竖窗比例从真屏宽反推（430 × 12/7 = 737） */
+            CGSize real = AevonRealScreenSize();
+            if (real.width > 100) { canvasH = floor(real.width * 12.0 / 7.0); }
+        }
+        CGFloat winH = main.bounds.size.height;
+        if (canvasH < 300 || winH < 200) { return; }
+        UIView *target = nil;
+        CGFloat diff = 0;
+        if (winH > canvasH + 8.0 && winH - canvasH <= 400.0) {
+            target = root;
+            diff = winH - canvasH;
+        } else {
+            target = AevonFindOversizeView(root, canvasH);
+            if (target != nil) { diff = target.bounds.size.height - canvasH; }
+        }
+        if (target == nil || diff <= 8.0) {
             if (gAevonCenterApplied) {
                 gAevonCenterApplied = NO;
                 gAevonCenterTarget.transform = CGAffineTransformIdentity;
                 gAevonCenterTarget = nil;
-                AevonAppLog(@"[App侧] 各层尺寸都已贴合窗口 → 撤掉画面位移"
-                            @"（AevonCenterContentV263）");
+                AevonAppLog(@"[App侧] 各层尺寸都已贴合画布 → 撤掉画面位移"
+                            @"（AevonCenterContentV263 AevonCenterCanvasV264）");
             }
             return;
         }
-        CGFloat diff = target.bounds.size.height - windowH;
         CGFloat shift = -diff / 2.0;
         if (gAevonCenterApplied && gAevonCenterTarget == target
             && fabs(gAevonCenterTarget.transform.ty - shift) < 0.5) { return; }
         gAevonCenterApplied = YES;
         gAevonCenterTarget = target;
         target.transform = CGAffineTransformMakeTranslation(0, shift);
-        AevonAppLog(@"[App侧] 画面居中：%@ 高 %.0f vs 窗口 %.0f（这一层仍按整屏排版）"
-                    @"→ 整体上移 %.1fpt，让画面中心回到浮窗中心（AevonCenterContentV263）",
-                    NSStringFromClass([target class]), target.bounds.size.height, windowH, -shift);
+        AevonAppLog(@"[App侧] 画面居中：%@ 高 %.0f vs 画布 %.0f（窗口 %.0f）"
+                    @"→ 整体上移 %.1fpt，让画面中心回到浮窗中心"
+                    @"（AevonCenterContentV263 AevonCenterCanvasV264）",
+                    NSStringFromClass([target class]), target.bounds.size.height,
+                    canvasH, winH, -shift);
     } @catch (NSException *exception) {
         AevonAppLog(@"[App侧] 画面居中失败：%@（不影响宿主）（AevonCenterContentV263）",
                     exception.reason ?: @"未知");
@@ -1267,17 +1372,40 @@ static void AevonScreenFitRefresh(void) {
     if (gAevonScreenFitRefreshing) { return; }
     gAevonScreenFitRefreshing = YES;
     BOOL flipped = NO;
-    BOOL nowOn = NO;
+    BOOL nowOn = gAevonScreenFitOn;
     @try {
         BOOL on = AevonAppIsFloatHosted();
-        nowOn = on;
-        if (on != gAevonScreenFitOn || !gAevonScreenFitLogged) {
-            flipped = (on != gAevonScreenFitOn);
-            gAevonScreenFitOn = on;
+        /* V0.2.64（AevonFitDebounceV264）：承载标记会**抖**。
+         * Aevon(38) 日志 12:20:32–12:20:39 之间，「屏幕贴合 开/关」在 Preferences /
+         * Sileo / BatteryInfo 之间 150ms 一轮地翻了十几遍 —— 用户每从圆盘切一个 App，
+         * SB 就重设一次承载标记。每翻一次我们就 nudge 一次窗口重排、甚至把窗口拉回整屏，
+         * 于是「布局按 737、窗口按 932」的中间态被反复制造出来 = 用户说的第二次黑屏。
+         * 现在新状态必须先稳定 0.30 秒才承认（打开浮窗时 SB 自己会先把画布改好，
+         * UIScreen 这一层晚 0.3 秒不影响观感）。 */
+        CFTimeInterval now = CACurrentMediaTime();
+        if (on == gAevonScreenFitOn) {
+            gAevonScreenFitPendingOn = on;
+            gAevonScreenFitPendingSince = 0;
+        } else {
+            if (gAevonScreenFitPendingOn != on || gAevonScreenFitPendingSince <= 0) {
+                gAevonScreenFitPendingOn = on;
+                gAevonScreenFitPendingSince = now;
+                gAevonScreenFitCheckedAt = now;
+                gAevonScreenFitRefreshing = NO;
+                return;   /* 抖动期：这一拍不认，等它稳 */
+            }
+            if (now - gAevonScreenFitPendingSince >= 0.30) {
+                gAevonScreenFitOn = on;
+                gAevonScreenFitPendingSince = 0;
+                flipped = YES;
+            }
+        }
+        nowOn = gAevonScreenFitOn;
+        if (flipped || !gAevonScreenFitLogged) {
             gAevonScreenFitLogged = YES;
-            AevonAppLog(@"屏幕贴合：%@（AevonAppScreenFitV249）",
-                        on ? @"开 —— 本 App 正被浮窗承载，UIScreen 改报画布尺寸"
-                           : @"关 —— 按真实屏幕报告");
+            AevonAppLog(@"屏幕贴合：%@（AevonAppScreenFitV249 AevonFitDebounceV264）",
+                        nowOn ? @"开 —— 本 App 正被浮窗承载，UIScreen 改报画布尺寸"
+                              : @"关 —— 按真实屏幕报告");
         }
         gAevonScreenFitCheckedAt = CACurrentMediaTime();
     } @catch (NSException *exception) {
@@ -1311,7 +1439,8 @@ static CGRect AevonScreenBoundsFit(id self_, SEL _cmd) {
     CGRect real = ((CGRect (*)(id, SEL))gAevonScreenBoundsOrigIMP)(self_, _cmd);
     @try {
         CFTimeInterval now = CACurrentMediaTime();
-        if (now - gAevonScreenFitCheckedAt >= 0.5) { AevonScreenFitRefresh(); }
+        /* V0.2.64：采样间隔 0.5 → 0.20 秒，配合 0.30 秒去抖（否则一次翻转要等 0.5~0.8s） */
+        if (now - gAevonScreenFitCheckedAt >= 0.20) { AevonScreenFitRefresh(); }
         if (!gAevonScreenFitOn) { return real; }
         if (real.size.width < 2) { return real; }
         CGFloat width = floor(real.size.width);
