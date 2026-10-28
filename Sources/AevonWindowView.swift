@@ -1580,8 +1580,7 @@ final class AevonWindowView: UIView {
     /// 连续「cs=2 且现场抓得到真画面」的拍数（0.1s 一拍）：要求稳定 2 拍才淡入，
     /// Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入会「亮一下又黑」。
     private var liveWaitTicks = 0
-    /// V0.2.62（AevonLiveQuietV262）：让位期抓帧次数（有界 3 次，防反复重绘造成闪）。
-    private var liveCaptureCount = 0
+    /// V0.2.65（AevonNoVanishV265）：让位期**不再现场抓帧**，次数计数器随之退休。
     private static let liveWaitLimit: TimeInterval = 1.0
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
@@ -1662,7 +1661,6 @@ final class AevonWindowView: UIView {
         liveWaitStartedAt = now
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
-        liveCaptureCount = 0
         liveAwaitingContent = false
         alpha = 1
         liveSettleUntil = 0
@@ -1675,7 +1673,7 @@ final class AevonWindowView: UIView {
         }
         AevonLog.info("[窗口] 回桌面：窗口保持可见（整窗 alpha 不动，\(reason)）→ 用最后一帧顶住，"
             + "实时画面回来再 0.22 秒交叉淡出，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
-            + "（AevonLiveFirstV260 AevonNoVanishV265）")
+            + "（AevonLiveFirstV260 AevonLiveFirstFixV261 AevonLiveQuietV262 AevonNoVanishV265）")
     }
 
     /// 让位结束：只决定「定格帧撤不撤」，永远不碰窗口自身 alpha。

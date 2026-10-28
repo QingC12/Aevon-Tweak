@@ -416,6 +416,8 @@ enum AevonEntryHost {
              * 没有一条「自动关闭浮窗」）。0.25 秒后视图铺满了，这里补一次同样的交接判定，
              * 浮窗才会真的让位。 */
             if let identifier = sceneIdentifier {
+                AevonLog.info("[入口] 全屏画面延后补判（\(identifier)）：交接判定补一次，"
+                    + "浮窗该让位就让位（AevonFullscreenRetryV265）")
                 AevonWindowManager.handleFullscreenSceneAppeared(sceneIdentifier: identifier)
             }
         }

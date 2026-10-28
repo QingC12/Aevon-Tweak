@@ -2361,8 +2361,12 @@ jobs:
             || { echo "::error::0.2.60/0.2.62 让位淡入判定丢了（>=1 拍 + 0.12s 下限）"; exit 1; }
           grep -q 'liveWaitLimit: TimeInterval = 1.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.60 让位上限（1.0s）被改动了"; exit 1; }
+          # 0.2.65 反转：让位期**必须**允许垫定格帧（窗口不再靠隐藏遮黑，改由最后一帧顶住）
+          grep -q 'guard liveWaitDeadline == 0 || liveWaitFreezeAllowed else { return }' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.65 让位期不垫定格帧（窗口会露空 = 闪）"; exit 1; }
           grep -q 'guard liveWaitDeadline == 0 else { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.60 让位期仍在盖定格帧（installDarkFreeze 未拦）"; exit 1; }
+            && { echo "::error::0.2.65 又回到「让位期禁止垫帧」（窗会消失）"; exit 1; } || true
           # ②停靠：手柄摘除 + 仲裁窗收窄 + 装回光晕延后
           grep -q 'private func setDockHandlesEnabled' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.60 停靠态手柄摘除缺失"; exit 1; }
@@ -2486,8 +2490,10 @@ jobs:
             && { echo "::error::0.2.65 吞咽又回到承载标记闸门（第一次滑把手会被 App 吃掉）"; exit 1; } || true
           grep -q 'static CGRect AevonFloatFrameRect' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.65 应用层缺「浮窗矩形」判定（浮窗内操作会漏给全屏 App）"; exit 1; }
-          grep -q 'CGRectContainsPoint(floatRect, p)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+          grep -q 'AevonPointInFloatEdge(p)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.65 浮窗边条没有按点吞"; exit 1; }
+          grep -q 'static BOOL AevonPointInFloatEdge' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 缺「浮窗手势区」几何判定"; exit 1; }
           grep -q 'w.bounds.size.height < real.height - 60.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             && { echo "::error::0.2.63 把手吞咽闸回退到旧几何锚（真机零命中，已被 AevonGripSwallowFixV263 取代）"; exit 1; } || true
           grep -q 'AevonKeyboardVisible' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
@@ -2539,8 +2545,9 @@ jobs:
           grep -q "reason.contains(\"画面离场\") ? \[0.40\]" \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.62 让位期重申没收到一次（多发会快速闪）"; exit 1; }
-          grep -q 'liveCaptureCount < 3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.62 让位期抓帧没设上限（drawHierarchy 反复重绘 = 闪）"; exit 1; }
+          # V0.2.65 反转：让位期**不再现场抓帧**（抓帧强迫重绘 = 一次闪），次数上限随之退休
+          grep -q 'liveCaptureCount' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.65 让位期又开始现场抓帧计数（抓帧强迫重绘 = 闪）"; exit 1; } || true
           grep -q 'now - liveWaitStartedAt > 0.12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.62 让位淡入没放宽到「1 拍 + 0.12s」（0.43s 的消失本身像闪）"; exit 1; }
           # ④单窗铁律清扫 + 降级失败不许留野窗
@@ -2666,8 +2673,6 @@ jobs:
             || { echo "::error::0.2.64 截图没复制到剪贴板（Snapper 等工具接不上）"; exit 1; }
           grep -q 'AevonQuickToast' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.64 截图没有提示（用户看不到反馈）"; exit 1; }
-          grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
-            || { echo "::error::0.2.64 录屏没做动态类探测（候选类名在本机全部不存在）"; exit 1; }
           # V0.2.65 反转：录屏不再遍历类表（Aevon(38) 一点就注销 = 在 perform 上踩陷阱），
           # 改成自己抓帧写 MP4。
           grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
