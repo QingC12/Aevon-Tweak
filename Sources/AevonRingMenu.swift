@@ -16,7 +16,10 @@ final class AevonRingIcon: UIView {
     init(bundleID: String, name: String, size: CGFloat) {
         self.bundleID = bundleID
         self.displayName = name
-        let icon = AevonAppIcon.image(bundleID: bundleID, size: size - 4)
+        // V0.2.62（AevonQuickActionV262）：截图 / 录屏两个动作槽没有 App 图标，
+        // 用 SF Symbol 画（白色实心，和原生图标一样铺满方框）。
+        let actionIcon = AevonQuickAction.symbolImage(bundleID: bundleID, size: size - 4)
+        let icon = actionIcon ?? AevonAppIcon.image(bundleID: bundleID, size: size - 4)
         self.hasIcon = icon != nil
         super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
 
@@ -35,7 +38,8 @@ final class AevonRingIcon: UIView {
         if let icon = icon {
             iconView.image = icon
             iconView.frame = bounds.insetBy(dx: 2, dy: 2)
-            iconView.contentMode = .scaleAspectFill
+            // 动作槽是 SF Symbol，居中即可（拉伸会把线条图撑变形）
+            iconView.contentMode = actionIcon != nil ? .center : .scaleAspectFill
             iconView.isUserInteractionEnabled = false
             iconView.layer.cornerRadius = size * 0.2237
             iconView.clipsToBounds = true
@@ -1089,6 +1093,18 @@ final class AevonRingMenu: UIView {
 
     private func activate(_ icon: AevonRingIcon) {
         let bundleID = icon.bundleID
+        // V0.2.62（AevonQuickActionV262）：截图 / 录屏不是 App，直接执行动作，不开窗。
+        if AevonQuickAction.isAction(bundleID) {
+            AevonLog.info("[圆盘] 选中 \(icon.displayName) (\(bundleID))，执行快捷动作并收起圆盘"
+                + "（AevonQuickActionV262）")
+            icon.transform = CGAffineTransform(scaleX: 1.12, y: 1.12)
+            AevonEdgeEntry.noteSelectionCooldown()
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                AevonQuickAction.perform(bundleID: bundleID)
+            }
+            return
+        }
         AevonLog.info("[圆盘] 选中 \(icon.displayName) (\(bundleID))，打开浮窗并收起圆盘")
         icon.transform = CGAffineTransform(scaleX: 1.12, y: 1.12)
         // V0.2.8（AevonSelectionCoolV208）：选中后 1.5 秒内 global 兜底不呼盘 ——

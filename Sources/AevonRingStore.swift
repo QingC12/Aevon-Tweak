@@ -37,11 +37,18 @@ enum AevonRingStore {
     }
 
     static func bundleIDs() -> [String] {
-        if let cached = cached { return cached }
+        if let cached = cached { return withQuickActions(cached) }
         var list = readList(forKey: key)
         if list.isEmpty { list = readList(forKey: snapshotKey) }
         cached = list
-        return list
+        return withQuickActions(list)
+    }
+
+    /// V0.2.62（AevonQuickActionV262，用户 Aevon(36) #2）：圆盘里固定挂两个快捷动作
+    /// （截图 / 录屏），永远排在最前两格 —— 收藏列表增删 App 不会影响它们。
+    private static func withQuickActions(_ list: [String]) -> [String] {
+        let apps = list.filter { !AevonQuickAction.isAction($0) }
+        return AevonQuickAction.allIDs + apps
     }
 
     /// 设置页广播 prefschanged 后调用（**唯一**的跨进程刷新入口）。

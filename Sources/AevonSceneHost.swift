@@ -365,9 +365,9 @@ final class AevonSceneHost {
         guard screen.width > 2, screen.height > 200 else { return }
         let fullOK = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
         AevonLog.warn("[场景] 断层修复：先把画布放回整屏 \(Int(screen.width))x\(Int(screen.height))"
-            + "（\(fullOK ? "已提交" : "失败")，模拟「全屏打开一次」），0.32s 后写回 "
+            + "（\(fullOK ? "已提交" : "失败")，模拟「全屏打开一次」），0.18s 后写回 "
             + "\(Int(width))x\(Int(height))（\(tag)）（AevonDouyinRepairV261）")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
             guard let self, !self.invalidated else { return }
             let backOK = AevonMainSceneSetFrame(self.scene, Double(width), Double(height))
             AevonLog.warn("[场景] 断层修复：画布已写回 \(Int(width))x\(Int(height))"
@@ -395,8 +395,11 @@ final class AevonSceneHost {
     /// 纪律：**总共 2 次写入，只在开窗时一次**。绝不循环、绝不在关窗后写。
     func kickRelayout(width: CGFloat, height: CGFloat, tag: String) {
         guard !invalidated, width > 2, height > 2 else { return }
-        // 0.45s 起手：让过 0.35s 那一拍防回弹复查（否则会被它当成「被回弹」再补写一次）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+        // V0.2.62（AevonKickFastV262，用户 Aevon(36) #1「要等 1~2 秒才打开」）：
+        // 起手 0.45 → 0.20 秒。0.45 是为了让过 0.35s 那一拍防回弹复查，但那一拍只
+        // 认「读回值 ≠ 目标」才补写，微扰窗口和它错开 0.15s 已足够；0.45 等于让用户
+        // 白等半秒才看到内容排好。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
             guard let self, !self.invalidated else { return }
             _ = self.writeCanvas(width - 1, height - 1)
             AevonLog.info("[场景] 强制重排：先写 \((Int(width - 1)))x\((Int(height - 1)))"

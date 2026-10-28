@@ -46,10 +46,12 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonWindowManager.swift \
     Sources/AevonGestureHandler.swift \
     Sources/AevonAppSideBridge.swift \
+    Sources/AevonQuickAction.swift \
     Sources/Hooks.swift
 
 Aevon_CFLAGS = -fobjc-arc
-Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation
+# V0.2.62（AevonQuickActionV262）：圆盘的「录屏」用 ReplayKit，「截图」存相册用 Photos。
+Aevon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreFoundation ReplayKit Photos
 
 # ---------------------------------------------------------------------------
 # 第二个 dylib：AevonApp

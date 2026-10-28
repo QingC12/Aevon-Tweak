@@ -104,6 +104,13 @@ enum AevonWindowManager {
         if let docked = dockedViews.first(where: { sceneIdentifier.contains($0.bundleID) }) {
             AevonLog.info("[窗口] \(docked.bundleID) 在停靠列里被系统全屏拉起（\(sceneIdentifier)）"
                 + "→ 关掉小窗、释放 presenter 并还原画布，让 App 自己呈现（AevonDockFullscreenCloseV261）")
+            // V0.2.62（AevonHandoffFastV262，用户 Aevon(36) #6「设置黑屏依然存在」）：
+            // 先**同步清承载标记**再关窗。Aevon(36) 日志 11:05:12.849 自动关窗、
+            // 12.963 才「屏幕贴合：关」—— 中间 110 毫秒 App 仍按画布 430×737 报告自己的
+            // 屏幕尺寸，而系统这一刻正在把它的主场景拉成全屏：窗口按 737 高建好，之后
+            // 再怎么重排都少一截，用户看到的就是黑屏。清标记会让 App 10ms 内自己恢复。
+            AevonPrefs.set("AevonFloatBundle", "")
+            AevonNotifySetFloatStage("")
             closeDocked(bundleID: docked.bundleID, reason: "被系统全屏拉起")
             return
         }
@@ -115,6 +122,10 @@ enum AevonWindowManager {
             return
         }
         AevonLog.info("[窗口] \(bundleID) 被系统全屏拉起（\(sceneIdentifier)，距开窗 \(String(format: "%.1f", age))s）→ 自动关闭浮窗，避免残留黑窗（AevonFullscreenCloseV106）")
+        // V0.2.62（AevonHandoffFastV262）：同上 —— 交接前先清承载标记，App 侧立刻
+        // 放弃画布尺寸，系统全屏那一帧就按整屏建窗口。
+        AevonPrefs.set("AevonFloatBundle", "")
+        AevonNotifySetFloatStage("")
         close(bundleID: bundleID, releaseOnly: true)
     }
 
@@ -149,6 +160,8 @@ enum AevonWindowManager {
     }
 
     static func title(for bundleID: String) -> String {
+        // V0.2.62（AevonQuickActionV262）：截图 / 录屏是圆盘里的动作槽，不是 App。
+        if let action = AevonQuickAction.title(for: bundleID) { return action }
         return AevonAppInfo.displayName(bundleID: bundleID) ?? bundleID
     }
 
@@ -456,11 +469,21 @@ enum AevonWindowManager {
                 let stateNow = AevonMainSceneFrameState(scene) ?? ""
                 if warmupCanvas {
                     // 预热：不写小画布（场景此刻本来就是整屏），mainCanvas 仍记小画布
-                    // —— 复查与后续流程都认它；真正的切换在 +1.0s 那一拍做。
+                    // —— 复查与后续流程都认它；真正的切换在 +0.42s 那一拍做。
                     mainResized = true
                     mainCanvas = size
-                    AevonLog.info("[场景] 画布预热：\(bundleID) 先按整屏画布渲染一拍（模拟「全屏打开一次」），"
-                        + "1.0 秒后切浮窗画布 \(Int(size.width))x\(Int(size.height))（AevonDouyinWarmupV251）")
+                    // V0.2.62（AevonWarmupForegroundV262，用户 Aevon(36) #8「抖音刚打开
+                    // 真重排了，一秒后内容上移、下面黑」）：预热一直形同虚设的真因 ——
+                    // Aevon(36) 日志 11:06:42.453 明确写着 `frame=430x932 fg=0 cs=2`：
+                    // 画布是整屏没错，但 **fg=0 = 场景根本没在前台**，App 不会渲染，
+                    // 所谓「先按整屏渲染一拍」这一拍从来没发生，切到 737 时抖音拿到的
+                    // 还是它自己缓存的旧布局 → 内容上移 + 底部黑。
+                    // 修法：预热期把主场景推一次前台（presenter 已激活，不会真上屏），
+                    // 让它真的按整屏渲染一帧，再切画布 —— 这才是用户说的「先全屏开一次」。
+                    AevonSceneHelper.setForeground(scene, true)
+                    AevonLog.info("[场景] 画布预热：\(bundleID) 先按整屏画布**推前台**渲染一拍"
+                        + "（fg 必须为 1，否则预热等于没做），0.42 秒后切浮窗画布 "
+                        + "\(Int(size.width))x\(Int(size.height))（AevonDouyinWarmupV251 AevonWarmupForegroundV262）")
                 } else if screenAspectOn && stateNow.contains(expected) {
                     // 屏幕比例档 + 画布本来就是整屏 → 一个字节都不用写
                     // （多余的 updateSettings 会让 App 白重排一次，画面闪一下）
@@ -505,7 +528,7 @@ enum AevonWindowManager {
             guard let sceneHost = AevonSceneHost(scene: hostScene, sceneID: sceneIdentifier,
                                                  bundleID: bundleID, isSelfBuilt: usedSelfScene,
                                                  mainResized: mainResized,
-                                                 canvasWarmupDelay: warmupCanvas ? 1.15 : 0) else {
+                                                 canvasWarmupDelay: warmupCanvas ? 0.42 : 0) else {
                 AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
                 if mainResized {
                     // V0.2.42（AevonMainSceneResizeV242）：承载不了就把主场景画布还原，
@@ -553,8 +576,19 @@ enum AevonWindowManager {
             lastOpenedAt = CACurrentMediaTime()
             // V0.2.61（AevonDouyinRepairV261，用户 Aevon(35) #9）：开窗 2.2 秒后按画面
             // 自查一次断层（下半截整块黑），命中就做一次「全屏往返」逼 App 重排。
-            windowView.scheduleSeamRepair(
-                canvas: AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize()))
+            //
+            // V0.2.62（AevonSeamRepairFixedV262，用户 Aevon(36) #8「真重排了一秒后内容
+            // 上移、下面黑」）：**画面采样判定被日志证伪** —— Aevon(36) 11:06:43.859
+            // 「下半截黑点占比 0.000 → 画面正常」，而用户肉眼看的是断层。原因很简单：
+            // drawHierarchy 抓不到跨进程远程表面的像素（0.2.26 已有定论），抓到的是浮窗
+            // 自己的底色 → 黑点占比永远是 0。所以「按画面判定」这条路彻底走不通。
+            // 现在改成：预热型开窗（抖音这类）在切完画布后**固定**再来一次极短的
+            // 「整屏 → 画布」往返，等于把用户那句「手动全屏打开一次，画面正常后再用
+            // 浮窗打开就是真重排」直接编进流程 —— 不再依赖任何采样。
+            if !warmupCanvas {
+                windowView.scheduleSeamRepair(
+                    canvas: AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize()))
+            }
             // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
             // App 侧识别器读它 —— 等于自己的 bundleID 就整体退让（不扣 began、不建失败要求），
             // 浮窗内的滑动才不会被右缘判向延迟到抬手。
@@ -575,7 +609,11 @@ enum AevonWindowManager {
             // 现在把画布切到浮窗尺寸并踢一次重排。只在「还是这同一个开窗会话」时执行。
             if warmupCanvas {
                 let warmupScene = scene
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak sceneHost] in
+                // V0.2.62（AevonWarmupFastV262，用户 Aevon(36) #1「圆盘选中图标后要等
+                // 1~2 秒才打开浮窗」）：预热 1.0→0.42 秒。日志里首帧在拉起后 **8ms**
+                // 就到了（41.545 预热 → 41.553 首帧），1.0 秒纯粹在等空气；再加上
+                // 原来 kickRelayout 的 0.45 秒起手，开窗到内容可用要 1.5 秒以上。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak sceneHost] in
                     // currentBundleID 已变 = 窗口已关 / 已换 App（承载器 invalidate 会随之发生）
                     guard currentBundleID == bundleID else {
                         AevonLog.info("[场景] 画布预热切换作废（窗口已关 / 已换 App）（AevonDouyinWarmupV251）")
@@ -584,8 +622,21 @@ enum AevonWindowManager {
                     let ok = AevonMainSceneSetFrame(warmupScene, Double(mainCanvas.width), Double(mainCanvas.height))
                     AevonLog.info("[场景] 画布预热完成：\(bundleID) 已切到浮窗画布 \(Int(mainCanvas.width))x\(Int(mainCanvas.height))"
                         + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")）（AevonDouyinWarmupV251）")
-                    sceneHost?.kickRelayout(width: mainCanvas.width - 1, height: mainCanvas.height - 1,
+                    // V0.2.62（AevonKickExactV262）：这里原来传的是 (width-1, height-1)，
+                    // 而 kickRelayout 内部还要再 -1 一次 → 日志里「先写 428x735 / 写回
+                    // 429x736」，最终画布比目标少 1pt（Aevon(36) 实锤 44.112 那次复查
+                    // 把 429x736 当成「被回弹」又补写一遍）。现在传原值。
+                    sceneHost?.kickRelayout(width: mainCanvas.width, height: mainCanvas.height,
                                             tag: "预热切换 \(bundleID)")
+                    // V0.2.62（AevonSeamRepairFixedV262）：再 0.35 秒做一次极短「整屏 →
+                    // 画布」往返。预热那一拍只是「整屏渲染过一帧」，而抖音要的是
+                    // 「从大尺寸退到小尺寸时重排」—— 用户实测只有「全屏打开一次」才管用。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak sceneHost] in
+                        guard currentBundleID == bundleID else { return }
+                        sceneHost?.bounceFullscreenThenBack(width: mainCanvas.width,
+                                                            height: mainCanvas.height,
+                                                            tag: "预热复刻 \(bundleID)")
+                    }
                 }
             }
             // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
@@ -594,7 +645,7 @@ enum AevonWindowManager {
             // 布局（画布改了 ≠ 重排完成，0.2.49 已有定论）。这里在踢完重排之后自查
             // 一次：内容宿主仍按整屏排版 → 再踢一次（一次开窗只补踢一次）。
             if sceneHost.mainResized {
-                let healAt: TimeInterval = warmupCanvas ? 1.9 : 1.5
+                let healAt: TimeInterval = warmupCanvas ? 1.1 : 1.5
                 let healWidth = mainCanvas.width
                 let healHeight = mainCanvas.height
                 DispatchQueue.main.asyncAfter(deadline: .now() + healAt) { [weak sceneHost] in
@@ -617,6 +668,13 @@ enum AevonWindowManager {
         guard AevonPrefs.bool("Enabled", default: true) else {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
             completion?(false)
+            return
+        }
+        // V0.2.62（AevonQuickActionV262）：截图 / 录屏这类动作槽被别处（面板、其他手势）
+        // 当 App 调进来时，直接执行动作，绝不去拉起一个不存在的 bundle。
+        if AevonQuickAction.isAction(bundleID) {
+            AevonQuickAction.perform(bundleID: bundleID)
+            completion?(true)
             return
         }
         if isWindowed(bundleID) {
@@ -817,7 +875,17 @@ enum AevonWindowManager {
             let side = AevonDock.side(forDropAt: main.frame) ?? columnSide.opposite
             AevonLog.info("[停靠] 主窗里还有 \(main.bundleID) → 先把它降到\(side.title)侧，"
                 + "把主窗位让给 \(bundleID)（AevonDockColumnV250）")
-            _ = dockCurrent(side: side)
+            // V0.2.62（AevonDockNoOrphanV262，用户 Aevon(36) #4「多个吸附小窗时快速点击还原，
+            // 会有概率出现多个主悬浮窗，并且无法关闭」）：降级失败（停靠列满 5 格 / 场景
+            // 已失效）时原来只是 `_ = dockCurrent(...)` 丢掉返回值 —— 那个窗口既不是
+            // currentView、也不在 dockedViews 里，成了一只没人认领的野窗：看着像第二个
+            // 主窗，点它没人管、底边双击也轮不到它（因为全局通道只认「当前主窗」）。
+            // 降级失败就直接关掉，绝不留野窗。
+            if !dockCurrent(side: side) {
+                AevonLog.warn("[停靠] \(main.bundleID) 降级失败（停靠列已满 / 场景失效）→ 直接关掉，"
+                    + "不留野窗（AevonDockNoOrphanV262）")
+                close(bundleID: main.bundleID, releaseOnly: false)
+            }
         }
         dockedViews.removeAll { $0 === view }
         currentView = view
@@ -841,6 +909,35 @@ enum AevonWindowManager {
         lastRestoredBundleID = bundleID
         // V0.2.59（AevonDockStageV259）：该 App 已离开停靠集合 → App 侧恢复主窗口交互。
         publishDockStages()
+        // V0.2.62（AevonDockNoOrphanV262）：装回之后立刻做一次一致性清扫。
+        enforceSingleMainWindow(reason: "装回 \(bundleID)")
+    }
+
+    /// V0.2.62（AevonDockNoOrphanV262）：单窗铁律的兜底 —— 承载层里只许有
+    /// 「当前主窗」和「停靠列里的窗」，其它一律视为野窗收掉。
+    ///
+    /// Aevon(36) #4：多个小窗在列时快速连点，装回路径要先把旧主窗降级（dockCurrent），
+    /// 降级失败就会留下第三只窗：它既不响应点击（不是 currentView），也不在停靠列里
+    /// （不会重排），用户看到「多个主悬浮窗且无法关闭」。这里按身份做一次清扫，
+    /// 与降级成功与否无关 —— 只要谁是野的就关谁。
+    static func enforceSingleMainWindow(reason: String) {
+        guard let host = AevonEntryHost.floatHost else { return }
+        let views = host.subviews.compactMap { $0 as? AevonWindowView }
+        guard views.count > 1 else { return }
+        var removed = 0
+        for view in views {
+            if let main = currentView, view === main { continue }
+            if dockedViews.contains(where: { $0 === view }) { continue }
+            AevonLog.warn("[窗口] 发现野窗 \(view.bundleID)（既不是主窗也不在停靠列）→ 收掉"
+                + "（\(reason)）（AevonDockNoOrphanV262）")
+            view.teardown()
+            view.removeFromSuperview()
+            removed += 1
+        }
+        if removed > 0 {
+            AevonLog.info("[窗口] 单窗清扫完成：收掉 \(removed) 只野窗（\(reason)）"
+                + "（AevonDockNoOrphanV262）")
+        }
     }
 
     /// 关掉一个停靠小窗（满员挤掉 / 面板关闭 / 插件停用）。

@@ -1570,6 +1570,8 @@ final class AevonWindowView: UIView {
     /// 连续「cs=2 且现场抓得到真画面」的拍数（0.1s 一拍）：要求稳定 2 拍才淡入，
     /// Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入会「亮一下又黑」。
     private var liveWaitTicks = 0
+    /// V0.2.62（AevonLiveQuietV262）：让位期抓帧次数（有界 3 次，防反复重绘造成闪）。
+    private var liveCaptureCount = 0
     private static let liveWaitLimit: TimeInterval = 1.0
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
@@ -1612,7 +1614,15 @@ final class AevonWindowView: UIView {
         // Aevon(33) 日志实测布防→撤冻结仍 0.78s，其中 cs 反复 0→1→0→1→2 —— 重申密度
         // 再收紧一档（0.25s 桶距），并配合守卫拍 0.1s（撤冻结最多晚 0.1s 检测），
         // 预期压到 ~0.5s。剩下的时间常数是系统回桌面动画本身，不再可压。
-        for delay in [0.25, 0.55, 0.85] {
+        // V0.2.62（AevonLiveQuietV262，用户 Aevon(36) #5「回桌面闪烁还在，这次是画面
+        // 闪烁、频率很快」）：让位期（回桌面）只重申**一次**。
+        //
+        // 每一次 updateSettings 重申都会让远程表面重建一次，屏幕上就是「黑一下、
+        // 再亮一下」；0.25 / 0.55 / 0.85 三发 + 立即那一发 = 让位期四发，正好凑成
+        // 用户说的「频率很快的闪」。让位分支（reason 含「画面离场」）改成只留一发
+        // 0.40s 的兜底重申；其它离场（切 App 等）保持原来的三拍。
+        let reassertDelays: [Double] = reason.contains("画面离场") ? [0.40] : [0.25, 0.55, 0.85]
+        for delay in reassertDelays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.reassertContentForeground(tag: String(format: "+%.2fs", delay))
             }
@@ -1627,6 +1637,7 @@ final class AevonWindowView: UIView {
         liveWaitStartedAt = now
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
+        liveCaptureCount = 0
         if darkFreezeView != nil { removeDarkFreeze(reason: "让位前先撤定格帧") }
         // V0.2.61（AevonLiveFirstFixV261，用户 Aevon(35) #7「浮窗出现前会闪烁（黑屏和画面
         // 交替）」）：让位必须**立刻**生效，不再做 0.08 秒淡出。
@@ -1724,12 +1735,22 @@ final class AevonWindowView: UIView {
         // 区别只是收尾动作从「撤一张图」变成「整窗淡入」。
         if liveWaitDeadline > 0 {
             let now = CACurrentMediaTime()
-            let live = sceneHost.contentLooksRendering == true && captureSnapshotImage() != nil
+            // V0.2.62（AevonLiveQuietV262）：让位期抓帧有界（最多 3 次）。
+            // 每次 drawHierarchy 都会让窗口重绘一遍，0.1 秒一拍地抓 = 让位期反复重绘，
+            // 视觉上就是「闪」。抓到 3 次还没成功就只等 cs 判定 + 到点垫帧。
+            var live = false
+            if sceneHost.contentLooksRendering == true && liveCaptureCount < 3 {
+                liveCaptureCount += 1
+                live = captureSnapshotImage() != nil
+            }
             liveWaitTicks = live ? liveWaitTicks + 1 : 0
-            // V0.2.60（AevonLiveFirstV260）：必须**连续 2 拍**（0.1s 一拍）都抓到真画面
-            // 才淡入。Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入 = 「亮一下又黑」。
-            if liveWaitTicks >= 2 {
-                finishLiveWait(reason: "实时画面已回来（连续 \(liveWaitTicks) 拍）")
+            // V0.2.60（AevonLiveFirstV260）：要求稳定才淡入。
+            // V0.2.62（AevonLiveQuietV262，Aevon(36) #5）：从「连续 2 拍」放宽成
+            // 「至少 1 拍 + 让位已过 0.12 秒」。Aevon(36) 实测让位 0.43 / 0.65 秒才淡入，
+            // 这么长的「窗口消失」本身就是一次闪；0.12 秒足够避开系统回桌面动画的首帧，
+            // 又不至于让用户觉得窗口「没了」。
+            if liveWaitTicks >= 1, now - liveWaitStartedAt > 0.12 {
+                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍）")
             } else if now > liveWaitDeadline {
                 finishLiveWait(reason: "上限到达")
             }
@@ -1737,11 +1758,11 @@ final class AevonWindowView: UIView {
         }
         // V0.2.61（AevonLiveFirstFixV261）：淡入后的稳定期 —— 系统回桌面动画还在收尾，
         // cs 会 2→0→2 抖。这段时间「掉出画」一律**不盖帧**（盖了就变成「画面 ←→ 黑」
-        // 交替，正是 Aevon(35) #7 看到的闪烁），只重申前台把它推醒。
+        // 交替，正是 Aevon(35) #7 看到的闪烁）。
+        // V0.2.62（AevonLiveQuietV262，Aevon(36) #5）：**也不再重申**。重申 = 重建远程
+        // 表面 = 一次黑闪，稳定期内重申就是自己制造闪烁。这里完全静默，只等系统自己
+        // 把画面送回来；稳定期结束后交给常驻看门处理。
         if liveSettleUntil > 0, CACurrentMediaTime() < liveSettleUntil {
-            if sceneHost.contentLooksRendering == false {
-                reassertContentForeground(tag: "淡入后稳定期")
-            }
             return
         }
         // ── V0.2.50（AevonDarkGuardV250）：常驻看门（没布防也在盯）───────────────

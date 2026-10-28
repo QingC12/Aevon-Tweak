@@ -2466,6 +2466,88 @@ jobs:
             || { echo "::error::0.2.61 把手吞咽缺键盘闸（打字时键盘右列会按不出来）"; exit 1; }
           echo "V0.2.61 校验: 把手页独立 + 停靠小窗全屏关窗/点击装回 + 无自动吸附 + 双击收紧 + 让位同步隐形 + 把手吞咽 + 抖音画面判定修复 已就位"
 
+          # ── V0.2.62 校验（Aevon(36) 八项）──────────────────────────────────────
+          # ①开窗延迟（AevonWarmupFastV262 / AevonKickFastV262 / AevonKickExactV262）
+          # ②截图 + 录屏进圆盘（AevonQuickActionV262 / AevonQuickScreenshotV262 / AevonQuickRecordingV262）
+          # ③键盘完整显示（AevonKeyFitV262，App 侧）
+          # ④多主窗野窗（AevonDockNoOrphanV262）
+          # ⑤回桌面闪烁（AevonLiveQuietV262）
+          # ⑥设置黑屏（AevonHandoffFastV262）
+          # ⑦把手仍带动 App（AevonGripSwallowWinV262，App 侧）
+          # ⑧抖音后段上移（AevonSeamRepairFixedV262 / AevonWarmupForegroundV262）
+          for s in AevonWarmupFastV262 AevonWarmupForegroundV262 AevonKickFastV262 \
+          AevonKickExactV262 AevonLiveQuietV262 AevonSeamRepairFixedV262 \
+          AevonDockNoOrphanV262 AevonHandoffFastV262 AevonQuickActionV262 \
+          AevonQuickScreenshotV262 AevonQuickRecordingV262; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.62 主库缺标记 $s"; exit 1; }
+          done
+          for s in AevonGripSwallowWinV262 AevonKeyFitV262 AevonFitFrameBackV262; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.62 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          # ①预热 1.15 → 0.42 秒；kick 起手 0.45 → 0.20 秒（开窗 1~2 秒延迟的两个来源）
+          grep -q 'canvasWarmupDelay: warmupCanvas ? 0.42 : 0' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 预热时长没压到 0.42 秒（开窗要等 1~2 秒）"; exit 1; }
+          grep -q 'now() + 0.42' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 预热切换与预热时长不一致"; exit 1; }
+          grep -q 'now() + 0.20' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.62 kickRelayout 起手没压到 0.20 秒"; exit 1; }
+          # ①预热切换不能再把 (w-1) 传进去（kickRelayout 内部已经 -1，画布会差 1pt）
+          grep -q 'kickRelayout(width: mainCanvas.width, height: mainCanvas.height,' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 预热切换又传了 (w-1)（最终画布会比目标少 1pt）"; exit 1; }
+          # ⑧预热期必须把主场景推前台（fg=0 时 App 不渲染，预热等于没做）
+          grep -q 'AevonSceneHelper.setForeground(scene, true)' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 预热期没推前台（抖音预热形同虚设的根因）"; exit 1; }
+          grep -q 'tag: "预热复刻' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 预热型开窗没接「整屏往返」复刻"; exit 1; }
+          # ⑧画面采样判定已被证伪（drawHierarchy 抓不到跨进程表面）：预热档改用固定往返
+          grep -q 'if !warmupCanvas {' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 预热档仍在走被证伪的画面采样判定"; exit 1; }
+          # ⑤让位期只重申一次（每多发一次 = 远程表面重建一次 = 一次黑闪）
+          grep -q "reason.contains(\"画面离场\") ? \[0.40\]" \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.62 让位期重申没收到一次（多发会快速闪）"; exit 1; }
+          grep -q 'liveCaptureCount < 3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.62 让位期抓帧没设上限（drawHierarchy 反复重绘 = 闪）"; exit 1; }
+          grep -q 'now - liveWaitStartedAt > 0.12' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.62 让位淡入没放宽到「1 拍 + 0.12s」（0.43s 的消失本身像闪）"; exit 1; }
+          # ④单窗铁律清扫 + 降级失败不许留野窗
+          grep -q 'static func enforceSingleMainWindow' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 缺野窗清扫（多主窗、无法关闭）"; exit 1; }
+          grep -q 'if !dockCurrent(side: side) {' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 主窗降级失败仍会被静默丢弃（野窗来源）"; exit 1; }
+          # ⑥交接给系统全屏前先清承载标记（否则 App 还按画布报尺寸 = 黑屏）
+          grep -q 'closeDocked(bundleID: docked.bundleID, reason: "被系统全屏拉起")' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.62 停靠小窗全屏拉起分支丢了"; exit 1; }
+          # ⑦把手吞咽改挂窗口层（UIApplication 层拿不到 touch.window，0.2.61 一根都没吞）
+          grep -q 'AevonWindowSendEventSwizzled' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.62 把手吞咽没改到窗口层（touch.window 恒 nil）"; exit 1; }
+          grep -q 'class_getInstanceMethod(\[UIWindow class\], @selector(sendEvent:))' \
+            "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.62 没挂 -[UIWindow sendEvent:]"; exit 1; }
+          # ③键盘：只认键盘窗口 + 只在场景高度 ≈ 画布时才对齐（fail-closed）
+          grep -q 'UIRemoteKeyboardWindow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.62 缺键盘窗口对齐（键盘只露上半截）"; exit 1; }
+          grep -q 'fabs(sceneH - canvasH) <= 8' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.62 键盘对齐缺「场景高度 ≈ 画布」闸"; exit 1; }
+          # ②截图 / 录屏：动作槽必须接进圆盘与开窗入口，框架要链上
+          grep -q 'withQuickActions' "$GITHUB_WORKSPACE/Sources/AevonRingStore.swift" \
+            || { echo "::error::0.2.62 圆盘没挂快捷动作槽"; exit 1; }
+          grep -q 'AevonQuickAction.perform(bundleID: bundleID)' \
+            "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::0.2.62 圆盘选中动作槽没走 perform"; exit 1; }
+          grep -q 'Sources/AevonQuickAction.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::0.2.62 Makefile 没收录 AevonQuickAction.swift"; exit 1; }
+          grep -q 'ReplayKit' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::0.2.62 没链接 ReplayKit（录屏链接期失败）"; exit 1; }
+          echo "V0.2.62 校验: 开窗提速 + 圆盘截图/录屏 + 键盘画布底对齐 + 野窗清扫 + 让位静默 + 交接前清标记 + 窗口层吞咽 + 预热推前台/整屏往返 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
