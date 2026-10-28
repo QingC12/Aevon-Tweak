@@ -69,7 +69,13 @@ enum AevonWindowManager {
     private static var lastRestoreAt: CFTimeInterval = 0
     private static var lastRestoredBundleID: String = ""
     /// 同一 App 两次停靠/装回动作的最小间隔（人手节奏下限）。
-    private static let dockArbiterWindow: CFTimeInterval = 0.8
+    ///
+    /// V0.2.60（AevonDockArbiterNarrowV260，用户 Aevon(34) #2「点击吸附小窗内不会还原」）：
+    /// 0.8 → 0.30 秒。0.8 秒是为了吸收「同一次手势被两条路各响应一次」，而真机日志
+    /// 实锤重复响应只隔 **12 毫秒**（34.570 停靠 → 34.582 装回）；0.8 秒的窗口却把
+    /// 用户随后正常的「点小窗装回」一起吃了 —— 停靠完 0.8 秒内点什么都没反应。
+    /// 0.30 秒足够罩住重复响应，同时远大于人手「看到小窗再点它」的反应时间。
+    private static let dockArbiterWindow: CFTimeInterval = 0.30
 
     /// App 全屏画面出现时调用（来自 `AevonEntryHost.appSceneAppeared`）。
     ///
@@ -566,6 +572,21 @@ enum AevonWindowManager {
                                             tag: "预热切换 \(bundleID)")
                 }
             }
+            // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
+            // Aevon(34)：「打开抖音大概率断层（下半部分黑屏），必须多次重开、或者
+            // 全屏打开一次并关掉后台卡片才有可能恢复」。成因是 App 没把新画布吃进
+            // 布局（画布改了 ≠ 重排完成，0.2.49 已有定论）。这里在踢完重排之后自查
+            // 一次：内容宿主仍按整屏排版 → 再踢一次（一次开窗只补踢一次）。
+            if sceneHost.mainResized {
+                let healAt: TimeInterval = warmupCanvas ? 1.9 : 1.5
+                let healWidth = mainCanvas.width
+                let healHeight = mainCanvas.height
+                DispatchQueue.main.asyncAfter(deadline: .now() + healAt) { [weak sceneHost] in
+                    guard currentBundleID == bundleID else { return }
+                    sceneHost?.healStaleLayoutIfNeeded(width: healWidth, height: healHeight,
+                                                       tag: "开窗 \(bundleID)")
+                }
+            }
             completion?(true)
         }
     }
@@ -715,7 +736,7 @@ enum AevonWindowManager {
         let now0 = CACurrentMediaTime()
         if bundleID == lastRestoredBundleID, now0 - lastRestoreAt < dockArbiterWindow {
             AevonLog.info("[停靠] \(bundleID) 装回后 \(String(format: "%.2f", now0 - lastRestoreAt))s 内的停靠请求被仲裁吸收"
-                + "（同一次手势的重复响应，AevonDockArbiterV253）")
+                + "（同一次手势的重复响应，AevonDockArbiterV253 AevonDockArbiterNarrowV260）")
             return false
         }
         var column = dockedViews.filter { $0.dockedSide == side }
@@ -761,7 +782,7 @@ enum AevonWindowManager {
         let now0 = CACurrentMediaTime()
         if bundleID == lastDockedBundleID, now0 - lastDockAt < dockArbiterWindow {
             AevonLog.info("[停靠] \(bundleID) 停靠后 \(String(format: "%.2f", now0 - lastDockAt))s 内的装回请求被仲裁吸收"
-                + "（同一次手势的重复响应，AevonDockArbiterV253）")
+                + "（同一次手势的重复响应，AevonDockArbiterV253 AevonDockArbiterNarrowV260）")
             return
         }
         let columnSide = view.dockedSide

@@ -293,16 +293,59 @@ final class AevonSceneHost {
     /// 仅 isSelfBuilt 时有效；调用时机 = 缩放抬手提交真实 frame 后（一次一调，天然单飞）。
     /// V0.2.42（AevonMainSceneResizeV242）：S2（主场景改画布）走同一条路 ——
     /// 只写 frame，不写前台状态。
-    func resizeCanvasTo(width: CGFloat, height: CGFloat) {
-        guard !invalidated else { return }
+    /// V0.2.60（AevonWarmupGateV260）：**预热期内主场景画布一次都不许提前改**。
+    ///
+    /// Aevon(34) 第 4 条：「打开抖音大概率断层（下半部分黑屏），必须多次重开或全屏
+    /// 打开一次并关后台卡片才恢复」。查 Aevon(34) 日志实锤预热形同虚设：
+    ///   51.513 画布预热：先按整屏画布渲染一拍，1.0 秒后切浮窗画布
+    ///   51.523 主场景画布已改 430x737（10 毫秒后就把整屏改掉了）
+    /// 10ms 那一条来自窗口首次 `layoutSubviews → applyContentLayout` 的写画布，
+    /// 它绕过了预热意图 —— App 从没按整屏排过版，「先全屏开一次」这一步等于没做，
+    /// 于是抖音仍会断层。现在预热期内这一路写入直接拒绝（返回 false，调用方不记账），
+    /// 真正切画布只由预热的 +1.0s 那一拍做。
+    @discardableResult
+    func resizeCanvasTo(width: CGFloat, height: CGFloat) -> Bool {
+        guard !invalidated else { return false }
         if isSelfBuilt {
             let ok = AevonSelfSceneResize(scene, Double(width), Double(height))
             AevonLog.info("[场景] 画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")）（AevonSelfSceneV228）")
-        } else if mainResized {
+            return ok
+        }
+        if mainResized {
+            if CACurrentMediaTime() < canvasWarmupDeadline {
+                AevonLog.info("[场景] 画布写入让位：预热期内保持整屏画布，\(Int(width))x\(Int(height))"
+                    + " 等预热切换（AevonDouyinWarmupV251 AevonWarmupGateV260）")
+                return false
+            }
             let ok = AevonMainSceneSetFrame(scene, Double(width), Double(height))
             AevonLog.info("[场景] 主场景画布已改 \(Int(width))x\(Int(height))（\(ok ? "已提交" : "失败")，"
                 + "读回 \(AevonMainSceneFrameState(scene) ?? "")）（AevonMainSceneResizeV242）")
+            return ok
         }
+        return false
+    }
+
+    /// V0.2.60（AevonDouyinHealV260）：断层自愈（只读判定 + 一次补踢）。
+    ///
+    /// 判据：呈现视图里第一层宿主视图（`_UISceneLayerHostContainerView`）的实际尺寸
+    /// 比画布还大 → App 仍按整屏在排版，浮窗里就是「上面正常、下面一条黑」。
+    /// 这时再踢一次「-1pt → 写回」，逼它按新画布重排一遍。
+    /// 纪律：一次开窗只补踢一次，`invalidated` 之后一律不动。
+    private var healKicked = false
+    func healStaleLayoutIfNeeded(width: CGFloat, height: CGFloat, tag: String) {
+        guard !invalidated, !healKicked, width > 2, height > 2 else { return }
+        let host = presentationView.subviews.first?.frame.size ?? .zero
+        guard host.width > 2, host.height > 2 else { return }
+        let stale = host.height > height + 8 || host.width > width + 8
+        guard stale else {
+            AevonLog.info("[场景] 断层自查：内容宿主 \(Int(host.width))x\(Int(host.height)) 已贴合画布"
+                + " \(Int(width))x\(Int(height))，无需补踢（AevonDouyinHealV260）")
+            return
+        }
+        healKicked = true
+        AevonLog.warn("[场景] 断层自愈：内容宿主 \(Int(host.width))x\(Int(host.height)) 仍按整屏排版"
+            + "（画布 \(Int(width))x\(Int(height))）→ 再踢一次重排（\(tag)）（AevonDouyinHealV260）")
+        kickRelayout(width: width, height: height, tag: "断层自愈 \(tag)")
     }
 
     /// V0.2.49（AevonRelayoutKickV249）：**强制 App 走一遍完整重排**。

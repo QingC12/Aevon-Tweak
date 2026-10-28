@@ -74,11 +74,11 @@ final class AevonRingGripView: UIView {
         pan.maximumNumberOfTouches = 1
         pan.delegate = self
         handle.addGestureRecognizer(pan)
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        tap.delegate = self
-        handle.addGestureRecognizer(tap)
-        // 单击必须等拖动失败（拖动优先，和 PullOver 的 tap/longPress 次序同构）
-        tap.require(toFail: pan)
+        // V0.2.60（AevonGripSwipeOnlyV260，用户 Aevon(34) #3）：「移除触发条的点击显示
+        // 圆盘功能，只保留滑动触发圆盘」—— 点击识别器整建制退役（含 require(toFail:)）。
+        // 顺带解决一个老毛病：把手和右侧吸附边条在屏幕上挨着，点边条停靠时那一下
+        // 也会被把手当点击吃掉（Aevon(34) 32.180 那次「边条轻点停靠」紧跟着
+        // 「把手被点 → 呼出圆盘」就是它）。
     }
 
     required init?(coder: NSCoder) {
@@ -138,12 +138,15 @@ final class AevonRingGripView: UIView {
         return handle
     }
 
-    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended, !didSummon else { return }
-        didSummon = true
-        AevonLog.info("[圆盘] 把手被点 → 呼出圆盘（可见把手入口，不再靠右缘盲带判向）"
-            + "（AevonRingGripV250 AevonRingGripV255）")
-        onSummon?("ringgrip")
+    /// V0.2.60（AevonGripSwipeGlobalV260）：屏幕坐标是否落在把手命中区里。
+    ///
+    /// 给全局触摸通道用：全屏 App 时触摸根本不进我们的视图树，`hitTest` 永远命中不到，
+    /// 只能由 `sendEvent` 侧拿屏幕点来问「这是不是把手」。
+    func containsScreenPoint(_ screenPoint: CGPoint) -> Bool {
+        guard !isHidden, alpha > 0.01 else { return false }
+        let local = convert(screenPoint, from: nil)
+        guard bounds.contains(local) else { return false }
+        return hitRect.contains(local)
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -198,6 +201,10 @@ enum AevonRingGrip {
             return
         }
         if let existing = grip, existing.superview != nil, !force {
+            // V0.2.60（AevonGripFrontV260，用户 Aevon(34) #3）：容器搬进全屏 App 画面
+            // 容器后，后加入容器的子视图（浮窗层 / 圆盘 / 面板）会压在把手上 ——
+            // 每轮核对都把它顶回最上层，否则「全屏 App 里把手点不到」。
+            existing.superview?.bringSubviewToFront(existing)
             existing.setNeedsLayout()
             return
         }
@@ -216,7 +223,8 @@ enum AevonRingGrip {
         AevonLog.info("[圆盘] 右缘把手已就位（V0.2.59 起为贴边小短竖条，位置/长度可在设置页调，"
             + "命中区向外扩 \(Int(AevonRingGripView.hitOutsetX))pt，把手外一律不拦，"
             + "识别器挂在真实控件上，全屏宿主零识别器）"
-            + "（AevonRingGripV250 AevonRingGripV255 AevonGripCustomV259）")
+            + "（AevonRingGripV250 AevonRingGripV255 AevonGripCustomV259"
+            + " AevonGripSwipeOnlyV260 AevonGripFrontV260）")
     }
 
     /// V0.2.59（AevonGripCustomV259）：设置页改了 GripY / GripLen → 实时重排。
@@ -226,6 +234,13 @@ enum AevonRingGrip {
         guard let grip = grip, grip.superview != nil else { return }
         grip.setNeedsLayout()
         grip.layoutIfNeeded()
+    }
+
+    /// V0.2.60（AevonGripSwipeGlobalV260）：屏幕点是否落在把手命中区（给全局通道问）。
+    static func hitTestScreenPoint(_ point: CGPoint) -> Bool {
+        guard AevonPrefs.bool("RingGripEnabled", default: true) else { return false }
+        guard let grip = grip, grip.superview != nil else { return false }
+        return grip.containsScreenPoint(point)
     }
 
     /// 圆盘展开时藏起来（避免它压在圆盘上），收起后再出来。

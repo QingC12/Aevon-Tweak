@@ -97,6 +97,24 @@ enum AevonEdgeEntry {
     private static let floatDoubleTapGap: CFTimeInterval = 0.34
     private static let floatDoubleTapRadius: CGFloat = 26
 
+    // V0.2.60（AevonDockTapOnlyV260，用户 Aevon(34) #2）：停靠小窗「点一下装回」的
+    // 全局兜底候选。停靠态我们不再接管、不再吞（四周边条手柄已在小窗侧摘除），
+    // UIKit 的 dockTap 是主路；但全屏 App 之上 UIKit 未必收得到这根触摸，
+    // 所以这里同时记一笔：没移动就抬手 = 装回，动了就作废（不做任何拖动语义）。
+    private static var dockTapCandidateID: UInt = 0
+    private static var dockTapCandidatePoint: CGPoint = .zero
+    private static weak var dockTapCandidateWindow: AevonWindowView?
+
+    // V0.2.60（AevonGripSwipeGlobalV260，用户 Aevon(34) #3）：把手滑动呼盘的全局通道。
+    // Aevon(34)：「圆盘触发条只能在桌面触发，无法在全屏 App 中被触发」。
+    // 根因是结构性的：把手是**视图**，而全屏 App 时触摸根本不进我们的视图树
+    //（「全屏 App 时视图层收不到窗外的触摸」正是全局通道存在的原因）。
+    // 所以把手滑动必须在 sendEvent 这条总入口上也判一次 —— 和浮窗边条同一条通路。
+    // 纪律：只观察、不吞（铁律：不在别人的触摸上做吞咽），呼盘后由圆盘自己接管。
+    private static var gripSwipeTouchID: UInt = 0
+    private static var gripSwipeStart: CGPoint = .zero
+    private static var lastGripSwipeLogAt: CFTimeInterval = 0
+
     /// 手势条已删除（0.2.51），入口可用性 = 全局通道已装（浮窗手势依赖它）。
     static var isVisible: Bool { return globalInstalled }
 
@@ -196,6 +214,17 @@ enum AevonEdgeEntry {
                 ring.beginRemoteTracking(at: point, source: "global")
                 return
             }
+            // V0.2.60（AevonGripSwipeGlobalV260）：把手命中区上的触摸**先认领**——
+            // 只登记观察，不吞、不接管（把手是真实控件，桌面 / 全屏 App 两条路都靠它）。
+            // 全屏 App 时视图层收不到触摸，只有这条总入口能看到 → 把手才「到处都能用」。
+            if AevonRingMenu.presented == nil, AevonRingGrip.hitTestScreenPoint(point) {
+                gripSwipeTouchID = touchID
+                gripSwipeStart = point
+                // 顺带把指针位置记准：呼盘时圆盘从这个点接手指（全屏 App 里
+                // 视图层那条路收不到触摸，这里是唯一能记到真实落点的通道）。
+                lastTouchPoint = point
+                return
+            }
             // V0.2.9（AevonFloatPassV209）：落在浮窗上的触摸整个交回浮窗。
             // 先给外侧手柄一次机会（浮窗在全屏 App 之上时只有这条通道能驱动窗外手势）。
             if AevonEntryHost.pointHitsFloatingWindow(at: point) {
@@ -212,6 +241,30 @@ enum AevonEdgeEntry {
             break
 
         case .moved:
+            // V0.2.60（AevonGripSwipeGlobalV260）：把手左滑 ≥14pt（纵向抖动 ≤40pt）→ 呼盘。
+            // 与视图层 pan 同一条判据；两边都命中时圆盘已展开，第二次调用直接跳过。
+            if gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
+                let dx = point.x - gripSwipeStart.x
+                let dy = point.y - gripSwipeStart.y
+                if dx < -14, abs(dy) < 40 {
+                    gripSwipeTouchID = 0
+                    if AevonRingMenu.presented == nil {
+                        lastTouchPoint = point
+                        AevonLog.info("[圆盘] 把手左滑 \(Int(dx))pt → 呼出圆盘（全局通道，全屏 App 也生效）"
+                            + "（AevonGripSwipeGlobalV260）")
+                        presentRing(source: "ringgrip")
+                    }
+                } else if hypot(dx, dy) > 60 {
+                    gripSwipeTouchID = 0
+                }
+            }
+            // V0.2.60（AevonDockTapOnlyV260）：停靠小窗上的手指一动就作废「点一下装回」候选
+            if dockTapCandidateID != 0, touchID == dockTapCandidateID,
+               hypot(point.x - dockTapCandidatePoint.x,
+                     point.y - dockTapCandidatePoint.y) > 12 {
+                dockTapCandidateID = 0
+                dockTapCandidateWindow = nil
+            }
             if handleFloatGestureMoved(point: point, touchID: touchID) { return }
             if touchID == ringExtraTouchID {
                 if CACurrentMediaTime() <= ringExtraDeadline {
@@ -246,6 +299,23 @@ enum AevonEdgeEntry {
             }
 
         case .ended:
+            // V0.2.60（AevonGripSwipeGlobalV260）：抬手即清把手观察态
+            if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
+            // V0.2.60（AevonDockTapOnlyV260）：停靠小窗「点一下装回」的全局兜底。
+            // 没移动就抬手 = 装回（UIKit 的 dockTap 是主路，这条只是全屏 App 的保险；
+            // restoreDocked 自己幂等，晚到的那一次会因「已不在停靠列」直接返回）。
+            if dockTapCandidateID != 0, touchID == dockTapCandidateID {
+                let win = dockTapCandidateWindow
+                let moved = hypot(point.x - dockTapCandidatePoint.x,
+                                  point.y - dockTapCandidatePoint.y) > 12
+                dockTapCandidateID = 0
+                dockTapCandidateWindow = nil
+                if !moved, let win = win, win.isDocked {
+                    AevonLog.info("[停靠] 小窗轻点（全局兜底）→ 装回主窗（AevonDockTapOnlyV260）")
+                    AevonWindowManager.restoreDocked(bundleID: win.bundleID)
+                    return
+                }
+            }
             // V0.2.12（AevonEndAlwaysCleanV212）：抬手必然归还，defer 兜底。
             let endedHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)
             defer {
@@ -284,6 +354,11 @@ enum AevonEdgeEntry {
             ownsTouch = false
 
         case .cancelled:
+            if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
+            if dockTapCandidateID != 0, touchID == dockTapCandidateID {
+                dockTapCandidateID = 0
+                dockTapCandidateWindow = nil
+            }
             let cancelledHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)
             defer {
                 if cancelledHeldGlobal {
@@ -445,6 +520,16 @@ enum AevonEdgeEntry {
         }
 
         let now = CACurrentMediaTime()
+        // V0.2.60（AevonDockTapOnlyV260）：停靠小窗只有一个手势语义 —— 点它 = 装回。
+        // 这里**不接管、不吞**（连 floatTouchID 都不登记）：让小窗侧那个 dockTap
+        // 拿到整根触摸；同时记一笔全局兜底候选，全屏 App 之上 UIKit 收不到时由
+        // handleGlobal 的 ended 分支把这次点击补上。
+        if hit.window.isDocked {
+            dockTapCandidateID = touchID
+            dockTapCandidatePoint = point
+            dockTapCandidateWindow = hit.window
+            return false
+        }
         // V0.2.21（AevonFloatBottomDblCloseV221）：底边双击 = 关闭浮窗。
         if case .bar(.bottom) = hit.grab,
            now - floatLastTapAt <= floatDoubleTapGap,
@@ -630,6 +715,10 @@ enum AevonEdgeEntry {
         lastTriggerAt = now
         AevonEntryHost.raise(reason: "呼出圆盘")
         AevonRingMenu.present(in: root)
+        // V0.2.60（AevonGripSwipeGlobalV260）：全局通道那条路没有 `onSummon`，
+        // 收起把手的动作必须放在这里统一做，否则圆盘张开时右缘还挂着一条竖条。
+        //（圆盘收起时 AevonRingMenu 会把它放回来，两处配套。）
+        AevonRingGrip.setVisible(false)
         // 唤出圆盘的那根手指还没离开屏幕 —— 把它的位置交给圆盘，后续移动就是旋转。
         let pointerSource = (source == "appedge") ? "global" : source
         AevonRingMenu.presented?.beginRemoteTracking(at: lastTouchPoint, source: pointerSource)

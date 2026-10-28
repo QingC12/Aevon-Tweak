@@ -337,6 +337,8 @@ enum AevonEntryHost {
         guard isUsableHost(host) else { return }
         if box.superview === host {
             host.bringSubviewToFront(box)
+            // V0.2.60（AevonGripFrontV260）：容器里后加的子视图会压住把手，顺手顶回来
+            AevonRingGrip.installIfNeeded()
             return
         }
         let from = box.superview.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "无"
@@ -344,6 +346,9 @@ enum AevonEntryHost {
         box.frame = host.bounds
         host.addSubview(box)
         host.bringSubviewToFront(box)
+        // V0.2.60（AevonGripFrontV260）：搬完家把把手顶到容器最上层（全屏 App 里
+        // 只有这一个视图是我们的命中面，被浮窗层 / 圆盘压住就等于「把手消失」）
+        AevonRingGrip.installIfNeeded()
         // 父视图换了，手势条按新 bounds 重新落位
         AevonLog.info("[入口] 容器已搬家 \(from) → \(AevonRuntime.className(host) ?? "\(type(of: host))")（\(Int(host.bounds.width))x\(Int(host.bounds.height))，原因=\(reason)）")
     }

@@ -65,11 +65,14 @@ final class AevonGlowRingView: UIView {
         layer.cornerRadius = corner
         // 只留一条「封口」细线（0.2.46 是 1.0pt / 0.55，那是一条硬框）
         layer.borderWidth = 0.5
-        layer.borderColor = (dark ? UIColor(white: 1.0, alpha: 0.22)
+        layer.borderColor = (dark ? UIColor(white: 1.0, alpha: 0.15)
                                   : UIColor(white: 0.0, alpha: 0.06)).cgColor
         layer.shadowColor = (dark ? UIColor.white : UIColor.black).cgColor
-        layer.shadowOpacity = Float(dark ? 0.46 : 0.14)
-        layer.shadowRadius = dark ? 6 : 5
+        // V0.2.60（AevonGlowDimV260，用户 Aevon(34) #5）：深色模式光晕再压一档。
+        // Aevon(34)：「深色模式下主悬浮窗四周的发光光晕还是有点明显，降一点亮度」。
+        // 深色 0.46 / 半径 6 → 0.30 / 半径 5，封口细线 0.22 → 0.15（浅色档不动）。
+        layer.shadowOpacity = Float(dark ? 0.30 : 0.14)
+        layer.shadowRadius = 5
         layer.shadowOffset = .zero
         // 直接赋 path（不做相等比较：CGPath 的相等判断要走 CF 层，这里几何变才调用，
         // 调用频率由 updateEdgeGlow 的去重保证）
@@ -96,8 +99,9 @@ final class AevonGlowRingView: UIView {
         } else {
             let dark = traitCollection.userInterfaceStyle == .dark
             layer.shadowColor = (dark ? UIColor.white : UIColor.black).cgColor
-            layer.shadowOpacity = Float(dark ? 0.46 : 0.14)
-            layer.shadowRadius = dark ? 6 : 5
+            // V0.2.60（AevonGlowDimV260）：与 apply() 保持同一组数（深色 0.30 / 半径 5）
+            layer.shadowOpacity = Float(dark ? 0.30 : 0.14)
+            layer.shadowRadius = 5
             layer.shadowOffset = .zero
             layer.shadowPath = UIBezierPath(roundedRect: bounds,
                                             cornerRadius: layer.cornerRadius).cgPath
@@ -750,7 +754,7 @@ final class AevonWindowView: UIView {
         appliedGlowDark = dark
         appliedGlowKey = ""
         updateEdgeGlow()
-        AevonLog.info("[窗口] 外观切换 → 重刷边缘发光圈（\(dark ? "深色·白色柔光" : "浅色·淡描边")）（AevonFloatGlowV246）")
+        AevonLog.info("[窗口] 外观切换 → 重刷边缘发光圈（\(dark ? "深色·白色柔光" : "浅色·淡描边")）（AevonFloatGlowV246 AevonGlowDimV260）")
     }
 
     /// 触摸落在本窗口时把自己提到最前（多窗重叠时点哪个哪个在上）。
@@ -826,9 +830,12 @@ final class AevonWindowView: UIView {
         updateCornerRadius(animated: true)
         // 画布变了（首次布局 / 滑杆改了倍数 / 缩放手势提交）→ 场景跟着改画布，
         // App 才会按新尺寸真正重排（而不是被拉伸）。
+        // V0.2.60（AevonWarmupGateV260）：只有**真的写进去了**才记账 —— 预热期内
+        // 主场景画布会被承载器拒绝（保持整屏），这时候记账会让 App 永远等不到切画布。
         if canvas != appliedCanvasSize {
-            appliedCanvasSize = canvas
-            sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
+            if sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height) {
+                appliedCanvasSize = canvas
+            }
         }
     }
 
@@ -909,8 +916,9 @@ final class AevonWindowView: UIView {
         setNeedsLayout()
         persistFrame()
         let canvas = AevonWindowView.canvasSize(for: frame.size)
-        appliedCanvasSize = canvas
-        sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height)
+        if sceneHost.resizeCanvasTo(width: canvas.width, height: canvas.height) {
+            appliedCanvasSize = canvas
+        }
         cachedSnapshotImage = nil
         scheduleSnapshotRecapture(after: 0.5)
         appliedAspect = aspect
@@ -1469,6 +1477,18 @@ final class AevonWindowView: UIView {
     /// 连续抓不到快照的次数（≥3 就把滚动刷新退避到 30 秒）
     private var snapshotMissStreak = 0
 
+    // V0.2.60（AevonLiveFirstV260，用户 Aevon(34) #1）：「先显示实时动画，然后再自动
+    // 打开悬浮窗」—— 回桌面时不再拿一张定格帧盖住整窗硬撑 1 秒，而是：浮窗先让位
+    //（alpha 0.02 = 看不见但仍在渲染树里，一秒内会被拉回），系统的回桌面动画先播完，等浮窗里那个场景真的重新
+    // 出画（cs=2 且现场抓得到真画面）再 0.12 秒淡入。上限 1.0 秒，到点无论如何都要
+    // 出现（画面还没回来就先垫缓存帧，绝不留一块黑的空窗）。
+    private var liveWaitDeadline: TimeInterval = 0
+    private var liveWaitStartedAt: TimeInterval = 0
+    /// 连续「cs=2 且现场抓得到真画面」的拍数（0.1s 一拍）：要求稳定 2 拍才淡入，
+    /// Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入会「亮一下又黑」。
+    private var liveWaitTicks = 0
+    private static let liveWaitLimit: TimeInterval = 1.0
+
     /// 全屏 App 画面离场（回桌面 / 切 App）时布防。
     ///
     /// 为什么是「布防 + 有界重申」而不是「每秒无限重申」：0.1.5 的历史结论写得很清楚
@@ -1486,7 +1506,11 @@ final class AevonWindowView: UIView {
         guard window != nil else { return }
         guard sceneHost.hasContent else { return }   // 还没出过首帧：交给首帧探测，别掺和
         beginGuardWindow(reason: reason)
-        if sceneHost.contentLooksRendering == false {
+        // V0.2.60（AevonLiveFirstV260）：回桌面 / 切 App 走「先让位、后淡入」，
+        // 不再盖定格帧（Aevon(34) #1：定格 1 秒观感比晚出现 0.3 秒差得多）。
+        if reason.contains("画面离场") {
+            beginLiveWait(reason: reason)
+        } else if sceneHost.contentLooksRendering == false {
             installDarkFreeze(reason: "离场")
         }
         reassertContentForeground(tag: "立即")
@@ -1503,6 +1527,46 @@ final class AevonWindowView: UIView {
                 self?.reassertContentForeground(tag: String(format: "+%.2fs", delay))
             }
         }
+    }
+
+    // MARK: - 回桌面「先实时、后出现」（V0.2.60，AevonLiveFirstV260）
+
+    /// 让位开始：整窗淡出（0.08s），不盖任何定格帧。
+    private func beginLiveWait(reason: String) {
+        let now = CACurrentMediaTime()
+        liveWaitStartedAt = now
+        liveWaitDeadline = now + AevonWindowView.liveWaitLimit
+        liveWaitTicks = 0
+        if darkFreezeView != nil { removeDarkFreeze(reason: "让位前先撤定格帧") }
+        // 让位用 alpha 0.02 而不是 0：肉眼不可见，但仍留在渲染树里 ——
+        // `drawHierarchy` 抓的是「视图子树」的渲染结果，整窗 alpha 归零有可能
+        // 让这棵子树被渲染服务器整体跳过，抓出来就是空壳（让位判定永远不成立，
+        // 每次都拖到 1.0 秒上限才淡入）。2% 既看不见，也不破坏抓帧。
+        UIView.animate(withDuration: 0.08, delay: 0,
+                       options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
+            self?.alpha = 0.02
+        }
+        AevonLog.info("[窗口] 回桌面：浮窗先让位（不盖定格帧，\(reason)）→ 视频 / 动画先按实时播，"
+            + "实时画面回来再 0.12s 淡入，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
+            + "（AevonLiveFirstV260）")
+    }
+
+    /// 让位结束：淡入。到点时画面还没回来就先垫一张缓存帧（宁可定格也不留黑窗）。
+    private func finishLiveWait(reason: String) {
+        guard liveWaitDeadline > 0 else { return }
+        let held = CACurrentMediaTime() - liveWaitStartedAt
+        liveWaitDeadline = 0
+        liveWaitStartedAt = 0
+        liveWaitTicks = 0
+        let rendering = sceneHost.contentLooksRendering
+        if rendering != true { installDarkFreeze(reason: "淡入前兜底") }
+        UIView.animate(withDuration: 0.12, delay: 0,
+                       options: [.curveEaseIn, .allowUserInteraction]) { [weak self] in
+            self?.alpha = 1
+        }
+        AevonLog.info("[窗口] 浮窗淡入（让位 \(String(format: "%.2f", held))s，\(reason)，"
+            + "当前 \(sceneHost.stateSummary())）"
+            + "（AevonLiveFirstV260）")
     }
 
     private func beginGuardWindow(reason: String) {
@@ -1558,6 +1622,22 @@ final class AevonWindowView: UIView {
     ///   · `cs == -1`（读不到）→ **一根手指都不动**，既不盖也不撤（绝不把「读不到」当黑）。
     private func checkBackgroundGuard() {
         guard window != nil, !isTearingDown else { return }
+        // ── V0.2.60（AevonLiveFirstV260）：让位期只做一件事 —— 等实时画面 ──────────
+        // 判定口径与「撤冻结」完全一致（cs=2 且现场 drawHierarchy 抓得到真画面），
+        // 区别只是收尾动作从「撤一张图」变成「整窗淡入」。
+        if liveWaitDeadline > 0 {
+            let now = CACurrentMediaTime()
+            let live = sceneHost.contentLooksRendering == true && captureSnapshotImage() != nil
+            liveWaitTicks = live ? liveWaitTicks + 1 : 0
+            // V0.2.60（AevonLiveFirstV260）：必须**连续 2 拍**（0.1s 一拍）都抓到真画面
+            // 才淡入。Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入 = 「亮一下又黑」。
+            if liveWaitTicks >= 2 {
+                finishLiveWait(reason: "实时画面已回来（连续 \(liveWaitTicks) 拍）")
+            } else if now > liveWaitDeadline {
+                finishLiveWait(reason: "上限到达")
+            }
+            return
+        }
         // ── V0.2.50（AevonDarkGuardV250）：常驻看门（没布防也在盯）───────────────
         // Aevon(25) 第 7 条：「全屏 App 时开浮窗后回桌面：悬浮窗黑屏时间依旧大于 1 秒
         // 甚至更多」。0.2.49 只在「全屏 App 画面离场」这一个事件上布防 —— 只要那一刻
@@ -1628,6 +1708,9 @@ final class AevonWindowView: UIView {
     /// 空壳一律不盖：宁可让真实画面自己回来，也不盖一张假的。
     private func installDarkFreeze(reason: String) {
         guard darkFreezeView == nil, hintLabel.isHidden, !isTearingDown else { return }
+        // V0.2.60（AevonLiveFirstV260）：让位期整窗是隐形的，再盖一张定格帧纯属浪费
+        //（还会在淡入那一刻露出旧画面）。让位收尾时会自己决定要不要垫缓存帧。
+        guard liveWaitDeadline == 0 else { return }
         guard let image = lastContentFrame() else {
             AevonLog.warn("[窗口] 内容不出画但没有可用快照 → 无法冻结（只能等重申生效，\(reason)）"
                 + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
@@ -1887,6 +1970,12 @@ final class AevonWindowView: UIView {
         isDocked = true
         dockedSide = side
         sceneHost.setContentInteraction(false)
+        // V0.2.60（AevonDockTapOnlyV260，用户 Aevon(34) #2）：停靠小窗**四周边条手柄整建制摘除**。
+        // Aevon(34)：「移除停靠吸附小窗四周的手势，只保留点击小窗还原的手势」。
+        // 92x158 的小窗上，四条边条 + 两个角块把面积吃掉大半，点哪儿基本都落在手柄上
+        //（手柄只有 pan，轻点既不还原也不停靠）—— 用户体感就是「点小窗没反应」。
+        // 停靠态唯一语义 = 点任意位置装回，手柄留着只会抢命中。
+        setDockHandlesEnabled(false)
         // V0.2.59（AevonDockHaloOffV259，用户 Aevon(33) #4「主窗变小窗的过渡中光晕闪过」）：
         // 窗口本体走 0.22s 动画（presentation 层逐帧插值），而光晕 apply 里禁了隐式动画
         // —— 它在动画**开始那一帧**就立刻缩到小窗尺寸。大窗还在、光晕先没了，
@@ -1913,6 +2002,17 @@ final class AevonWindowView: UIView {
             + "过渡期光晕隐藏）（AevonDockColumnV250 AevonDockHaloOffV259）")
     }
 
+    /// V0.2.60（AevonDockTapOnlyV260）：停靠态摘除 / 装回后恢复窗外手势手柄。
+    ///
+    /// 摘除用 `isHidden + isUserInteractionEnabled` 两道：隐藏负责视觉与命中，
+    /// 关交互负责识别器彻底不接事件（隐藏视图本身就不再参与 hitTest，双保险）。
+    private func setDockHandlesEnabled(_ enabled: Bool) {
+        for case let handle as AevonEdgeHandleView in subviews {
+            handle.isHidden = !enabled
+            handle.isUserInteractionEnabled = enabled
+        }
+    }
+
     /// V0.2.55（AevonDockTapAnywhereV255，用户 Aevon(29) #2）：停靠小窗任意位置
     /// 轻点 = 装回主窗（这是 dock 态唯一的手势语义；点边条与点内容等价，同为装回）。
     @objc private func handleDockTapAnywhere(_ gesture: UITapGestureRecognizer) {
@@ -1926,13 +2026,21 @@ final class AevonWindowView: UIView {
         guard isDocked else { return }
         isDocked = false
         sceneHost.setContentInteraction(true)
-        // V0.2.59（AevonDockHaloOffV259）：停靠期光晕整圈隐藏，装回主窗即刻恢复。
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        glowRing.isHidden = false
-        CATransaction.commit()
-        appliedGlowKey = ""
-        updateEdgeGlow()
+        // V0.2.60（AevonDockTapOnlyV260）：停靠期被摘除的窗外手势手柄立刻恢复。
+        setDockHandlesEnabled(true)
+        // V0.2.59（AevonDockHaloOffV259）→ V0.2.60（AevonDockHaloBackV260）：
+        // 还原光晕的时机改到**动画结束之后**。Aevon(34) #2：「吸附小窗还原时也会有光晕
+        // 闪过」—— 0.2.59 是动画一开始就把光晕按主窗尺寸恢复，于是小窗位置瞬间冒出
+        // 一大圈光，和正在长开的窗口不同步 = 又是那次「闪过」。等 0.22s 长完再恢复。
+        let restoreGlow = { [weak self] in
+            guard let self else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.glowRing.isHidden = false
+            CATransaction.commit()
+            self.appliedGlowKey = ""
+            self.updateEdgeGlow()
+        }
         let target = AevonWindowView.mainFrameForRestore()
         let apply = { [weak self] in
             guard let self else { return }
@@ -1942,12 +2050,14 @@ final class AevonWindowView: UIView {
         if animated, window != nil {
             UIView.animate(withDuration: 0.22, delay: 0,
                            options: [.curveEaseOut, .allowUserInteraction],
-                           animations: apply, completion: nil)
+                           animations: apply, completion: { _ in restoreGlow() })
         } else {
             apply()
+            restoreGlow()
         }
         AevonLog.info("[停靠] \(bundleID) 已从停靠列装回主窗"
-            + "（\(Int(target.width))x\(Int(target.height))，光晕恢复）（AevonDockColumnV250 AevonDockHaloOffV259）")
+            + "（\(Int(target.width))x\(Int(target.height))，光晕在过渡结束后才恢复）"
+            + "（AevonDockColumnV250 AevonDockHaloOffV259 AevonDockHaloBackV260）")
     }
 
     private func persistFrame() {
@@ -2012,6 +2122,15 @@ final class AevonWindowView: UIView {
         guardArmedUntil = 0
         stopGuardTimer()
         removeDarkFreeze(reason: "关窗收尾")
+        // V0.2.60（AevonLiveFirstV260）：让位期（整窗 alpha 0）里关窗 → 先撤销让位。
+        // 否则离场帧是在一个隐形窗口上抓的（抓到空壳 → 淡出动画被跳过，硬切一下）。
+        if liveWaitDeadline > 0 {
+            liveWaitDeadline = 0
+            liveWaitStartedAt = 0
+            liveWaitTicks = 0
+            alpha = 1
+            AevonLog.info("[窗口] 让位期关窗：先撤销让位再抓离场帧（AevonLiveFirstV260）")
+        }
         // V0.2.49：抓离场帧（必须在承载容器 invalidate 之前）
         let exitFrame = exitFreezeView()
         // V0.2.44（AevonScreenAspectV244）：比例监听到此为止
