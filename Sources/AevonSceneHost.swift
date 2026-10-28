@@ -325,6 +325,50 @@ final class AevonSceneHost {
         return false
     }
 
+    /// V0.2.65（AevonCenterPresentV265，用户 Aevon(38) #7）：
+    /// 「抖音断层依旧存在（在一段时间后它会自动恢复真重排）…… 能不能在 1 秒内达到真重排，
+    ///   或者是我们之前讨论的视频内容中心对齐悬浮窗中心」。
+    ///
+    /// **抖音进程里没有我们的人**：Aevon(38) 整篇日志没有任何 `[App侧(com.ss.iphone.ugc.Aweme)]`
+    /// 行 —— App 侧 dylib 根本没注入进去（它有自己的越狱检测 / 注入被拒）。所以 0.2.63/0.2.64
+    /// 那种「在 App 进程里改根视图 transform」对它永远不生效，日志里一条「画面居中」都没有。
+    ///
+    /// 这一版把对中搬到**我们自己的进程**：浮窗呈现的是一棵远程层树，远程层自己的 bounds
+    /// 就是 App 内部真实的排版高度（它按 932 排就是 932 的层，即使画布只有 737）。
+    /// 量到「层高 > 画布高」→ 给呈现视图一个 -diff/2 的位移，视觉上把画面中心拉回窗口中心。
+    /// 量不到（层树不可读）→ **一个字节都不动**，只写一行诊断 —— 宁可不修，也不乱移。
+    private var centerApplied: CGFloat = 0
+    func centerStaleContentIfNeeded(canvasSize: CGSize, tag: String) {
+        guard !invalidated, canvasSize.height > 200, canvasSize.width > 100 else { return }
+        guard let host = presentationView.subviews.first else { return }
+        var tallest: CGFloat = 0
+        var widest: CGFloat = 0
+        for layer in host.layer.sublayers ?? [] {
+            let b = layer.bounds.size
+            if b.height > tallest { tallest = b.height }
+            if b.width > widest { widest = b.width }
+        }
+        // 先把量到的东西写出来（下一版据此决定要不要继续用这条路）
+        AevonLog.info("[场景] 画面居中度量（\(tag)）：内容宿主 \(Int(host.bounds.width))x\(Int(host.bounds.height))，"
+            + "远程层最高 \(Int(tallest)) / 最宽 \(Int(widest))，画布 \(Int(canvasSize.width))x\(Int(canvasSize.height))，"
+            + "层数 \(host.layer.sublayers?.count ?? 0)（AevonCenterPresentV265）")
+        guard tallest > canvasSize.height + 8 else {
+            if centerApplied != 0 {
+                presentationView.transform = .identity
+                centerApplied = 0
+                AevonLog.info("[场景] 画面居中：远程层已贴合画布 → 撤掉位移（\(tag)）（AevonCenterPresentV265）")
+            }
+            return
+        }
+        let shift = -(tallest - canvasSize.height) / 2.0
+        guard abs(shift) <= 300, fabs(centerApplied - shift) > 0.5 else { return }
+        centerApplied = shift
+        presentationView.transform = CGAffineTransform(translationX: 0, y: shift)
+        AevonLog.warn("[场景] 画面居中：远程层 \(Int(tallest)) 高于画布 \(Int(canvasSize.height))"
+            + " → 呈现视图上移 \(String(format: "%.1f", -shift))pt，让画面中心回到浮窗中心"
+            + "（\(tag)）（AevonCenterPresentV265）")
+    }
+
     /// V0.2.60（AevonDouyinHealV260）：断层自愈（只读判定 + 一次补踢）。
     ///
     /// 判据：呈现视图里第一层宿主视图（`_UISceneLayerHostContainerView`）的实际尺寸

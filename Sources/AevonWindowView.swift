@@ -1591,6 +1591,10 @@ final class AevonWindowView: UIView {
     private var liveSettleUntil: TimeInterval = 0
     /// V0.2.63（AevonLiveHiddenV263）：让位到点仍无画面 → 整窗藏着等真画面
     private var liveAwaitingContent = false
+    /// V0.2.65（AevonNoVanishV265）：让位期允许垫定格帧（窗口不再靠隐藏来遮黑）
+    private var liveWaitFreezeAllowed = false
+    /// V0.2.65（AevonEntryRevealV265）：入场淡入只做一次
+    private var entryRevealDone = false
     private static let liveSettleWindow: TimeInterval = 0.9
 
     /// 全屏 App 画面离场（回桌面 / 切 App）时布防。
@@ -1643,35 +1647,38 @@ final class AevonWindowView: UIView {
 
     // MARK: - 回桌面「先实时、后出现」（V0.2.60，AevonLiveFirstV260）
 
-    /// 让位开始：整窗淡出（0.08s），不盖任何定格帧。
+    /// 让位开始：**不动整窗 alpha**，垫一张最后一帧等实时画面。
+    ///
+    /// V0.2.65（AevonNoVanishV265，用户 Aevon(38) #8「全屏 App 开浮窗回桌面时依旧会闪」）：
+    /// 0.2.60~0.2.64 的做法是「整窗 alpha 打到 0.02（或 0）让位，等实时画面回来再淡入」。
+    /// 观感上就是：浮窗**消失**（露出桌面）→ 0.3~1.0 秒后**又出现**。这不是"闪"是什么？
+    /// 每一版都在调「让位多长 / 淡入多快」，但「窗会消失再出现」这件事本身就是闪的根源。
+    ///
+    /// 现在改成：窗口**从头到尾 alpha = 1，位置不动**；内容层用最后一张真画面顶住，
+    /// 实时画面回来后 0.22 秒交叉淡出（见 removeDarkFreeze）。屏幕上永远有一块
+    /// 连续的浮窗，没有"空窗"帧，也就不可能闪。
     private func beginLiveWait(reason: String) {
         let now = CACurrentMediaTime()
         liveWaitStartedAt = now
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
         liveCaptureCount = 0
-        if darkFreezeView != nil { removeDarkFreeze(reason: "让位前先撤定格帧") }
-        // V0.2.61（AevonLiveFirstFixV261，用户 Aevon(35) #7「浮窗出现前会闪烁（黑屏和画面
-        // 交替）」）：让位必须**立刻**生效，不再做 0.08 秒淡出。
-        //
-        // 根因：布防这一拍 App 的场景刚好被系统按下（日志 fg=? cs=0 layers=-1），远程表面
-        // 已经没了，而窗口还按 alpha≈1 停在屏幕上 —— 那 80 毫秒里露出的就是「黑」，等淡出
-        // 走完、实时画面回来再淡入 = 用户看到的「黑 ←→ 画面」交替。
-        // 直接把 alpha 打到 0.02（同一 runloop 内完成，不产生任何中间帧），黑帧就永远不会
-        // 被看见；「浮窗后出现」的观感反而更干净。
-        //
-        // 用 0.02 而不是 0：肉眼不可见，但仍留在渲染树里 —— `drawHierarchy` 抓的是
-        // 「视图子树」的渲染结果，整窗 alpha 归零有可能让这棵子树被渲染服务器整体跳过，
-        // 抓出来就是空壳（让位判定永远不成立，每次都拖到 1.0 秒上限才淡入）。
-        alpha = 0.02
-        liveSettleUntil = 0
         liveAwaitingContent = false
-        AevonLog.info("[窗口] 回桌面：浮窗先让位（不盖定格帧，\(reason)）→ 视频 / 动画先按实时播，"
-            + "实时画面回来再 0.12s 淡入，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
-            + "（AevonLiveFirstV260 AevonLiveFirstFixV261 AevonLiveQuietV262）")
+        alpha = 1
+        liveSettleUntil = 0
+        /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
+         * 抓不到就保持现状 —— 但**绝不隐藏窗口**。 */
+        if darkFreezeView == nil {
+            liveWaitFreezeAllowed = true
+            installDarkFreeze(reason: "回桌面垫最后一帧")
+            liveWaitFreezeAllowed = false
+        }
+        AevonLog.info("[窗口] 回桌面：窗口保持可见（整窗 alpha 不动，\(reason)）→ 用最后一帧顶住，"
+            + "实时画面回来再 0.22 秒交叉淡出，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
+            + "（AevonLiveFirstV260 AevonNoVanishV265）")
     }
 
-    /// 让位结束：淡入。到点时画面还没回来就先垫一张缓存帧（宁可定格也不留黑窗）。
+    /// 让位结束：只决定「定格帧撤不撤」，永远不碰窗口自身 alpha。
     private func finishLiveWait(reason: String) {
         guard liveWaitDeadline > 0 else { return }
         let held = CACurrentMediaTime() - liveWaitStartedAt
@@ -1679,37 +1686,15 @@ final class AevonWindowView: UIView {
         liveWaitStartedAt = 0
         liveWaitTicks = 0
         let rendering = sceneHost.contentLooksRendering
-        // V0.2.63（AevonLiveHiddenV263，用户 Aevon(37) #6「回桌面还在闪，画面快速闪」）：
-        // 到点时既没实时画面、又没有可用快照 → **不淡入**，整窗继续藏着（alpha 0），
-        // 等真画面到了再一次淡入。上一版这里会 alpha=1 硬淡入，屏幕上是「一块什么都没有
-        // 的窗口 + 后面桌面」，随后画面一回来又换一次 —— 这就是用户看到的「快速闪」。
-        // 看不见比闪好：藏着的窗口不会产生任何中间帧。
-        if rendering != true, captureSnapshotImage() == nil {
-            liveAwaitingContent = true
-            alpha = 0
-            liveSettleUntil = 0
-            renderTicks = 0
-            AevonLog.info("[窗口] 让位 \(String(format: "%.2f", held))s 到点仍无画面也无快照（\(reason)）"
-                + "→ 整窗继续藏着（alpha 0），真画面到了再一次淡入"
-                + "（\(sceneHost.stateSummary())）（AevonLiveHiddenV263）")
-            return
-        }
-        if rendering != true { installDarkFreeze(reason: "淡入前兜底") }
         liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
-        /* V0.2.64（AevonFadeInV264，用户 Aevon(38) #5.5「回桌面还在闪」）：
-         * 0.12 秒的淡入在 60fps 下只有 7 帧，观感就是「啪地闪出来」。
-         * 改成 0.22 秒 ease-out + 从 0.985 微微长到 1.0 —— 看起来是「浮现」而不是「弹出」。 */
-        alpha = 0
-        transform = CGAffineTransform(scaleX: 0.985, y: 0.985)
-        UIView.animate(withDuration: 0.22, delay: 0,
-                       options: [.curveEaseOut, .allowUserInteraction],
-                       animations: { [weak self] in
-            self?.alpha = 1
-            self?.transform = .identity
-        })
-        AevonLog.info("[窗口] 浮窗淡入（让位 \(String(format: "%.2f", held))s，\(reason)，"
-            + "0.22s 浮现动画，当前 \(sceneHost.stateSummary())）"
-            + "（AevonLiveFirstV260 AevonLiveHiddenV263 AevonFadeInV264）")
+        if rendering == true {
+            removeDarkFreeze(reason: "让位结束且实时画面已回来")
+        }
+        /* rendering != true 时保留定格帧（宁可停住，也不露一块空窗）；
+         * 常驻看门会在 cs=2 时撤掉它。 */
+        AevonLog.info("[窗口] 回桌面让位结束（\(String(format: "%.2f", held))s，\(reason)，"
+            + "画面=\(rendering == true ? "实时" : "仍定格")，窗口 alpha 全程 1）"
+            + "（\(sceneHost.stateSummary())）（AevonNoVanishV265）")
     }
 
     /// V0.2.63（AevonLiveHiddenV263）：藏着等真画面 —— 连续 2 拍在画才淡入，
@@ -1802,11 +1787,10 @@ final class AevonWindowView: UIView {
             // V0.2.62（AevonLiveQuietV262）：让位期抓帧有界（最多 3 次）。
             // 每次 drawHierarchy 都会让窗口重绘一遍，0.1 秒一拍地抓 = 让位期反复重绘，
             // 视觉上就是「闪」。抓到 3 次还没成功就只等 cs 判定 + 到点垫帧。
-            var live = false
-            if sceneHost.contentLooksRendering == true && liveCaptureCount < 3 {
-                liveCaptureCount += 1
-                live = captureSnapshotImage() != nil
-            }
+            /* V0.2.65（AevonNoVanishV265）：让位期**不再做 drawHierarchy 抓帧验证** ——
+             * 窗口现在是全程可见的，抓帧会强迫重绘一遍，那一下本身就是闪。
+             * 判定只看场景的 contentState（cs=2 = 在画），足够了。 */
+            let live = (sceneHost.contentLooksRendering == true)
             liveWaitTicks = live ? liveWaitTicks + 1 : 0
             // V0.2.60（AevonLiveFirstV260）：要求稳定才淡入。
             // V0.2.62（AevonLiveQuietV262，Aevon(36) #5）：从「连续 2 拍」放宽成
@@ -1910,7 +1894,11 @@ final class AevonWindowView: UIView {
         guard darkFreezeView == nil, hintLabel.isHidden, !isTearingDown else { return }
         // V0.2.60（AevonLiveFirstV260）：让位期整窗是隐形的，再盖一张定格帧纯属浪费
         //（还会在淡入那一刻露出旧画面）。让位收尾时会自己决定要不要垫缓存帧。
-        guard liveWaitDeadline == 0 else { return }
+        //
+        // V0.2.65（AevonNoVanishV265）：让位期窗口不再隐形了 —— 现在正是**要在让位期
+        // 盖一张最后一帧顶住**（否则那一秒就是一块空窗）。所以只在「让位期且不是
+        // 让位自己要求盖」时才拒绝。
+        guard liveWaitDeadline == 0 || liveWaitFreezeAllowed else { return }
         guard let image = lastContentFrame() else {
             AevonLog.warn("[窗口] 内容不出画但没有可用快照 → 无法冻结（只能等重申生效，\(reason)）"
                 + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
@@ -1935,16 +1923,23 @@ final class AevonWindowView: UIView {
     }
 
     private func removeDarkFreeze(reason: String) {
-        guard darkFreezeView != nil else { return }
-        darkFreezeView?.removeFromSuperview()
+        guard let view = darkFreezeView else { return }
         darkFreezeView = nil
         freezeRemoveCount += 1
         // V0.2.63（AevonFlashDampV263）：记下撤帧时刻，1.2 秒内不再盖（防「盖/撤」抖动）。
         lastFreezeRemovedAt = CACurrentMediaTime()
         idleDarkTicks = 0
         darkTicks = 0
-        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263）")
+        /* V0.2.65（AevonFreezeCrossFadeV265，用户 Aevon(38) #8「回桌面依旧会闪」）：
+         * 原来是一次 `removeFromSuperview()` —— 定格帧瞬间消失，下面那一帧如果还没
+         * 画出来就是「黑一下再出画面」，这就是闪。改成 0.22 秒淡出，让实时画面从底下
+         * 透上来（交叉溶解）。窗口本身 alpha 全程是 1，屏幕上不会出现「窗没了」的帧。 */
+        UIView.animate(withDuration: 0.22, delay: 0,
+                       options: [.curveEaseOut, .allowUserInteraction],
+                       animations: { view.alpha = 0 },
+                       completion: { _ in view.removeFromSuperview() })
+        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次，0.22s 淡出）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263 AevonFreezeCrossFadeV265）")
     }
 
     /// 点冻结图：用户主动要画面。
@@ -2339,6 +2334,49 @@ final class AevonWindowView: UIView {
             + "（AevonDockColumnV250 AevonDockHaloOffV259 AevonDockHaloBackV260）")
     }
 
+    /// V0.2.65（AevonLiveWakeV265，用户 Aevon(38) #9）：别的 App 抢了全屏 → 把浮窗里
+    /// 这个场景叫醒，否则窗口上永远停着最后一帧（用户得点一下才恢复实时画面）。
+    func refreshLiveContent(reason: String) {
+        guard window != nil, !isTearingDown, sceneHost.hasContent else { return }
+        guardArmedUntil = CACurrentMediaTime() + 4.0
+        reassertCount = 0
+        darkTicks = 0
+        renderTicks = 0
+        lastReassertAt = 0
+        startGuardTimerIfNeeded()
+        let rendering = sceneHost.contentLooksRendering
+        if rendering != true {
+            installDarkFreeze(reason: "实时画面停了")
+        }
+        reassertContentForeground(tag: "抢全屏叫醒")
+        AevonLog.info("[窗口] 别的 App 抢了全屏（\(reason)）→ 叫醒浮窗场景，"
+            + "0.9 秒后再补一次（当前 \(sceneHost.stateSummary())）（AevonLiveWakeV265）")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+            guard let self, self.window != nil, !self.isTearingDown else { return }
+            self.reassertContentForeground(tag: "抢全屏补一次")
+        }
+    }
+
+    /// V0.2.65（AevonEntryRevealV265，用户 Aevon(38) #3「浮窗打开 App 时第一时间底栏黑屏」）：
+    /// 开窗时窗口先以 alpha 0 藏着，等画布真的切到浮窗尺寸、App 重排过一拍之后再显。
+    /// 幂等：重复调用只生效一次。
+    func revealEntryNow(_ reason: String) {
+        guard !entryRevealDone, !isTearingDown, window != nil else { return }
+        entryRevealDone = true
+        alpha = 0
+        transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
+        UIView.animate(withDuration: 0.34, delay: 0,
+                       usingSpringWithDamping: 0.86,
+                       initialSpringVelocity: 0.3,
+                       options: [.allowUserInteraction, .beginFromCurrentState],
+                       animations: { [weak self] in
+            self?.alpha = 1
+            self?.transform = .identity
+        }, completion: nil)
+        AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 淡入 + 0.965→1.0 弹簧 0.34s"
+            + "（AevonFloatTransitionV264 AevonEntryRevealV265）")
+    }
+
     private func persistFrame() {
         // V0.2.50：停靠态的坐标不进「主窗几何记忆」（否则下次开窗跑到边角）
         guard !isDocked else { return }
@@ -2366,6 +2404,7 @@ final class AevonWindowView: UIView {
             text += "（上次 \(String(format: "%.1f", previous[0]))%/\(String(format: "%.1f", previous[1]))%/\(String(format: "%.1f", previous[2]))%）"
         }
         AevonLog.info(text + "（AevonFrameMemoryV248）")
+        AevonWindowManager.publishFloatFrame(safe)
     }
 
     // MARK: - 关闭

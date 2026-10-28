@@ -24,6 +24,7 @@ import UIKit
 import ReplayKit
 import Photos
 import AudioToolbox
+import AVFoundation
 
 /// 截图保存完成的回调目标（`UIImageWriteToSavedPhotosAlbum` 需要一个 selector）
 final class AevonQuickActionSaver: NSObject {
@@ -148,7 +149,7 @@ enum AevonQuickAction {
      *   ③ 弹一个自己的提示条（SB 里没有系统截图缩略图，只能自己给反馈）。
      */
     @discardableResult
-    private static func captureScreenImage() -> UIImage? {
+    static func captureScreenImage() -> UIImage? {
         if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_UICreateScreenUIImageWithRotation") {
             let fn = unsafeBitCast(symbol, to: ScreenUIImageFn.self)
             if let image = fn(0)?.takeUnretainedValue() as? UIImage, image.size.width > 10 {
@@ -195,181 +196,200 @@ enum AevonQuickAction {
         }
     }
 
-    // MARK: - 录屏
-
-    private static var isRecording = false
-    private typealias StopRecordFn = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
-
-    /// V0.2.64（AevonRecorderFindV264）：在整个进程里找「能开始/停止系统录屏」的对象。
-    ///
-    /// Aevon(38) 日志证明上一版的四个候选类名（SBControlCenterController 等）**一个都不存在**
-    /// （「没有可用的系统录屏服务」→ 退回 ReplayKit → 「无法开始录制」）。
-    /// 这次不再猜类名：直接遍历本进程所有类，挑类名含 `Record`、且能拿到单例、
-    /// 且实例上有 `startSystemRecording*` / `startRecording` / `stopSystemRecording:` 的，
-    /// 命中就把**真实类名**写进日志（下一版可以按它硬编码，省掉遍历）。
-    private typealias StartSystemRecordFn = @convention(c) (AnyObject, Selector, ObjCBool, AnyObject?) -> Void
-    private typealias StartRecordFn = @convention(c) (AnyObject, Selector) -> Void
-
-    private static var cachedRecordingService: NSObject?
-    private static var recordingServiceSearched = false
-
-    private static func dynamicRecordingService() -> NSObject? {
-        if recordingServiceSearched { return cachedRecordingService }
-        recordingServiceSearched = true
-        let accessors = ["sharedInstance", "sharedInstanceIfExists", "controller",
-                         "sharedController", "sharedRecorder", "defaultService"]
-        let startSels = ["startSystemRecordingWithMicrophoneEnabled:handler:",
-                         "startSystemRecordingWithMicrophoneEnabled:",
-                         "startRecording", "startRecordingWithHandler:"]
-        let stopSels = ["stopSystemRecording:", "stopSystemRecording", "stopRecording"]
-        var count: UInt32 = 0
-        guard let list = objc_copyClassList(&count), count > 0 else {
-            AevonLog.warn("[快捷] 录屏探测：拿不到类表（AevonRecorderFindV264）")
-            return nil
-        }
-        defer { free(UnsafeMutableRawPointer(list)) }
-        var seen: [String] = []
-        for index in 0..<Int(count) {
-            let cls: AnyClass = list[index]
-            let name = NSStringFromClass(cls)
-            guard name.lowercased().contains("record") else { continue }
-            guard let meta = cls as? NSObject.Type else { continue }
-            for accessor in accessors {
-                let sel = NSSelectorFromString(accessor)
-                guard meta.responds(to: sel),
-                      let shared = meta.perform(sel)?.takeUnretainedValue() as? NSObject else { continue }
-                let hasStart = startSels.contains { shared.responds(to: NSSelectorFromString($0)) }
-                let hasStop = stopSels.contains { shared.responds(to: NSSelectorFromString($0)) }
-                if hasStart || hasStop {
-                    AevonLog.info("[快捷] 录屏服务命中：\(name) \(accessor)"
-                        + "（start=\(hasStart) stop=\(hasStop)）（AevonRecorderFindV264）")
-                    cachedRecordingService = shared
-                    return shared
-                }
-            }
-            if seen.count < 8 { seen.append(name) }
-        }
-        AevonLog.warn("[快捷] 录屏探测：没有命中（候选类："
-            + (seen.isEmpty ? "无" : seen.joined(separator: ", "))
-            + "）（AevonRecorderFindV264）")
-        return nil
-    }
-
-    @discardableResult
-    private static func startSystemRecording(_ service: NSObject) -> Bool {
-        let specialized = NSSelectorFromString("startSystemRecordingWithMicrophoneEnabled:handler:")
-        if service.responds(to: specialized),
-           let method = class_getInstanceMethod(type(of: service), specialized) {
-            let fn = unsafeBitCast(method_getImplementation(method), to: StartSystemRecordFn.self)
-            fn(service, specialized, ObjCBool(false), nil)
-            isRecording = true
-            AevonLog.info("[快捷] 已开始系统录屏（不录麦克风；再点一次「录屏」结束并保存）"
-                + "（AevonQuickShotV264 AevonRecorderFindV264）")
-            return true
-        }
-        let candidates = ["startSystemRecordingWithMicrophoneEnabled:", "startRecording"]
-        for name in candidates {
-            let sel = NSSelectorFromString(name)
-            guard service.responds(to: sel),
-                  let method = class_getInstanceMethod(type(of: service), sel) else { continue }
-            let fn = unsafeBitCast(method_getImplementation(method), to: BoolArgVoidFn.self)
-            fn(service, sel, ObjCBool(false))
-            isRecording = true
-            AevonLog.info("[快捷] 已开始系统录屏：\(name)（AevonRecorderFindV264）")
-            return true
-        }
-        let simple = NSSelectorFromString("startRecording")
-        if service.responds(to: simple),
-           let method = class_getInstanceMethod(type(of: service), simple) {
-            let fn = unsafeBitCast(method_getImplementation(method), to: StartRecordFn.self)
-            fn(service, simple)
-            isRecording = true
-            AevonLog.info("[快捷] 已开始系统录屏：startRecording（AevonRecorderFindV264）")
-            return true
-        }
-        return false
-    }
-
-    @discardableResult
-    private static func stopSystemRecording(_ service: NSObject) -> Bool {
-        let candidates = ["stopSystemRecording:", "stopSystemRecording", "stopRecording"]
-        for name in candidates {
-            let sel = NSSelectorFromString(name)
-            guard service.responds(to: sel),
-                  let method = class_getInstanceMethod(type(of: service), sel) else { continue }
-            let fn = unsafeBitCast(method_getImplementation(method), to: StopRecordFn.self)
-            fn(service, sel, nil)
-            isRecording = false
-            AevonLog.info("[快捷] 已停止系统录屏：\(name)（视频由系统存相册）（AevonRecorderFindV264）")
-            return true
-        }
-        return false
-    }
+    // MARK: - 录屏（V0.2.65：自己录，不再碰系统录屏服务）
 
     private static func toggleRecording() {
-        // V0.2.64（AevonRecorderFindV264）：先动态找系统录屏服务（不再猜类名）。
-        if let service = dynamicRecordingService() {
-            if isRecording {
-                if stopSystemRecording(service) {
-                    AevonQuickToast.show("录屏已结束")
-                    return
-                }
-            } else if startSystemRecording(service) {
-                AevonQuickToast.show("已开始录屏")
-                return
-            }
-        }
-        // 兜底：ReplayKit（多数 SpringBoard 上会直接失败，只留日志）
-        AevonLog.warn("[快捷] 没有可用的系统录屏服务 → 退回 RPScreenRecorder"
-            + "（AevonQuickShotV264）")
-        let recorder = RPScreenRecorder.shared()
-        guard recorder.isAvailable else {
-            AevonLog.warn("[快捷] 录屏不可用：RPScreenRecorder.isAvailable = false"
-                + "（AevonQuickSystemV263）")
+        AevonFrameRecorder.shared.toggle()
+    }
+
+    /// 给录制器用的抓帧入口（和截图同一条已验证通路）。
+    static func captureFrameForRecorder() -> CGImage? {
+        return captureScreenImage()?.cgImage
+    }
+
+}
+
+
+/// V0.2.65（AevonOwnRecorderV265，用户 Aevon(38) #5「录屏依旧不可用（并且点击录屏时会自动注销）」）
+///
+/// 前面三版都在找「系统那个录屏服务」：
+///   0.2.63 硬编码四个类名 → 本机一个都不存在；
+///   0.2.64 改成遍历所有类、`perform` 取单例 → **一点就注销**。
+/// 崩溃栈给了答案：`swift_dynamicCast` ← `_CF_forwarding_prep_0` ← dispatch 主队列，
+/// 就是给某些类发 `perform(sharedInstance)` 拿回一个非 NSObject 的返回值（NSProxy 之类），
+/// 再 `as? NSObject` 时走了消息转发 → 陷阱。这条路本身就不该走。
+///
+/// 现在自己录：每 1/6 秒用 `_UICreateScreenUIImageWithRotation`（和截图同一条已验证通路）
+/// 抓一帧，AVAssetWriter 写 H.264 MP4，停止时存相册。不碰任何系统私有服务，
+/// 也就不可能把 SpringBoard 带走。
+final class AevonFrameRecorder {
+    static let shared = AevonFrameRecorder()
+
+    private var writer: AVAssetWriter?
+    private var input: AVAssetWriterInput?
+    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var timer: Timer?
+    private var outputURL: URL?
+    private var startTime = CACurrentMediaTime()
+    private var frames = 0
+    private var failedFrames = 0
+    private let fps: Double = 6
+
+    var isRunning: Bool { writer != nil }
+
+    func toggle() {
+        if isRunning { stop() } else { start() }
+    }
+
+    private func start() {
+        guard writer == nil else { return }
+        guard let first = AevonQuickAction.captureFrameForRecorder() else {
+            AevonLog.warn("[录屏] 抓不到第一帧，取消录制（AevonOwnRecorderV265）")
+            AevonQuickToast.show("录屏失败：抓不到画面")
             return
         }
-        if isRecording {
-            recorder.stopRecording { preview, error in
-                isRecording = false
-                if let error = error {
-                    AevonLog.warn("[快捷] 停止录屏失败：\(error.localizedDescription)（AevonQuickSystemV263）")
-                    return
-                }
-                AevonLog.info("[快捷] 录屏已停止（AevonQuickSystemV263）")
-                if let preview = preview {
-                    savePreview(preview)
-                } else {
-                    AevonLog.warn("[快捷] 录屏没有返回预览控制器，视频可能未落盘（AevonQuickSystemV263）")
-                }
-            }
+        var w = first.width
+        var h = first.height
+        w -= w % 2
+        h -= h % 2
+        guard w > 16, h > 16 else { return }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("Aevon-\(Int(Date().timeIntervalSince1970)).mp4")
+        try? FileManager.default.removeItem(at: url)
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: w,
+            AVVideoHeightKey: h,
+        ]
+        let assWriter: AVAssetWriter
+        do {
+            assWriter = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        } catch {
+            AevonLog.warn("[录屏] 建不了输出文件：\(error.localizedDescription)（AevonOwnRecorderV265）")
+            AevonQuickToast.show("录屏失败：无法建文件")
             return
         }
-        recorder.isMicrophoneEnabled = false
-        recorder.startRecording { error in
-            if let error = error {
-                AevonLog.warn("[快捷] 开始录屏失败：\(error.localizedDescription)（AevonQuickSystemV263）")
-                isRecording = false
-                return
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        videoInput.expectsMediaDataInRealTime = true
+        let bufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: videoInput,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+                kCVPixelBufferWidthKey as String: w,
+                kCVPixelBufferHeightKey as String: h,
+            ])
+        guard assWriter.canAdd(videoInput) else {
+            AevonLog.warn("[录屏] 写入器不接受视频轨（AevonOwnRecorderV265）")
+            return
+        }
+        assWriter.add(videoInput)
+        guard assWriter.startWriting() else {
+            AevonLog.warn("[录屏] startWriting 失败：\(assWriter.error?.localizedDescription ?? "未知")"
+                + "（AevonOwnRecorderV265）")
+            return
+        }
+        assWriter.startSession(atSourceTime: .zero)
+        writer = assWriter
+        input = videoInput
+        adaptor = bufferAdaptor
+        outputURL = url
+        startTime = CACurrentMediaTime()
+        frames = 0
+        failedFrames = 0
+        let ticker = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+        RunLoop.main.add(ticker, forMode: .common)
+        timer = ticker
+        append(first, at: CMTime(seconds: 0, preferredTimescale: 600))
+        AevonLog.info("[录屏] 开始录制：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
+            + "（再点一次「录屏」结束并存相册）（AevonOwnRecorderV265）")
+        AevonQuickToast.show("开始录屏")
+    }
+
+    private func tick() {
+        guard let assWriter = writer, assWriter.status == .writing else { return }
+        guard let frame = AevonQuickAction.captureFrameForRecorder() else {
+            failedFrames += 1
+            return
+        }
+        let elapsed = CACurrentMediaTime() - startTime
+        append(frame, at: CMTime(seconds: elapsed, preferredTimescale: 600))
+    }
+
+    private func append(_ image: CGImage, at time: CMTime) {
+        guard let adaptor, let pool = adaptor.pixelBufferPool else { return }
+        guard adaptor.assetWriterInput.isReadyForMoreMediaData else { return }
+        var pixelBuffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess,
+              let buffer = pixelBuffer else { return }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        if let base = CVPixelBufferGetBaseAddress(buffer) {
+            let width = CVPixelBufferGetWidth(buffer)
+            let height = CVPixelBufferGetHeight(buffer)
+            let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue
+            if let context = CGContext(data: base, width: width, height: height,
+                                       bitsPerComponent: 8,
+                                       bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                                       space: CGColorSpaceCreateDeviceRGB(),
+                                       bitmapInfo: bitmapInfo) {
+                context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             }
-            isRecording = true
-            AevonLog.info("[快捷] 开始录屏（ReplayKit）（AevonQuickSystemV263）")
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        if adaptor.append(buffer, withPresentationTime: time) {
+            frames += 1
         }
     }
 
-    /// 把录制结果写相册：RPPreviewViewController 的公开接口只有分享面板（SpringBoard
-    /// 里没有可用的宿主），所以直接调它的私有保存方法；取不到就如实记日志。
-    private static func savePreview(_ controller: RPPreviewViewController) {
-        let selectors = ["saveVideoToCameraRoll:", "savePreviewToCameraRoll:"]
-        for name in selectors {
-            let selector = NSSelectorFromString(name)
-            if controller.responds(to: selector) {
-                _ = controller.perform(selector, with: nil)
-                AevonLog.info("[快捷] 录屏走 \(name) 存相册（AevonQuickActionV262）")
-                return
+    private func stop() {
+        timer?.invalidate()
+        timer = nil
+        guard let assWriter = writer, let videoInput = input else { return }
+        let url = outputURL
+        let total = frames
+        let missed = failedFrames
+        videoInput.markAsFinished()
+        writer = nil
+        input = nil
+        adaptor = nil
+        outputURL = nil
+        if total < 2 {
+            AevonLog.warn("[录屏] 只有 \(total) 帧，当成失败处理（AevonOwnRecorderV265）")
+            if let url { try? FileManager.default.removeItem(at: url) }
+            AevonQuickToast.show("录屏失败：没抓到足够画面")
+            return
+        }
+        AevonLog.info("[录屏] 停止录制，正在收尾（\(total) 帧，失败 \(missed) 帧）"
+            + "（AevonOwnRecorderV265）")
+        assWriter.finishWriting {
+            let status = assWriter.status
+            let failure = assWriter.error?.localizedDescription ?? "未知"
+            DispatchQueue.main.async {
+                guard status == .completed, let url else {
+                    AevonLog.warn("[录屏] 收尾失败：status=\(status.rawValue) \(failure)"
+                        + "（AevonOwnRecorderV265）")
+                    AevonQuickToast.show("录屏保存失败")
+                    return
+                }
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                }, completionHandler: { ok, error in
+                    DispatchQueue.main.async {
+                        if ok {
+                            AevonLog.info("[录屏] 已存相册（\(total) 帧 / \(String(format: "%.1f", Double(total) / 6.0)) 秒）"
+                                + "（AevonOwnRecorderV265）")
+                            AevonQuickToast.show("录屏已存相册")
+                        } else {
+                            AevonLog.warn("[录屏] 存相册失败：\(error?.localizedDescription ?? "未知")"
+                                + "（AevonOwnRecorderV265）")
+                            AevonQuickToast.show("录屏已生成（相册保存失败）")
+                        }
+                    }
+                })
             }
         }
-        AevonLog.warn("[快捷] 录屏已生成但没有可用的存相册入口（RPPreviewViewController 无 "
-            + selectors.joined(separator: " / ") + "）（AevonQuickActionV262）")
     }
 }
 

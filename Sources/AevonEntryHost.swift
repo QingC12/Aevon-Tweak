@@ -408,6 +408,16 @@ enum AevonEntryHost {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard appSceneView === view, coversScreen(view) else { return }
             attach(to: view, reason: "\(reason)（延后重顶）")
+            /* V0.2.65（AevonFullscreenRetryV265，用户 Aevon(38) #6「浮窗打开设置时，
+             * 在桌面点击设置全屏打开时全屏黑屏，但浮窗显示设置内容（并没有自动关闭浮窗）」）：
+             *
+             * 第一次回调时场景视图往往还没铺满（`coversScreen` 为假）→ 直接 return，
+             * `handleFullscreenSceneAppeared` **一次都没被调用**（Aevon(38) 整篇日志
+             * 没有一条「自动关闭浮窗」）。0.25 秒后视图铺满了，这里补一次同样的交接判定，
+             * 浮窗才会真的让位。 */
+            if let identifier = sceneIdentifier {
+                AevonWindowManager.handleFullscreenSceneAppeared(sceneIdentifier: identifier)
+            }
         }
     }
 

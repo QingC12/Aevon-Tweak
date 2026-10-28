@@ -2453,9 +2453,11 @@ jobs:
             || { echo "::error::0.2.61 缺停靠窗口按 frame 的命中判定"; exit 1; }
           grep -q 'AevonEntryHost.dockedWindow(atScreenPoint: point)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::0.2.61 全局通道没接停靠轻点（全屏 App 上点小窗没反应）"; exit 1; }
-          # ⑦回桌面：让位必须**同步**隐形（alpha 0.02，不做 0.08s 淡出），淡入后 0.9s 稳定期禁盖帧
+          # ⑦回桌面：让位**不许再把整窗藏起来**（0.2.61 的 alpha 0.02 就是「窗消失再出现」= 闪）
           grep -q 'alpha = 0.02' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.61 让位没有同步隐形（0.08s 淡出期会露黑 = 黑↔画面交替）"; exit 1; }
+            && { echo "::error::0.2.65 回桌面又把整窗藏起来（窗消失→再出现，用户看到的闪）"; exit 1; } || true
+          grep -q 'AevonNoVanishV265' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.65 让位期没有「窗口保持可见」的实现"; exit 1; }
           grep -q 'liveSettleWindow: TimeInterval = 0.9' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.61 淡入后稳定期缺失（cs 2→0→2 抖时会盖帧=闪烁）"; exit 1; }
           grep -q 'if liveSettleUntil > 0, CACurrentMediaTime() < liveSettleUntil {' \
@@ -2477,9 +2479,15 @@ jobs:
           # ⑧ App 侧：hook sendEvent: 前必须自检类型编码（0.2.52 安全模式事故纪律）
           grep -q "types\[0\] != 'v'" "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.61 把手吞咽缺类型编码自检（fail-closed 纪律）"; exit 1; }
-          # 0.2.63 反转：闸门从「窗口高 < 真屏高 − 60」改成 AevonAppIsFloatHosted()（与几何无关，必达）
+          # 0.2.65 反转：吞咽闸门不再看承载标记，改成「按点判定」（浮窗边条 + 把手带）。
+          # 承载标记在 App 从浮窗转回全屏后会残留 0.3 秒以上 —— 那 0.3 秒里第一次滑把手
+          # 会被 App 吃掉，正是用户说的「每次第一次都会触发应用内操作」。
           grep -q 'if (AevonAppIsFloatHosted()) { return NO; }' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.63 把手吞咽缺「浮窗承载时不接管」闸（会吃掉浮窗内点击）"; exit 1; }
+            && { echo "::error::0.2.65 吞咽又回到承载标记闸门（第一次滑把手会被 App 吃掉）"; exit 1; } || true
+          grep -q 'static CGRect AevonFloatFrameRect' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 应用层缺「浮窗矩形」判定（浮窗内操作会漏给全屏 App）"; exit 1; }
+          grep -q 'CGRectContainsPoint(floatRect, p)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 浮窗边条没有按点吞"; exit 1; }
           grep -q 'w.bounds.size.height < real.height - 60.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             && { echo "::error::0.2.63 把手吞咽闸回退到旧几何锚（真机零命中，已被 AevonGripSwallowFixV263 取代）"; exit 1; } || true
           grep -q 'AevonKeyboardVisible' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
@@ -2624,9 +2632,13 @@ jobs:
           grep -q 'AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.63 缺「残留承载标记 → 画布写回整屏」兜底"; exit 1; }
-          # ⑥回桌面：无画面时整窗藏着（不许 alpha=1 硬淡入 = 闪）
+          # ⑥回桌面：0.2.65 反转 —— 不再「无画面就把整窗藏着」（藏=窗消失=闪）
           grep -q 'liveAwaitingContent = true' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.63 让位到点没画面仍会硬淡入（画面快速闪）"; exit 1; }
+            && { echo "::error::0.2.65 又回到「让位到点把整窗藏起来」（窗消失再出现 = 闪）"; exit 1; } || true
+          grep -q 'liveWaitFreezeAllowed' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.65 让位期没垫最后一帧（窗口会露空）"; exit 1; }
+          grep -q 'AevonFreezeCrossFadeV265' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.65 撤定格帧不是淡出（硬切 = 闪）"; exit 1; }
           grep -q 'freezeQuietWindow' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.63 盖帧没有静默期（盖/撤抖动 = 快速闪）"; exit 1; }
           grep -q 'idleDarkTicks >= 3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -2656,9 +2668,14 @@ jobs:
             || { echo "::error::0.2.64 截图没有提示（用户看不到反馈）"; exit 1; }
           grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.64 录屏没做动态类探测（候选类名在本机全部不存在）"; exit 1; }
-          grep -q 'startSystemRecordingWithMicrophoneEnabled:handler:' \
-            "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
-            || { echo "::error::0.2.63 录屏没走系统录屏服务（ReplayKit 在 SB 里起不来）"; exit 1; }
+          # V0.2.65 反转：录屏不再遍历类表（Aevon(38) 一点就注销 = 在 perform 上踩陷阱），
+          # 改成自己抓帧写 MP4。
+          grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            && { echo "::error::0.2.65 又去遍历类表取录屏单例（Aevon(38) 实测一点就注销）"; exit 1; } || true
+          grep -q 'AVAssetWriterInputPixelBufferAdaptor' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.65 录屏没有自己写 MP4 的实现"; exit 1; }
+          grep -q 'AevonFrameRecorder' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.65 缺自绘录制器"; exit 1; }
           echo "V0.2.63 校验: 抖音画面居中 + 停靠不误关 + 截图/录屏走系统且可编辑 + 键盘通知对位 + 残留黑屏兜底 + 回桌面藏着不闪 + 把手占用广播 已就位"
 
           # ── V0.2.64 校验（Aevon(38) 六项）──────────────────────────────────────
@@ -2669,7 +2686,7 @@ jobs:
               || { echo "::error::0.2.64 App 侧 dylib 缺标记 $s"; exit 1; }
           done
           for s in AevonSwapDockV264 AevonMainAvoidV264 AevonFloatTransitionV264 \
-          AevonFullscreenRecoverV264 AevonQuickShotV264 AevonRecorderFindV264 \
+          AevonFullscreenRecoverV264 AevonQuickShotV264 \
           AevonFadeInV264; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.64 主库缺标记 $s"; exit 1; }
@@ -2702,6 +2719,57 @@ jobs:
             || { echo "::error::0.2.64 ⓘ 说明弹窗没实现"; exit 1; }
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));bad=[str(i.get('label','')) for i in d['items'] if i.get('cell')=='PSGroupCell' and len(i.get('footerText','') or '')>90];print('::error::0.2.64 一级菜单分组注释过长: '+','.join(bad)) if bad else print('V0.2.64 设置页: 分组注释全部 <=90 字');sys.exit(1 if bad else 0)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           echo "V0.2.64 校验: 单主窗转停靠 + 主窗避让 + 出入场动画 + 设置页去长注释 + 抖音居中口径/键盘闸门/承载去抖/二次黑屏 已就位"
+
+          # ── V0.2.65 校验（归档(16) 十项）──────────────────────────────────────
+          for s in AevonEdgeShieldV265 AevonKeyAllWindowsV265 AevonKeyAlignV265 \
+          AevonNoCapsFileV265; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.65 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          for s in AevonEntryRevealV265 AevonNoVanishV265 AevonFreezeCrossFadeV265 \
+          AevonCenterPresentV265 AevonOwnRecorderV265 AevonLiveWakeV265 \
+          AevonFullscreenRetryV265; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.65 主库缺标记 $s"; exit 1; }
+          done
+          # ① #10 日志目录清理：不再写 aevon_caps.txt
+          grep -q 'aevon_caps.txt' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 能力表清理没做（日志目录仍会留 aevon_caps.txt）"; exit 1; }
+          grep -q 'writeToFile:path atomically:YES' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && { echo "::error::0.2.65 又往日志目录写能力表文件了"; exit 1; } || true
+          # ② #2 浮窗边条：SB 侧发布浮窗矩形
+          grep -q 'static func publishFloatFrame' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.65 SB 没把浮窗矩形写给 App 侧（浮窗内操作会漏给全屏 App）"; exit 1; }
+          grep -q 'AevonFloatFrame' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.65 浮窗矩形没落偏好"; exit 1; }
+          # ③ #3 开窗入场：等画布切完再显（否则第一时间底栏黑）
+          grep -q 'func revealEntryNow' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.65 开窗入场没有「等画布就绪再显」"; exit 1; }
+          grep -q 'revealEntryNow("画布已切到浮窗尺寸")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.65 预热切完画布没有触发显窗"; exit 1; }
+          # ④ #4 键盘：窗口枚举不能再走废弃的 sharedApplication.windows
+          grep -q 'static NSArray<UIWindow \*> \*AevonAllWindows' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 键盘窗口枚举没换成 _allWindowsIncludingInternalWindows"; exit 1; }
+          grep -q '_allWindowsIncludingInternalWindows:onlyVisibleWindows:' \
+            "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 场景化 App 上 windows 恒空，枚举必走私有接口"; exit 1; }
+          grep -q 'static NSInteger AevonKeyAlignWindows' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.65 键盘对位没有统一实现"; exit 1; }
+          # ⑤ #6 全屏交接：0.25s 后补一次判定（第一次回调 coversScreen 往往为假）
+          grep -q 'AevonFullscreenRetryV265' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.65 全屏出现没有补判定（浮窗不会自动让位 = 黑屏）"; exit 1; }
+          # ⑥ #7 抖音：呈现层视觉对中（远程层高度可测时才动手）
+          grep -q 'func centerStaleContentIfNeeded' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.65 缺「画面中心对齐浮窗中心」"; exit 1; }
+          grep -q 'presentationView.transform = CGAffineTransform(translationX: 0, y: shift)' \
+            "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.65 呈现层没做位移"; exit 1; }
+          # ⑦ #9 浮窗卡住：别的 App 抢全屏时叫醒
+          grep -q 'func refreshLiveContent' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.65 缺「全屏抢走时叫醒浮窗场景」"; exit 1; }
+          grep -q 'refreshLiveContent(reason: "全屏出现' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.65 全屏出现没接叫醒"; exit 1; }
+          echo "V0.2.65 校验: 边条按点吞 + 浮窗矩形 + 等画布再显 + 键盘窗口枚举 + 全屏交接补判 + 抖音呈现层对中 + 叫醒浮窗 + 自绘录屏 + 去 caps 文件 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

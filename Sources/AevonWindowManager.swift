@@ -95,6 +95,18 @@ enum AevonWindowManager {
             AevonLog.warn("[窗口] 全屏 App 画面出现，但场景标识取不到（探针待补 KVC 路径）；本次不自动关窗（AevonFullscreenCloseV106）")
             return
         }
+        /* V0.2.65（AevonLiveWakeV265，用户 Aevon(38) #9「桌面开启悬浮窗时，打开全屏 App 时，
+         * 浮窗内容会卡住，必须点一下或者多下才能显示实时画面」）：
+         *
+         * 全屏 App 一上场，系统会把**其它** App 的场景压到后台，我们浮窗里那个场景的
+         * 远程表面就不再刷新 —— 窗口上留着的其实是最后一帧，看起来就是「卡住」。
+         * 用户点一下能好，是因为点击让场景又拿到一次渲染机会。
+         *
+         * 这里在全屏画面出现的这一刻主动把它叫醒（重申前台 + 必要时垫帧 + 0.9 秒补一次），
+         * 不依赖用户去点。 */
+        if let bundle = currentBundleID, !bundle.isEmpty, !sceneIdentifier.contains(bundle) {
+            currentView?.refreshLiveContent(reason: "全屏出现 \(sceneIdentifier)")
+        }
         // ── V0.2.63（AevonFullscreenRecoverV263，用户 Aevon(37) #5）──────────────
         // 「悬浮窗打开设置，双击关闭浮窗后，点桌面设置图标 → 黑屏，浮窗也没自动关」。
         //
@@ -205,6 +217,17 @@ enum AevonWindowManager {
     static var openBundleIDs: [String] {
         if let identifier = openBundleID { return [identifier] }
         return []
+    }
+
+    /// V0.2.65（AevonEdgeShieldV265，用户 Aevon(38) #1 #2）：
+    /// 把主浮窗的**屏幕矩形**写进偏好域，给 App 进程的吞咽判定用。
+    ///
+    /// 为什么不用通知传：`notify_set_state` 只有 64 位，装不下四个坐标；而每根手指
+    /// 都发一次跨进程通知又太贵。浮窗几何变化很少（拖动松手 / 缩放 / 停靠 / 关闭），
+    /// 写一次偏好让 App 侧缓存 0.5 秒，够用且零时序风险。
+    static func publishFloatFrame(_ rect: CGRect) {
+        let text = "\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
+        AevonPrefs.set("AevonFloatFrame", text)
     }
 
     static func title(for bundleID: String) -> String {
@@ -631,19 +654,28 @@ enum AevonWindowManager {
              * 之前是 addSubview 之后 alpha 直接就是 1，视觉上「啪」地出现一块窗。 */
             windowView.alpha = 0
             windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
-            UIView.animate(withDuration: 0.34, delay: 0.02,
-                           usingSpringWithDamping: 0.86,
-                           initialSpringVelocity: 0.3,
-                           options: [.allowUserInteraction, .beginFromCurrentState],
-                           animations: {
-                windowView.alpha = 1
-                windowView.transform = .identity
-            }, completion: nil)
-            AevonLog.info("[窗口] 开窗入场：\(bundleID) 淡入 + 0.965→1.0 弹簧 0.34s"
-                + "（AevonFloatTransitionV264）")
+            /* V0.2.65（AevonEntryRevealV265，用户 Aevon(38) #3「浮窗打开 App 时第一时间
+             * 会出现底栏黑屏」）：
+             *
+             * 0.2.64 是 addSubview 之后立刻淡入 —— 而这一刻画布**还是整屏 932**
+             * （画布要 0.42 秒后才切到 737，见下面的预热块）。App 按 932 排版，它的
+             * 底栏 / TabBar 在 y≈880 的位置，落在 737 画布之外 → 浮窗底部那条就是空的
+             * （黑）。等画布切过去、App 重排完，底栏才「跳」回来。
+             *
+             * 现在改成：先 alpha 0 藏着，等画布真的切到浮窗尺寸并且踢过一次重排之后
+             * 再淡入。用户看到的第一帧就是「排好版的样子」。上限 1.3 秒兜底，
+             * 任何路径卡住都不会留下一个看不见的窗。 */
+            AevonLog.info("[窗口] 开窗入场：\(bundleID) 先藏着等画布切到浮窗尺寸，"
+                + "切完再淡入 + 0.965→1.0 弹簧 0.34s（AevonFloatTransitionV264 AevonEntryRevealV265）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak windowView] in
+                windowView?.revealEntryNow("兜底上限到达")
+            }
             currentView = windowView
             currentBundleID = bundleID
             lastOpenedAt = CACurrentMediaTime()
+            // V0.2.65（AevonEdgeShieldV265）：开窗即发布浮窗矩形，App 侧从第一根手指起
+            // 就能判「这一点是不是浮窗的手势区」。
+            publishFloatFrame(windowView.frame)
             // V0.2.64（AevonMainAvoidV264）：开窗后若左右某一侧已有停靠列 → 主窗让开那一侧。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
                 AevonWindowManager.avoidDockColumns(reason: "开窗 \(bundleID)")
@@ -703,6 +735,10 @@ enum AevonWindowManager {
                     // 把 429x736 当成「被回弹」又补写一遍）。现在传原值。
                     sceneHost?.kickRelayout(width: mainCanvas.width, height: mainCanvas.height,
                                             tag: "预热切换 \(bundleID)")
+                    // V0.2.65（AevonEntryRevealV265）：画布已经切到浮窗尺寸并踢过一次重排 ——
+                    // 现在才让窗口出现。用户 Aevon(38) #3 的「第一时间底栏黑屏」就是
+                    // 在这一拍之前把窗显出来造成的。
+                    currentView?.revealEntryNow("画布已切到浮窗尺寸")
                     // V0.2.62（AevonSeamRepairFixedV262）：再 0.35 秒做一次极短「整屏 →
                     // 画布」往返。预热那一拍只是「整屏渲染过一帧」，而抖音要的是
                     // 「从大尺寸退到小尺寸时重排」—— 用户实测只有「全屏打开一次」才管用。
@@ -715,6 +751,12 @@ enum AevonWindowManager {
                                                             height: mainCanvas.height,
                                                             tag: "预热复刻 \(bundleID)")
                     }
+                }
+            } else {
+                // 非预热档：画布在开窗前就已经写好了，给系统 0.25 秒把第一帧排出来再显。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    guard currentBundleID == bundleID else { return }
+                    currentView?.revealEntryNow("画布早已就绪")
                 }
             }
             // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
@@ -730,6 +772,16 @@ enum AevonWindowManager {
                     guard currentBundleID == bundleID else { return }
                     sceneHost?.healStaleLayoutIfNeeded(width: healWidth, height: healHeight,
                                                        tag: "开窗 \(bundleID)")
+                }
+                /* V0.2.65（AevonCenterPresentV265，用户 Aevon(38) #7）：
+                 * 抖音进程里没有 App 侧 dylib（日志无任何 Aweme 行），只能在我们自己的
+                 * 进程里对呈现层做视觉对中。两次机会：重排踢完之后 / 再晚 0.6 秒。 */
+                for delay in [healAt + 0.15, healAt + 0.75] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak sceneHost] in
+                        guard currentBundleID == bundleID else { return }
+                        sceneHost?.centerStaleContentIfNeeded(canvasSize: mainCanvas,
+                                                              tag: "开窗 \(bundleID)")
+                    }
                 }
             }
             completion?(true)
@@ -835,6 +887,9 @@ enum AevonWindowManager {
         // V0.2.49（AevonAppScreenFitV249）：共享内存那份同步清掉 ——
         // App 下一遍布局立刻拿到真实屏幕尺寸（否则关窗后仍按画布排）。
         AevonNotifySetFloatStage("")
+        // V0.2.65（AevonEdgeShieldV265）：窗没了 → 让 App 侧的边条吞噬判定立刻失效
+        // （留一个 0x0 矩形，App 侧看到宽度 <40 就整段跳过）。
+        publishFloatFrame(.zero)
         windowView.teardown()
         // V0.2.56（AevonCloseDisarmV256）：窗没了 → 拖拽吞咽状态必须一并解除，
         // 残留 floatTouchID 只会误吞同槽位的新触摸（pan 死、点按活）。
