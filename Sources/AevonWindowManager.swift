@@ -791,6 +791,8 @@ enum AevonWindowManager {
                          * → kick 两笔 +0.44 / +0.69 —— 尾排全在 0.85 之前；0.2.68 的
                          * 0.48 显窗时尾排还剩两笔，内容在用户眼前又跳两遍 = 闪一下。
                          * 显窗时机 = 画布彻底定稿之后，开窗即终态。 */
+                        AevonLog.info("[窗口] 显窗时机 +0.85s（画布定稿 +0.69s 之后，开窗即终态）"
+                            + "（AevonRevealLateV269）")
                         currentView?.revealEntryNow("预热隐形复刻完成（画布已切回）")
                     }
                 }

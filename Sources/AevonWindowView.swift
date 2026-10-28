@@ -1214,6 +1214,8 @@ final class AevonWindowView: UIView {
         // 会丢帧」）：拖动期间把熄屏重申定时器停掉 —— 它 8 秒一发、每次都在主线程
         // 上做一串 runtime 探测（类表遍历 + perform），正好撞上拖动的每一帧合成；
         // 落位后立即重启（浮窗还在，防熄屏语义不受影响）。缩放同享（isLiveResizing）。
+        AevonLog.info("[窗口] 拖动\((moving ? "开始 → 熄屏重申拍子暂停（降载防丢帧）" : "结束 → 熄屏重申拍子恢复"))"
+            + "（AevonDragLeanV269）")
         if moving {
             idleKickTimer?.invalidate()
             idleKickTimer = nil

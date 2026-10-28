@@ -411,7 +411,7 @@ final class AevonSceneHost {
         let fullOK = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
         AevonLog.warn("[场景] 断层修复：先把画布放回整屏 \(Int(screen.width))x\(Int(screen.height))"
             + "（\(fullOK ? "已提交" : "失败")，模拟「全屏打开一次」），0.12s 后写回 "
-            + "\(Int(width))x\(Int(height))（\(tag)）（AevonDouyinRepairV261）")
+            + "\(Int(width))x\(Int(height))（\(tag)）（AevonDouyinRepairV261 AevonBounceFastV269）")
         // V0.2.69（AevonBounceFastV269，用户 Aevon(41) #1「圆盘选中图标打开悬浮窗时，
         // 悬浮窗会先闪一下」）：0.18 → 0.12。复刻尾排（写回 + kick 的两笔写入）
         // 必须全部落在显窗（manager +0.85s）**之前** —— 显窗后再写画布 = 内容
