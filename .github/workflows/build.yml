@@ -620,20 +620,24 @@ jobs:
           ARCH="$(grep -i '^Architecture:' ctl/control | cut -d' ' -f2-)"
           echo "deb Architecture: $ARCH"
           [ "$ARCH" = "iphoneos-arm64e" ] || { echo "::error::deb 架构应为 iphoneos-arm64e，实际: $ARCH"; exit 1; }
-          # ── V0.0.31/32：插件图标（Sileo Icon 字段 + 图标文件，路径不含空格）──
-          # V0.0.40（AevonSileoIconV40）：file:// scheme Sileo 不解析
-          #（UIImage(contentsOfFile:) 只认纯路径），改纯绝对路径。
-          grep -qi '^Icon:' ctl/control \
-            || { echo "::error::control 缺少 Icon: 字段（Sileo 不显示插件图标）"; exit 1; }
-          find . -path '*Library/Aevon/AevonIcon.png' | grep -q . \
-            || { echo "::error::deb 缺少插件图标文件 Library/Aevon/AevonIcon.png（Sileo Icon 指向它）"; exit 1; }
-          grep -q '^Icon: /var/jb/Library/Aevon/AevonIcon.png' ctl/control \
-            || { echo "::error::control Icon: 应为纯路径 /var/jb/Library/Aevon/AevonIcon.png（Sileo 不解析 file:// scheme）"; exit 1; }
+          # ── 插件图标：V0.2.61 起 **Sileo 列表不再显示图标**（用户 Aevon(35) #5）──
+          # 原 V0.0.31/32 的正向断言（control 必须有 Icon: 且指向纯绝对路径）在
+          # V0.2.61 整建制反转：Icon: 字段**必须不存在**，一旦回潮就报错。
+          # 设置里的图标不受影响 —— 那是 AevonPrefs.bundle 里的 icon.png / icon@2x / icon@3x
+          #（由 entry.plist 的 icon 键引用），下面照旧守着。
+          if grep -qi '^Icon:' ctl/control; then
+            echo "::error::control 又出现 Icon: 字段（V0.2.61 起 Sileo 列表不显示插件图标，只保留设置里的图标）"
+            exit 1
+          fi
+          if grep -q 'AevonIcon.png' ctl/control; then
+            echo "::error::control 里仍引用 AevonIcon.png（Sileo 图标已退役）"
+            exit 1
+          fi
           find . -name 'icon@2x.png' -path '*AevonPrefs.bundle*' | grep -q . \
             || { echo "::error::AevonPrefs.bundle 缺少 icon@2x.png（系统设置不显示插件图标）"; exit 1; }
           find . -name 'icon@3x.png' -path '*AevonPrefs.bundle*' | grep -q . \
             || { echo "::error::AevonPrefs.bundle 缺少 icon@3x.png（系统设置不显示插件图标）"; exit 1; }
-          echo "V0.0.40 图标校验: Sileo Icon 纯路径 + 图标文件 已就位"
+          echo "V0.2.61 图标校验: control 无 Icon:（Sileo 不显示）+ 设置 bundle 三档图标仍在"
           PKG="$(grep -i '^Package:' ctl/control | cut -d' ' -f2-)"
           echo "deb Package: $PKG"
           [ "$PKG" = "com.aevon" ] || { echo "::error::包名应为 com.aevon（dpkg 要求全小写），实际: $PKG"; exit 1; }
@@ -650,6 +654,13 @@ jobs:
           echo "设置 bundle 控制器类: 已编入；specifier 构建与写回: 已编入"
           strings "$PREFS_BIN" | grep -q 'aevonOpenRingEditor' \
             || { echo "::error::设置页没有「编辑圆盘 App」入口动作（aevonOpenRingEditor）"; exit 1; }
+          # V0.2.61（AevonGripPageV261）：把手调整页的入口动作与控制器都必须真的编进二进制
+          strings "$PREFS_BIN" | grep -q 'aevonOpenGrip' \
+            || { echo "::error::设置页没有「圆盘把手」入口动作（aevonOpenGrip）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'AevonGripListController' \
+            || { echo "::error::缺少 AevonGripListController（把手页控制器没编进 bundle，点进去会空白）"; exit 1; }
+          strings "$PREFS_BIN" | grep -q 'AevonGripPageV261' \
+            || { echo "::error::设置 bundle 缺标记 AevonGripPageV261"; exit 1; }
           PREFS_DIR_TMP="$(dirname "$PREFS_BIN")"
           plutil -convert xml1 -o - "$PREFS_DIR_TMP/Root.plist" | grep -q 'aevonOpenDetail' \
             || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
@@ -673,16 +684,37 @@ jobs:
             echo "::error::Root.plist 仍有已删除的开关项（SnapEnabled / KeepAlive / ForceForeground / SystemGestureEdge）"
             exit 1
           fi
-          # V0.0.30：一级 Root.plist 只允许开关（滑杆全部在 Detail.plist）
-          # V0.2.59（AevonGripCustomV259）反转：把手位置 / 长度两个滑条按用户要求
-          #（Aevon(33) #3「增加设置项，自定义上下位置和尺寸大小」）放回一级页
-          # —— 一级页从此允许PSSliderCell，但**必须带 min/max 量程**（V0.0.29 护栏延续）。
+          # V0.0.30：一级 Root.plist 只允许开关（滑杆全部在二级页）
+          # V0.2.59（AevonGripCustomV259）曾把把手两条滑条放回一级页；
+          # V0.2.61（AevonGripPageV261，用户 Aevon(35) #1「圆盘触发条的调整功能移动到一个
+          # 可点击进入的一级菜单里，且不要把圆圈叹号放在滑条上」）又整体搬进 Grip.plist ——
+          # 于是这条断言**再反转为**「一级页零滑条」，滑条数 / 量程改到 Grip.plist 上守。
           ROOT_SLIDER_TOTAL=$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c 'PSSliderCell' || true)
-          [ "$ROOT_SLIDER_TOTAL" -eq 2 ] \
-            || { echo "::error::Root.plist 滑杆数不是 2（V0.2.59 定档 = GripY + GripLen，实际 $ROOT_SLIDER_TOTAL）"; exit 1; }
-          ROOT_SLIDER_RANGE=$(plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -c -e '<key>min</key>' -e '<key>max</key>' || true)
-          [ "$ROOT_SLIDER_RANGE" -ge 4 ] \
-            || { echo "::error::Root.plist 滑杆缺 min/max 量程（V0.0.29 护栏：缺量程退化成 0~1）"; exit 1; }
+          [ "$ROOT_SLIDER_TOTAL" -eq 0 ] \
+            || { echo "::error::Root.plist 又出现滑杆（V0.2.61 起把手滑条只在 Grip.plist，实际 $ROOT_SLIDER_TOTAL）"; exit 1; }
+          if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'GripY'; then
+            echo "::error::Root.plist 又出现 GripY/GripLen（把手滑条已搬到 Grip.plist）"
+            exit 1
+          fi
+          # Grip.plist：把手页 = 两条滑条 + 各自成组的说明（说明走 footerText，滑条不挂 infoText）
+          [ -s "$ICON_DIR/Grip.plist" ] || { echo "::error::bundle 缺少 Grip.plist（圆盘把手二级页）"; exit 1; }
+          GRIP_SLIDER_TOTAL=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c 'PSSliderCell' || true)
+          [ "$GRIP_SLIDER_TOTAL" -eq 2 ] \
+            || { echo "::error::Grip.plist 滑杆数不是 2（GripY + GripLen，实际 $GRIP_SLIDER_TOTAL）"; exit 1; }
+          GRIP_SLIDER_RANGE=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c -e '<key>min</key>' -e '<key>max</key>' || true)
+          [ "$GRIP_SLIDER_RANGE" -ge 4 ] \
+            || { echo "::error::Grip.plist 滑杆缺 min/max 量程（V0.0.29 护栏：缺量程退化成 0~1）"; exit 1; }
+          # 用户 Aevon(35) #1 的原话：「切记不要在把圆圈叹号放在滑动条上」——
+          # 滑条行里一旦挂了 infoText 就会长出 ⓘ，这里硬性拦死。
+          GRIP_INFO=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c -e '<key>infoText</key>' || true)
+          [ "$GRIP_INFO" -eq 0 ] \
+            || { echo "::error::Grip.plist 的滑条又挂了 infoText（滑条上不许出现圆圈叹号，说明请用 footerText）"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripY' \
+            || { echo "::error::Grip.plist 缺少 GripY 滑条"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripLen' \
+            || { echo "::error::Grip.plist 缺少 GripLen 滑条"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
+            || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenDetail' \
             || { echo "::error::Root.plist 缺少「细节调整」二级页入口"; exit 1; }
@@ -2349,6 +2381,90 @@ jobs:
           grep -q 'Float(dark ? 0.30 : 0.14)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.60 深色光晕 0.30 未落地"; exit 1; }
           echo "V0.2.60 校验: 回桌面先实时后出现 + 停靠只点击装回 + 把手只认滑动(全屏可用) + 抖音预热闸门/断层自愈 + 深色光晕降档 已就位"
+
+          # ── V0.2.61 校验（Aevon(35) 九项）──────────────────────────────────────
+          # ①设置页重排（AevonGripPageV261）：把手滑条搬进 Grip.plist 独立页
+          #   —— plist 侧断言在上面；它的标记在**设置 bundle** 里（PREFS_BIN），不在主库
+          # ②全屏启动设置黑屏（AevonDockFullscreenCloseV261）
+          # ③拖到边缘不再自动停靠（AevonNoAutoDockV261）
+          # ④底边双击误触（AevonDblTapGuardV261）
+          # ⑤Sileo 图标退役 —— control 侧断言在上面（必须不存在 Icon:）
+          # ⑥停靠小窗点击装回（AevonDockTapFixV261 + AevonDockRestoreOnPickV261）
+          # ⑦回桌面闪烁（AevonLiveFirstFixV261）
+          # ⑧把手滑动不再带动 App（AevonGripSwallowV261，在 App 侧 dylib 里）
+          # ⑨抖音断层（AevonDouyinRepairV261）
+          for s in AevonDockFullscreenCloseV261 AevonNoAutoDockV261 \
+          AevonDblTapGuardV261 AevonDockTapFixV261 AevonDockRestoreOnPickV261 \
+          AevonLiveFirstFixV261 AevonDouyinRepairV261; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.61 主库缺标记 $s"; exit 1; }
+          done
+          # ⑧ 的标记在 **App 侧** dylib 里 —— 查主库永远 miss（历史教训）
+          strings "$APP_DYLIB" | grep -q 'AevonGripSwallowV261' \
+            || { echo "::error::0.2.61 App 侧 dylib 缺标记 AevonGripSwallowV261（把手吞咽没编进去）"; exit 1; }
+          # ①把手页：控制器 + 入口动作（bundle 侧已断言），源码侧守「说明用 footerText、
+          #   滑条不挂 infoText」这条口径 —— Grip.plist 里每个 PSSliderCell 段内不许出现 infoText
+          grep -q 'AevonGripListController' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::0.2.61 缺少 AevonGripListController"; exit 1; }
+          grep -q 'aevonOpenGrip' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::0.2.61 一级页没有「圆盘把手」入口"; exit 1; }
+          grep -q 'loadSpecifiersFromPlistName:@"Grip"' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
+            || { echo "::error::0.2.61 把手页没有加载 Grip.plist"; exit 1; }
+          # ②停靠小窗被系统全屏拉起时必须先关小窗（否则同一场景两个主人 = 黑屏）
+          grep -q 'closeDocked(bundleID: docked.bundleID, reason: "被系统全屏拉起")' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.61 停靠小窗没纳入「全屏拉起自动关窗」（设置黑屏复发）"; exit 1; }
+          # ③反向：视图层再也不能按落点自己吸附停靠
+          grep -q 'side(forDropAt' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.61 视图层又出现按落点自动停靠（拖到边缘松手就停靠已退役）"; exit 1; } || true
+          grep -q 'dockCurrent' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.61 视图层又直接调 dockCurrent（停靠唯一入口 = 点边条，走全局通道）"; exit 1; } || true
+          # ④双击窗口：只认原地轻点（≤8pt）+ 间隔 0.45s + 半径 16
+          grep -q 'floatDoubleTapGap: CFTimeInterval = 0.45' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.61 双击间隔未放宽到 0.45s"; exit 1; }
+          grep -q 'floatDoubleTapRadius: CGFloat = 16' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.61 双击半径未收到 16pt"; exit 1; }
+          grep -q 'let moved = hypot(point.x - floatBeganPoint.x' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.61 双击第一击缺「原地轻点」位移判定（拖完再点会被当双击）"; exit 1; }
+          # ⑥停靠点一下装回：真实控件命中层 + 全局通道按窗口 frame 兜底
+          grep -q 'private func installDockTapCatcher' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 停靠态没铺「点一下装回」命中层"; exit 1; }
+          grep -q 'addTarget(self, action: #selector(handleDockCatcherTap' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 命中层没接 touchUpInside"; exit 1; }
+          grep -q 'static func dockedWindow(atScreenPoint' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.61 缺停靠窗口按 frame 的命中判定"; exit 1; }
+          grep -q 'AevonEntryHost.dockedWindow(atScreenPoint: point)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.61 全局通道没接停靠轻点（全屏 App 上点小窗没反应）"; exit 1; }
+          # ⑦回桌面：让位必须**同步**隐形（alpha 0.02，不做 0.08s 淡出），淡入后 0.9s 稳定期禁盖帧
+          grep -q 'alpha = 0.02' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 让位没有同步隐形（0.08s 淡出期会露黑 = 黑↔画面交替）"; exit 1; }
+          grep -q 'liveSettleWindow: TimeInterval = 0.9' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 淡入后稳定期缺失（cs 2→0→2 抖时会盖帧=闪烁）"; exit 1; }
+          grep -q 'if liveSettleUntil > 0, CACurrentMediaTime() < liveSettleUntil {' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 稳定期没有拦在守卫判定之前"; exit 1; }
+          # ⑨抖音断层：按**画面**判定 + 全屏往返修复
+          grep -q 'func scheduleSeamRepair' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 缺开窗后断层自查"; exit 1; }
+          grep -q 'static func lumaStats' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 缺画面采样（断层判定不能只看尺寸）"; exit 1; }
+          grep -q 'stats.aboveMean >= 25' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 缺「黑区上方是亮的」判定（深色 App 会被误判成断层）"; exit 1; }
+          grep -q 'func bounceFullscreenThenBack' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.61 缺「全屏往返」修复"; exit 1; }
+          grep -q 'bounceFullscreenThenBack(width: canvas.width' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.61 断层判定没接到全屏往返"; exit 1; }
+          grep -q 'windowView.scheduleSeamRepair' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.61 开窗后没接断层自查"; exit 1; }
+          # ⑧ App 侧：hook sendEvent: 前必须自检类型编码（0.2.52 安全模式事故纪律）
+          grep -q "types\[0\] != 'v'" "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.61 把手吞咽缺类型编码自检（fail-closed 纪律）"; exit 1; }
+          grep -q 'w.bounds.size.height < real.height - 60.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.61 把手吞咽缺「只在整屏 App 生效」闸（会吃掉浮窗内点击）"; exit 1; }
+          grep -q 'AevonKeyboardVisible' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.61 把手吞咽缺键盘闸（打字时键盘右列会按不出来）"; exit 1; }
+          echo "V0.2.61 校验: 把手页独立 + 停靠小窗全屏关窗/点击装回 + 无自动吸附 + 双击收紧 + 让位同步隐形 + 把手吞咽 + 抖音画面判定修复 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

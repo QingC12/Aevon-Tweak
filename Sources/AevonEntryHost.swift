@@ -138,6 +138,22 @@ enum AevonEntryHost {
         return nil
     }
 
+    /// V0.2.61（AevonDockTapFixV261，用户 Aevon(35) #6）：屏幕点落在哪个**停靠小窗**里。
+    ///
+    /// 停靠态四周边条手柄已摘除（0.2.60），`grab(at:)` 只看手柄 frame → 恒返回 nil，
+    /// 全局通道因此完全不知道这一下点在小窗上。这里给停靠态一条独立的 frame 判定，
+    /// 不依赖任何子视图与命中测试。
+    static func dockedWindow(atScreenPoint point: CGPoint) -> AevonWindowView? {
+        guard let layer = floatLayer, !layer.subviews.isEmpty else { return nil }
+        let layerPoint = floatLayerPoint(fromScreen: point)
+        for view in layer.subviews.reversed() {
+            guard let win = view as? AevonWindowView else { continue }
+            guard win.isDocked, !win.isHidden, win.alpha > 0.01 else { continue }
+            if win.frame.contains(layerPoint) { return win }
+        }
+        return nil
+    }
+
     /// 屏幕（窗口）坐标 → 浮窗层坐标。浮窗层全屏且 origin 为 0，正常是恒等变换，
     /// 但容器被搬进 App 场景视图后坐标系由系统决定，统一走 convert 才不会偏。
     static func floatLayerPoint(fromScreen point: CGPoint) -> CGPoint {

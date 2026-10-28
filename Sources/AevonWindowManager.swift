@@ -91,11 +91,23 @@ enum AevonWindowManager {
     ///   ④ 距开窗不足 5 秒 → 判定为开窗自身的副作用，不动；
     ///   ⑤ 其余情况 → 关窗（`releaseOnly`，不写任何场景状态，避免重演 SIGTRAP）。
     static func handleFullscreenSceneAppeared(sceneIdentifier: String) {
-        guard let bundleID = openBundleID else { return }
         guard !sceneIdentifier.isEmpty else {
             AevonLog.warn("[窗口] 全屏 App 画面出现，但场景标识取不到（探针待补 KVC 路径）；本次不自动关窗（AevonFullscreenCloseV106）")
             return
         }
+        // V0.2.61（AevonDockFullscreenCloseV261，用户 Aevon(35) #2「悬浮窗打开设置后，
+        // 全屏启动设置有概率黑屏，必须上滑关掉后台卡片才能恢复」）：
+        // 停靠小窗**同样持有那个 App 的主场景 presenter**，而 openBundleID 在停靠态恒为
+        // nil（主窗变量已归零）—— 0.2.60 及以前这条自动关窗逻辑对停靠小窗完全不生效，
+        // 于是应用场景被两个主人抢：我们的小窗还在呈现它，App 自己的全屏窗口就拿不到
+        // 画面 → 黑屏，只有杀掉进程才恢复。这里先把停靠列也纳进来。
+        if let docked = dockedViews.first(where: { sceneIdentifier.contains($0.bundleID) }) {
+            AevonLog.info("[窗口] \(docked.bundleID) 在停靠列里被系统全屏拉起（\(sceneIdentifier)）"
+                + "→ 关掉小窗、释放 presenter 并还原画布，让 App 自己呈现（AevonDockFullscreenCloseV261）")
+            closeDocked(bundleID: docked.bundleID, reason: "被系统全屏拉起")
+            return
+        }
+        guard let bundleID = openBundleID else { return }
         guard sceneIdentifier.contains(bundleID) else { return }
         let age = CACurrentMediaTime() - lastOpenedAt
         if age < 5.0 {
@@ -539,6 +551,10 @@ enum AevonWindowManager {
             currentView = windowView
             currentBundleID = bundleID
             lastOpenedAt = CACurrentMediaTime()
+            // V0.2.61（AevonDouyinRepairV261，用户 Aevon(35) #9）：开窗 2.2 秒后按画面
+            // 自查一次断层（下半截整块黑），命中就做一次「全屏往返」逼 App 重排。
+            windowView.scheduleSeamRepair(
+                canvas: AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize()))
             // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
             // App 侧识别器读它 —— 等于自己的 bundleID 就整体退让（不扣 began、不建失败要求），
             // 浮窗内的滑动才不会被右缘判向延迟到抬手。
@@ -604,6 +620,17 @@ enum AevonWindowManager {
             return
         }
         if isWindowed(bundleID) {
+            // V0.2.61（AevonDockRestoreOnPickV261，用户 Aevon(35) #6）：在停靠列里就不是
+            // 「置顶」—— 停在角落的 92x158 小窗再怎么置顶也还是小窗，用户要的是**装回主窗**。
+            // 0.2.60 这里对停靠态只打了「已在浮窗里，置顶」，于是圆盘再选同一个 App 永远
+            // 只能看到角落里那块小窗（Aevon(35) 10:22:28 / 10:22:39 两条日志）。
+            if dockedViews.contains(where: { $0.bundleID == bundleID }) {
+                AevonLog.info("[窗口] \(bundleID) 在停靠列里 → 装回主窗（圆盘再选 = 还原）"
+                    + "（AevonDockRestoreOnPickV261）")
+                restoreDocked(bundleID: bundleID)
+                completion?(true)
+                return
+            }
             AevonLog.info("[窗口] \(bundleID) 已在浮窗里，置顶（单窗模式）")
             bringToFront(bundleID: bundleID)
             completion?(true)

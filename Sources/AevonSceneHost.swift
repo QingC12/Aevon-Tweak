@@ -348,6 +348,35 @@ final class AevonSceneHost {
         kickRelayout(width: width, height: height, tag: "断层自愈 \(tag)")
     }
 
+    /// V0.2.61（AevonDouyinRepairV261，用户 Aevon(35) #9）：抖音断层**修不好**的第二条路。
+    ///
+    /// 0.2.60 的预热闸门 + 断层自愈只解决「画布被提前写掉」，但 Aevon(35) 实测抖音仍然
+    /// 断层，而内容宿主尺寸完全贴合画布（日志「内容宿主 430x737 已贴合画布」）—— 说明
+    /// 抖音是**按旧尺寸排好了版、只是不再重算**。用户给了一条可复现的解法：
+    /// 「手动打开抖音，画面正常时再用悬浮窗打开就是真重排」。这一版把这条解法搬进代码：
+    /// 画布先回到整屏 → 0.32 秒后写回浮窗画布 → 再踢一次重排。抖音因此会像「刚从全屏
+    /// 退下来」那样重算一遍布局。
+    /// 纪律：一次开窗只做一次；`invalidated` 之后一个字节都不写。
+    private var seamRepaired = false
+    func bounceFullscreenThenBack(width: CGFloat, height: CGFloat, tag: String) {
+        guard !invalidated, !seamRepaired, mainResized, width > 2, height > 2 else { return }
+        seamRepaired = true
+        let screen = UIScreen.main.bounds.size
+        guard screen.width > 2, screen.height > 200 else { return }
+        let fullOK = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+        AevonLog.warn("[场景] 断层修复：先把画布放回整屏 \(Int(screen.width))x\(Int(screen.height))"
+            + "（\(fullOK ? "已提交" : "失败")，模拟「全屏打开一次」），0.32s 后写回 "
+            + "\(Int(width))x\(Int(height))（\(tag)）（AevonDouyinRepairV261）")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+            guard let self, !self.invalidated else { return }
+            let backOK = AevonMainSceneSetFrame(self.scene, Double(width), Double(height))
+            AevonLog.warn("[场景] 断层修复：画布已写回 \(Int(width))x\(Int(height))"
+                + "（\(backOK ? "已提交" : "失败")）→ 再踢一次重排"
+                + "（\(tag)）（AevonDouyinRepairV261）")
+            self.kickRelayout(width: width, height: height, tag: "断层修复 \(tag)")
+        }
+    }
+
     /// V0.2.49（AevonRelayoutKickV249）：**强制 App 走一遍完整重排**。
     ///
     /// Aevon(24) 两条同源反馈：

@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <notify.h>
 #import <stdio.h>
@@ -1130,6 +1131,194 @@ static void AevonScreenFitInstall(void) {
     }
 }
 
+#pragma mark - V0.2.61：把手滑动不再带着 App 内操作（AevonGripSwallowV261）
+
+/*
+ * 用户 Aevon(35) #8：「全屏时滑动触发条会带着 App 内的操作（例如 QQ 的左滑删除
+ * 聊天记录）」。
+ *
+ * 根因不是我们吞得不够狠，而是**双投**：backboardd 把同一根手指同时投给 SpringBoard
+ * 和前台 App 进程。0.2.60 在 SB 侧对把手滑动「只观察不吞」（铁律：不在别人的触摸上
+ * 做吞咽），于是 App 那一份原封不动地进去当了一次左滑 —— QQ 就删了聊天记录。
+ * 唯一能拦住 App 那一份的地方，只有 App 自己的进程。
+ *
+ * 做法：拦 `-[UIApplication sendEvent:]`，把**落点在把手命中区**的触摸整根丢掉
+ * （began 就不投递，App 永远没见过它），绝不中途改判 —— 铁律「began 已投递 UIKit
+ * 的触摸不许再改吞」仍然成立，因为这里连 began 都不给。
+ *
+ * 命中区与把手视图严格同源：右缘 5pt 竖条 + 向内 40pt、上下各 14pt；
+ * 位置 = 屏高 ×(1 - GripY/100)，长度 = GripLen（夹 36~120）。参数每 2 秒最多读一次。
+ *
+ * 两条安全闸（这条 hook 跑在**别人 App 的进程里**，误伤比不生效更糟）：
+ *   · 只在 App 占满整屏时生效；进浮窗后 window 高度 = 画布 737，一律不吞；
+ *   · 键盘在屏上时不吞 —— 否则打字时键盘右列（p / l / ⌫）会有时候按不出来。
+ */
+
+static IMP gAevonSendEventOrig;
+static NSMutableSet *gAevonSwallowedTouches;
+static CFTimeInterval gAevonGripCacheAt;
+static CGRect gAevonGripRect;
+static CGSize gAevonRealScreen;
+static BOOL gAevonGripCached;
+
+/* 真·屏幕尺寸：直接走**被接管前的** -[UIScreen bounds] 原实现。
+ * 不能用当前 [UIScreen bounds] —— 它在本进程里被 AevonAppScreenFitV249 接管过，
+ * App 进浮窗后会报成画布 430×737，把手命中区就会算错位；
+ * 也不能去动像素级尺寸（0.2.49 的硬规矩：只许改 bounds 这一个方法）。 */
+static CGSize AevonRealScreenSize(void) {
+    UIScreen *screen = [UIScreen mainScreen];
+    if (gAevonScreenBoundsOrigIMP != NULL) {
+        CGRect real = ((CGRect (*)(id, SEL))gAevonScreenBoundsOrigIMP)(screen, @selector(bounds));
+        if (real.size.width > 10 && real.size.height > 10) { return real.size; }
+    }
+    return screen.bounds.size;
+}
+
+/* 键盘在屏上？（横幅、输入法候选视图都算）
+ * 必须挡掉：把手的竖直带子会压在键盘右列上（默认位置 30% = 屏高 70% 处，
+ * 92pt 高、右缘 45pt 宽），如果照吞，用户在别的 App 里打字会「偶尔按不出 p / l / ⌫」。
+ * 键盘窗口扫一遍很便宜，而且只在 began 这一拍查。 */
+static BOOL AevonKeyboardVisible(void) {
+    NSArray *windows = nil;
+    @try { windows = [[UIApplication sharedApplication] windows]; } @catch (NSException *e) { windows = nil; }
+    for (UIWindow *w in windows) {
+        if (w == nil || w.hidden || w.alpha < 0.01) { continue; }
+        NSString *name = NSStringFromClass([w class]) ?: @"";
+        if ([name rangeOfString:@"Keyboard"].location != NSNotFound
+            || [name rangeOfString:@"TextEffects"].location != NSNotFound) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static void AevonGripRefreshCache(void) {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (gAevonGripCached && now - gAevonGripCacheAt < 2.0) { return; }
+    gAevonGripCacheAt = now;
+    gAevonGripCached = YES;
+    gAevonGripRect = CGRectZero;
+    gAevonRealScreen = AevonRealScreenSize();
+    CFPropertyListRef enabled = CFPreferencesCopyAppValue(CFSTR("RingGripEnabled"), CFSTR("com.Aevon"));
+    BOOL on = YES;
+    if (enabled != NULL) {
+        if (CFGetTypeID(enabled) == CFBooleanGetTypeID()) { on = CFBooleanGetValue((CFBooleanRef)enabled); }
+        CFRelease(enabled);
+    }
+    if (!on) { return; }
+    double ratio = 30.0, len = 64.0;
+    CFPropertyListRef y = CFPreferencesCopyAppValue(CFSTR("GripY"), CFSTR("com.Aevon"));
+    if (y != NULL) {
+        if (CFGetTypeID(y) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)y, kCFNumberDoubleType, &ratio); }
+        CFRelease(y);
+    }
+    CFPropertyListRef l = CFPreferencesCopyAppValue(CFSTR("GripLen"), CFSTR("com.Aevon"));
+    if (l != NULL) {
+        if (CFGetTypeID(l) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)l, kCFNumberDoubleType, &len); }
+        CFRelease(l);
+    }
+    if (ratio < 10) { ratio = 10; }
+    if (ratio > 90) { ratio = 90; }
+    if (len < 36) { len = 36; }
+    if (len > 120) { len = 120; }
+    CGSize screen = gAevonRealScreen;
+    if (screen.width < 100 || screen.height < 200) { return; }
+    const double barWidth = 5.0, outsetX = 40.0, outsetY = 14.0;
+    double cy = screen.height * (1.0 - ratio / 100.0);
+    double hitW = barWidth + outsetX;
+    double hitH = len + outsetY * 2.0;
+    gAevonGripRect = CGRectMake(screen.width - hitW, cy - hitH / 2.0, hitW, hitH);
+}
+
+static BOOL AevonPointInGrip(CGPoint p) {
+    AevonGripRefreshCache();
+    return !CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(gAevonGripRect, p);
+}
+
+/* V0.2.61（AevonGripSwallowV261）：这一拍能不能吞？
+ * 两条硬闸，都是为了不在别人的 App 里误伤正常操作：
+ *   1) 只在**App 占满整屏**时吞 —— 进浮窗后 App 的 window 高度就是画布 737，
+ *      这时把手在屏幕右缘、跟 App 内容不在一个位置，吞了只会平白吃掉浮窗内的点击；
+ *   2) 键盘在屏上时不吞（见 AevonKeyboardVisible 的注释：会压住键盘右列）。
+ * 判据全部用真屏幕（被接管前的 -[UIScreen bounds] 原实现），不用被接管过的值。 */
+static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
+    UIWindow *w = touch.window;
+    if (w == nil) { return NO; }
+    CGSize real = AevonRealScreenSize();
+    if (real.height < 200) { return NO; }
+    if (w.bounds.size.height < real.height - 60.0) { return NO; }
+    if (AevonKeyboardVisible()) { return NO; }
+    return AevonPointInGrip(p);
+}
+
+static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
+    @try {
+        NSSet *touches = [event allTouches];
+        if (touches.count > 0) {
+            if (gAevonSwallowedTouches == nil) { gAevonSwallowedTouches = [NSMutableSet set]; }
+            BOOL anySwallowed = NO;
+            BOOL allSwallowed = YES;
+            NSMutableArray *finished = nil;
+            for (UITouch *touch in touches) {
+                NSValue *key = [NSValue valueWithPointer:(__bridge const void *)touch];
+                if (touch.phase == UITouchPhaseBegan) {
+                    CGPoint p = [touch locationInView:touch.window];
+                    if (AevonShouldConsiderSwallow(touch, p)) {
+                        [gAevonSwallowedTouches addObject:key];
+                        AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（不再带着 App 内滑动）"
+                                    @"（AevonGripSwallowV261）", NSStringFromCGPoint(p));
+                    }
+                }
+                BOOL swallowed = [gAevonSwallowedTouches containsObject:key];
+                if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
+                    if (swallowed) {
+                        if (finished == nil) { finished = [NSMutableArray array]; }
+                        [finished addObject:key];
+                    }
+                }
+                if (swallowed) { anySwallowed = YES; } else { allSwallowed = NO; }
+            }
+            if (anySwallowed && allSwallowed) {
+                for (NSValue *key in finished) { [gAevonSwallowedTouches removeObject:key]; }
+                return;   /* 整条事件不投递：App 侧手势 / 视图永远看不到这一根手指 */
+            }
+            for (NSValue *key in finished) { [gAevonSwallowedTouches removeObject:key]; }
+        }
+    } @catch (NSException *exception) {
+        AevonAppLog(@"[App侧] 把手吞咽判定异常：%@（不影响宿主）（AevonGripSwallowV261）",
+                    exception.reason ?: @"未知");
+    }
+    ((void (*)(id, SEL, UIEvent *))gAevonSendEventOrig)(self, _cmd, event);
+}
+
+static void AevonGripSwallowInstall(void) {
+    @try {
+        if (gAevonSendEventOrig != NULL) { return; }
+        Method m = class_getInstanceMethod([UIApplication class], @selector(sendEvent:));
+        if (m == NULL) {
+            AevonAppLog(@"[App侧] 没有 -[UIApplication sendEvent:]，把手吞咽不装（AevonGripSwallowV261）");
+            return;
+        }
+        const char *types = method_getTypeEncoding(m);
+        /* 0.2.52 的纪律：hook 前必须自检类型编码，形状不符一律不装（fail-closed）。
+         * -[UIApplication sendEvent:] 必须是「返回 void、self + _cmd + 一个对象参数」：
+         * 判据 = 首字母 v 且含 "@0:8@"（对象实参段）。 */
+        if (types == NULL || types[0] != 'v' || strstr(types, "@0:8@") == NULL) {
+            AevonAppLog(@"[App侧] sendEvent: 类型编码异常（%s），把手吞咽不装（AevonGripSwallowV261）",
+                        types ?: "nil");
+            return;
+        }
+        gAevonSendEventOrig = method_getImplementation(m);
+        method_setImplementation(m, (IMP)AevonSendEventSwizzled);
+        AevonAppLog(@"[App侧] 已接管 -[UIApplication sendEvent:]：把手命中区（右缘竖条 + 内 40pt /"
+                    @"上下各 14pt）内的触摸整根丢弃，全屏 App 里滑把手不再带动 App 内滑动"
+                    @"（AevonGripSwallowV261）");
+    } @catch (NSException *exception) {
+        AevonAppLog(@"[App侧] 把手吞咽安装失败：%@（AevonGripSwallowV261）",
+                    exception.reason ?: @"未知");
+    }
+}
+
 #pragma mark - 入口
 
 __attribute__((constructor))
@@ -1153,6 +1342,8 @@ static void AevonAppSideEntry(void) {
                     /* V0.2.49（AevonAppScreenFitV249）：先接管屏幕尺寸，再挂识别器 ——
                      * 顺序反了会让第一遍布局用整屏尺寸（真重排要等下一次布局）。 */
                     AevonScreenFitInstall();
+                    /* V0.2.61（AevonGripSwallowV261）：把手命中区的触摸在 App 进程内整根丢掉。 */
+                    AevonGripSwallowInstall();
                     [[AevonAppSide sharedInstance] start];
                 } @catch (NSException *exception) {
                     AevonAppLog(@"启动抛异常：%@", exception.reason ?: @"未知");

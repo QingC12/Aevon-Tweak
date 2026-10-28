@@ -304,10 +304,15 @@ static NSArray *AevonBuildFromPlist(id target, NSBundle *bundle, NSString *plist
         } else if ([cell isEqualToString:@"PSSliderCell"] || [cell isEqualToString:@"PSTSliderCell"]) {
             NSString *key = item[@"key"];
             if (![key isKindOfClass:[NSString class]] || key.length == 0) continue;
-            double minValue = [item[@"minValue"] respondsToSelector:@selector(doubleValue)]
-                ? [item[@"minValue"] doubleValue] : 0.0;
-            double maxValue = [item[@"maxValue"] respondsToSelector:@selector(doubleValue)]
-                ? [item[@"maxValue"] doubleValue] : 100.0;
+            /* V0.2.61（AevonGripPageV261）：plist 里写的是 min / max（Preferences 原生键名），
+             * 这里原先只认 minValue / maxValue —— 走本兜底路径时范围会退化成 0–100，
+             * GripLen 的 120 上限直接被截掉。两种键名都认。 */
+            id minRaw = item[@"minValue"] ?: item[@"min"];
+            id maxRaw = item[@"maxValue"] ?: item[@"max"];
+            double minValue = [minRaw respondsToSelector:@selector(doubleValue)]
+                ? [minRaw doubleValue] : 0.0;
+            double maxValue = [maxRaw respondsToSelector:@selector(doubleValue)]
+                ? [maxRaw doubleValue] : 100.0;
             NSNumber *stored = AevonPrefsNumber(key);
             id initial = stored ?: item[@"default"];
             double defaultValue = [initial respondsToSelector:@selector(doubleValue)]
@@ -370,9 +375,22 @@ static NSArray *AevonBuildFallback(id target) {
     id s5 = AevonNewSwitch(@"运行时探针（排错用，每次启动跑一轮六组）", target, @"ProbeV107", @NO);
     if (s5 != nil) [result addObject:s5];
 
-    id groupDetail = AevonNewGroup(@"细节调整",
-                                   @"圆盘 App 编辑、浮窗几何说明都在二级页（AevonDetailPageV30）。");
+    id groupDetail = AevonNewGroup(@"圆盘把手",
+                                   @"把手的位置 / 长短在独立页里调（AevonGripPageV261）。");
     if (groupDetail != nil) [result addObject:groupDetail];
+    id gripButton = AevonNewSpecifier(@"把手位置 / 长度调整",
+                                      target,
+                                      NSSelectorFromString(@"aevonOpenGrip"),
+                                      nil,
+                                      AEVON_CELL_BUTTON);
+    if (gripButton != nil) {
+        AevonSetProperty(gripButton, @"aevonOpenGrip", @"buttonAction");
+        [result addObject:gripButton];
+    }
+
+    id groupDetail2 = AevonNewGroup(@"细节调整",
+                                   @"圆盘 App 编辑、浮窗几何说明都在二级页（AevonDetailPageV30）。");
+    if (groupDetail2 != nil) [result addObject:groupDetail2];
     id detailButton = AevonNewSpecifier(@"圆盘 / 浮窗细节调整",
                                         target,
                                         NSSelectorFromString(@"aevonOpenDetail"),
@@ -954,6 +972,31 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 }
 
+/* V0.2.61（AevonGripPageV261）：用户 Aevon(35) #1 ——
+ * 「设置中圆盘触发条的调整功能移动到新添加项中（添加一个可点击进入的一级菜单用来放置
+ *   触发条的调整功能，切记不要再把圆圈叹号放在滑动条上）」。
+ * 于是 GripY / GripLen 两条滑条从一级页整体搬进本页（Grip.plist），
+ * 说明文字改成 PSGroupCell 的 footerText —— 滑条本体不再挂 infoText，行内也就不出 ⓘ。 */
+- (void)aevonOpenGrip {
+    UIViewController *grip = nil;
+    Class cls = NSClassFromString(@"AevonGripListController");
+    if (cls != Nil) {
+        grip = [[cls alloc] init];
+        if ([grip respondsToSelector:@selector(setTitle:)]) {
+            [grip performSelector:@selector(setTitle:) withObject:@"圆盘把手"];
+        }
+    }
+    if (grip == nil) return;
+    UINavigationController *nav = self.navigationController;
+    if (nav != nil) {
+        [nav pushViewController:grip animated:YES];
+    } else {
+        UINavigationController *wrap = [[UINavigationController alloc] initWithRootViewController:grip];
+        wrap.modalPresentationStyle = UIModalPresentationPageSheet;
+        [self presentViewController:wrap animated:YES completion:nil];
+    }
+}
+
 @end
 
 #pragma mark - V0.0.30：二级「细节调整」页
@@ -994,6 +1037,71 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     /* 标记：CI 校验二级页逻辑确实编入（AevonDetailPageV30） */
     static char once; (void)once;
     NSString *marker = @"AevonDetailPageV30";
+    if (marker.length == 0) { return; }
+}
+
+@end
+
+#pragma mark - V0.2.61：二级「圆盘把手」页（滑条专用，滑条不挂 ⓘ）
+
+/* Grip.plist 读不到时的代码兜底：两条滑条 + 分组说明，数值与 plist 完全一致 */
+static NSArray *AevonBuildFallbackGrip(id target) {
+    NSMutableArray *result = [NSMutableArray array];
+
+    id group = AevonNewGroup(@"圆盘把手外观",
+                             @"把手是贴屏幕右缘的小短竖条（宽 5pt）。可点热区向屏幕内侧延伸约 40pt、"
+                             @"上下各多出 14pt，手指不必精确按在竖条上。两个滑条都即时生效，不用注销。");
+    if (group != nil) [result addObject:group];
+
+    id y = AevonNewSlider(@"位置：从底部起 %", target, @"GripY", 10.0, 90.0, 30.0);
+    if (y != nil) [result addObject:y];
+    id groupY = AevonNewGroup(@" ", @"10 = 贴近屏幕底部，90 = 贴近顶部；默认 30（单手最顺手）。");
+    if (groupY != nil) [result addObject:groupY];
+
+    id len = AevonNewSlider(@"长度：pt", target, @"GripLen", 36.0, 120.0, 64.0);
+    if (len != nil) [result addObject:len];
+    id groupLen = AevonNewGroup(@" ", @"36 = 很短的一条，120 = 接近一根手指高度；默认 64。");
+    if (groupLen != nil) [result addObject:groupLen];
+
+    return result.count > 0 ? result : nil;
+}
+
+@interface AevonGripListController : AevonRootListController
+@end
+
+@implementation AevonGripListController
+
+- (NSArray *)specifiers {
+    NSArray *cached = AevonCachedSpecifiers(self);
+    if (cached != nil) return cached;
+
+    NSArray *list = nil;
+    @try {
+        list = [self loadSpecifiersFromPlistName:@"Grip" target:self];
+    } @catch (NSException *exception) {
+        list = nil;
+    }
+    if (![list isKindOfClass:[NSArray class]] || list.count == 0) list = nil;
+
+    if (list == nil) {
+        NSBundle *bundle = nil;
+        @try { bundle = [NSBundle bundleForClass:[self class]]; } @catch (NSException *e) { bundle = nil; }
+        if (bundle == nil) bundle = [NSBundle mainBundle];
+        list = AevonBuildFromPlist(self, bundle, @"Grip");
+    }
+
+    if (list == nil) list = AevonBuildFallbackGrip(self);
+    if (list.count > 0) AevonStoreSpecifiers(self, list);
+    return list ?: @[];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    if (self.title.length == 0) self.title = @"圆盘把手";
+    AevonLogPrefsSync();
+    /* 标记：CI 校验「把手调整独立成页」确实编入（AevonGripPageV261） */
+    static char once; (void)once;
+    NSString *marker = @"AevonGripPageV261";
     if (marker.length == 0) { return; }
 }
 

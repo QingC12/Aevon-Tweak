@@ -1029,10 +1029,12 @@ final class AevonWindowView: UIView {
             }
             applyBarMove(to: point)
             setMovingWindow(false)
-            if let side = AevonDock.side(forDropAt: frame) {
-                AevonWindowManager.dockCurrent(side: side)
-                return
-            }
+            // V0.2.61（AevonNoAutoDockV261，用户 Aevon(35) #3）：「移除拖动悬浮窗到屏幕两侧时
+            // 自动吸附停靠（只有点击悬浮窗左右边缘才会触发停靠手势）」——
+            // 松手就吸附会让「想把它放到边上」变成「它消失了」，还经常在缩放/微调后误触。
+            // 停靠入口从此只剩一个：点主窗左/右边条（全局通道轻点，见 AevonEdgeEntry）。
+            AevonLog.info("[窗口] 拖动松手 → 只记住位置，不再按落点自动吸附停靠"
+                + "（AevonNoAutoDockV261）")
             persistFrame()
         default:
             break
@@ -1113,12 +1115,10 @@ final class AevonWindowView: UIView {
             }
             applyBarMove(to: layerPoint)
             setMovingWindow(false)
-            // V0.2.50（AevonDockColumnV250）：松手贴着左/右边缘 → 进停靠列。
-            // 这是用户第 3 条要的入口：「吸附停靠」= 拖到边缘放手。
-            if let side = AevonDock.side(forDropAt: frame) {
-                AevonWindowManager.dockCurrent(side: side)
-                return
-            }
+            // V0.2.61（AevonNoAutoDockV261）：与视图层同一条口径 —— 拖到边缘松手不再吸附停靠。
+            // 停靠唯一入口 = 点主窗左/右边条（AevonDockTapV251）。
+            AevonLog.info("[窗口] 拖动松手 → 只记住位置，不再按落点自动吸附停靠"
+                + "（AevonNoAutoDockV261）")
             persistFrame()
         case .corner(let edges):
             applyCornerResize(to: layerPoint, edges: edges)
@@ -1383,6 +1383,89 @@ final class AevonWindowView: UIView {
         return (maxLuma - minLuma) >= 10
     }
 
+    // MARK: - 断层修复（V0.2.61，AevonDouyinRepairV261，用户 Aevon(35) #9）
+
+    /// 开窗 2.2 秒后自查一次：窗口下半截是不是整块黑的。
+    ///
+    /// 判据用**现场抓到的画面**，不看尺寸（0.2.60 的尺寸判定已经被日志证明会误判
+    /// 「已贴合」）：下半 25% 采样点几乎全黑、上半 50% 有明显明暗跨度、且**黑区正上方那一带
+    /// 本身是亮的**（把「深色 App 本来就底部全黑」摘出去）→ 判定断层，
+    /// 触发一次「画布回整屏 → 写回 → 踢重排」。一次开窗只做一次。
+    func scheduleSeamRepair(canvas: CGSize) {
+        guard canvas.width > 2, canvas.height > 2 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+            guard let self, self.window != nil, !self.isTearingDown, !self.isDocked else { return }
+            guard let image = self.captureSnapshotImage() else {
+                AevonLog.info("[窗口] 断层自查：抓不到画面，本次跳过（AevonDouyinRepairV261）")
+                return
+            }
+            let stats = AevonWindowView.lumaStats(image)
+            guard stats.topRange >= 20 else {
+                AevonLog.info("[窗口] 断层自查：上半截明暗跨度只有 \(stats.topRange)，画面还没稳定 → 跳过"
+                    + "（AevonDouyinRepairV261）")
+                return
+            }
+            guard stats.bottomBlack >= 0.985 else {
+                AevonLog.info("[窗口] 断层自查：下半截黑点占比 "
+                    + "\(String(format: "%.3f", stats.bottomBlack)) → 画面正常，无需修复"
+                    + "（AevonDouyinRepairV261）")
+                return
+            }
+            // 深色 App 本来就「上半有内容、下半一片黑」—— 只按黑点占比判会误伤一大片，
+            // 每次开窗都白做一次全屏往返（肉眼就是一下闪）。断层的特征是**断层线**
+            // 上方紧贴的就是正常画面，所以再要求黑区正上方那一带确实有亮度。
+            guard stats.aboveMean >= 25 else {
+                AevonLog.info("[窗口] 断层自查：下半截虽黑，但黑区上方也是暗的（平均亮度 "
+                    + "\(Int(stats.aboveMean))）→ 判定为深色界面，不修复"
+                    + "（AevonDouyinRepairV261）")
+                return
+            }
+            AevonLog.warn("[窗口] 断层自查：上半截正常而**下半截整块黑**"
+                + "（黑点 \(String(format: "%.3f", stats.bottomBlack))）→ 判定断层，触发全屏往返修复"
+                + "（AevonDouyinRepairV261）")
+            self.sceneHost.bounceFullscreenThenBack(width: canvas.width, height: canvas.height,
+                                                    tag: self.bundleID)
+        }
+    }
+
+    /// 采样 12×24 网格：返回「下半截黑点占比」「上半截明暗跨度」「黑区正上方的平均亮度」。
+    static func lumaStats(_ image: UIImage) -> (bottomBlack: Double, topRange: Int, aboveMean: Double) {
+        guard let cg = image.cgImage else { return (1.0, 0, 0) }
+        let w = 12, h = 24
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return (1.0, 0, 0)
+        }
+        ctx.interpolationQuality = .low
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // CGContext 的原点在左下：row 0 = 画面**底部**。
+        // 下半截 = row 0..<6（底部 25%）；黑区上方那一带 = row 6..<9（25%–37.5%）。
+        var bottomTotal = 0, bottomDark = 0
+        var topMin = 255, topMax = 0
+        var aboveSum = 0, aboveCount = 0
+        for row in 0..<h {
+            for col in 0..<w {
+                let i = (row * w + col) * 4
+                let luma = (Int(pixels[i]) * 3 + Int(pixels[i + 1]) * 6 + Int(pixels[i + 2])) / 10
+                if row < 6 {
+                    bottomTotal += 1
+                    if luma <= 14 { bottomDark += 1 }
+                } else if row < 9 {
+                    aboveSum += luma
+                    aboveCount += 1
+                } else if row >= 12 {
+                    topMin = min(topMin, luma)
+                    topMax = max(topMax, luma)
+                }
+            }
+        }
+        let ratio = bottomTotal > 0 ? Double(bottomDark) / Double(bottomTotal) : 1.0
+        let above = aboveCount > 0 ? Double(aboveSum) / Double(aboveCount) : 0
+        return (ratio, max(0, topMax - topMin), above)
+    }
+
     /// 「离黑屏最近的那一帧」：优先现场抓（画面还在时抓到的就是真·最后一帧），
     /// 抓不到/是空壳才退回滚动缓存。
     private func lastContentFrame() -> UIImage? {
@@ -1488,6 +1571,13 @@ final class AevonWindowView: UIView {
     /// Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入会「亮一下又黑」。
     private var liveWaitTicks = 0
     private static let liveWaitLimit: TimeInterval = 1.0
+    /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
+    ///
+    /// 回桌面那一下 cs 会 2→0→2 来回抖（Aevon(35)：让位 0.22s 淡入，随后系统还在
+    /// 收尾动画）。0.2.60 在这个抖动里会按「看门：内容掉出画」去盖一张旧帧 →
+    /// 用户看到的就是「画面 ←→ 黑」交替。稳定期内不盖帧、只重申前台。
+    private var liveSettleUntil: TimeInterval = 0
+    private static let liveSettleWindow: TimeInterval = 0.9
 
     /// 全屏 App 画面离场（回桌面 / 切 App）时布防。
     ///
@@ -1538,17 +1628,23 @@ final class AevonWindowView: UIView {
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
         if darkFreezeView != nil { removeDarkFreeze(reason: "让位前先撤定格帧") }
-        // 让位用 alpha 0.02 而不是 0：肉眼不可见，但仍留在渲染树里 ——
-        // `drawHierarchy` 抓的是「视图子树」的渲染结果，整窗 alpha 归零有可能
-        // 让这棵子树被渲染服务器整体跳过，抓出来就是空壳（让位判定永远不成立，
-        // 每次都拖到 1.0 秒上限才淡入）。2% 既看不见，也不破坏抓帧。
-        UIView.animate(withDuration: 0.08, delay: 0,
-                       options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
-            self?.alpha = 0.02
-        }
+        // V0.2.61（AevonLiveFirstFixV261，用户 Aevon(35) #7「浮窗出现前会闪烁（黑屏和画面
+        // 交替）」）：让位必须**立刻**生效，不再做 0.08 秒淡出。
+        //
+        // 根因：布防这一拍 App 的场景刚好被系统按下（日志 fg=? cs=0 layers=-1），远程表面
+        // 已经没了，而窗口还按 alpha≈1 停在屏幕上 —— 那 80 毫秒里露出的就是「黑」，等淡出
+        // 走完、实时画面回来再淡入 = 用户看到的「黑 ←→ 画面」交替。
+        // 直接把 alpha 打到 0.02（同一 runloop 内完成，不产生任何中间帧），黑帧就永远不会
+        // 被看见；「浮窗后出现」的观感反而更干净。
+        //
+        // 用 0.02 而不是 0：肉眼不可见，但仍留在渲染树里 —— `drawHierarchy` 抓的是
+        // 「视图子树」的渲染结果，整窗 alpha 归零有可能让这棵子树被渲染服务器整体跳过，
+        // 抓出来就是空壳（让位判定永远不成立，每次都拖到 1.0 秒上限才淡入）。
+        alpha = 0.02
+        liveSettleUntil = 0
         AevonLog.info("[窗口] 回桌面：浮窗先让位（不盖定格帧，\(reason)）→ 视频 / 动画先按实时播，"
             + "实时画面回来再 0.12s 淡入，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
-            + "（AevonLiveFirstV260）")
+            + "（AevonLiveFirstV260 AevonLiveFirstFixV261）")
     }
 
     /// 让位结束：淡入。到点时画面还没回来就先垫一张缓存帧（宁可定格也不留黑窗）。
@@ -1560,6 +1656,7 @@ final class AevonWindowView: UIView {
         liveWaitTicks = 0
         let rendering = sceneHost.contentLooksRendering
         if rendering != true { installDarkFreeze(reason: "淡入前兜底") }
+        liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
         UIView.animate(withDuration: 0.12, delay: 0,
                        options: [.curveEaseIn, .allowUserInteraction]) { [weak self] in
             self?.alpha = 1
@@ -1635,6 +1732,15 @@ final class AevonWindowView: UIView {
                 finishLiveWait(reason: "实时画面已回来（连续 \(liveWaitTicks) 拍）")
             } else if now > liveWaitDeadline {
                 finishLiveWait(reason: "上限到达")
+            }
+            return
+        }
+        // V0.2.61（AevonLiveFirstFixV261）：淡入后的稳定期 —— 系统回桌面动画还在收尾，
+        // cs 会 2→0→2 抖。这段时间「掉出画」一律**不盖帧**（盖了就变成「画面 ←→ 黑」
+        // 交替，正是 Aevon(35) #7 看到的闪烁），只重申前台把它推醒。
+        if liveSettleUntil > 0, CACurrentMediaTime() < liveSettleUntil {
+            if sceneHost.contentLooksRendering == false {
+                reassertContentForeground(tag: "淡入后稳定期")
             }
             return
         }
@@ -1976,6 +2082,9 @@ final class AevonWindowView: UIView {
         //（手柄只有 pan，轻点既不还原也不停靠）—— 用户体感就是「点小窗没反应」。
         // 停靠态唯一语义 = 点任意位置装回，手柄留着只会抢命中。
         setDockHandlesEnabled(false)
+        // V0.2.61（AevonDockTapFixV261）：手柄摘除后补一层真实命中控件 —— 停靠态
+        // 「点任意位置 = 装回」从此有一条不依赖命中判定的硬通道。
+        installDockTapCatcher()
         // V0.2.59（AevonDockHaloOffV259，用户 Aevon(33) #4「主窗变小窗的过渡中光晕闪过」）：
         // 窗口本体走 0.22s 动画（presentation 层逐帧插值），而光晕 apply 里禁了隐式动画
         // —— 它在动画**开始那一帧**就立刻缩到小窗尺寸。大窗还在、光晕先没了，
@@ -2013,6 +2122,51 @@ final class AevonWindowView: UIView {
         }
     }
 
+    // MARK: - 停靠「点一下装回」命中层（V0.2.61，AevonDockTapFixV261）
+
+    /// 停靠小窗上铺一层**真实控件**（UIControl），只负责一件事：轻点 = 装回主窗。
+    ///
+    /// 为什么 0.2.60 的「点小窗没反应」会复发（Aevon(35) #6）：
+    /// 0.2.60 把四周边条手柄整建制摘除之后，`grab(at:)`（全局通道认领浮窗的唯一入口）
+    /// 只看手柄 frame —— 手柄没了，它对这个窗口恒返回 nil，全局通道于是**根本不知道
+    /// 这一下点在小窗上**；而窗口自带的 `UITapGestureRecognizer` 在这种「内容层关交互
+    /// + 无任何可交互子视图」的窗口上并不可靠（真机日志里 0.2.60 之后再没打出过
+    /// 一次 AevonDockTapAnywhereV255）。铺一层 UIControl 把「命中归属」钉死在
+    /// 我们自己手里 —— hitTest 必然返回它，`touchUpInside` 必然到。
+    private var dockTapCatcher: UIControl?
+
+    private func installDockTapCatcher() {
+        if let existing = dockTapCatcher {
+            existing.frame = bounds
+            bringSubviewToFront(existing)
+            return
+        }
+        let catcher = UIControl(frame: bounds)
+        catcher.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        catcher.backgroundColor = .clear
+        catcher.isUserInteractionEnabled = true
+        catcher.isMultipleTouchEnabled = false
+        catcher.addTarget(self, action: #selector(handleDockCatcherTap(_:)),
+                          for: .touchUpInside)
+        addSubview(catcher)
+        bringSubviewToFront(catcher)
+        dockTapCatcher = catcher
+        AevonLog.info("[停靠] 已铺「点一下装回」命中层（\(Int(bounds.width))x\(Int(bounds.height))，"
+            + "真实控件，不依赖手柄也不依赖全局通道）（AevonDockTapFixV261）")
+    }
+
+    private func removeDockTapCatcher() {
+        guard let catcher = dockTapCatcher else { return }
+        catcher.removeFromSuperview()
+        dockTapCatcher = nil
+    }
+
+    @objc private func handleDockCatcherTap(_ sender: UIControl) {
+        guard isDocked else { return }
+        AevonLog.info("[停靠] 小窗轻点（命中层）→ 装回主窗（AevonDockTapFixV261）")
+        AevonWindowManager.restoreDocked(bundleID: bundleID)
+    }
+
     /// V0.2.55（AevonDockTapAnywhereV255，用户 Aevon(29) #2）：停靠小窗任意位置
     /// 轻点 = 装回主窗（这是 dock 态唯一的手势语义；点边条与点内容等价，同为装回）。
     @objc private func handleDockTapAnywhere(_ gesture: UITapGestureRecognizer) {
@@ -2028,6 +2182,9 @@ final class AevonWindowView: UIView {
         sceneHost.setContentInteraction(true)
         // V0.2.60（AevonDockTapOnlyV260）：停靠期被摘除的窗外手势手柄立刻恢复。
         setDockHandlesEnabled(true)
+        // V0.2.61（AevonDockTapFixV261）：装回后撤掉「点一下装回」命中层，
+        // 否则它会在主窗上继续吃点击（主窗内容要能正常交互）。
+        removeDockTapCatcher()
         // V0.2.59（AevonDockHaloOffV259）→ V0.2.60（AevonDockHaloBackV260）：
         // 还原光晕的时机改到**动画结束之后**。Aevon(34) #2：「吸附小窗还原时也会有光晕
         // 闪过」—— 0.2.59 是动画一开始就把光晕按主窗尺寸恢复，于是小窗位置瞬间冒出

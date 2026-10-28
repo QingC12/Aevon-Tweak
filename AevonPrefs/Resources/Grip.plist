@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>圆盘把手</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>圆盘把手外观</string>
+			<key>footerText</key>
+			<string>0.2.61 起（AevonGripPageV261）：把手的位置和长度搬到了这个独立页面，一级页只留入口。两个滑条都是拖动即时生效，不用注销。把手是贴屏幕右缘的小短竖条（宽 5pt），但可点热区向屏幕内侧延伸约 40pt、上下各多出 14pt —— 手指不必精确按在竖条上。注意：全屏 App 里从把手开始的那根手指会被整根拦下（不再带着 App 内滑动，比如 QQ 的左滑删除），所以把手热区那一小条位置的普通点击也不会进 App。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>label</key>
+			<string>位置：从底部起 %</string>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripY</string>
+			<key>default</key>
+			<real>30</real>
+			<key>min</key>
+			<real>10</real>
+			<key>max</key>
+			<real>90</real>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>10 = 贴近屏幕底部，90 = 贴近顶部；默认 30（单手最顺手）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>label</key>
+			<string>长度：pt</string>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripLen</string>
+			<key>default</key>
+			<real>64</real>
+			<key>min</key>
+			<real>36</real>
+			<key>max</key>
+			<real>120</real>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>36 = 很短的一条，120 = 接近一根手指高度；默认 64。</string>
+		</dict>
+	</array>
+</dict>
+</plist>

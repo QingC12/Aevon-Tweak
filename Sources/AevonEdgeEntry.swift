@@ -94,8 +94,15 @@ enum AevonEdgeEntry {
     private static var floatLastTapAt: CFTimeInterval = 0
     private static var floatLastTapPoint: CGPoint = .zero
     private static weak var floatLastTapWindow: AevonWindowView?
-    private static let floatDoubleTapGap: CFTimeInterval = 0.34
-    private static let floatDoubleTapRadius: CGFloat = 26
+    /// V0.2.61（AevonDblTapGuardV261，用户 Aevon(35) #4「底边双击容易误触」）：
+    /// 两击间隔按用户要求放宽到 0.45 秒（原来 0.34），同时把**两击位置半径收到 16pt**
+    /// （原来 26pt —— 底边条才 44pt 高，26pt 半径等于半个条子都算同一点）。
+    /// 真正解决误触的是下面那条：拖完 / 缩完松手不再算「第一击」。
+    private static let floatDoubleTapGap: CFTimeInterval = 0.45
+    private static let floatDoubleTapRadius: CGFloat = 16
+    /// V0.2.61（AevonDblTapGuardV261，用户 Aevon(35) #4）：这一根浮窗手势的落点。
+    /// 抬手时算位移，用来区分「原地轻点」和「拖完/缩完松手」。
+    private static var floatBeganPoint: CGPoint = .zero
 
     // V0.2.60（AevonDockTapOnlyV260，用户 Aevon(34) #2）：停靠小窗「点一下装回」的
     // 全局兜底候选。停靠态我们不再接管、不再吞（四周边条手柄已在小窗侧摘除），
@@ -515,6 +522,18 @@ enum AevonEdgeEntry {
             }
         }
         guard AevonRingMenu.presented == nil else { return false }
+        // V0.2.61（AevonDockTapFixV261，用户 Aevon(35) #6 重点）：停靠小窗在 0.2.60 里
+        // 摘掉了四周边条手柄，而 `grabFloatingWindow` 只认手柄命中 —— 于是点小窗时
+        // 这里恒返回 nil，全局通道连「这一下点在小窗上」都不知道，自然也不会装回。
+        // 先按**窗口 frame** 单独判一次停靠态（不依赖任何子视图 / 命中测试）。
+        if let docked = AevonEntryHost.dockedWindow(atScreenPoint: point) {
+            dockTapCandidateID = touchID
+            dockTapCandidatePoint = point
+            dockTapCandidateWindow = docked
+            AevonLog.info("[停靠] 全局通道记下小窗轻点候选（\(Int(point.x)),\(Int(point.y))）"
+                + "→ 抬手未移动即装回（AevonDockTapFixV261）")
+            return false
+        }
         guard let hit = AevonEntryHost.grabFloatingWindow(atScreenPoint: point) else {
             return false
         }
@@ -548,7 +567,7 @@ enum AevonEdgeEntry {
             // = 残留 30 秒且自愈完全不触发，同槽位新手指被整段吞（pan 死、点按活）。
             lastFloatMovedAt = now
             AevonLog.info("[窗口] 底边双击 → 关闭浮窗（全局通道，自愈锚点已登记）"
-                + "（AevonFloatBottomDblCloseV221 AevonDblTapHealV256）")
+                + "（AevonFloatBottomDblCloseV221 AevonDblTapHealV256 AevonDblTapGuardV261）")
             AevonWindowManager.close(bundleID: hit.window.bundleID)
             return true
         }
@@ -558,6 +577,9 @@ enum AevonEdgeEntry {
         floatGrab = hit.grab
         floatDeadline = now + floatDragLimit
         lastFloatMovedAt = now   // V0.2.55：began 也算一次「在场」，丢 ended 时自愈才有锚
+        // V0.2.61（AevonDblTapGuardV261，用户 Aevon(35) #4）：记住落点，抬手时算位移。
+        // 底边双击的「第一击」只认真正的原地轻点 —— 拖完/缩完再点一下不算。
+        floatBeganPoint = point
         switch hit.grab {
         case .bar:
             // V0.2.27（AevonFloatEdgeGripV227）：落指即拖（延迟 0）——
@@ -652,9 +674,18 @@ enum AevonEdgeEntry {
             if let grab = floatGrab, win != nil {
                 switch grab {
                 case .bar, .corner:
-                    floatLastTapAt = CACurrentMediaTime()
-                    floatLastTapPoint = point
-                    floatLastTapWindow = win
+                    // V0.2.61（AevonDblTapGuardV261，用户 Aevon(35) #4）：只有**原地轻点**
+                    // 才登记「双击第一击」。0.2.60 及以前是「任何一次拖拽/缩放松手」都登记 ——
+                    // 于是「拖一下窗，再点一下底边」就被当成双击直接关窗，这才是误触的真凶。
+                    let moved = hypot(point.x - floatBeganPoint.x, point.y - floatBeganPoint.y)
+                    if moved <= 8 {
+                        floatLastTapAt = CACurrentMediaTime()
+                        floatLastTapPoint = point
+                        floatLastTapWindow = win
+                    } else {
+                        floatLastTapAt = 0
+                        floatLastTapWindow = nil
+                    }
                 }
             }
         }
