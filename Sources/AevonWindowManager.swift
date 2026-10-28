@@ -122,6 +122,8 @@ enum AevonWindowManager {
             return
         }
         AevonLog.info("[窗口] \(bundleID) 被系统全屏拉起（\(sceneIdentifier)，距开窗 \(String(format: "%.1f", age))s）→ 自动关闭浮窗，避免残留黑窗（AevonFullscreenCloseV106）")
+        AevonLog.info("[窗口] 交接给系统全屏：先同步清承载标记（App 侧 10ms 内恢复真实屏幕），"
+            + "再关窗释放 presenter（AevonHandoffFastV262）")
         // V0.2.62（AevonHandoffFastV262）：同上 —— 交接前先清承载标记，App 侧立刻
         // 放弃画布尺寸，系统全屏那一帧就按整屏建窗口。
         AevonPrefs.set("AevonFloatBundle", "")
@@ -621,7 +623,8 @@ enum AevonWindowManager {
                     }
                     let ok = AevonMainSceneSetFrame(warmupScene, Double(mainCanvas.width), Double(mainCanvas.height))
                     AevonLog.info("[场景] 画布预热完成：\(bundleID) 已切到浮窗画布 \(Int(mainCanvas.width))x\(Int(mainCanvas.height))"
-                        + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")）（AevonDouyinWarmupV251）")
+                        + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")）"
+                        + "（AevonDouyinWarmupV251 AevonWarmupFastV262 AevonKickExactV262）")
                     // V0.2.62（AevonKickExactV262）：这里原来传的是 (width-1, height-1)，
                     // 而 kickRelayout 内部还要再 -1 一次 → 日志里「先写 428x735 / 写回
                     // 429x736」，最终画布比目标少 1pt（Aevon(36) 实锤 44.112 那次复查
@@ -633,6 +636,9 @@ enum AevonWindowManager {
                     // 「从大尺寸退到小尺寸时重排」—— 用户实测只有「全屏打开一次」才管用。
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak sceneHost] in
                         guard currentBundleID == bundleID else { return }
+                        AevonLog.info("[场景] 预热复刻：对 \(bundleID) 再做一次「整屏 → 画布」往返"
+                            + "（不再依赖画面采样，采样已被 Aevon(36) 证伪）"
+                            + "（AevonSeamRepairFixedV262）")
                         sceneHost?.bounceFullscreenThenBack(width: mainCanvas.width,
                                                             height: mainCanvas.height,
                                                             tag: "预热复刻 \(bundleID)")

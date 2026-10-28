@@ -1655,7 +1655,7 @@ final class AevonWindowView: UIView {
         liveSettleUntil = 0
         AevonLog.info("[窗口] 回桌面：浮窗先让位（不盖定格帧，\(reason)）→ 视频 / 动画先按实时播，"
             + "实时画面回来再 0.12s 淡入，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
-            + "（AevonLiveFirstV260 AevonLiveFirstFixV261）")
+            + "（AevonLiveFirstV260 AevonLiveFirstFixV261 AevonLiveQuietV262）")
     }
 
     /// 让位结束：淡入。到点时画面还没回来就先垫一张缓存帧（宁可定格也不留黑窗）。

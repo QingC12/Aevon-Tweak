@@ -403,7 +403,7 @@ final class AevonSceneHost {
             guard let self, !self.invalidated else { return }
             _ = self.writeCanvas(width - 1, height - 1)
             AevonLog.info("[场景] 强制重排：先写 \((Int(width - 1)))x\((Int(height - 1)))"
-                + "（\(tag)，让 App 收到一次尺寸变化）（AevonRelayoutKickV249）")
+                + "（\(tag)，让 App 收到一次尺寸变化）（AevonRelayoutKickV249 AevonKickFastV262）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 guard let self, !self.invalidated else { return }
                 _ = self.writeCanvas(width, height)
