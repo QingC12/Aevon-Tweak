@@ -1932,7 +1932,8 @@ jobs:
           grep -q 'contentAspectCurrent' "$W/Sources/AevonDock.swift" \
             || { echo "::error::0.2.50 停靠窗没按小胖屏比例等比缩小"; exit 1; }
           # ② 停靠 = 主窗降级，绝不许新建场景（抢承载信号会让 App 整屏排错）
-          grep -q 'static func dockCurrent(side: AevonDockSide) -> Bool' "$W/Sources/AevonWindowManager.swift" \
+          # V0.2.63（AevonDockNoVanishV263）反转：dockCurrent 加了 force 形参
+          grep -q 'static func dockCurrent(side: AevonDockSide, force: Bool = false) -> Bool' "$W/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.50 缺 dockCurrent（主窗降级成小窗）"; exit 1; }
           grep -q 'AevonPrefs.set("AevonFloatBundle", "")' "$W/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.50 停靠时没清「浮窗承载」信号（App 会继续按 430x737 排版）"; exit 1; }
@@ -2535,8 +2536,12 @@ jobs:
           grep -q 'static func enforceSingleMainWindow' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.62 缺野窗清扫（多主窗、无法关闭）"; exit 1; }
+          # V0.2.63（AevonDockNoVanishV263）反转：主窗降级改成 `force: true` 并**只在真的
+          # 没进停靠列时**才关 —— Aevon(37) #2 实测「被仲裁拒掉也算失败 → 把好好的小窗关掉」。
+          grep -q 'dockCurrent(side: side, force: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.63 主窗降级没走 force（快速连点会误关停靠小窗）"; exit 1; }
           grep -q 'if !dockCurrent(side: side) {' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.62 主窗降级失败仍会被静默丢弃（野窗来源）"; exit 1; }
+            && { echo "::error::0.2.63 主窗降级又回到「被仲裁拒掉就关窗」的老写法"; exit 1; } || true
           # ⑥交接给系统全屏前先清承载标记（否则 App 还按画布报尺寸 = 黑屏）
           grep -q 'closeDocked(bundleID: docked.bundleID, reason: "被系统全屏拉起")' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -2550,11 +2555,24 @@ jobs:
           # ③键盘：只认键盘窗口 + 只在场景高度 ≈ 画布时才对齐（fail-closed）
           grep -q 'UIRemoteKeyboardWindow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.62 缺键盘窗口对齐（键盘只露上半截）"; exit 1; }
+          # V0.2.63（AevonKeyFitV263）反转：键盘对齐闸门换成「浮窗承载中 + 真实键盘窗口」，
+          # 并加通知驱动的对位（Aevon(37) #4 键盘仍显示不全）。
+          grep -q 'AevonAppIsFloatHosted() && AevonIsKeyboardWindow(self_)' \
+            "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 键盘对齐闸门没换成「浮窗承载 + 键盘窗口」"; exit 1; }
+          grep -q 'AevonKeyRepositionNow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 缺键盘通知对位（setFrame: 有时只改内部 layer）"; exit 1; }
           grep -q 'fabs(sceneH - canvasH) <= 8' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.62 键盘对齐缺「场景高度 ≈ 画布」闸"; exit 1; }
+            && { echo "::error::0.2.63 键盘闸门又回到「场景高度 ≈ 画布」（floatstage 读不到就整段失效）"; exit 1; } || true
           # ②截图 / 录屏：动作槽必须接进圆盘与开窗入口，框架要链上
+          # V0.2.63（AevonQuickEditableV263）反转：快捷动作改成「一次性播种进 RingApps」，
+          # 设置页能看见 / 能删 / 能排序（Aevon(37) #3）。
+          grep -q 'seedQuickActionsIfNeeded' "$GITHUB_WORKSPACE/Sources/AevonRingStore.swift" \
+            || { echo "::error::0.2.63 快捷动作没播种进圆盘列表（设置页里删不掉）"; exit 1; }
           grep -q 'withQuickActions' "$GITHUB_WORKSPACE/Sources/AevonRingStore.swift" \
-            || { echo "::error::0.2.62 圆盘没挂快捷动作槽"; exit 1; }
+            && { echo "::error::0.2.63 快捷动作又回到「强行拼在最前」（设置页看不到）"; exit 1; } || true
+          grep -q 'aevon.action.screenshot' "$GITHUB_WORKSPACE/AevonPrefs/AevonRingEditorController.m" \
+            || { echo "::error::0.2.63 设置页添加入口里没有截图动作（删了就加不回来）"; exit 1; }
           grep -q 'AevonQuickAction.perform(bundleID: bundleID)' \
             "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::0.2.62 圆盘选中动作槽没走 perform"; exit 1; }
@@ -2563,6 +2581,67 @@ jobs:
           grep -q 'ReplayKit' "$GITHUB_WORKSPACE/Makefile" \
             || { echo "::error::0.2.62 没链接 ReplayKit（录屏链接期失败）"; exit 1; }
           echo "V0.2.62 校验: 开窗提速 + 圆盘截图/录屏 + 键盘画布底对齐 + 野窗清扫 + 让位静默 + 交接前清标记 + 窗口层吞咽 + 预热推前台/整屏往返 已就位"
+
+          # ── V0.2.63 校验（Aevon(37) 七项）──────────────────────────────────────
+          # ①抖音画面居中（AevonCenterContentV263，App 侧）
+          # ②停靠小窗被误关（AevonDockNoVanishV263）
+          # ③截图/录屏走系统入口 + 可在设置页增删排序（AevonQuickSystemV263 / AevonQuickEditableV263）
+          # ④键盘完整显示（AevonKeyFitV263 / AevonKeyboardVisibleFixV263）
+          # ⑤关窗后全屏启动设置黑屏（AevonFullscreenRecoverV263）
+          # ⑥回桌面闪烁（AevonLiveHiddenV263 / AevonFlashDampV263）
+          # ⑦滑把手带动 App（AevonGripBusyV263 + AevonGripSwallowFixV263）
+          for s in AevonCenterContentV263; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.63 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          for s in AevonKeyFitV263 AevonKeyboardVisibleFixV263 AevonGripSwallowFixV263; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.63 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          for s in AevonDockNoVanishV263 AevonQuickSystemV263 AevonQuickEditableV263 \
+          AevonFullscreenRecoverV263 AevonLiveHiddenV263 AevonFlashDampV263 \
+          AevonGripBusyV263; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.63 主库缺标记 $s"; exit 1; }
+          done
+          # ①画面居中：必须真的找到「比窗口高」的那一层并平移，位移上限 240pt
+          grep -q 'AevonFindOversizeView' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 缺「画面居中」实现（抖音内容上移/下面黑）"; exit 1; }
+          grep -q 'CGAffineTransformMakeTranslation(0, shift)' \
+            "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 画面居中没做平移"; exit 1; }
+          grep -q 'rootH <= 0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && { echo "::error::0.2.63 残留旧版居中判定"; exit 1; } || true
+          # ⑤残留下黑屏兜底
+          grep -q 'AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.63 缺「残留承载标记 → 画布写回整屏」兜底"; exit 1; }
+          # ⑥回桌面：无画面时整窗藏着（不许 alpha=1 硬淡入 = 闪）
+          grep -q 'liveAwaitingContent = true' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.63 让位到点没画面仍会硬淡入（画面快速闪）"; exit 1; }
+          grep -q 'freezeQuietWindow' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.63 盖帧没有静默期（盖/撤抖动 = 快速闪）"; exit 1; }
+          grep -q 'idleDarkTicks >= 3' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.63 盖帧没有「连续 3 拍」阻尼"; exit 1; }
+          # ⑦把手：SB 广播 + App 侧关交互（不再依赖坐标命中）
+          grep -q 'AevonNotifySetGripBusy(true)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.63 把手落指没广播「把手占用」"; exit 1; }
+          grep -q 'void AevonNotifySetGripBusy' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.63 缺把手占用 notify 通道"; exit 1; }
+          grep -q 'AevonGripBusyRefresh' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 App 侧没接「把手占用」"; exit 1; }
+          grep -q 'locationInView:nil' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 应用层吞咽没用屏幕坐标（touch.window 恒 nil）"; exit 1; }
+          # ④键盘：不再把 UITextEffectsWindow 当键盘（它常驻，会导致「键盘在屏」恒真）
+          grep -q 'rangeOfString:@"TextEffects"' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && { echo "::error::0.2.63 又把 TextEffects 当键盘了（键盘在屏判定恒真）"; exit 1; } || true
+          # ③截图/录屏走系统入口
+          grep -q '_takeScreenshotAndEdit:' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.63 截图没走系统入口（UICreateScreenImage 在 SB 里是空壳）"; exit 1; }
+          grep -q 'startSystemRecordingWithMicrophoneEnabled:handler:' \
+            "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.63 录屏没走系统录屏服务（ReplayKit 在 SB 里起不来）"; exit 1; }
+          echo "V0.2.63 校验: 抖音画面居中 + 停靠不误关 + 截图/录屏走系统且可编辑 + 键盘通知对位 + 残留黑屏兜底 + 回桌面藏着不闪 + 把手占用广播 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

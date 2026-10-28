@@ -971,3 +971,28 @@ void AevonNotifyPublishDockStages(NSArray<NSString *> *bundleIDs) {
     } @catch (NSException *exception) {
     }
 }
+
+/* ── V0.2.63（AevonGripBusyV263）：把手触摸期间「关掉被覆盖 App 的交互」 ─────
+ *
+ * 用户 Aevon(37) #7：滑把手仍带动 App 内操作。0.2.61 / 0.2.62 都在 App 进程里
+ * 按「落点是否在把手矩形内」判定，两版日志都是**一条「把手区落点」都没有** ——
+ * 坐标这条路不可靠（App 侧拿到的点、窗口坐标系、UIScreen 被接管后的值，任何
+ * 一环偏一点就永远命中不了）。
+ *
+ * 换个不依赖坐标的做法：SB 侧**一看到手指落在把手上**就广播「把手占用」，
+ * App 侧收到就把它自己的窗口交互整体关掉（`userInteractionEnabled = NO`）——
+ * UIKit 会把这根手指直接取消，QQ 的左滑删除根本没机会开始。抬手（或 0.6 秒
+ * 超时）再恢复。这条通道与几何无关，只要 notify 送到就必然生效。 */
+void AevonNotifySetGripBusy(BOOL busy) {
+    @try {
+        static int token = -1;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            notify_register_check("com.aevon.gripbusy", &token);
+        });
+        if (token < 0) { return; }
+        notify_set_state(token, busy ? 1ull : 0ull);
+        notify_post("com.aevon.gripbusy");
+    } @catch (NSException *exception) {
+    }
+}

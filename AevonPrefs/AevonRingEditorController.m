@@ -270,6 +270,16 @@ static UIImage *AevonLetterIcon(NSString *name, NSString *bundleID, CGFloat size
 - (NSString *)aevonNameFor:(NSString *)bundleID {
     NSString *cached = self.nameCache[bundleID];
     if (cached.length > 0) return cached;
+    /* V0.2.63（AevonQuickEditableV263）：截图 / 录屏是「动作」不是 App，
+     * LSApplicationProxy 查不到，这里给它们一个正常名字。 */
+    if ([bundleID isEqualToString:@"aevon.action.screenshot"]) {
+        self.nameCache[bundleID] = @"截图（系统）";
+        return @"截图（系统）";
+    }
+    if ([bundleID isEqualToString:@"aevon.action.recording"]) {
+        self.nameCache[bundleID] = @"录屏（系统）";
+        return @"录屏（系统）";
+    }
     NSString *name = bundleID;
     @try {
         Class cls = NSClassFromString(@"LSApplicationProxy");
@@ -358,9 +368,14 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"添加 App";
+    self.title = @"添加 App / 动作";
     self.view.backgroundColor = [UIColor systemBackgroundColor];
-    self.apps = AevonInstalledApps();
+    /* V0.2.63（AevonQuickEditableV263）：截图 / 录屏是「动作」，不是装出来的 App。
+     * 放在列表最前面，删掉之后还能从「+」加回来 —— 用户 Aevon(37) #3 要的就是这个。 */
+    NSArray<NSDictionary *> *actions =
+        @[@{ @"id": @"aevon.action.screenshot", @"name": @"截图（系统）" },
+          @{ @"id": @"aevon.action.recording",  @"name": @"录屏（系统）" }];
+    self.apps = [actions arrayByAddingObjectsFromArray:AevonInstalledApps()];
     self.selected = [NSMutableArray arrayWithArray:AevonRingReadList()];
 
     self.table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];

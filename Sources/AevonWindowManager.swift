@@ -95,6 +95,36 @@ enum AevonWindowManager {
             AevonLog.warn("[窗口] 全屏 App 画面出现，但场景标识取不到（探针待补 KVC 路径）；本次不自动关窗（AevonFullscreenCloseV106）")
             return
         }
+        // ── V0.2.63（AevonFullscreenRecoverV263，用户 Aevon(37) #5）──────────────
+        // 「悬浮窗打开设置，双击关闭浮窗后，点桌面设置图标 → 黑屏，浮窗也没自动关」。
+        //
+        // 这条路上我们**已经没有浮窗了**（currentView / dockedViews 都空），所以下面的
+        // 自动关窗逻辑直接 `guard let openBundleID` 返回，什么都没做：而 App 的主场景
+        // 还留着上一次「按画布 430x737 排版」的状态（App 侧承载标记可能也还挂着），
+        // 系统按整屏把它拉起来时就只有一小块有画面，其余全黑。
+        //
+        // 兜底：全屏画面一出现，先看「承载标记是不是这个 App」—— 是就当场清标记 +
+        // 把主场景画布写回整屏。清标记那一刻 App 进程 10ms 内就会自己改回真实尺寸
+        // （AevonAppScreenFitV249 的事件驱动），再补一次画布写入是双保险。
+        let marked = AevonPrefs.string("AevonFloatBundle") ?? ""
+        if !marked.isEmpty, sceneIdentifier.contains(marked),
+           currentView == nil,
+           !dockedViews.contains(where: { $0.bundleID == marked }) {
+            AevonLog.warn("[窗口] \(marked) 以全屏身份出现，但还挂着浮窗承载标记（浮窗早已关闭）"
+                + "→ 清标记 + 主场景画布写回整屏，避免残留黑屏（AevonFullscreenRecoverV263）")
+            AevonPrefs.set("AevonFloatBundle", "")
+            AevonNotifySetFloatStage("")
+            let screen = UIScreen.main.bounds.size
+            if let scene = AevonSceneHelper.scene(for: marked), screen.height > 200 {
+                let ok = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+                AevonLog.info("[窗口] 残留黑屏兜底：\(marked) 主场景画布写回 "
+                    + "\(Int(screen.width))x\(Int(screen.height))（\(ok ? "已提交" : "失败")，"
+                    + "读回 \(AevonMainSceneFrameState(scene) ?? "")）"
+                    + "（AevonFullscreenRecoverV263）")
+            }
+            enforceSingleMainWindow(reason: "全屏恢复 \(marked)")
+            return
+        }
         // V0.2.61（AevonDockFullscreenCloseV261，用户 Aevon(35) #2「悬浮窗打开设置后，
         // 全屏启动设置有概率黑屏，必须上滑关掉后台卡片才能恢复」）：
         // 停靠小窗**同样持有那个 App 的主场景 presenter**，而 openBundleID 在停靠态恒为
@@ -819,13 +849,19 @@ enum AevonWindowManager {
     /// 用户操作 = 拖主窗贴住左/右边缘松手（26pt 内）。名额只有 5 格，
     /// 满了就把该侧**最早进来的**那个关掉（历史 V0.0.50 定档：一列 5 个）。
     @discardableResult
-    static func dockCurrent(side: AevonDockSide) -> Bool {
+    static func dockCurrent(side: AevonDockSide, force: Bool = false) -> Bool {
         guard let view = currentView else { return false }
         let bundleID = view.bundleID
         // V0.2.53（AevonDockArbiterV253）：刚装回主窗 0.8 秒内的停靠请求 = 同一次
         // 手势的重复响应（restore 完，另一条路的 .ended 又看见 !isDocked）→ 拒绝。
+        //
+        // V0.2.63（AevonDockNoVanishV263，用户 Aevon(37) #2「多个停靠小窗切换到主悬浮窗时，
+        // 快速点击会自动关掉停靠小窗」）：`force = true` 时跳过这道仲裁 —— 内部
+        // 「装回 A 之前先把旧主窗 B 降级」是**我们自己发起的**，不是同一次手势的
+        // 重复响应。原来这里被仲裁拒掉后返回 false，上一版又把 false 当成
+        // 「降级失败」把 B 直接关掉 → 用户眼里就是「点一下，另一个小窗没了」。
         let now0 = CACurrentMediaTime()
-        if bundleID == lastRestoredBundleID, now0 - lastRestoreAt < dockArbiterWindow {
+        if !force, bundleID == lastRestoredBundleID, now0 - lastRestoreAt < dockArbiterWindow {
             AevonLog.info("[停靠] \(bundleID) 装回后 \(String(format: "%.2f", now0 - lastRestoreAt))s 内的停靠请求被仲裁吸收"
                 + "（同一次手势的重复响应，AevonDockArbiterV253 AevonDockArbiterNarrowV260）")
             return false
@@ -887,9 +923,13 @@ enum AevonWindowManager {
             // currentView、也不在 dockedViews 里，成了一只没人认领的野窗：看着像第二个
             // 主窗，点它没人管、底边双击也轮不到它（因为全局通道只认「当前主窗」）。
             // 降级失败就直接关掉，绝不留野窗。
-            if !dockCurrent(side: side) {
+            //
+            // V0.2.63（AevonDockNoVanishV263，Aevon(37) #2）：`force: true` 跳过仲裁，
+            // 并且**只在真的没进停靠列时**才关 —— 上一版把「被仲裁拒掉」也当成失败，
+            // 快速连点时会把好好的小窗直接关掉（用户看到的就是「小窗自动消失」）。
+            if !dockCurrent(side: side, force: true), !dockedViews.contains(where: { $0 === main }) {
                 AevonLog.warn("[停靠] \(main.bundleID) 降级失败（停靠列已满 / 场景失效）→ 直接关掉，"
-                    + "不留野窗（AevonDockNoOrphanV262）")
+                    + "不留野窗（AevonDockNoOrphanV262 AevonDockNoVanishV263）")
                 close(bundleID: main.bundleID, releaseOnly: false)
             }
         }

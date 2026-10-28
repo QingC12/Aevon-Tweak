@@ -1014,25 +1014,26 @@ static BOOL AevonIsKeyboardWindow(UIWindow *window) {
 static void AevonKeyFrameSwizzled(id self_, SEL _cmd, CGRect frame) {
     CGRect use = frame;
     @try {
-        if (gAevonScreenFitOn && AevonIsKeyboardWindow(self_)) {
+        // V0.2.63（AevonKeyFitV263）：闸门从 `gAevonScreenFitOn` 换成 `AevonAppIsFloatHosted()`
+        // —— 前者会随偏好读延迟来回翻（Aevon(37) 日志里同一分钟内 开/关 反复），一翻就整段失效。
+        if (AevonAppIsFloatHosted() && AevonIsKeyboardWindow(self_)) {
             UIWindow *win = (UIWindow *)self_;
-            CGFloat canvasH = floor([UIScreen mainScreen].bounds.size.height);
-            CGFloat sceneH = 0;
-            @try {
-                sceneH = win.windowScene.coordinateSpace.bounds.size.height;
-            } @catch (NSException *e) { sceneH = 0; }
+            CGFloat canvasH = AevonAppIsFloatHostedScreenHeight();
+            CGFloat canvasW = AevonAppIsFloatHostedScreenWidth();
             CGFloat kbH = use.size.height;
-            if (canvasH > 200 && kbH > 40 && kbH < canvasH
-                && sceneH > 200 && fabs(sceneH - canvasH) <= 8) {
+            if (canvasH > 200 && kbH > 40 && kbH < canvasH) {
                 CGFloat targetY = canvasH - kbH;
-                if (fabs(use.origin.y - targetY) > 1.0) {
+                if (fabs(use.origin.y - targetY) > 1.0 || fabs(use.size.width - canvasW) > 1.0) {
+                    use.origin.x = 0;
                     use.origin.y = targetY;
+                    use.size.width = canvasW;
                     if (!gAevonKeyLogged) {
                         gAevonKeyLogged = YES;
-                        AevonAppLog(@"[App侧] 键盘按画布底对齐：%@ → y=%.0f（画布高 %.0f，"
-                                    @"系统给的是整屏坐标 y=%.0f）→ 键盘完整落在浮窗里"
-                                    @"（AevonKeyFitV262）",
-                                    NSStringFromClass([win class]), targetY, canvasH, frame.origin.y);
+                        AevonAppLog(@"[App侧] 键盘按画布底对齐：%@ → (0,%.0f,%.0f,%.0f)"
+                                    @"（画布 %.0fx%.0f，系统给的是整屏坐标 y=%.0f）"
+                                    @"→ 键盘完整落在浮窗里（AevonKeyFitV262 AevonKeyFitV263）",
+                                    NSStringFromClass([win class]), targetY, canvasW, kbH,
+                                    canvasW, canvasH, frame.origin.y);
                     }
                 }
             }
@@ -1044,6 +1045,164 @@ static void AevonKeyFrameSwizzled(id self_, SEL _cmd, CGRect frame) {
         ((void (*)(id, SEL, CGRect))gAevonKeyFrameOrig)(self_, _cmd, use);
     }
 }
+
+/* V0.2.63（AevonKeyFitV263）：浮窗承载期间的画布尺寸。
+ * 优先用被接管的 `[UIScreen bounds]`（它就是画布）；万一那一刻没被接管，
+ * 按 7:12 竖窗的比例从真实屏宽反推（430 × 12/7 = 737）。 */
+static CGSize AevonAppFloatCanvasSize(void) {
+    CGSize real = AevonRealScreenSize();
+    CGSize hooked = [UIScreen mainScreen].bounds.size;
+    if (hooked.width > 100 && hooked.height > 200
+        && (real.height < 200 || hooked.height < real.height - 40.0)) {
+        return hooked;
+    }
+    if (real.width > 100) { return CGSizeMake(real.width, floor(real.width * 12.0 / 7.0)); }
+    return hooked;
+}
+
+static CGFloat AevonAppIsFloatHostedScreenHeight(void) {
+    return AevonAppFloatCanvasSize().height;
+}
+
+static CGFloat AevonAppIsFloatHostedScreenWidth(void) {
+    return AevonAppFloatCanvasSize().width;
+}
+
+/* 通知驱动的一次对位：系统算好的键盘 frame 是按**真实屏幕**给的，
+ * 这里按画布底重新摆一次。setFrame: 那条 swizzle 是主路（系统每次改都过），
+ * 这条是「已经在屏上、只是位置不对」的补正（系统有时候只改内部 layer 不改窗口）。 */
+static void AevonKeyRepositionNow(NSNotification *note) {
+    @try {
+        if (!AevonAppIsFloatHosted()) { return; }
+        CGRect end = CGRectZero;
+        NSValue *value = note.userInfo[UIKeyboardFrameEndUserInfoKey];
+        if ([value isKindOfClass:[NSValue class]]) { end = [value CGRectValue]; }
+        CGFloat kbH = end.size.height;
+        if (kbH < 40) { return; }
+        CGSize canvas = AevonAppFloatCanvasSize();
+        if (canvas.height < 200 || kbH >= canvas.height) { return; }
+        CGRect target = CGRectMake(0, canvas.height - kbH, canvas.width, kbH);
+        NSArray<UIWindow *> *windows = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        windows = [[UIApplication sharedApplication] windows];
+#pragma clang diagnostic pop
+        for (UIWindow *w in windows) {
+            if (!AevonIsKeyboardWindow(w)) { continue; }
+            if (CGRectEqualToRect(CGRectIntegral(w.frame), CGRectIntegral(target))) { continue; }
+            CGRect before = w.frame;
+            w.frame = target;
+            [w setNeedsLayout];
+            [w layoutIfNeeded];
+            AevonAppLog(@"[App侧] 键盘通知对位：%@ %@ → %@（画布 %.0fx%.0f，键盘高 %.0f）"
+                        @"（AevonKeyFitV263）",
+                        NSStringFromClass([w class]), NSStringFromCGRect(before),
+                        NSStringFromCGRect(target), canvas.width, canvas.height, kbH);
+        }
+    } @catch (NSException *exception) {
+        AevonAppLog(@"[App侧] 键盘通知对位异常：%@（不影响宿主）（AevonKeyFitV263）",
+                    exception.reason ?: @"未知");
+    }
+}
+
+/* ── V0.2.63（AevonCenterContentV263）：把画面中心拉回浮窗中心 ───────────────────
+ *
+ * 用户 Aevon(37) #1：「抖音真重排一秒后内容上移、下面黑。能不能让抖音画面的中心始终
+ * 保持在悬浮窗的中心」。
+ *
+ * 前面两版都在 SB 侧改画布尺寸（S2 主场景改画布），尺寸是对的（日志「内容宿主
+ * 430x737 已贴合画布」），可画面还是整体偏上留一条黑 —— 说明抖音自己的**根视图**仍然
+ * 按整屏高度（932）排好了内部坐标，场景变窄之后它只裁不重排：可见区永远是那 932 的
+ * 顶上 737，画面中心自然不在窗口中心。
+ *
+ * 这一版换到 App 进程里做**视觉对中**：浮窗承载期间看一眼主窗口的根视图，
+ * 如果它比窗口还高（说明内部仍按整屏排版），就把根视图整体平移
+ * (窗口高 - 根视图高)/2 —— 屏幕上看就是「画面中心 = 窗口中心」。
+ * 只改 transform（不碰约束、不碰子视图坐标），关窗立刻还原；
+ * 位移上限 240pt（防止某个 App 的超长滚动视图被误判后甩飞）。
+ * 纪律：整个方法包在 @try 里，任何异常都只记日志（圆盘 / 浮窗是天天用的入口）。
+ */
+__attribute__((used)) static const char AevonCenterContentV263Marker[] = "AevonCenterContentV263";
+
+static BOOL gAevonCenterApplied = NO;
+static __weak UIView *gAevonCenterTarget = nil;
+
+/* 在窗口里找「比窗口高一大截」的那一层（浅层优先，最多走 3 层）。
+ * 抖音这类 App 的形态是：根视图 = 窗口高，里面某一层容器仍是整屏 932 → 那一层就是要对中的目标。 */
+static UIView *AevonFindOversizeView(UIView *root, CGFloat windowH) {
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    for (int depth = 0; depth < 3 && queue.count > 0; depth++) {
+        NSUInteger count = queue.count;
+        UIView *best = nil;
+        for (NSUInteger i = 0; i < count; i++) {
+            UIView *view = queue[i];
+            CGFloat h = view.bounds.size.height;
+            if (view != root && h > windowH + 40.0 && h <= windowH + 240.0) {
+                if (best == nil || h > best.bounds.size.height) { best = view; }
+            }
+            [queue addObjectsFromArray:view.subviews];
+        }
+        if (best != nil) { return best; }
+        [queue removeObjectsInRange:NSMakeRange(0, count)];
+    }
+    return nil;
+}
+
+static void AevonCenterContentRefresh(BOOL floatHosted) {
+    @try {
+        UIWindow *main = nil;
+        for (UIScene *scene in [[UIApplication sharedApplication] connectedScenes]) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (AevonIsKeyboardWindow(w)) { continue; }
+                if (main == nil || w.bounds.size.height > main.bounds.size.height) { main = w; }
+            }
+        }
+        UIView *root = main.rootViewController.view;
+        if (main == nil || root == nil) { return; }
+        if (!floatHosted) {
+            if (gAevonCenterApplied) {
+                gAevonCenterApplied = NO;
+                gAevonCenterTarget.transform = CGAffineTransformIdentity;
+                gAevonCenterTarget = nil;
+                AevonAppLog(@"[App侧] 关窗 → 画面位移已还原（AevonCenterContentV263）");
+            }
+            return;
+        }
+        CGFloat windowH = main.bounds.size.height;
+        if (windowH < 200) { return; }
+        UIView *target = AevonFindOversizeView(root, windowH);
+        if (target == nil) {
+            if (gAevonCenterApplied) {
+                gAevonCenterApplied = NO;
+                gAevonCenterTarget.transform = CGAffineTransformIdentity;
+                gAevonCenterTarget = nil;
+                AevonAppLog(@"[App侧] 各层尺寸都已贴合窗口 → 撤掉画面位移"
+                            @"（AevonCenterContentV263）");
+            }
+            return;
+        }
+        CGFloat diff = target.bounds.size.height - windowH;
+        CGFloat shift = -diff / 2.0;
+        if (gAevonCenterApplied && gAevonCenterTarget == target
+            && fabs(gAevonCenterTarget.transform.ty - shift) < 0.5) { return; }
+        gAevonCenterApplied = YES;
+        gAevonCenterTarget = target;
+        target.transform = CGAffineTransformMakeTranslation(0, shift);
+        AevonAppLog(@"[App侧] 画面居中：%@ 高 %.0f vs 窗口 %.0f（这一层仍按整屏排版）"
+                    @"→ 整体上移 %.1fpt，让画面中心回到浮窗中心（AevonCenterContentV263）",
+                    NSStringFromClass([target class]), target.bounds.size.height, windowH, -shift);
+    } @catch (NSException *exception) {
+        AevonAppLog(@"[App侧] 画面居中失败：%@（不影响宿主）（AevonCenterContentV263）",
+                    exception.reason ?: @"未知");
+    }
+}
+
+/* V0.2.63 标记：ObjC 里的中文日志串会被编成 UTF-16（strings 查不到），
+ * 所以每个标记单独放一条纯 ASCII 的 used 数组，保证一定出现在编译产物里。 */
+__attribute__((used)) static const char AevonKeyFitV263Marker[] = "AevonKeyFitV263";
+__attribute__((used)) static const char AevonKeyboardVisibleFixV263Marker[] = "AevonKeyboardVisibleFixV263";
+__attribute__((used)) static const char AevonGripSwallowFixV263Marker[] = "AevonGripSwallowFixV263";
 
 static void AevonKeyFitInstall(void) {
     @try {
@@ -1067,14 +1226,36 @@ static void AevonKeyFitInstall(void) {
         method_setImplementation(m, (IMP)AevonKeyFrameSwizzled);
         AevonAppLog(@"[App侧] 已接管 -[UIRemoteKeyboardWindow setFrame:]：键盘按画布底对齐，"
                     @"不再只露出上半截（AevonKeyFitV262）");
+        /* V0.2.63（AevonKeyFitV263）：再加一条通知驱动的补正 —— setFrame: 偶尔只改内部
+         * layer、不改窗口；键盘「显示不全」的另一半原因就在这里。 */
+        static BOOL observersInstalled = NO;
+        if (!observersInstalled) {
+            observersInstalled = YES;
+            void (^handler)(NSNotification *) = ^(NSNotification *note) {
+                AevonKeyRepositionNow(note);
+            };
+            [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillChangeFrameNotification
+                                                              object:nil
+                                                               queue:[NSOperationQueue mainQueue]
+                                                          usingBlock:handler];
+            [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardDidShowNotification
+                                                              object:nil
+                                                               queue:[NSOperationQueue mainQueue]
+                                                          usingBlock:handler];
+            AevonAppLog(@"[App侧] 键盘通知监听已装（UIKeyboardWillChangeFrame / DidShow）"
+                        @"：键盘每次出现都按画布底对一次位（AevonKeyFitV263）");
+        }
     } @catch (NSException *exception) {
         AevonAppLog(@"[App侧] 键盘对齐安装失败：%@（AevonKeyFitV262）", exception.reason ?: @"未知");
     }
 }
 
 /* 前向声明（V0.2.59）：ScreenFitRefresh 的 0.5s 轮询兜底要调停靠交互刷新，
- * 定义在本文件更后面 —— C99 不支持隐式声明（0.2.52 同款坑，编译期才暴露）。 */
+ * 定义在本文件更后面 —— C99 不支持隐式声明（0.2.52 同款坑，编译期才暴露）。
+ * V0.2.63：把手占用刷新同样在轮询里兜底一次（通知丢了也不会卡在无交互态）。 */
 static void AevonDockInteractionRefresh(void);
+static void AevonGripBusyRefresh(BOOL fromNotify);
+static void AevonCenterContentRefresh(BOOL floatHosted);
 
 static void AevonScreenFitRefresh(void) {
     if (gAevonScreenFitRefreshing) { return; }
@@ -1098,8 +1279,25 @@ static void AevonScreenFitRefresh(void) {
     }
     gAevonScreenFitRefreshing = NO;
     if (flipped) { AevonScreenFitNudgeLayout(nowOn); }
+    /* V0.2.63（AevonCenterContentV263）：开窗那一下先对一次中，再在 0.4 / 0.9 / 1.5 秒
+     * 各复查一次 —— 用户 Aevon(37) #1 的现象是「真重排成立，一秒后才上移」，说明 App
+     * 是**晚一步**才把内部尺寸改回整屏的，一开局对中不够，要跟一段。 */
+    if (flipped) {
+        AevonCenterContentRefresh(nowOn);
+        if (nowOn) {
+            for (NSNumber *delay in @[@0.4, @0.9, @1.5]) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                             (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    AevonCenterContentRefresh(AevonAppIsFloatHosted());
+                });
+            }
+        }
+    }
     /* V0.2.59（AevonDockStageV259）：0.5s 轮询兜底刷新停靠交互（事件驱动为主）。 */
     AevonDockInteractionRefresh();
+    /* V0.2.63（AevonGripBusyV263）：把手占用同样轮询兜底（只做撤销，不会误关）。 */
+    AevonGripBusyRefresh(NO);
 }
 
 static CGRect AevonScreenBoundsFit(id self_, SEL _cmd) {
@@ -1136,8 +1334,14 @@ __attribute__((used)) static const char AevonDockFuseV259Marker[] = "AevonDockFu
 
 static int gAevonDockStageTokens[5] = {-1, -1, -1, -1, -1};
 static int gAevonDockStageNotifyToken = -1;
+static int gAevonGripBusyToken = -1;
 static BOOL gAevonDockStageOnce = NO;
 static BOOL gAevonDockActive = NO;
+/* V0.2.63（AevonGripBusyV263）：手指正压在把手上 → 本进程窗口交互临时关闭。 */
+static BOOL gAevonGripBusy = NO;
+static BOOL gAevonGripBusyDirty = NO;
+static uint32_t gAevonGripBusyGeneration = 0;
+static void AevonDockInteractionRefresh(void);
 
 static BOOL AevonAppDockCheck(void) {
     if (!gAevonDockStageOnce) {
@@ -1162,7 +1366,8 @@ static BOOL AevonAppDockCheck(void) {
 static void AevonDockInteractionRefresh(void) {
     @try {
         BOOL docked = AevonAppDockCheck();
-        if (docked == gAevonDockActive) { return; }
+        if (docked == gAevonDockActive && !gAevonGripBusy && !gAevonGripBusyDirty) { return; }
+        gAevonGripBusyDirty = NO;
         gAevonDockActive = docked;
         UIApplication *app = [UIApplication sharedApplication];
         if (app == nil) { return; }
@@ -1170,7 +1375,9 @@ static void AevonDockInteractionRefresh(void) {
         for (UIScene *scene in app.connectedScenes) {
             if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
             for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                BOOL want = !docked;
+                // V0.2.63（AevonGripBusyV263）：把手占用期同样关掉交互
+                // （手指压在把手上时，App 不该收到任何直投触摸）。
+                BOOL want = (!docked && !gAevonGripBusy);
                 if (window.userInteractionEnabled != want) {
                     window.userInteractionEnabled = want;
                     touched += 1;
@@ -1189,6 +1396,75 @@ static void AevonDockInteractionRefresh(void) {
     }
 }
 
+/* V0.2.63（AevonGripBusyV263）：SB 说「手指在把手上」→ 本进程关交互。
+ *
+ * 为什么不再用坐标判定：0.2.61 / 0.2.62 两版都在 App 侧按落点矩形判，
+ * Aevon(36) / Aevon(37) 两篇日志里「把手区落点」都是 **0 条** —— 说明那条路
+ * 在真机上根本命中不了（App 拿到的点、窗口坐标系、被接管的 UIScreen，任何
+ * 一环偏一点就永远判不中）。改成「SB 说压住了 → 我整体不接触摸」，与几何无关。
+ *
+ * 闸门（防误伤）：只在本 App 占满整屏、且没有被浮窗承载时才关交互 ——
+ * 浮窗里的 App 右缘没有把手，关了只会让浮窗内容点不动。
+ * fail-open：读不到「占用」态一律恢复交互；0.6 秒硬超时兜底（抬手包丢了也不会卡死）。
+ */
+static void AevonGripBusyRefresh(BOOL fromNotify) {
+    @try {
+        if (gAevonGripBusyToken < 0) { return; }
+        uint64_t state = 0;
+        BOOL busy = NO;
+        if (notify_get_state(gAevonGripBusyToken, &state) == NOTIFY_STATUS_OK) {
+            busy = (state != 0);
+        }
+        if (busy) {
+            /* 只有全屏 App 才需要关：浮窗承载中（画布尺寸）把手不在这个进程的界面上。 */
+            if (AevonAppIsFloatHosted()) { return; }
+            CGSize real = AevonRealScreenSize();
+            CGFloat tallest = 0;
+            @try {
+                for (UIScene *scene in [[UIApplication sharedApplication] connectedScenes]) {
+                    if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+                    for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                        if (AevonIsKeyboardWindow(w)) { continue; }
+                        tallest = MAX(tallest, w.bounds.size.height);
+                    }
+                }
+            } @catch (NSException *e) { tallest = 0; }
+            if (real.height > 200 && tallest < real.height - 60.0) { return; }
+            gAevonGripBusyGeneration += 1;
+            uint32_t generation = gAevonGripBusyGeneration;
+            if (!gAevonGripBusy) {
+                gAevonGripBusy = YES;
+                gAevonGripBusyDirty = YES;
+                AevonDockInteractionRefresh();
+                AevonAppLog(@"[App侧] 把手占用 → 本进程窗口交互临时关闭（UIKit 会取消这根手指，"
+                            @"App 内的左滑 / 长按不会开始）（AevonGripBusyV263）");
+            }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if (generation != gAevonGripBusyGeneration) { return; }
+                if (!gAevonGripBusy) { return; }
+                gAevonGripBusy = NO;
+                gAevonGripBusyDirty = YES;
+                AevonDockInteractionRefresh();
+                AevonAppLog(@"[App侧] 把手占用满 0.6s 未见抬手 → 自行恢复交互（fail-open）"
+                            @"（AevonGripBusyV263）");
+            });
+            return;
+        }
+        if (gAevonGripBusy) {
+            gAevonGripBusy = NO;
+            gAevonGripBusyDirty = YES;
+            AevonDockInteractionRefresh();
+            AevonAppLog(@"[App侧] 把手占用结束 → 交互恢复（%@）（AevonGripBusyV263）",
+                        fromNotify ? @"来自 SB 通知" : @"轮询兜底");
+        }
+    } @catch (NSException *exception) {
+        gAevonGripBusy = NO;
+        gAevonGripBusyDirty = YES;
+        AevonDockInteractionRefresh();
+    }
+}
+
 static void AevonDockInteractionInstall(void) {
     @try {
         if ([gAevonAppBundleID isEqualToString:@"com.apple.springboard"]) { return; }
@@ -1196,6 +1472,19 @@ static void AevonDockInteractionInstall(void) {
             notify_register_dispatch("com.aevon.dockstage", &gAevonDockStageNotifyToken,
                                      dispatch_get_main_queue(), ^(int token) {
                 AevonDockInteractionRefresh();
+            });
+        }
+        /* V0.2.63（AevonGripBusyV263，用户 Aevon(37) #7）：SB 侧「手指落在把手上」的广播
+         * —— 收到就把本进程窗口交互关掉（UIKit 会取消这根手指，App 内的左滑 / 长按
+         * 来不及开始），抬手或 0.6 秒后恢复。这条通道与坐标无关，必达。 */
+        if (gAevonGripBusyToken < 0) {
+            notify_register_check("com.aevon.gripbusy", &gAevonGripBusyToken);
+        }
+        static int gripNotifyToken = -1;
+        if (gripNotifyToken < 0) {
+            notify_register_dispatch("com.aevon.gripbusy", &gripNotifyToken,
+                                     dispatch_get_main_queue(), ^(int token) {
+                AevonGripBusyRefresh(YES);
             });
         }
         /* 保险丝：回前台强制重判（停靠中的 App 被全屏拉起时，即使 SB 侧清位通知
@@ -1317,10 +1606,12 @@ static BOOL AevonKeyboardVisible(void) {
     for (UIWindow *w in windows) {
         if (w == nil || w.hidden || w.alpha < 0.01) { continue; }
         NSString *name = NSStringFromClass([w class]) ?: @"";
-        if ([name rangeOfString:@"Keyboard"].location != NSNotFound
-            || [name rangeOfString:@"TextEffects"].location != NSNotFound) {
-            return YES;
-        }
+        /* V0.2.63（AevonKeyboardVisibleFixV263）：原来把 `TextEffects` 也算键盘 ——
+         * 但 `UITextEffectsWindow` 在**每个 App 里常驻**（没键盘时也在），于是
+         * `AevonKeyboardVisible()` 恒为 YES，把「把手吞咽」整条链闸死了。
+         * 现在只认真正的键盘窗口，并且要求它确有高度（> 80pt）。 */
+        if ([name rangeOfString:@"Keyboard"].location == NSNotFound) { continue; }
+        if (w.bounds.size.height > 80.0 && w.bounds.size.width > 100.0) { return YES; }
     }
     return NO;
 }
@@ -1375,14 +1666,20 @@ static BOOL AevonPointInGrip(CGPoint p) {
  *   2) 键盘在屏上时不吞（见 AevonKeyboardVisible 的注释：会压住键盘右列）。
  * 判据全部用真屏幕（被接管前的 -[UIScreen bounds] 原实现），不用被接管过的值。 */
 static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
-    UIWindow *w = touch.window;
-    if (w == nil) { return NO; }
+    /* V0.2.63（AevonGripSwallowFixV263）：不再要求 `touch.window != nil`。
+     * UIApplication 这一层 touch.window 恒为 nil（0.2.61 实测），但
+     * `-locationInView:nil` 拿到的就是**屏幕坐标**，够判定了。
+     * 闸门换成「本 App 正被浮窗承载时不动」（那时右缘没有把手，
+     * 吞了只会让浮窗内容点不动）—— 这个判据比 gAevonScreenFitOn 稳。 */
+    if (AevonAppIsFloatHosted()) { return NO; }
     CGSize real = AevonRealScreenSize();
     if (real.height < 200) { return NO; }
-    if (w.bounds.size.height < real.height - 60.0) { return NO; }
     if (AevonKeyboardVisible()) { return NO; }
     return AevonPointInGrip(p);
 }
+
+/* V0.2.63：右缘落点诊断的限频时间戳（两个钩子共用） */
+static CFTimeInterval gAevonGripMissLoggedAt;
 
 static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
     @try {
@@ -1395,11 +1692,31 @@ static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
             for (UITouch *touch in touches) {
                 NSValue *key = [NSValue valueWithPointer:(__bridge const void *)touch];
                 if (touch.phase == UITouchPhaseBegan) {
-                    CGPoint p = [touch locationInView:touch.window];
+                    /* V0.2.63：这一层 `touch.window` 恒为 nil，用 nil 视图取到的
+                     * 就是屏幕坐标（也对得上把手命中区）。 */
+                    CGPoint p = [touch locationInView:nil];
+                    /* 诊断（限频 3s）：右缘 80pt 内的落点一律记一条 —— 万一还是没吞，
+                     * 下一篇日志直接能看出是「点没到这一层」还是「坐标对不上」。 */
+                    CGSize real = AevonRealScreenSize();
+                    if (real.width > 100 && p.x >= real.width - 80.0) {
+                        CFTimeInterval nowLog = CACurrentMediaTime();
+                        if (nowLog - gAevonGripMissLoggedAt > 3.0) {
+                            gAevonGripMissLoggedAt = nowLog;
+                            AevonAppLog(@"[App侧] 右缘落点 %@（把手矩形 %@，真屏 %.0fx%.0f，"
+                                        @"浮窗承载=%@，键盘=%@）→ 吞=%@"
+                                        @"（AevonGripSwallowFixV263 AevonGripBusyV263）",
+                                        NSStringFromCGPoint(p), NSStringFromCGRect(gAevonGripRect),
+                                        real.width, real.height,
+                                        AevonAppIsFloatHosted() ? @"是" : @"否",
+                                        AevonKeyboardVisible() ? @"是" : @"否",
+                                        AevonShouldConsiderSwallow(touch, p) ? @"是" : @"否");
+                        }
+                    }
                     if (AevonShouldConsiderSwallow(touch, p)) {
                         [gAevonSwallowedTouches addObject:key];
                         AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（不再带着 App 内滑动）"
-                                    @"（AevonGripSwallowV261）", NSStringFromCGPoint(p));
+                                    @"（AevonGripSwallowV261 AevonGripSwallowFixV263）",
+                                    NSStringFromCGPoint(p));
                     }
                 }
                 BOOL swallowed = [gAevonSwallowedTouches containsObject:key];
@@ -1443,7 +1760,6 @@ static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
 __attribute__((used)) static const char AevonGripSwallowWinV262Marker[] = "AevonGripSwallowWinV262";
 
 static IMP gAevonWinSendEventOrig;
-static CFTimeInterval gAevonGripMissLoggedAt;
 
 static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
     @try {

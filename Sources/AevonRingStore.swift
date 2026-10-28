@@ -37,19 +37,38 @@ enum AevonRingStore {
     }
 
     static func bundleIDs() -> [String] {
-        if let cached = cached { return withQuickActions(cached) }
+        // V0.2.63（AevonQuickEditableV263）：首次读之前播种一次截图 / 录屏（只一次）。
+        seedQuickActionsIfNeeded()
+        if let cached = cached { return cached }
         var list = readList(forKey: key)
         if list.isEmpty { list = readList(forKey: snapshotKey) }
         cached = list
-        return withQuickActions(list)
+        return list
     }
 
-    /// V0.2.62（AevonQuickActionV262，用户 Aevon(36) #2）：圆盘里固定挂两个快捷动作
-    /// （截图 / 录屏），永远排在最前两格 —— 收藏列表增删 App 不会影响它们。
-    private static func withQuickActions(_ list: [String]) -> [String] {
-        let apps = list.filter { !AevonQuickAction.isAction($0) }
-        return AevonQuickAction.allIDs + apps
+    /// V0.2.63（AevonQuickEditableV263，用户 Aevon(37) #3「截图和录屏一直存在圆盘里，
+    /// 无法通过设置中的应用编辑去添加/移除或者排序」）：
+    /// 0.2.62 是把两个动作**强行拼在**列表最前面（内部私有方法），所以设置页里
+    /// 根本看不到它们，自然也删不掉。现在改成「一次性播种进 RingApps」——
+    /// 播种之后它们就是普通条目：设置页能看见、能删、能拖动排序、删了还能从「+」加回来。
+    /// 用 `RingQuickSeeded` 标记保证只播种一次（用户删掉后不会再自己长回来）。
+    static func seedQuickActionsIfNeeded() {
+        let store = UserDefaults(suiteName: suite)
+        if store?.bool(forKey: seedKey) == true { return }
+        var list = readList(forKey: key)
+        if list.isEmpty { list = readList(forKey: snapshotKey) }
+        var seeded = AevonQuickAction.allIDs
+        for id in list where !seeded.contains(id) { seeded.append(id) }
+        store?.set(sanitize(seeded), forKey: key)
+        store?.set(sanitize(seeded), forKey: snapshotKey)
+        store?.set(true, forKey: seedKey)
+        store?.synchronize()
+        cached = sanitize(seeded)
+        AevonLog.info("[圆盘] 已把「截图 / 录屏」一次性写进圆盘列表（之后可在设置页增删、排序）"
+            + "（AevonQuickEditableV263）")
     }
+
+    private static let seedKey = "RingQuickSeeded"
 
     /// 设置页广播 prefschanged 后调用（**唯一**的跨进程刷新入口）。
     /// 读到可信列表就更新缓存并写快照；读到空列表时保留旧缓存（防漂移读）。

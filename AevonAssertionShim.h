@@ -37,6 +37,9 @@ void AevonNotifySetFloatStage(NSString *bundleID);
 ///（拦截 backboardd 直投的触摸：点停靠小窗不再触发小窗里 App 的内容点击）。
 /// 空数组 = 全清（所有停靠窗已离开，App 侧恢复交互）。
 void AevonNotifyPublishDockStages(NSArray<NSString *> *bundleIDs);
+/* V0.2.63（AevonGripBusyV263）：手指落在把手上 → YES；抬手 / 超时 → NO。
+ * App 侧据此临时关掉自己的窗口交互，滑把手不再带动 App 内操作。 */
+void AevonNotifySetGripBusy(BOOL busy);
 /// V0.2.51（AevonGripOnlyV251）：GetRing 已随 App 侧识别器退役（bit39 写入保留）。
 
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。

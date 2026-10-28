@@ -119,6 +119,8 @@ enum AevonEdgeEntry {
     // 所以把手滑动必须在 sendEvent 这条总入口上也判一次 —— 和浮窗边条同一条通路。
     // 纪律：只观察、不吞（铁律：不在别人的触摸上做吞咽），呼盘后由圆盘自己接管。
     private static var gripSwipeTouchID: UInt = 0
+    /// V0.2.63（AevonGripBusyV263）：当前是否已广播「把手占用」（抬手 / 取消时撤销）
+    private static var gripBusyActive = false
     private static var gripSwipeStart: CGPoint = .zero
     private static var lastGripSwipeLogAt: CFTimeInterval = 0
 
@@ -230,6 +232,14 @@ enum AevonEdgeEntry {
                 // 顺带把指针位置记准：呼盘时圆盘从这个点接手指（全屏 App 里
                 // 视图层那条路收不到触摸，这里是唯一能记到真实落点的通道）。
                 lastTouchPoint = point
+                // V0.2.63（AevonGripBusyV263，用户 Aevon(37) #7）：一落指就广播「把手占用」，
+                // 让被覆盖的全屏 App 立刻把自己的窗口交互关掉 —— UIKit 会把这根手指整根取消，
+                // App 内的左滑 / 长按根本没机会开始。这条通道与坐标无关，
+                // 不再像 0.2.61/0.2.62 那样「判定矩形没命中就一根都没吞」。
+                AevonNotifySetGripBusy(true)
+                gripBusyActive = true
+                AevonLog.info("[圆盘] 手指落在把手上 (\(Int(point.x)),\(Int(point.y))) → 广播「把手占用」，"
+                    + "被覆盖的 App 立刻停收触摸（AevonGripBusyV263）")
                 return
             }
             // V0.2.9（AevonFloatPassV209）：落在浮窗上的触摸整个交回浮窗。
@@ -308,6 +318,11 @@ enum AevonEdgeEntry {
         case .ended:
             // V0.2.60（AevonGripSwipeGlobalV260）：抬手即清把手观察态
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
+            // V0.2.63（AevonGripBusyV263）：抬手 → 撤销「把手占用」，App 侧恢复交互。
+            if gripBusyActive {
+                gripBusyActive = false
+                AevonNotifySetGripBusy(false)
+            }
             // V0.2.60（AevonDockTapOnlyV260）：停靠小窗「点一下装回」的全局兜底。
             // 没移动就抬手 = 装回（UIKit 的 dockTap 是主路，这条只是全屏 App 的保险；
             // restoreDocked 自己幂等，晚到的那一次会因「已不在停靠列」直接返回）。
@@ -362,6 +377,11 @@ enum AevonEdgeEntry {
 
         case .cancelled:
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
+            // V0.2.63（AevonGripBusyV263）：取消同样撤销「把手占用」（fail-open）。
+            if gripBusyActive {
+                gripBusyActive = false
+                AevonNotifySetGripBusy(false)
+            }
             if dockTapCandidateID != 0, touchID == dockTapCandidateID {
                 dockTapCandidateID = 0
                 dockTapCandidateWindow = nil
