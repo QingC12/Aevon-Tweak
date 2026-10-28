@@ -151,6 +151,20 @@ enum AevonWindowManager {
                     + "\(Int(screen.width))x\(Int(screen.height))（读回 "
                     + "\(AevonMainSceneFrameState(scene) ?? "")）"
                     + "（AevonFullscreenRecoverV264）")
+                // V0.2.66（AevonFullKickV266，用户 Aevon(39) #11「关闭悬浮窗后全屏打开抖音
+                // 会出现断层」）：画布写回整屏只改了 scene frame —— App 进程可能仍按
+                // 上一轮浮窗画布 737 排版（frame 写入不必然触发 relayout）。这里不依赖
+                // sceneHost（浮窗已关、承载器可能已 invalidate），直接对场景做一次
+                // 「429x931 → 430x932」抖动写入，逼 App 用真实屏幕尺寸重排一遍。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                    let w = screen.width, h = screen.height
+                    _ = AevonMainSceneSetFrame(scene, Double(w - 1), Double(h - 1))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        _ = AevonMainSceneSetFrame(scene, Double(w), Double(h))
+                        AevonLog.info("[窗口] 全屏兜底抖动踢完成：\(Int(w - 1))x\(Int(h - 1)) → "
+                            + "\(Int(w))x\(Int(h))（逼 App 按真实屏幕重排）（AevonFullKickV266）")
+                    }
+                }
             }
         }
         // V0.2.61（AevonDockFullscreenCloseV261，用户 Aevon(35) #2「悬浮窗打开设置后，
@@ -198,6 +212,12 @@ enum AevonWindowManager {
     ///
     /// 只在浮窗还在时动作；没有浮窗就是一次函数调用，零副作用。
     static func noteForegroundSceneLost() {
+        // V0.2.66（AevonGripFastV266，用户 Aevon(39) #6）：回桌面那一刻容器多半还挂在
+        // 离场 App 的画面视图里（SB 主屏不触发「App 场景消失」），右缘把手跟着不可摸，
+        // 要等看门狗（3s 周期归位）才回来 = 「触发条慢 1 秒左右」。布防这拍（桌面出现
+        // 之前）立刻搬回窗口根，把手即时就位。无浮窗时也执行（把手归位与浮窗无关）。
+        AevonLog.info("[入口] 回桌面布防 → 把手容器立即归位到窗口根（AevonGripFastV266）")
+        AevonEntryHost.attachToWindowRoot(reason: "回桌面把手归位")
         guard let view = currentView else { return }
         view.armBackgroundGuard(reason: "全屏 App 画面离场")
     }
@@ -228,6 +248,16 @@ enum AevonWindowManager {
     static func publishFloatFrame(_ rect: CGRect) {
         let text = "\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
         AevonPrefs.set("AevonFloatFrame", text)
+        // V0.2.66（AevonFrameFileV266，用户 Aevon(39) #12「双击浮窗底边关窗，全屏 App
+        // 依旧被带动」）：偏好域通道被日志证伪 —— Aevon(39) 整篇零条「浮窗手势区落点」，
+        // App 侧 AevonFloatFrameRect() 读到的恒为零矩形（CFPreferences 跨进程在
+        // roothide 的 App 进程里读不到 SB 刚写的值，cfprefsd 缓存/域映射不可靠）。
+        // 加一条**文件通道**双保险：直接写 /var/mobile/Library/Aevon/floatframe.txt
+        // （与我们自己日志同一个可写区），App 侧优先读文件、读不到再回落偏好。
+        let dir = "/var/mobile/Library/Aevon"
+        let path = dir + "/floatframe.txt"
+        FileManager.default.createFile(atPath: path, contents: text.data(using: .utf8),
+                                       attributes: nil)
     }
 
     static func title(for bundleID: String) -> String {
@@ -263,6 +293,12 @@ enum AevonWindowManager {
             completion?(false)
             return
         }
+        // V0.2.66（AevonCleanSlateV266，用户 Aevon(39) #3「多次开关主悬浮窗后有概率黑屏」）：
+        // 开窗前把「还没收干净的上一扇窗」扫一遍 —— 上一次 teardown 若被开窗打断
+        // （连续快开快关），旧窗视图可能残留在入口容器上（alpha 0 的入场窗尤其看不见、
+        // 摸不着、也不报错），新窗一盖上去就是一块黑。这里开窗前统一清扫。
+        enforceSingleMainWindow(reason: "开窗清扫 \(bundleID)")
+
         // V0.2.50（AevonDockColumnV250）：目标 App 正在停靠列里 → 不重新开窗，
         // 直接把它装回主窗（同一个 presenter，画面不中断）。
         if dockedViews.contains(where: { $0.bundleID == bundleID }) {
@@ -688,13 +724,10 @@ enum AevonWindowManager {
             // 「下半截黑点占比 0.000 → 画面正常」，而用户肉眼看的是断层。原因很简单：
             // drawHierarchy 抓不到跨进程远程表面的像素（0.2.26 已有定论），抓到的是浮窗
             // 自己的底色 → 黑点占比永远是 0。所以「按画面判定」这条路彻底走不通。
-            // 现在改成：预热型开窗（抖音这类）在切完画布后**固定**再来一次极短的
-            // 「整屏 → 画布」往返，等于把用户那句「手动全屏打开一次，画面正常后再用
-            // 浮窗打开就是真重排」直接编进流程 —— 不再依赖任何采样。
-            if !warmupCanvas {
-                windowView.scheduleSeamRepair(
-                    canvas: AevonWindowView.canvasSize(for: AevonWindowView.plannedContentSize()))
-            }
+            // V0.2.66（AevonNoReplayV266）：非预热档的 2.2s 定时往返同样退役 ——
+            // Aevon(39) 里它对设置等 App 只制造一次可见闪（画布 932→737→932→737），
+            // 几何自查（healStaleLayoutIfNeeded）继续兜底真断层。
+            AevonLog.info("[场景] 开窗定时往返已退役：几何自查继续兜底（AevonNoReplayV266）")
             // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
             // App 侧识别器读它 —— 等于自己的 bundleID 就整体退让（不扣 began、不建失败要求），
             // 浮窗内的滑动才不会被右缘判向延迟到抬手。
@@ -739,18 +772,15 @@ enum AevonWindowManager {
                     // 现在才让窗口出现。用户 Aevon(38) #3 的「第一时间底栏黑屏」就是
                     // 在这一拍之前把窗显出来造成的。
                     currentView?.revealEntryNow("画布已切到浮窗尺寸")
-                    // V0.2.62（AevonSeamRepairFixedV262）：再 0.35 秒做一次极短「整屏 →
-                    // 画布」往返。预热那一拍只是「整屏渲染过一帧」，而抖音要的是
-                    // 「从大尺寸退到小尺寸时重排」—— 用户实测只有「全屏打开一次」才管用。
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak sceneHost] in
-                        guard currentBundleID == bundleID else { return }
-                        AevonLog.info("[场景] 预热复刻：对 \(bundleID) 再做一次「整屏 → 画布」往返"
-                            + "（不再依赖画面采样，采样已被 Aevon(36) 证伪）"
-                            + "（AevonSeamRepairFixedV262）")
-                        sceneHost?.bounceFullscreenThenBack(width: mainCanvas.width,
-                                                            height: mainCanvas.height,
-                                                            tag: "预热复刻 \(bundleID)")
-                    }
+            // V0.2.66（AevonNoReplayV266，用户 Aevon(39) #11「抖音打开时屏幕会闪一下才
+            // 真重排」）：**预热复刻往返退役**（0.2.62 曾在这里再做一次「整屏 → 画布」
+            // 第二次往返）。Aevon(39) 日志三次抖音开窗，预热复刻之后的断层几何自查
+            // 全部「内容宿主已贴合画布，无需补踢」—— 复刻收益为零，而它必然制造一次
+            // 可见闪（窗口已显出，画布又跳回整屏一拍再跳回来）。
+            // 预热那一拍（开窗前的整屏渲染）保留 —— 那才是「全屏打开一次」的本体。
+            AevonLog.info("[场景] 预热复刻已退役：不再做「整屏 → 画布」第二次往返"
+                + "（Aevon(39) 日志证明收益为零，徒增一闪）"
+                + "（AevonSeamRepairFixedV262 AevonNoReplayV266）")
                 }
             } else {
                 // 非预热档：画布在开窗前就已经写好了，给系统 0.25 秒把第一帧排出来再显。
@@ -1070,7 +1100,11 @@ enum AevonWindowManager {
     static func enforceSingleMainWindow(reason: String) {
         guard let host = AevonEntryHost.floatHost else { return }
         let views = host.subviews.compactMap { $0 as? AevonWindowView }
-        guard views.count > 1 else { return }
+        // V0.2.66（AevonCleanSlateV266）：单个「孤儿窗」也算 —— 上一扇窗 teardown
+        // 被打断时视图可能残留在容器上（currentView / dockedViews 都已为空），只留
+        // 一个视图虽然不构成「多窗」，但同样是一块看不见的黑底。开窗清扫把这种也收掉。
+        let orphanSingle = views.count == 1 && currentView == nil && dockedViews.isEmpty
+        guard views.count > 1 || orphanSingle else { return }
         var removed = 0
         for view in views {
             if let main = currentView, view === main { continue }

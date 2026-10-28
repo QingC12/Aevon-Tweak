@@ -1930,14 +1930,16 @@ final class AevonWindowView: UIView {
         darkTicks = 0
         /* V0.2.65（AevonFreezeCrossFadeV265，用户 Aevon(38) #8「回桌面依旧会闪」）：
          * 原来是一次 `removeFromSuperview()` —— 定格帧瞬间消失，下面那一帧如果还没
-         * 画出来就是「黑一下再出画面」，这就是闪。改成 0.22 秒淡出，让实时画面从底下
-         * 透上来（交叉溶解）。窗口本身 alpha 全程是 1，屏幕上不会出现「窗没了」的帧。 */
-        UIView.animate(withDuration: 0.22, delay: 0,
+         * 画出来就是「黑一下再出画面」，这就是闪。改成淡出让实时画面从底下透上来。
+         * V0.2.66（AevonFreezeSoftV266，用户 Aevon(39) #10「回桌面先显示快照再出现实时
+         * 画面」）：0.22 → 0.35 秒。快照 → 实时的内容跳变没法消除（快照就是旧像素），
+         * 但把交叉溶解拉长可以明显弱化跳变感。 */
+        UIView.animate(withDuration: 0.35, delay: 0,
                        options: [.curveEaseOut, .allowUserInteraction],
                        animations: { view.alpha = 0 },
                        completion: { _ in view.removeFromSuperview() })
-        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次，0.22s 淡出）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263 AevonFreezeCrossFadeV265）")
+        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次，0.35s 淡出）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263 AevonFreezeCrossFadeV265 AevonFreezeSoftV266）")
     }
 
     /// 点冻结图：用户主动要画面。
@@ -2330,6 +2332,20 @@ final class AevonWindowView: UIView {
         AevonLog.info("[停靠] \(bundleID) 已从停靠列装回主窗"
             + "（\(Int(target.width))x\(Int(target.height))，光晕在过渡结束后才恢复）"
             + "（AevonDockColumnV250 AevonDockHaloOffV259 AevonDockHaloBackV260）")
+    }
+
+    /// V0.2.66（AevonTraitWakeV266，用户 Aevon(39) #1「悬浮窗画面不跟随系统深浅色」）：
+    /// 系统深浅色切换时，浮窗里那个 App 的场景被压在后台 —— 它收得到 trait 变化
+    /// 但不重绘（远程表面停在旧外观的那一帧）。这里在 SpringBoard 侧窗口的 trait
+    /// 翻转时把场景叫醒（与「抢全屏叫醒」同一条路），App 重绘后远程表面就是新外观。
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard window != nil, !isTearingDown, sceneHost.hasContent else { return }
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            AevonLog.info("[窗口] 系统深浅色切换（\(traitCollection.userInterfaceStyle == .dark ? "深色" : "浅色")）"
+                + "→ 叫醒浮窗场景重绘（AevonTraitWakeV266）")
+            refreshLiveContent(reason: "外观切换")
+        }
     }
 
     /// V0.2.65（AevonLiveWakeV265，用户 Aevon(38) #9）：别的 App 抢了全屏 → 把浮窗里

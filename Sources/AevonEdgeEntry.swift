@@ -223,6 +223,16 @@ enum AevonEdgeEntry {
                 ring.beginRemoteTracking(at: point, source: "global")
                 return
             }
+            // V0.2.66（AevonFloatGripFirstV266，用户 Aevon(39) #2 #4 #7）：浮窗手势
+            // **提到把手认领之前**。原来把手认领在前 —— 浮窗贴近屏幕右缘时，浮窗的
+            // 边条/右下角与把手命中区（右缘竖条外扩 40pt）重叠，落点先被判成「落在
+            // 把手上」→ 认领 + 广播占用后直接 return，浮窗自己的边条点击 / 缩放手势
+            // 完全收不到（=「移到边缘后吸附点击失效」「缩放时呼出圆盘」两个死因同根）。
+            // 现在落点在浮窗上就先走浮窗手势；浮窗手势不要这个点（返回 false）再回落
+            // 到把手认领。全屏 App 里没有浮窗，呼盘把手通道不受影响。
+            if AevonEntryHost.pointHitsFloatingWindow(at: point) {
+                if handleFloatGestureBegan(point: point, touchID: touchID) { return }
+            }
             // V0.2.60（AevonGripSwipeGlobalV260）：把手命中区上的触摸**先认领**——
             // 只登记观察，不吞、不接管（把手是真实控件，桌面 / 全屏 App 两条路都靠它）。
             // 全屏 App 时视图层收不到触摸，只有这条总入口能看到 → 把手才「到处都能用」。
@@ -243,14 +253,14 @@ enum AevonEdgeEntry {
                 return
             }
             // V0.2.9（AevonFloatPassV209）：落在浮窗上的触摸整个交回浮窗。
-            // 先给外侧手柄一次机会（浮窗在全屏 App 之上时只有这条通道能驱动窗外手势）。
+            // V0.2.66：浮窗手势已在上面先试过（AevonFloatGripFirstV266），这里只兜
+            // 「浮窗手势不接管的内容区」—— 不吞、不判向，也绝不让下面的把手认领抢走。
             if AevonEntryHost.pointHitsFloatingWindow(at: point) {
-                if handleFloatGestureBegan(point: point, touchID: touchID) { return }
                 lastTouchPoint = point
                 let nowFloat = CACurrentMediaTime()
                 if nowFloat - globalLastLogAt > 2.0 {
                     globalLastLogAt = nowFloat
-                    AevonLog.info("[边缘] 触摸落在浮窗上 (x=\(Int(point.x)), y=\(Int(point.y))) → 整个交回浮窗（不接管、不吞、不判向）（AevonFloatPassV209 AevonFloatStandDownV209）")
+                    AevonLog.info("[边缘] 触摸落在浮窗上 (x=\(Int(point.x)), y=\(Int(point.y))) → 整个交回浮窗（不接管、不吞、不判向）（AevonFloatPassV209 AevonFloatStandDownV209 AevonFloatGripFirstV266）")
                 }
                 return
             }

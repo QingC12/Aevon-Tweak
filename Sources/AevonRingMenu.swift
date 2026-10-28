@@ -166,6 +166,13 @@ final class AevonRingMenu: UIView {
     static let hoverSpringVelocity: CGFloat = 3.4
     /// 指针事件中断多久之后允许新手指出手接管（自愈，防止某条通道漏发 ended 把圆盘卡死）
     private static let pointerStaleInterval: CFTimeInterval = 1.2
+    /// V0.2.66（AevonRingIdleV266）：指针静默多久后判定「手指早已离屏但 ended 漏发」
+    /// → 自动收起圆盘。用户 Aevon(39) #5：滑动呼出圆盘后抬手，圆盘留在屏上必须
+    /// 再点一下才消失 —— 就是某条通道漏了 ended，`isFingerDown` 恒真，圆盘成了死态。
+    /// 0.8 秒比 pointerStaleInterval(1.2) 短：宁可早一点收，也不让用户多点一次。
+    /// 副作用：按住圆盘完全静止 0.8 秒也会收 —— 「静止不动」与「已抬手」在事件层
+    /// 无法区分，选择偏向用户报的那一侧。
+    private static let pointerIdleDismissInterval: CFTimeInterval = 0.8
     /// 指针**通道**交接阈值（V0.2.16 / AevonRingPointerHandoffV216）。
     ///
     /// 与上面那个 1.2 秒不是一回事：1.2 秒管的是「新手指出手」，这里管的是
@@ -267,7 +274,37 @@ final class AevonRingMenu: UIView {
         current = menu
         menu.reload()
         menu.animateIn()
+        menu.startIdleWatch()
     }
+
+    // MARK: - V0.2.66（AevonRingIdleV266）：指针静默自动收起
+    //
+    // 用户 Aevon(39) #5：滑动呼出圆盘后手指离开屏幕，圆盘留在屏上必须再点一下。
+    // 抬手判定（handlePointerEnded）本身没问题 —— 问题是那条通道**根本没把 ended
+    // 送进来**（收养手指只登记观察，通道交接 / 系统手势抢断都可能漏发最后一报），
+    // isFingerDown 恒真，圆盘成了死态。这里用「静默时长」兜底：0.8 秒没有任何
+    // 指针事件就判定手指早已离屏，按「抬手未选中」收起。
+
+    private var idleWatch: Timer?
+
+    private func startIdleWatch() {
+        idleWatch?.invalidate()
+        // 呼盘后先给 1 秒宽限：部分通道（视图层 pan）呼盘后才交指针，
+        // 不能让「还没喂过第一报」被误判成「手指早已离屏」。
+        presentedAt = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self, AevonRingMenu.current === self, !self.isDismissing else { return }
+            guard CACurrentMediaTime() - self.presentedAt >= 1.0 else { return }
+            guard self.pointerIdleSeconds >= AevonRingMenu.pointerIdleDismissInterval else { return }
+            AevonLog.info("[圆盘] 指针已静默 \(String(format: "%.1f", self.pointerIdleSeconds))s"
+                + " → 判定手指早已离屏（ended 漏发），自动收起（AevonRingIdleV266）")
+            self.dismiss()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        idleWatch = timer
+    }
+
+    private var presentedAt: CFTimeInterval = 0
 
     static var presented: AevonRingMenu? { return current }
     static var isPresented: Bool { return current != nil }
@@ -651,6 +688,9 @@ final class AevonRingMenu: UIView {
     private func dismiss() {
         guard AevonRingMenu.current === self, !isDismissing else { return }
         isDismissing = true
+        // V0.2.66（AevonRingIdleV266）：静默看门狗随圆盘一起停。
+        idleWatch?.invalidate()
+        idleWatch = nil
         // V0.2.8（AevonRingDismissNoTouchV208）：收起决定一做出就立刻断触摸 ——
         // 0.18 秒淡出动画期间这个全屏视图不再截住任何点击（Aevon(94) 用户
         // 「桌面无法操作」的最坏情况兜底：动画 completion 万一没跑，触摸通道也已还清）。

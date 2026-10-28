@@ -473,7 +473,11 @@ enum AevonEntryHost {
     }
 
     /// 搬回入口窗口根视图。
-    private static func attachToWindowRoot(reason: String) {
+    /// V0.2.66（AevonGripFastV266）：改为 internal —— 回桌面布防（noteForegroundSceneLost）
+    /// 也要叫它：SB 主屏不是「App 场景消失」，容器经常还挂在离场 App 的画面视图里，
+    /// 右缘把手跟着一起不可见 / 不可摸（用户 Aevon(39) #6「从全屏 App 回桌面，触发条
+    /// 要等 1 秒左右才出现」）。布防那拍（桌面出现前 0.1s）主动搬回窗口根，把手即时就位。
+    static func attachToWindowRoot(reason: String) {
         guard let host = window?.rootViewController?.view else { return }
         if host.bounds.width < 1 { host.frame = UIScreen.main.bounds }
         attach(to: host, reason: reason)

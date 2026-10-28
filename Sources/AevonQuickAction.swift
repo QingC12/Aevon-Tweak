@@ -148,6 +148,30 @@ enum AevonQuickAction {
      *   ② 同时复制到剪贴板 —— Snapper / 长截图这类工具都从剪贴板接图；
      *   ③ 弹一个自己的提示条（SB 里没有系统截图缩略图，只能自己给反馈）。
      */
+    /* V0.2.66（AevonSysShotV266，用户 Aevon(39) #9「截图依旧不会联动其他插件」）：
+     * 主路改走**系统截图管线** `SBScreenShotter -saveScreenshot:` —— 快门音、缩放
+     * 动画、相册落库全部由系统完成，hook 了截图完成事件的插件（Snapper 等）随之联动；
+     * 这是 home+电源键那一条真管线（cycript 实锤 `[[SBScreenShotter sharedInstance]
+     * saveScreenshot:YES]` 就是系统截图）。装前用 method_getTypeEncoding 自检
+     * （0.2.52 安全模式铁律），类或方法不存在、编码不符就回落自抓帧老路。 */
+    private static func takeSystemScreenshot() -> Bool {
+        guard let cls = NSClassFromString("SBScreenShotter") as? NSObject.Type,
+              let shared = cls.perform(NSSelectorFromString("sharedInstance"))?.takeUnretainedValue()
+        else { return false }
+        let sel = NSSelectorFromString("saveScreenshot:")
+        guard let m = class_getInstanceMethod(type(of: shared), sel) else { return false }
+        let types = String(cString: method_getTypeEncoding(m))
+        // v24@0:8@16B24 = (void)(id self, SEL, BOOL)
+        guard types.hasPrefix("v"), types.contains("@0:8@"), types.contains("B") else {
+            AevonLog.warn("[快捷] SBScreenShotter saveScreenshot: 编码不符（\(types)）→ 走自抓帧（AevonSysShotV266）")
+            return false
+        }
+        shared.perform(sel, with: NSNumber(value: true))
+        AevonLog.info("[快捷] 截图走系统管线 SBScreenShotter -saveScreenshot:YES"
+            + "（快门/闪光/相册/联动全由系统完成）（AevonSysShotV266）")
+        return true
+    }
+
     @discardableResult
     static func captureScreenImage() -> UIImage? {
         if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_UICreateScreenUIImageWithRotation") {
@@ -168,10 +192,11 @@ enum AevonQuickAction {
     }
 
     private static func takeScreenshot() {
+        // V0.2.66（AevonSysShotV266）：先试系统管线（联动达成）；失败回落自抓帧老路。
+        if takeSystemScreenshot() { return }
         DispatchQueue.global(qos: .userInitiated).async {
             guard let image = captureScreenImage() else {
-                AevonLog.warn("[快捷] 截图失败：_UICreateScreenUIImageWithRotation / UICreateScreenImage "
-                    + "都拿不到画面（AevonQuickShotV264）")
+                AevonLog.warn("[快捷] 截图失败：系统管线不可用且自抓帧拿不到画面（AevonSysShotV266）")
                 DispatchQueue.main.async { AevonQuickToast.show("截图失败") }
                 return
             }
@@ -233,7 +258,12 @@ final class AevonFrameRecorder {
     private var startTime = CACurrentMediaTime()
     private var frames = 0
     private var failedFrames = 0
-    private let fps: Double = 6
+    /* V0.2.66（AevonRecLightV266，用户 Aevon(39) #9「录屏可以开关，但开启期间手机
+     * 非常卡顿」）：6fps → 3fps。卡顿主因是每帧 `_UICreateScreenUIImageWithRotation`
+     * 全屏合成渲染 —— 6fps 下主线程每秒被吃掉 6 次；3fps 减半。像素搬运
+     * （CGContext 绘制 + CVPixelBuffer 填充）同时挪到后台队列，主线程只剩抓帧本身。
+     * 顺滑度换流畅度：录教程/存证 3fps 够用，追求丝滑需要系统录屏（不可用）。 */
+    private let fps: Double = 3
 
     var isRunning: Bool { writer != nil }
 
@@ -301,7 +331,7 @@ final class AevonFrameRecorder {
         }
         RunLoop.main.add(ticker, forMode: .common)
         timer = ticker
-        append(first, at: CMTime(seconds: 0, preferredTimescale: 600))
+        appendOffMain(first, at: CMTime(seconds: 0, preferredTimescale: 600))
         AevonLog.info("[录屏] 开始录制：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
             + "（再点一次「录屏」结束并存相册）（AevonOwnRecorderV265 AevonQuickSystemV263）")
         AevonQuickToast.show("开始录屏")
@@ -314,10 +344,13 @@ final class AevonFrameRecorder {
             return
         }
         let elapsed = CACurrentMediaTime() - startTime
-        append(frame, at: CMTime(seconds: elapsed, preferredTimescale: 600))
+        // V0.2.66（AevonRecLightV266）：像素搬运挪后台，主线程只留抓帧一次调用。
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.appendOffMain(frame, at: CMTime(seconds: elapsed, preferredTimescale: 600))
+        }
     }
 
-    private func append(_ image: CGImage, at time: CMTime) {
+    private func appendOffMain(_ image: CGImage, at time: CMTime) {
         guard let adaptor, let pool = adaptor.pixelBufferPool else { return }
         guard adaptor.assetWriterInput.isReadyForMoreMediaData else { return }
         var pixelBuffer: CVPixelBuffer?

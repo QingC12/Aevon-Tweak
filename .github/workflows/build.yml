@@ -1678,9 +1678,13 @@ jobs:
             || { echo "::error::0.2.46 发光圈没有 shadowPath 轮廓（画不出光晕）"; exit 1; }
           grep -q 'refreshEdgeGlowIfAppearanceChanged' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.46 深浅外观切换未重刷发光圈"; exit 1; }
-          # 反转断言：不许用 traitCollectionDidChange（iOS 17 SDK 已废弃，警告会断构建）
+          # V0.2.66 反转：浮窗外观跟随需要 traitCollectionDidChange（AevonTraitWakeV266）
+          # —— iOS 17 SDK 对它只是 deprecation warning，Swift 侧不 -Werror；
+          # 真正断构建的是 ObjC 的 traitCollectionDidChange:，我们只用 Swift override。
           grep -q 'override func traitCollectionDidChange' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            && { echo "::error::0.2.46 用了废弃的 traitCollectionDidChange"; exit 1; }
+            || { echo "::error::0.2.66 缺 traitCollectionDidChange（深浅色切换不叫醒浮窗场景）"; exit 1; }
+          grep -q 'AevonTraitWakeV266' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.66 外观切换叫醒缺标记"; exit 1; }
           # 反转断言：发光圈绝不能参与命中（否则窗外 12pt 会吃掉 App 触摸）
           grep -q 'glowRing.isUserInteractionEnabled = false' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.46 发光圈可交互（会吃掉窗外触摸）"; exit 1; }
@@ -2478,8 +2482,11 @@ jobs:
             || { echo "::error::0.2.61 缺「全屏往返」修复"; exit 1; }
           grep -q 'bounceFullscreenThenBack(width: canvas.width' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.61 断层判定没接到全屏往返"; exit 1; }
+          # V0.2.66 反转：开窗后**不再**接定时断层自查（AevonNoReplayV266）——
+          # Aevon(39) 日志证明它对设置等 App 只制造一次可见闪（画布 932→737→932→737），
+          # 几何自查继续兜底真断层。函数本体保留（防回退网引用）。
           grep -q 'windowView.scheduleSeamRepair' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.61 开窗后没接断层自查"; exit 1; }
+            && { echo "::error::0.2.66 开窗后又接回定时断层自查（必制造一次可见闪）"; exit 1; } || true
           # ⑧ App 侧：hook sendEvent: 前必须自检类型编码（0.2.52 安全模式事故纪律）
           grep -q "types\[0\] != 'v'" "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.61 把手吞咽缺类型编码自检（fail-closed 纪律）"; exit 1; }
@@ -2536,11 +2543,12 @@ jobs:
           grep -q 'AevonSceneHelper.setForeground(scene, true)' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.62 预热期没推前台（抖音预热形同虚设的根因）"; exit 1; }
+          # V0.2.66 反转：预热复刻「整屏 → 画布」第二次往返退役（AevonNoReplayV266）——
+          # 三次抖音开窗断层自查全部「已贴合无需补踢」，复刻收益为零、必制造一闪。
           grep -q 'tag: "预热复刻' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.62 预热型开窗没接「整屏往返」复刻"; exit 1; }
-          # ⑧画面采样判定已被证伪（drawHierarchy 抓不到跨进程表面）：预热档改用固定往返
-          grep -q 'if !warmupCanvas {' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.62 预热档仍在走被证伪的画面采样判定"; exit 1; }
+            && { echo "::error::0.2.66 预热复刻往返又回来了（抖音开窗必闪一下）"; exit 1; } || true
+          # 注意：`if !warmupCanvas {` 本身还保留着 —— 非预热档开窗时的 kickRelayout
+          # 是正当代码；退役的只是它**后面**那组 scheduleSeamRepair 定时自查（上一条）。
           # ⑤让位期只重申一次（每多发一次 = 远程表面重建一次 = 一次黑闪）
           grep -q "reason.contains(\"画面离场\") ? \[0.40\]" \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -2775,6 +2783,63 @@ jobs:
           grep -q 'refreshLiveContent(reason: "全屏出现' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.65 全屏出现没接叫醒"; exit 1; }
           echo "V0.2.65 校验: 边条按点吞 + 浮窗矩形 + 等画布再显 + 键盘窗口枚举 + 全屏交接补判 + 抖音呈现层对中 + 叫醒浮窗 + 自绘录屏 + 去 caps 文件 已就位"
+
+          # ── V0.2.66 校验（Aevon(39) 十二项）──────────────────────────────────
+          # ①深浅色跟随 ②④⑦浮窗手势优先于把手认领 ③开窗清扫野窗 ⑤圆盘静默自收
+          # ⑥回桌面把手即时归位 ⑧App 侧顶对齐 ⑨截图走系统管线+录屏降载
+          # ⑩撤帧淡出加柔 ⑪预热复刻退役+全屏兜底抖动踢 ⑫浮窗矩形文件通道
+          for s in AevonTraitWakeV266 AevonNoReplayV266 AevonFloatGripFirstV266 \
+          AevonRingIdleV266 AevonGripFastV266 AevonFreezeSoftV266 \
+          AevonCleanSlateV266 AevonFullKickV266 AevonSysShotV266 \
+          AevonRecLightV266; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.66 主库缺标记 $s"; exit 1; }
+          done
+          for s in AevonFrameFileV266 AevonTopAlignV266; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.66 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          # ① 深浅色切换 → 叫醒浮窗场景（AevonTraitWakeV266）
+          grep -q 'refreshLiveContent(reason: "外观切换")' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.66 外观切换没接叫醒"; exit 1; }
+          # ②④⑦ 全局通道：浮窗手势必须排在把手认领**之前**（重叠区归浮窗）
+          grep -q 'AevonFloatGripFirstV266' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.66 浮窗手势没提前（边缘点击失效/缩放呼盘复发）"; exit 1; }
+          GRIP_LINE=$(grep -n 'AevonRingGrip.hitTestScreenPoint(point)' \
+                        "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | head -n1 | cut -d: -f1)
+          FLOAT_LINE=$(grep -n 'AevonFloatGripFirstV266' \
+                        "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" | head -n1 | cut -d: -f1)
+          if [ -z "$GRIP_LINE" ] || [ -z "$FLOAT_LINE" ] || [ "$FLOAT_LINE" -ge "$GRIP_LINE" ]; then
+            echo "::error::0.2.66 浮窗手势没排在把手认领之前"
+            exit 1
+          fi
+          # ⑤ 圆盘指针静默 0.8s 自动收（AevonRingIdleV266）
+          grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::0.2.66 圆盘静默自收没就位（抬手漏发 ended 圆盘卡死）"; exit 1; }
+          # ⑥ 回桌面布防即把手归位（AevonGripFastV266）
+          grep -q 'attachToWindowRoot(reason: "回桌面把手归位")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.66 回桌面把手没即时归位"; exit 1; }
+          # ⑧ App 侧居中改顶对齐（位移归零，底部不再露黑）
+          grep -q 'CGFloat shift = 0.0;' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.66 画面居中没改顶对齐（设置底部黑 13% 复发）"; exit 1; }
+          grep -q 'shift = -diff / 2.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && { echo "::error::0.2.66 又回到居中位移（底部黑缝）"; exit 1; } || true
+          # ⑨ 截图主路走系统管线（编码自检 fail-closed）+ 录屏 3fps
+          grep -q 'SBScreenShotter' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.66 截图没走系统管线（无法联动其他插件）"; exit 1; }
+          grep -q "method_getTypeEncoding(m)" "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.66 SBScreenShotter 缺类型编码自检（fail-closed 纪律）"; exit 1; }
+          grep -q 'private let fps: Double = 3' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.66 录屏帧率没降到 3fps（开启期间卡顿）"; exit 1; }
+          # ⑫ 浮窗矩形文件通道（SB 写文件 + App 读文件，偏好域跨进程已被证伪）
+          grep -q 'floatframe.txt' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.66 SB 侧缺浮窗矩形文件通道"; exit 1; }
+          grep -q 'floatframe.txt' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.66 App 侧没读浮窗矩形文件（双击底边带动全屏 App 复发）"; exit 1; }
+          # ⑪ 全屏兜底抖动踢（关浮窗后全屏打开抖音断层）
+          grep -q 'AevonFullKickV266' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.66 全屏兜底缺抖动踢"; exit 1; }
+          echo "V0.2.66 校验: 外观叫醒 + 浮窗手势优先 + 圆盘静默自收 + 把手即时归位 + 顶对齐 + 系统截图管线 + 录屏降载 + 淡出加柔 + 复刻退役 + 抖动踢 + 矩形文件通道 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

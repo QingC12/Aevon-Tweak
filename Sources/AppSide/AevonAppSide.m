@@ -674,9 +674,9 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
  * （设置/文件/GitHub 实现 → 真重排；Sileo/Filza 未实现 → 连接被拒黑屏）。
  * 静态判据五版全翻车：设置 manifest 无 delegate 类名却成功、Sileo 二进制含该串
  * 却被拒、贴吧纯净版扫不到却成功 —— 只有进程内 respondsToSelector 与成败 100% 对齐。
- * 落地：本进程算完合并写 /var/mobile/aevon_caps.txt（`bundleID=1/0` 逐行），
- * SB 侧开窗前读（AevonSelfSceneAppCapVerdict）；读不到 = 未知 → 维持自建（旧行为）。
- * delegate 未就绪（nil）不写，绝不把「判断不了」记成 0。 */
+ * 落地：V0.2.65 起**只在进程内判定 + 打日志**，不再往日志目录写能力表文件
+ * （见下方 AevonNoCapsFileV265）。delegate 未就绪（nil）不出结论，
+ * 绝不把「判断不了」记成 0。 */
 __attribute__((used)) static const char AevonAppSceneCapV241Marker[] = "AevonAppSceneCapV241";
 
 static void AevonAppSceneCapRegistry(void) {
@@ -1318,17 +1318,24 @@ static void AevonCenterContentRefresh(BOOL floatHosted) {
             }
             return;
         }
-        CGFloat shift = -diff / 2.0;
+        /* V0.2.66（AevonTopAlignV266，用户 Aevon(39) #8「悬浮窗打开设置时底部有黑屏
+         * 大约 10%，系统应用不会自动修复」）：居中（上移 diff/2）改成**顶对齐**。
+         * 真因：没重排的 App 内容高 932 > 画布 737，上移 97.5pt 后内容占
+         * -97.5..834.5，而窗口底部到 834.5 之间没有内容像素 = 底部一条黑
+         * （约 97.5/737 ≈ 13%）。顶对齐（位移 0）时内容从 0 画到 932，窗口
+         * 0..737 全程有像素、超出部分被画布自然裁掉 —— 无缝，只是底部内容看不到。
+         * 能重排的 App（内容收到 737）走 diff <= 8 分支照常不动，无影响。 */
+        CGFloat shift = 0.0;
         if (gAevonCenterApplied && gAevonCenterTarget == target
             && fabs(gAevonCenterTarget.transform.ty - shift) < 0.5) { return; }
         gAevonCenterApplied = YES;
         gAevonCenterTarget = target;
         target.transform = CGAffineTransformMakeTranslation(0, shift);
-        AevonAppLog(@"[App侧] 画面居中：%@ 高 %.0f vs 画布 %.0f（窗口 %.0f）"
-                    @"→ 整体上移 %.1fpt，让画面中心回到浮窗中心"
-                    @"（AevonCenterContentV263 AevonCenterCanvasV264）",
+        AevonAppLog(@"[App侧] 画面顶对齐：%@ 高 %.0f 超出画布 %.0f（窗口 %.0f）"
+                    @"→ 位移归零，内容从顶部铺起、超出部分由画布裁掉，底部不再露黑"
+                    @"（AevonCenterContentV263 AevonTopAlignV266）",
                     NSStringFromClass([target class]), target.bounds.size.height,
-                    canvasH, winH, -shift);
+                    canvasH, winH);
     } @catch (NSException *exception) {
         AevonAppLog(@"[App侧] 画面居中失败：%@（不影响宿主）（AevonCenterContentV263）",
                     exception.reason ?: @"未知");
@@ -1350,6 +1357,8 @@ __attribute__((used)) static const char AevonEdgeShieldV265Marker[] = "AevonEdge
 __attribute__((used)) static const char AevonKeyAllWindowsV265Marker[] = "AevonKeyAllWindowsV265";
 __attribute__((used)) static const char AevonKeyAlignV265Marker[] = "AevonKeyAlignV265";
 __attribute__((used)) static const char AevonNoCapsFileV265Marker[] = "AevonNoCapsFileV265";
+__attribute__((used)) static const char AevonFrameFileV266Marker[] = "AevonFrameFileV266";
+__attribute__((used)) static const char AevonTopAlignV266Marker[] = "AevonTopAlignV266";
 
 static void AevonKeyFitInstall(void) {
     @try {
@@ -1864,22 +1873,37 @@ static CGRect AevonFloatFrameRect(void) {
     gAevonFloatFrameReadAt = now;
     CGRect rect = CGRectZero;
     @try {
-        CFPreferencesAppSynchronize(CFSTR("com.Aevon"));
-        CFPropertyListRef raw = CFPreferencesCopyAppValue(CFSTR("AevonFloatFrame"), CFSTR("com.Aevon"));
-        if (raw != NULL) {
-            NSString *text = nil;
-            if (CFGetTypeID(raw) == CFStringGetTypeID()) {
-                text = [NSString stringWithString:(__bridge NSString *)raw];
-            }
-            CFRelease(raw);
-            if (text.length > 0) {
-                NSArray<NSString *> *parts = [text componentsSeparatedByString:@","];
-                if (parts.count >= 4) {
-                    rect = CGRectMake(parts[0].doubleValue, parts[1].doubleValue,
-                                      parts[2].doubleValue, parts[3].doubleValue);
+        /* V0.2.66（AevonFrameFileV266）：优先走**文件通道**。Aevon(39) 整篇零条
+         * 「浮窗手势区落点」= 偏好域通道在 App 进程里读不到 SB 写的值。文件是我们
+         * 自己的日志同款可写区（/var/mobile/Library/Aevon/），SB 侧 publishFloatFrame
+         * 每次都写，读取零依赖 cfprefsd。文件读不到再回落偏好（双保险）。 */
+        NSString *text = nil;
+        NSString *filePath = @"/var/mobile/Library/Aevon/floatframe.txt";
+        NSDictionary *attrs = [[NSFileManager defaultManager]
+                               attributesOfItemAtPath:filePath error:nil];
+        if (attrs != nil) {
+            text = [NSString stringWithContentsOfFile:filePath
+                                             encoding:NSUTF8StringEncoding error:nil];
+            text = [text stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        }
+        if (text.length == 0) {
+            CFPreferencesAppSynchronize(CFSTR("com.Aevon"));
+            CFPropertyListRef raw = CFPreferencesCopyAppValue(CFSTR("AevonFloatFrame"), CFSTR("com.Aevon"));
+            if (raw != NULL) {
+                if (CFGetTypeID(raw) == CFStringGetTypeID()) {
+                    text = [NSString stringWithString:(__bridge NSString *)raw];
                 }
-                if (rect.size.width < 40 || rect.size.height < 40) { rect = CGRectZero; }
+                CFRelease(raw);
             }
+        }
+        if (text.length > 0) {
+            NSArray<NSString *> *parts = [text componentsSeparatedByString:@","];
+            if (parts.count >= 4) {
+                rect = CGRectMake(parts[0].doubleValue, parts[1].doubleValue,
+                                  parts[2].doubleValue, parts[3].doubleValue);
+            }
+            if (rect.size.width < 40 || rect.size.height < 40) { rect = CGRectZero; }
         }
     } @catch (NSException *exception) {
         rect = CGRectZero;
