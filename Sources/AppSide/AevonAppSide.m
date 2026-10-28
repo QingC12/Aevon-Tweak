@@ -928,6 +928,11 @@ __attribute__((used)) static const char AevonAppFitRelayoutV250Marker[] = "Aevon
  * 所以新标记一律走纯 ASCII 的 used 数组 —— 0.2.61 已经在这上面烧过一次构建。 */
 __attribute__((used)) static const char AevonFitFrameBackV262Marker[] = "AevonFitFrameBackV262";
 
+/* 前向声明（V0.2.62）：下面两个函数定义在文件后部，nudge / 键盘对齐都要用 ——
+ * C99 不支持隐式声明（0.2.52 同款坑，编译期才暴露）。必须放在**第一个调用点之前**。 */
+static CGSize AevonRealScreenSize(void);
+static BOOL AevonIsKeyboardWindow(UIWindow *window);
+
 static void AevonScreenFitNudgeLayout(BOOL nowOn) {
     @try {
         UIApplication *app = [UIApplication sharedApplication];
@@ -1070,9 +1075,6 @@ static void AevonKeyFitInstall(void) {
 /* 前向声明（V0.2.59）：ScreenFitRefresh 的 0.5s 轮询兜底要调停靠交互刷新，
  * 定义在本文件更后面 —— C99 不支持隐式声明（0.2.52 同款坑，编译期才暴露）。 */
 static void AevonDockInteractionRefresh(void);
-/* 前向声明（V0.2.62）：窗口纠偏要用真实屏幕尺寸，定义在文件后部。 */
-static CGSize AevonRealScreenSize(void);
-static BOOL AevonIsKeyboardWindow(UIWindow *window);
 
 static void AevonScreenFitRefresh(void) {
     if (gAevonScreenFitRefreshing) { return; }
