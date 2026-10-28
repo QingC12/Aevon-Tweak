@@ -184,10 +184,10 @@ enum AevonRingGrip {
     private static var grip: AevonRingGripView?
 
     /// V0.2.69（AevonRingIdleFixV269）：把手上还有没有活跃触摸 ——
-    /// 圆盘静默看门狗的「ended 真漏发」判据（手指物理在屏上时 touch 一定挂在视图上）。
+    /// 圆盘静默看门狗的「ended 真漏发」判据（allTouches 挂在 UIWindow 上）。
     static var hasActiveGripTouch: Bool {
-        guard let grip else { return false }
-        return grip.allTouches?.isEmpty == false
+        guard let grip, let win = grip.window else { return false }
+        return win.allTouches?.isEmpty == false
     }
     private static var lastInstalledAt: CFTimeInterval = 0
 
