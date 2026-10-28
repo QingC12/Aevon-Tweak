@@ -31,7 +31,7 @@ enum AevonRecProbe {
                 var mCount: UInt32 = 0
                 if let methods = class_copyMethodList(object_getClass(cls), &mCount) {
                     for j in 0..<Int(mCount) {
-                        if sel_getName(method_getName(methods[j])) == target {
+                        if String(cString: sel_getName(method_getName(methods[j]))) == target {
                             hits.append("\(NSStringFromClass(cls))(+)")
                         }
                     }
@@ -41,7 +41,7 @@ enum AevonRecProbe {
                 var iCount: UInt32 = 0
                 if let imethods = class_copyMethodList(cls, &iCount) {
                     for j in 0..<Int(iCount) {
-                        if sel_getName(method_getName(imethods[j])) == target {
+                        if String(cString: sel_getName(method_getName(imethods[j]))) == target {
                             hits.append("\(NSStringFromClass(cls))(-)")
                         }
                     }
