@@ -2477,8 +2477,11 @@ jobs:
           # ⑧ App 侧：hook sendEvent: 前必须自检类型编码（0.2.52 安全模式事故纪律）
           grep -q "types\[0\] != 'v'" "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.61 把手吞咽缺类型编码自检（fail-closed 纪律）"; exit 1; }
+          # 0.2.63 反转：闸门从「窗口高 < 真屏高 − 60」改成 AevonAppIsFloatHosted()（与几何无关，必达）
+          grep -q 'if (AevonAppIsFloatHosted()) { return NO; }' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.63 把手吞咽缺「浮窗承载时不接管」闸（会吃掉浮窗内点击）"; exit 1; }
           grep -q 'w.bounds.size.height < real.height - 60.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.61 把手吞咽缺「只在整屏 App 生效」闸（会吃掉浮窗内点击）"; exit 1; }
+            && { echo "::error::0.2.63 把手吞咽闸回退到旧几何锚（真机零命中，已被 AevonGripSwallowFixV263 取代）"; exit 1; } || true
           grep -q 'AevonKeyboardVisible' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.61 把手吞咽缺键盘闸（打字时键盘右列会按不出来）"; exit 1; }
           echo "V0.2.61 校验: 把手页独立 + 停靠小窗全屏关窗/点击装回 + 无自动吸附 + 双击收紧 + 让位同步隐形 + 把手吞咽 + 抖音画面判定修复 已就位"
