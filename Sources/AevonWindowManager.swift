@@ -804,7 +804,7 @@ enum AevonWindowManager {
                      * 0.85 时尾排还有两笔没写完，内容在用户眼前又跳两遍 = 闪好几下。
                      * 现在显窗挂进 kick 最后一笔画布写回的回调（onCanvasSettled），
                      * 写完才显 —— 画布没定稿前用户看不到窗。1.3s 兜底不变。 */
-                    sceneHost.onCanvasSettled = {
+                    sceneHost?.onCanvasSettled = {
                         guard currentBundleID == bundleID else { return }
                         AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
                             + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
