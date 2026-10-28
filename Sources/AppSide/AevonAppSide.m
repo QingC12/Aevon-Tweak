@@ -1945,9 +1945,30 @@ static CGRect AevonFloatFrameRect(void) {
 
 /* V0.2.65（AevonEdgeShieldV265）：这一点是不是落在浮窗「自己的手势区」——
  * 左/右 30pt 全高边条 + 底 44pt 全宽 + 顶 8pt。落在这里的触摸归浮窗（拖窗 / 双击关闭），
- * App 一根都不许接，否则用户双击浮窗关窗时全屏 App 也跟着收到双击。 */
+ * App 一根都不许接，否则用户双击浮窗关窗时全屏 App 也跟着收到双击。
+ * V0.2.69（AevonFloatBandV269，用户 Aevon(41) #10「全屏 App 上叠浮窗：双击浮窗底边
+ * 关窗、点边条拖动/吸附时依旧会触发 app 内操作」）：加**压边 10pt**（与 SB 侧
+ * FloatGripOverlap 同口径）—— 边条触摸常落在浮窗矩形外沿 10pt 内（SB 侧手柄
+ * 压边设计），原判据只在矩形内判 = 外沿那圈漏给 App。 */
+__attribute__((used)) static const char AevonFloatBandV269Marker[] = "AevonFloatBandV269";
+
 static BOOL AevonPointInFloatEdge(CGPoint p) {
     CGRect r = AevonFloatFrameRect();
+    if (r.size.width < 40 || r.size.height < 40) { return NO; }
+    if (!CGRectContainsPoint(r, p)) { return NO; }
+    CGFloat band = 30.0;
+    CGFloat bottomBand = 44.0;
+    return (p.x <= r.origin.x + band)
+        || (p.x >= CGRectGetMaxX(r) - band)
+        || (p.y <= r.origin.y + 8.0)
+        || (p.y >= CGRectGetMaxY(r) - bottomBand);
+}
+
+/* V0.2.69（AevonFloatBandV269）：浮窗矩形外扩 10pt 后再判一次手势带 ——
+ * SB 侧手柄压边 10pt（FloatGripOverlapV224 同口径），App 侧窄一圈就会把
+ * 边条外沿的触摸漏给 App（= #10 的「点边条带动 App」）。 */
+static BOOL AevonPointInFloatEdgeInflated(CGPoint p) {
+    CGRect r = CGRectInset(AevonFloatFrameRect(), -10.0, -10.0);
     if (r.size.width < 40 || r.size.height < 40) { return NO; }
     if (!CGRectContainsPoint(r, p)) { return NO; }
     CGFloat band = 30.0;
@@ -2124,11 +2145,14 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                      * V0.2.68（AevonCanvasBandV268，用户 Aevon(40) #5）：承载模式
                      * **不再一刀切放行** —— 那等于把「点浮窗边条带动浮窗里的 App」
                      * 合法化。承载模式下改按**画布自身边缘带**判定（坐标系自洽）。 */
-                    if (fullScreen && AevonPointInFloatEdge(p)) {
+                    if (fullScreen && (AevonPointInFloatEdge(p)
+                                       || AevonPointInFloatEdgeInflated(p))) {
                         [gAevonSwallowedTouches addObject:key];
-                        AevonAppLog(@"[App侧] 浮窗手势区落点 %@ → 整根丢弃（窗边归浮窗，"
-                                    @"App 内的双击/滑动不许被带着走）（AevonEdgeShieldV265）",
-                                    NSStringFromCGPoint(p));
+                        AevonAppLog(@"[App侧] 浮窗手势区落点 %@（浮窗矩形 %@）→ 整根丢弃（窗边归浮窗，"
+                                    @"App 内的双击/滑动不许被带着走）（AevonEdgeShieldV265 "
+                                    @"AevonFloatBandV269）",
+                                    NSStringFromCGPoint(p),
+                                    NSStringFromCGRect(AevonFloatFrameRect()));
                     } else if (!fullScreen && !AevonKeyboardVisible()
                                && AevonPointInCanvasBand(win, p)) {
                         [gAevonSwallowedTouches addObject:key];
@@ -2140,6 +2164,21 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                         AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（窗口层，"
                                     @"不再带着 App 内滑动）（AevonGripSwallowV261 "
                                     @"AevonGripSwallowWinV262）", NSStringFromCGPoint(p));
+                    } else if (fullScreen && !AevonKeyboardVisible()) {
+                        /* V0.2.69（AevonFloatBandV269）：全屏 + 有浮窗矩形时的漏判诊断
+                         * （5 秒限频）—— #10 复发时这条直接给出「落点 vs 矩形」的差值，
+                         * 不用再猜是矩形过期还是带宽不够。排在把手分支之后只诊断不吞。 */
+                        CGRect r = AevonFloatFrameRect();
+                        CGRect inflated = CGRectInset(r, -10.0, -10.0);
+                        if (r.size.width > 40 && CGRectContainsPoint(inflated, p)) {
+                            CFTimeInterval nowB = CACurrentMediaTime();
+                            if (nowB - gAevonGripMissLoggedAt > 5.0) {
+                                gAevonGripMissLoggedAt = nowB;
+                                AevonAppLog(@"[App侧] 浮窗外沿落点 %@ 未吞（矩形 %@，压边判否，"
+                                            @"疑矩形过期/带宽不够）（AevonFloatBandV269）",
+                                            NSStringFromCGPoint(p), NSStringFromCGRect(r));
+                            }
+                        }
                     } else if (inRect) {
                         /* 中了矩形却没吞：留一条可诊断的证（5 秒限频），
                          * 下次出问题不用再靠猜（浮窗内 / 键盘在屏 / 窗口不是全屏）。 */

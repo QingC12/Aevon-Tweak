@@ -92,6 +92,12 @@ NSInteger AevonSceneLayerCount(id scene);
 /// 4 = isIdleTimerDisabled 写成功；0 = 全都没成功（调用方只记一次日志，不重试）。
 NSInteger AevonIdleTimerKick(void);
 
+/// V0.2.69（AevonIdleRelV269，用户 Aevon(41) #7）：释放 kick 里 acquire 的
+/// 「空闲计时器禁用」断言。0.2.50 起只取不放 = 浮窗关闭后系统空闲计时器仍被禁
+/// = 手机不按设置自动暗屏锁屏。关窗时调用一次（幂等，无断言时返回 0）。
+/// 返回位掩码：1 = 断言对象已释放；2 = 协调器 release 方法已调；4 = isIdleTimerDisabled 写回 NO。
+NSInteger AevonIdleTimerRelease(void);
+
 /// V0.2.50（AevonLockBlockV250）：在锁屏真正发生的那一刻拦下「非电源键」的锁屏请求。
 /// 只在浮窗还存在时生效（钩子内部查 `AevonFloatActive()`），电源键（source == 1）永远放行。
 ///   返回 YES = 至少挂上一个锁屏入口；NO = 本机没有该入口（日志里会写「不可用」）。

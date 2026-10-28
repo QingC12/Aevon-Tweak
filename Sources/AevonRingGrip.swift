@@ -182,6 +182,13 @@ extension AevonRingGripView: UIGestureRecognizerDelegate {
 /// 把手安装与显隐（V0.2.50，AevonRingGripV250）。
 enum AevonRingGrip {
     private static var grip: AevonRingGripView?
+
+    /// V0.2.69（AevonRingIdleFixV269）：把手上还有没有活跃触摸 ——
+    /// 圆盘静默看门狗的「ended 真漏发」判据（手指物理在屏上时 touch 一定挂在视图上）。
+    static var hasActiveGripTouch: Bool {
+        guard let grip else { return false }
+        return grip.allTouches?.isEmpty == false
+    }
     private static var lastInstalledAt: CFTimeInterval = 0
 
     // MARK: 键盘在屏 → 把手整条抑制（V0.2.67 引入；V0.2.68 换主驱动源，AevonKbSenseV268）
@@ -214,23 +221,92 @@ enum AevonRingGrip {
 
     /// V0.2.68（AevonKbSenseV268）：现场检测键盘窗口是否在屏（0.5s 缓存）。
     /// 判据纯几何 + 类名，不依赖任何跨进程通知的时序。
+    /// V0.2.69（AevonKbSense2V269，用户 Aevon(41) #9「全屏 App 打开键盘时还是会
+    /// 触碰到圆盘触发条」）：Aevon(41) 全篇零条本检测的日志 = 从未命中。窗口栈实锤
+    /// `SBMedusaHostedKeyboardWindow(h)` —— 全屏 App 的键盘窗口在 SB 栈里是
+    /// **隐藏**的（键盘真正画在 `UITextEffectsWindow` 里），「非隐藏 KeyboardWindow」
+    /// 判据永远不成立。补两条主判据：
+    ///   ① `UIKeyboardImpl` 的 isOnScreen（SB 进程里键盘状态的最权威来源，
+    ///      类方法 / activeInstance / sharedInstance 三档探测，全 @try）；
+    ///   ② 窗口栈放宽：非隐藏 `*KeyboardWindow` **或** 非隐藏 UITextEffectsWindow
+    ///      里翻得到 Keyboard 类子视图（含 RemoteKeyboard 视图）。
     static func syncKeyboardSuppression() {
         let now = CACurrentMediaTime()
         if now - kbSenseAt < 0.5 { return }
         kbSenseAt = now
         var visible = false
-        let app = UIApplication.shared
-        for scene in app.connectedScenes {
-            guard let ws = scene as? UIWindowScene else { continue }
-            for w in ws.windows where !w.isHidden && w.frame.height > 150 {
-                if NSStringFromClass(type(of: w)).contains("KeyboardWindow") {
-                    visible = true
-                    break
+        var probe = "窗口扫描=无"
+
+        // ① UIKeyboardImpl.isOnScreen（三档探测；BOOL 返回必须走类型化 msgSend，
+        //    NSObject.perform 接原始 BOOL 会拿回垃圾对象）
+        if let kbCls = NSClassFromString("UIKeyboardImpl") {
+            typealias BoolFn0 = @convention(c) (AnyObject, Selector) -> Bool
+            typealias IdFn0 = @convention(c) (AnyObject, Selector) -> Unmanaged<AnyObject>?
+            if let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "objc_msgSend") {
+                let sendBool = unsafeBitCast(sym, to: BoolFn0.self)
+                let sendId = unsafeBitCast(sym, to: IdFn0.self)
+                let selOn = NSSelectorFromString("isOnScreen")
+                let kbAny = kbCls as AnyObject
+                // 类方法档（部分 iOS 版本提供 +isOnScreen）
+                if kbAny.responds(to: selOn) {
+                    let on = sendBool(kbAny, selOn)
+                    visible = on
+                    probe = "UIKeyboardImpl.+isOnScreen=\(on)"
+                }
+                if !visible {
+                    // 实例档：activeInstance / sharedInstance
+                    for factory in ["activeInstance", "sharedInstance"] {
+                        let selF = NSSelectorFromString(factory)
+                        guard kbAny.responds(to: selF),
+                              let boxed = sendId(kbAny, selF),
+                              let inst = boxed.takeUnretainedValue() as? NSObject,
+                              inst.responds(to: selOn) else { continue }
+                        let on = sendBool(inst, selOn)
+                        visible = on
+                        probe = "UIKeyboardImpl.\(factory).isOnScreen=\(on)"
+                        break
+                    }
                 }
             }
-            if visible { break }
+        }
+
+        // ② 窗口扫描（原判据 + UITextEffectsWindow 内容物检查）
+        if !visible {
+            let app = UIApplication.shared
+            scan: for scene in app.connectedScenes {
+                guard let ws = scene as? UIWindowScene else { continue }
+                for w in ws.windows where !w.isHidden && w.frame.height > 150 {
+                    let name = NSStringFromClass(type(of: w))
+                    if name.contains("KeyboardWindow") {
+                        visible = true
+                        probe = "\(name) 非隐藏"
+                        break scan
+                    }
+                    if name.contains("TextEffects") {
+                        // 键盘画在 UITextEffectsWindow 里：翻一层子树找 Keyboard 类视图
+                        if AevonRingGrip.subtreeContainsKeyboard(w, depth: 0) {
+                            visible = true
+                            probe = "\(name) 内含键盘视图"
+                            break scan
+                        }
+                    }
+                }
+            }
         }
         setKeyboardSuppressed(visible)
+        if visible {
+            AevonLog.info("[圆盘] 键盘在屏（\(probe)）→ 把手触发条临时屏蔽（AevonKbSense2V269）")
+        }
+    }
+
+    /// V0.2.69：UITextEffectsWindow 子树里有没有 Keyboard 类视图（限深 4 层防大遍历）。
+    private static func subtreeContainsKeyboard(_ view: UIView, depth: Int) -> Bool {
+        if depth > 4 { return false }
+        for sub in view.subviews {
+            if NSStringFromClass(type(of: sub)).contains("Keyboard") { return true }
+            if subtreeContainsKeyboard(sub, depth: depth + 1) { return true }
+        }
+        return false
     }
 
     private static func installKbObserversIfNeeded() {

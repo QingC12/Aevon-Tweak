@@ -295,9 +295,18 @@ final class AevonRingMenu: UIView {
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self, AevonRingMenu.current === self, !self.isDismissing else { return }
             guard CACurrentMediaTime() - self.presentedAt >= 1.0 else { return }
+            // V0.2.69（AevonRingIdleFixV269，用户 Aevon(41) #2「触发圆盘时，手指
+            // 没有离开屏幕，有时候会自动关闭圆盘」）：静默 ≠ 手指已离屏 —— 用户
+            // 按住不动（圆心按住 / 旋转模式 / 盯着看）同样静默。真判据是 UIKit
+            // 活跃触摸：圆盘视图与把手上都查不到活跃 touch，才算「ended 真漏发」。
+            // 圆心按住与旋转模式照旧豁免（它们的 touch 一定在）。
+            guard !self.rotating, self.centerHoldTimer == nil else { return }
             guard self.pointerIdleSeconds >= AevonRingMenu.pointerIdleDismissInterval else { return }
+            guard !self.hasLiveTouch else { return }
             AevonLog.info("[圆盘] 指针已静默 \(String(format: "%.1f", self.pointerIdleSeconds))s"
-                + " → 判定手指早已离屏（ended 漏发），自动收起（AevonRingIdleV266）")
+                + "（最后落点 \(NSStringFromCGPoint(self.pointerPoint))）"
+                + " → 圆盘与把手均无活跃触摸（ended 漏发实锤），自动收起"
+                + "（AevonRingIdleV266 AevonRingIdleFixV269）")
             self.dismiss()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -305,6 +314,15 @@ final class AevonRingMenu: UIView {
     }
 
     private var presentedAt: CFTimeInterval = 0
+
+    /// V0.2.69（AevonRingIdleFixV269）：圆盘视图与把手上还有没有活跃触摸。
+    /// 静默看门狗的「ended 真漏发」判据 —— 手指物理在屏上时 UIKit 一定把
+    /// touch 挂在命中视图（圆盘全屏视图 / 把手控件）上，查得到就不是漏发。
+    fileprivate var hasLiveTouch: Bool {
+        if allTouches?.isEmpty == false { return true }
+        if AevonRingGrip.hasActiveGripTouch { return true }
+        return false
+    }
 
     static var presented: AevonRingMenu? { return current }
     static var isPresented: Bool { return current != nil }

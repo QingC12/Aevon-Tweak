@@ -2890,7 +2890,7 @@ jobs:
           grep -q 'if isTearingDown || isClosing { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.67 persistFrame 没把关窗期挡掉（残留矩形误吞）"; exit 1; }
           # ⑧ 浮窗手势区吞噬必须带全屏闸门（承载模式下坐标系错配 = 误吞内容）
-          grep -q 'if (fullScreen && AevonPointInFloatEdge(p)) {' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+          grep -q 'fullScreen && (AevonPointInFloatEdge(p)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.67 浮窗手势区吞噬缺全屏闸门（承载内容被误吞）"; exit 1; }
           echo "V0.2.67 校验: 贴边侧屏蔽 + 缩放方向修复 + 键盘屏蔽把手 + 截图runtime加固 + 录屏8fps降分辨率 + 预热隐形复刻 + 残留矩形治理 + 吞咽收敛窗口层 已就位"
 
@@ -2936,6 +2936,54 @@ jobs:
           grep -q '!fullScreen && !AevonKeyboardVisible()' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.68 承载模式吞咽分支没接（或没带键盘保护）"; exit 1; }
           echo "V0.2.68 校验: 录屏系统抓屏硬编 + append串行队列 + 缩放径向连续 + 键盘现场检测 + SBScreenshotManager + 画布边缘带吞咽 已就位"
+          # ── V0.2.69 校验（Aevon(41) 十项）──────────────────────────────────────
+          for s in AevonIdleRelV269 AevonRecRetryV269 AevonRecBadgeV269 \
+          AevonSnapPadV269 AevonKbSense2V269; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.69 主库缺标记 $s"; exit 1; }
+          done
+          for s in AevonFloatBandV269; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.69 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          # ⑦ 熄屏断言释放（0.2.50 起 acquire 只取不放 = 浮窗关闭后不自动锁屏）
+          grep -q 'AevonIdleTimerRelease' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.69 垫片缺 AevonIdleTimerRelease（断言只取不放）"; exit 1; }
+          grep -q 'AevonIdleTimerRelease()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.69 endNoAutoLock 没释放熄屏断言"; exit 1; }
+          grep -q 'acquireIdleTimerDisableAssertionForReason:' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.69 熄屏断言 acquire 通道丢失"; exit 1; }
+          # ② 圆盘静默看门狗：有活跃触摸绝不误收
+          grep -q 'hasLiveTouch' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::0.2.69 圆盘静默看门狗缺活跃触摸判据（误收复发）"; exit 1; }
+          grep -q 'hasActiveGripTouch' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.69 把手缺活跃触摸查询"; exit 1; }
+          # ③ 设置编辑页动作槽不再走私有 API（白色占位图）
+          grep -q 'aevon.action.' "$GITHUB_WORKSPACE/AevonPrefs/AevonRingEditorController.m" \
+            || { echo "::error::0.2.69 编辑页没拦 aevon.action.*（白图标复发）"; exit 1; }
+          # ⑧ 录屏失败重试 + domain/code 落日志
+          grep -q 'rpRetryCount' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.69 缺 RP 启动失败重试"; exit 1; }
+          grep -q 'domain=' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.69 RP 失败日志缺 domain/code"; exit 1; }
+          # ④/⑤ 快照垫底：撤帧即时交接（0.35s 溶解 = 「先快照后实时」糊感），布防期第一拍即垫
+          grep -q 'view.removeFromSuperview()' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.69 撤帧不是即时交接（SnapPad 方案没落地）"; exit 1; }
+          grep -q 'darkTicks >= (everCovered ? 3 : 1)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.69 布防期没改第一拍即垫（进全屏 App 黑 0.3s 复发）"; exit 1; }
+          # ① 显窗时机 = 画布定稿之后（显窗后再写画布 = 内容跳两遍闪一下）
+          grep -q 'AevonRevealLateV269' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.69 显窗时机没后移（开窗闪一下复发）"; exit 1; }
+          # ⑨ 键盘检测补 UIKeyboardImpl.isOnScreen（KeyboardWindow 在 SB 栈是 hidden）
+          grep -q 'UIKeyboardImpl' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.69 键盘检测缺 UIKeyboardImpl 判据"; exit 1; }
+          # ⑩ App 侧浮窗压边 10pt
+          grep -q 'AevonPointInFloatEdgeInflated' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.69 App 侧缺浮窗压边判定"; exit 1; }
+          # ⑥ 拖动降载：拖动中停熄屏重申拍子
+          grep -q 'startIdleKickTimerOnly' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.69 拖动降载缺重申拍子重启助手"; exit 1; }
+          echo "V0.2.69 校验: 熄屏断言释放 + 圆盘触摸实判 + 编辑页SF图标 + 录屏重试/指示胶囊 + 快照垫底即时交接 + 显窗定稿后 + 键盘UIKeyboardImpl + 浮窗压边 + 拖动降载 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

@@ -125,6 +125,34 @@ static NSArray<NSDictionary *> *AevonInstalledApps(void) {
 /// 应用图标（私有 API，失败返回 nil，由调用方画首字母色块）
 static UIImage *AevonIconForBundle(NSString *bundleID, CGFloat size) {
     if (bundleID.length == 0) return nil;
+    /* V0.2.69（AevonPrefsIconV269，用户 Aevon(41) #3「设置中圆盘应用编辑页面中的
+     * 截图和录屏显示白图标」）：截图 / 录屏是动作不是 App —— 私有 API
+     * _applicationIconImageForBundleIdentifier: 对不存在的 bundleID 返回的是
+     * **白色占位图**（不是 nil），所以 0.2.63 的兜底链根本走不到色块那步。
+     * 动作槽在这里直接画 SF Symbol（和圆盘上的同款视觉）。 */
+    if ([bundleID hasPrefix:@"aevon.action."]) {
+        NSString *symbol = [bundleID isEqualToString:@"aevon.action.screenshot"]
+            ? @"camera.viewfinder" : @"record.circle";
+        UIImage *glyph = [UIImage systemImageNamed:symbol];
+        if (size < 8) size = 32;
+        UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
+        UIBezierPath *bg = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size)
+                                                      cornerRadius:size * 0.2237];
+        UIColor *tint = [bundleID isEqualToString:@"aevon.action.screenshot"]
+            ? [UIColor colorWithRed:0.29 green:0.52 blue:1.00 alpha:1.0]
+            : [UIColor colorWithRed:1.00 green:0.35 blue:0.31 alpha:1.0];
+        [tint setFill];
+        [bg fill];
+        if (glyph != nil) {
+            UIImage *white = [glyph imageWithTintColor:[UIColor whiteColor]
+                                       renderingMode:UIImageRenderingModeAlwaysOriginal];
+            CGFloat side = size * 0.62;
+            [white drawInRect:CGRectMake((size - side) / 2, (size - side) / 2, side, side)];
+        }
+        UIImage *out = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+        return out;
+    }
     Class imageClass = [UIImage class];
     SEL selector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
     if ([imageClass respondsToSelector:selector]) {

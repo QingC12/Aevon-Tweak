@@ -3,6 +3,7 @@
 #import <objc/runtime.h>
 #import <stdio.h>
 #import <string.h>
+#import <stdlib.h>
 
 /*
  * 自建场景驱动垫片（V0.2.28，AevonSelfSceneV228，P1 概念验证）。
@@ -1158,10 +1159,13 @@ __attribute__((used)) static const char AevonIdleKickProbeV249Marker[] = "AevonI
 ///         acquireIdleTimerDisableAssertionForReason:
 /// 任何一步不存在就往下试，绝不因为私有 API 改名而崩（全 @try）。
 /// 返回值进日志（位掩码），下一次真机日志就能一眼看出这台机器到底走通了哪条。
+/* V0.2.69（AevonIdleRelV269）：acquire 拿到的断言对象存这里，
+ * 关窗时 AevonIdleTimerRelease() 释放 —— 只取不放 = Aevon(41) #7 的真凶。 */
+static NSMutableArray<id> *gAevonIdleAssertions = nil;
+
 NSInteger AevonIdleTimerKick(void) {
     NSInteger mask = 0;
-    @try {
-        NSArray<NSString *> *coordinatorNames =
+    @try {        NSArray<NSString *> *coordinatorNames =
             @[@"SBIdleTimerGlobalCoordinator",
               @"SBIdleTimerCoordinatorHelper",
               @"SBIdleTimerGlobalStateMonitor",
@@ -1201,10 +1205,21 @@ NSInteger AevonIdleTimerKick(void) {
             }
             // 断言通道（历史的 V0.0.55 同款）：持有一次「空闲计时器禁用」断言。
             // 参数是一个 reason 字符串；同一个 reason 反复取是幂等的。
+            // V0.2.69（AevonIdleRelV269）：把返回的断言对象存进静态表，
+            // 关窗时 AevonIdleTimerRelease() 释放 —— 0.2.50 只取不放是
+            // Aevon(41) #7「浮窗关闭后手机不再自动暗屏锁屏」的真凶。
             SEL assertSel = NSSelectorFromString(@"acquireIdleTimerDisableAssertionForReason:");
             if ([coordinator respondsToSelector:assertSel]) {
-                ((AevonSDIdFn1)objc_msgSend)(coordinator, assertSel, @"AevonFloat");
+                id assertion = ((AevonSDIdFn1)objc_msgSend)(coordinator, assertSel, @"AevonFloat");
                 mask |= 8;
+                if (assertion != nil) {
+                    if (gAevonIdleAssertions == nil) {
+                        gAevonIdleAssertions = [NSMutableArray array];
+                    }
+                    if (![gAevonIdleAssertions containsObject:assertion]) {
+                        [gAevonIdleAssertions addObject:assertion];
+                    }
+                }
             }
         }
     } @catch (NSException *exception) {
@@ -1224,6 +1239,101 @@ NSInteger AevonIdleTimerKick(void) {
         }
     } @catch (NSException *exception) {
     }
+    return mask;
+}
+
+/* ── V0.2.69（AevonIdleRelV269）：把 0.2.50 欠的「断言释放」补上 ─────────────
+ *
+ * Aevon(41) #7：「系统的定时暗屏锁屏似乎被我们修改出了问题，悬浮窗没有打开时，
+ * 手机在设置的时间内不会自动暗屏锁屏」。日志实锤：kick 的位掩码里
+ * 「空闲计时器禁用断言」= mask|8 这一条在这台机器上**有效**（acquire 每次都命中），
+ * 但自 0.2.50 起只 acquire 从不 release —— 浮窗关闭后断言仍然持有，
+ * SpringBoard 的空闲计时器还是被禁着，系统就永远不按设置暗屏锁屏。
+ *
+ * 修法：kick 时把 acquire 返回的断言对象存进静态表（同一 reason 幂等，对象复用）；
+ * release 时对这些对象枚举方法名匹配 invalidate / release / relinquish 的方法逐一
+ * 调用，再对协调器枚举 release 类方法兜底。全部 @try，任何一步不存在都不上抛。
+ */
+__attribute__((used)) static const char AevonIdleRelV269Marker[] = "AevonIdleRelV269";
+
+NSInteger AevonIdleTimerRelease(void) {
+    NSInteger mask = 0;
+    if (gAevonIdleAssertions == nil) { return 0; }
+    @try {
+        for (id assertion in gAevonIdleAssertions) {
+            if (assertion == nil) { continue; }
+            // 断言对象上找 invalidate / release 类方法（XPC 断言通常是 invalidate）。
+            for (NSString *name in @[@"invalidate", @"releaseAssertion", @"relinquish",
+                                     @"release", @"cancel"]) {
+                SEL sel = NSSelectorFromString(name);
+                if ([assertion respondsToSelector:sel]) {
+                    ((AevonSDVoidFn0)objc_msgSend)(assertion, sel);
+                    mask |= 1;
+                    break;
+                }
+            }
+        }
+        // 协调器兜底：方法名带 IdleTimer + Assertion 的 release/relinquish。
+        NSArray<NSString *> *coordinatorNames =
+            @[@"SBIdleTimerGlobalCoordinator",
+              @"SBIdleTimerCoordinatorHelper",
+              @"SBIdleTimerGlobalStateMonitor",
+              @"SBIdleTimerPolicyAggregator",
+              @"SBLockScreenIdleTimer",
+              @"SBIdleTimerAggregator"];
+        NSArray<NSString *> *factorySelNames =
+            @[@"sharedInstance", @"sharedCoordinator", @"globalCoordinator", @"shared"];
+        for (NSString *name in coordinatorNames) {
+            Class cls = NSClassFromString(name);
+            if (cls == Nil) { continue; }
+            for (NSString *factory in factorySelNames) {
+                SEL sel = NSSelectorFromString(factory);
+                if (![cls respondsToSelector:sel]) { continue; }
+                id object = ((AevonSDIdFn0)objc_msgSend)((id)cls, sel);
+                if (object == nil) { continue; }
+                Class objCls = object_getClass(object);
+                unsigned int methodCount = 0;
+                Method *methods = class_copyMethodList(objCls, &methodCount);
+                for (unsigned int i = 0; i < methodCount; i++) {
+                    NSString *selName =
+                        NSStringFromSelector(method_getName(methods[i]));
+                    if ([selName length] < 12) { continue; }
+                    BOOL hasTimer = ([selName rangeOfString:@"IdleTimer" options:NSCaseInsensitiveSearch].location != NSNotFound
+                                     || [selName rangeOfString:@"idleTimer" options:NSCaseInsensitiveSearch].location != NSNotFound);
+                    BOOL hasAssert = ([selName rangeOfString:@"ssertion"].location != NSNotFound);
+                    BOOL hasRelease = ([selName hasPrefix:@"release"] || [selName hasPrefix:@"relinquish"]
+                                       || [selName rangeOfString:@"releaseAssertion"].location != NSNotFound
+                                       || [selName rangeOfString:@"relinquishAssertion"].location != NSNotFound);
+                    if (hasTimer && hasAssert && hasRelease && [objCls instancesRespondToSelector:method_getName(methods[i])]) {
+                        SEL relSel = NSSelectorFromString(selName);
+                        if ([object respondsToSelector:relSel]) {
+                            NSMethodSignature *sig = [object methodSignatureForSelector:relSel];
+                            if (sig != nil && [sig numberOfArguments] <= 2) {
+                                ((AevonSDVoidFn0)objc_msgSend)(object, relSel);
+                                mask |= 2;
+                            }
+                        }
+                    }
+                }
+                free(methods);
+            }
+        }
+        // UIApplication 兜底：还原 isIdleTimerDisabled（Swift 侧 endNoAutoLock 也会写，
+        // 这里再写一次确保断言释放后状态一致）。
+        Class appCls = NSClassFromString(@"UIApplication");
+        SEL sharedSel = NSSelectorFromString(@"sharedApplication");
+        if (appCls != Nil && [appCls respondsToSelector:sharedSel]) {
+            id app = ((AevonSDIdFn0)objc_msgSend)((id)appCls, sharedSel);
+            SEL setSel = NSSelectorFromString(@"setIdleTimerDisabled:");
+            if (app != nil && [app respondsToSelector:setSel]) {
+                ((AevonSDVoidFnBool1)objc_msgSend)(app, setSel, NO);
+                mask |= 4;
+            }
+        }
+    } @catch (NSException *exception) {
+        /* 释放失败也不能上抛：这里在主线程，抛一次就是注销 */
+    }
+    [gAevonIdleAssertions removeAllObjects];
     return mask;
 }
 

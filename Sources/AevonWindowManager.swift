@@ -784,8 +784,13 @@ enum AevonWindowManager {
                                                             height: mainCanvas.height,
                                                             tag: "预热隐形复刻 \(bundleID)")
                     }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.48) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
                         guard currentBundleID == bundleID else { return }
+                        /* V0.2.69（AevonRevealLateV269，用户 Aevon(41) #1「悬浮窗先闪一下
+                         * 才打开」）：0.48 → 0.85。时序账：+0.12 复刻起手 → +0.24 写回
+                         * → kick 两笔 +0.44 / +0.69 —— 尾排全在 0.85 之前；0.2.68 的
+                         * 0.48 显窗时尾排还剩两笔，内容在用户眼前又跳两遍 = 闪一下。
+                         * 显窗时机 = 画布彻底定稿之后，开窗即终态。 */
                         currentView?.revealEntryNow("预热隐形复刻完成（画布已切回）")
                     }
                 }

@@ -1210,6 +1210,16 @@ final class AevonWindowView: UIView {
         guard moving != isMovingWindow else { return }
         isMovingWindow = moving
         glowRing.setShadowSuppressed(moving)
+        // V0.2.69（AevonDragLeanV269，用户 Aevon(41) #6「全屏 App 拖动移动悬浮窗时
+        // 会丢帧」）：拖动期间把熄屏重申定时器停掉 —— 它 8 秒一发、每次都在主线程
+        // 上做一串 runtime 探测（类表遍历 + perform），正好撞上拖动的每一帧合成；
+        // 落位后立即重启（浮窗还在，防熄屏语义不受影响）。缩放同享（isLiveResizing）。
+        if moving {
+            idleKickTimer?.invalidate()
+            idleKickTimer = nil
+        } else {
+            if idleKickTimer == nil { startIdleKickTimerOnly() }
+        }
         if moving {
             // 位移期间不做任何抓帧（整屏 drawHierarchy 会直接掉帧）
             snapshotRecaptureWork?.cancel()
@@ -1217,6 +1227,19 @@ final class AevonWindowView: UIView {
             // 落位后补一张（守卫要用最新的「最后一帧」）
             scheduleSnapshotRecapture(after: 0.8)
         }
+    }
+
+    /// V0.2.69：只重启 8 秒重申拍子（不重复布防日志、不重复 install）。
+    private func startIdleKickTimerOnly() {
+        let timer = Timer(timeInterval: 8.0, repeats: true) { [weak self] _ in
+            let now = AevonWindowView.kickIdleTimerIfNeeded()
+            guard let self, now != self.idleKickMask else { return }
+            self.idleKickMask = now
+            AevonLog.info("[窗口] 熄屏压制方式变化 → \(AevonWindowView.idleKickMaskText(now))"
+                + "（AevonNoAutoLockV249 AevonNoAutoLockV250）")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        idleKickTimer = timer
     }
 
     // MARK: - 外角缩放（V0.0.36 起，V0.0.37 移到窗外角块）
@@ -1913,10 +1936,16 @@ final class AevonWindowView: UIView {
         case .some(false):
             renderTicks = 0
             darkTicks += 1
-            // V0.2.63（AevonFlashDampV263）：同上，布防期也要 3 拍 + 静默期，别盖/撤抖动。
-            if darkFreezeView == nil, darkTicks >= 3,
-               CACurrentMediaTime() - lastFreezeRemovedAt > AevonWindowView.freezeQuietWindow {
-                installDarkFreeze(reason: "巡查发现不出画")
+            // V0.2.63（AevonFlashDampV263）：同上，布防期也要静默期防盖/撤抖动。
+            // V0.2.69（AevonSnapPadV269，用户 Aevon(41) #5「进入全屏 App 时悬浮窗先
+            // 黑屏一下」）：布防期 3 拍（0.3s）才盖 = 每次进全屏 App 都先看 0.3s 黑。
+            // 布防的语义就是「画面离场事件已实锤」，第一拍就垫帧；静默期压到
+            // 0.6s（只防 cs 抖动引发的反复盖撤，第一次盖不受静默期限制）。
+            let quiet = AevonWindowView.freezeQuietWindow * 0.5
+            let everCovered = freezeRemoveCount > 0
+            if darkFreezeView == nil, darkTicks >= (everCovered ? 3 : 1),
+               CACurrentMediaTime() - lastFreezeRemovedAt > quiet {
+                installDarkFreeze(reason: "巡查发现不出画（布防期第一拍即垫）")
             }
             reassertContentForeground(tag: "发现不出画")
         case .none:
@@ -1971,18 +2000,15 @@ final class AevonWindowView: UIView {
         lastFreezeRemovedAt = CACurrentMediaTime()
         idleDarkTicks = 0
         darkTicks = 0
-        /* V0.2.65（AevonFreezeCrossFadeV265，用户 Aevon(38) #8「回桌面依旧会闪」）：
-         * 原来是一次 `removeFromSuperview()` —— 定格帧瞬间消失，下面那一帧如果还没
-         * 画出来就是「黑一下再出画面」，这就是闪。改成淡出让实时画面从底下透上来。
-         * V0.2.66（AevonFreezeSoftV266，用户 Aevon(39) #10「回桌面先显示快照再出现实时
-         * 画面」）：0.22 → 0.35 秒。快照 → 实时的内容跳变没法消除（快照就是旧像素），
-         * 但把交叉溶解拉长可以明显弱化跳变感。 */
-        UIView.animate(withDuration: 0.35, delay: 0,
-                       options: [.curveEaseOut, .allowUserInteraction],
-                       animations: { view.alpha = 0 },
-                       completion: { _ in view.removeFromSuperview() })
-        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次，0.35s 淡出）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263 AevonFreezeCrossFadeV265 AevonFreezeSoftV266）")
+        /* V0.2.65（AevonFreezeCrossFadeV265）/ 0.2.66（AevonFreezeSoftV266）：
+         * 交叉溶解 0.35s —— Aevon(41) #4 实锤观感「先显示快照，然后快照变为实时画面，
+         * 看着不舒服」：溶解期里新旧两帧叠着，用户看到的就是「快照糊着实时」。
+         * V0.2.69（AevonSnapPadV269，对齐 Stheno/MultiFloat 事故 20 的快照垫底方案）：
+         * 撤帧只发生在「cs=2 且现场抓到真画面」之后 —— 此刻实时帧已经在位，
+         * 直接摘掉垫帧 = 快照与实时的交接近似同帧完成，无溶解糊感。 */
+        view.removeFromSuperview()
+        AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次，即时交接）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263 AevonSnapPadV269）")
     }
 
     /// 点冻结图：用户主动要画面。
@@ -2175,9 +2201,19 @@ final class AevonWindowView: UIView {
             else { return }
             app.setValue(saved, forKey: "idleTimerDisabled")
         }
-        if exception != nil { return }
+        // V0.2.69（AevonIdleRelV269，用户 Aevon(41) #7）：0.2.50 起 kick 里
+        // acquireIdleTimerDisableAssertionForReason: 只取不放 —— 浮窗关闭后断言
+        // 还持有，SpringBoard 空闲计时器仍被禁 = 手机不按设置自动暗屏锁屏。
+        // 这里把断言释放掉（release 内部同时把 isIdleTimerDisabled 写回 NO）。
+        // 注意不能再调 kickIdleTimerIfNeeded —— kick 会把断言重新 acquire 回来。
+        let released = AevonIdleTimerRelease()
+        if exception != nil {
+            AevonLog.warn("[窗口] 浮窗已关，空闲锁屏还原异常但断言已释放 mask=\(released)"
+                + "（AevonIdleRelV269）")
+            return
+        }
         AevonLog.info("[窗口] 浮窗已关，空闲锁屏还原为原值（\(saved ? "禁用" : "启用")）"
-            + "（AevonNoAutoLockV248）")
+            + "，熄屏断言已释放 mask=\(released)（AevonNoAutoLockV248 AevonIdleRelV269）")
     }
 
     // MARK: - 停靠态（V0.2.50，AevonDockColumnV250）

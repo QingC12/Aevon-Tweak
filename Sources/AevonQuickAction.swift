@@ -338,6 +338,10 @@ final class AevonFrameRecorder: NSObject {
     private var failedFrames = 0
     private var usingSystem = false
     private var stopRequested = false
+    /// V0.2.69（AevonRecRetryV269）：RP 启动失败自动重试一次的计数。
+    /// Aevon(41) #8 实锤首次 startCapture 直接「无法开始录制」——可能是上一次
+    /// 会话还没释放干净 / 系统服务冷启动，重试一发能救回来就不落自绘。
+    private var rpRetryCount = 0
     /* 自绘兜底档参数（V0.2.66/0.2.67 保留：主路失败才走，8fps/540 宽已够看）。 */
     private let fps: Double = 8
     private let recMaxWidth: CGFloat = 540
@@ -353,6 +357,7 @@ final class AevonFrameRecorder: NSObject {
         frames = 0
         failedFrames = 0
         stopRequested = false
+        rpRetryCount = 0
         outputURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("Aevon-\(Int(Date().timeIntervalSince1970)).mp4")
         if let url = outputURL { try? FileManager.default.removeItem(at: url) }
@@ -360,6 +365,11 @@ final class AevonFrameRecorder: NSObject {
         // 时间戳永不倒退，status=3 从根上消灭（两条通路共用）。
         appendQueue = DispatchQueue(label: "com.aevon.recorder.append")
         if startSystemCapture() {
+            // V0.2.69（AevonRecBadgeV269，用户 Aevon(41) #8「录屏开始时灵动岛没有
+            // 提示…需要其他方式显示正在录屏，不然误触后不知道」）：SB 侧常驻
+            // 指示胶囊，点按即停。RP 成功时系统录屏指示器由系统负责，胶囊只补
+            // 「正在录的是 Aevon」这个信息。
+            AevonRecBadge.show()
             AevonQuickToast.show("开始录屏")
             return
         }
@@ -390,12 +400,29 @@ final class AevonFrameRecorder: NSObject {
         }, completionHandler: { [weak self] error in
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let error, self.usingSystem, !self.stopRequested {
-                    AevonLog.warn("[录屏] RPScreenRecorder 启动失败：\(error.localizedDescription)"
-                        + " → 走自绘兜底（AevonReplayRecV268）")
-                    self.usingSystem = false
-                    self.startOwnCapture()
+                guard let error, self.usingSystem, !self.stopRequested else { return }
+                // V0.2.69（AevonRecRetryV269）：失败日志带上 domain/code ——
+                // 「无法开始录制」没有 code 就定不了因（权限？会话占用？服务冷启动？）。
+                let code = (error as NSError).code
+                let domain = (error as NSError).domain
+                AevonLog.warn("[录屏] RPScreenRecorder 启动失败：\(error.localizedDescription)"
+                    + "（domain=\(domain) code=\(code)）（AevonReplayRecV268 AevonRecRetryV269）")
+                self.usingSystem = false
+                if self.rpRetryCount < 1 {
+                    self.rpRetryCount += 1
+                    AevonLog.info("[录屏] 0.6 秒后自动重试主路（第 \(self.rpRetryCount) 次）"
+                        + "（AevonRecRetryV269）")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                        guard let self, !self.stopRequested, !self.isRunning else { return }
+                        if self.startSystemCapture() {
+                            AevonLog.info("[录屏] 主路重试成功（AevonRecRetryV269）")
+                        } else {
+                            self.startOwnCapture()
+                        }
+                    }
+                    return
                 }
+                self.startOwnCapture()
             }
         })
         AevonLog.info("[录屏] 主路启动：RPScreenRecorder 系统级抓屏（硬编、帧率与系统录屏"
@@ -489,6 +516,7 @@ final class AevonFrameRecorder: NSObject {
         guard writer == nil, !usingSystem else { return }
         guard let first = AevonQuickAction.captureFrameForRecorder() else {
             AevonLog.warn("[录屏] 抓不到第一帧，取消录制（AevonOwnRecorderV265）")
+            AevonRecBadge.hide()
             AevonQuickToast.show("录屏失败：抓不到画面")
             return
         }
@@ -513,6 +541,7 @@ final class AevonFrameRecorder: NSObject {
             assWriter = try AVAssetWriter(outputURL: url, fileType: .mp4)
         } catch {
             AevonLog.warn("[录屏] 建不了输出文件：\(error.localizedDescription)（AevonOwnRecorderV265）")
+            AevonRecBadge.hide()
             AevonQuickToast.show("录屏失败：无法建文件")
             return
         }
@@ -533,6 +562,7 @@ final class AevonFrameRecorder: NSObject {
         guard assWriter.startWriting() else {
             AevonLog.warn("[录屏] startWriting 失败：\(assWriter.error?.localizedDescription ?? "未知")"
                 + "（AevonOwnRecorderV265）")
+            AevonRecBadge.hide()
             return
         }
         assWriter.startSession(atSourceTime: .zero)
@@ -548,6 +578,7 @@ final class AevonFrameRecorder: NSObject {
         AevonLog.info("[录屏] 开始录制（自绘兜底）：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
             + "（再点一次「录屏」结束并存相册）"
             + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267）")
+        AevonRecBadge.show()
         AevonQuickToast.show("开始录屏")
     }
 
@@ -601,6 +632,7 @@ final class AevonFrameRecorder: NSObject {
         stopRequested = true
         timer?.invalidate()
         timer = nil
+        AevonRecBadge.hide()
         if usingSystem {
             RPScreenRecorder.shared().stopCapture { _ in }
             usingSystem = false
@@ -716,6 +748,74 @@ final class AevonQuickToast {
                     label.removeFromSuperview()
                 })
             })
+        }
+    }
+}
+
+/// V0.2.69（AevonRecBadgeV269，用户 Aevon(41) #8）：录屏常驻指示胶囊。
+///
+/// 「录屏开始时灵动岛没有提示开始录屏（我们不需要灵动岛显示，但是需要其他方式
+/// 显示正在录屏，不然误触后不知道）」。自绘管线本就不触发系统的录屏指示器，
+/// RP 主路在 SB 进程里灵动岛也可能不出 —— 这里在屏幕底部常驻一颗小红胶囊
+/// 「● 录屏中 · 点按停止」，录屏开始出现、结束/失败消失，点它 = stop()。
+/// 挂在自己的 overlay 窗口上（与 toast 同基建），不接管屏幕其余触摸。
+final class AevonRecBadge {
+    private static var window: UIWindow?
+    private static var badge: UIButton?
+    private static let tag = 0x7A52
+
+    static func show() {
+        DispatchQueue.main.async {
+            guard Thread.isMainThread else { return }
+            var panel = window
+            if panel == nil { panel = AevonHostWindow.makeOverlayWindow() }
+            guard let overlay = panel else { return }
+            window = overlay
+            overlay.isHidden = false
+            overlay.frame = UIScreen.main.bounds
+            overlay.windowLevel = AevonWindowLevels.overlay + 2
+            guard let host = overlay.rootViewController?.view else { return }
+            host.subviews.filter { $0.tag == tag }.forEach { $0.removeFromSuperview() }
+
+            let button = UIButton(type: .system)
+            button.tag = tag
+            button.setTitle("● 录屏中 · 点按停止", for: .normal)
+            button.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .semibold)
+            button.setTitleColor(.white, for: .normal)
+            button.backgroundColor = UIColor(red: 0.78, green: 0.12, blue: 0.14, alpha: 0.92)
+            button.layer.cornerRadius = 15
+            button.layer.cornerCurve = .continuous
+            button.clipsToBounds = true
+            button.contentEdgeInsets = UIEdgeInsets(top: 7, left: 14, bottom: 7, right: 14)
+            button.sizeToFit()
+            let size = button.intrinsicContentSize
+            let screen = UIScreen.main.bounds
+            button.frame = CGRect(x: (screen.width - size.width - 28) / 2,
+                                  y: screen.height - max(size.height + 14, 30) - 34,
+                                  width: size.width + 28, height: max(size.height + 14, 30))
+            button.addAction(UIAction { _ in
+                AevonLog.info("[录屏] 指示胶囊被点按 → 停止录制（AevonRecBadgeV269）")
+                AevonFrameRecorder.shared.toggle()
+            }, for: .touchUpInside)
+            host.addSubview(button)
+            badge = button
+
+            button.alpha = 0
+            UIView.animate(withDuration: 0.22) { button.alpha = 1 }
+            AevonLog.info("[录屏] 录屏指示胶囊已显示（点按即停）（AevonRecBadgeV269）")
+        }
+    }
+
+    static func hide() {
+        DispatchQueue.main.async {
+            guard Thread.isMainThread else { return }
+            guard let button = badge else { return }
+            UIView.animate(withDuration: 0.22, animations: { button.alpha = 0 },
+                           completion: { _ in
+                               button.removeFromSuperview()
+                               if badge === button { badge = nil }
+                               window?.isHidden = true
+                           })
         }
     }
 }
