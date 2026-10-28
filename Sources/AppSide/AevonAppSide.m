@@ -1161,6 +1161,11 @@ static CGRect gAevonGripRect;
 static CGSize gAevonRealScreen;
 static BOOL gAevonGripCached;
 
+/* 纯 ASCII 的 used 数组：CI 用 strings 查标记，而 @"…（AevonGripSwallowV261）" 这种
+ * 带中文的字面量在 ObjC 里会被编成 UTF-16 存进 __ustring —— strings 一个字节都搜不到
+ * （0.2.61 第一次构建就是栽在这里）。本文件其它版本的标记同样靠这种数组兜底。 */
+__attribute__((used)) static const char AevonGripSwallowV261Marker[] = "AevonGripSwallowV261";
+
 /* 真·屏幕尺寸：直接走**被接管前的** -[UIScreen bounds] 原实现。
  * 不能用当前 [UIScreen bounds] —— 它在本进程里被 AevonAppScreenFitV249 接管过，
  * App 进浮窗后会报成画布 430×737，把手命中区就会算错位；
