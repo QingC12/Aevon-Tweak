@@ -26,6 +26,25 @@ import UIKit
 ///   · 位置（从底部起的百分比）与长度（pt）进设置页，**实时生效**（prefschanged）；
 ///   · 命中区依旧向屏幕内侧外扩 40pt、上下各 14pt —— 可点性不因竖条变窄而缩水。
 final class AevonRingGripView: UIView {
+    /// V0.2.69（AevonRingIdleFixV269）：把手上活跃触摸计数 —— 圆盘静默看门狗的
+    /// 「ended 真漏发」实判（touches 家族是 UIKit 硬通道，不会漏）。
+    fileprivate var touchCount = 0
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        touchCount += touches.count
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        touchCount = max(0, touchCount - touches.count)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        touchCount = 0
+        super.touchesCancelled(touches, with: event)
+    }
+
     /// 竖条视觉宽度（pt）。贴屏幕右缘。
     static let barWidth: CGFloat = 5
     /// 命中区外扩：向屏幕内侧 40pt、上下各 14pt（0.2.50 定档，不变）
@@ -184,10 +203,10 @@ enum AevonRingGrip {
     private static var grip: AevonRingGripView?
 
     /// V0.2.69（AevonRingIdleFixV269）：把手上还有没有活跃触摸 ——
-    /// 圆盘静默看门狗的「ended 真漏发」判据（allTouches 挂在 UIWindow 上）。
+    /// 圆盘静默看门狗的「ended 真漏发」判据（把手视图自己的 UIKit 触摸计数）。
     static var hasActiveGripTouch: Bool {
-        guard let grip, let win = grip.window else { return false }
-        return win.allTouches?.isEmpty == false
+        guard let grip else { return false }
+        return grip.touchCount > 0
     }
     private static var lastInstalledAt: CFTimeInterval = 0
 

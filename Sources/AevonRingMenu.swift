@@ -319,12 +319,11 @@ final class AevonRingMenu: UIView {
     /// 静默看门狗的「ended 真漏发」判据 —— 手指物理在屏上时 UIKit 一定把
     /// touch 挂在命中视图（圆盘全屏视图 / 把手控件）上，查得到就不是漏发。
     /// V0.2.69（AevonRingIdleFixV269）：圆盘视图与把手上还有没有活跃触摸。
-    /// 静默看门狗的「ended 真漏发」判据 —— 手指物理在屏上时 UIKit 一定把
-    /// touch 挂在命中视图（圆盘全屏视图 / 把手控件）上，查得到就不是漏发。
-    /// 注意 `allTouches` 挂在 **UIWindow** 上（UIView 没有这个属性）：
-    /// 圆盘与把手同在入口窗口，窗口上有活跃触摸 = 手指还在屏上。
+    /// 静默看门狗的「ended 真漏发」判据 —— UIKit touches 家族是硬通道（指针
+    /// 喂料通道会漏最后一报），圆盘自己的触摸计数为 0 且把手上也没手指，
+    /// 才算「手指真不在屏上」。
     fileprivate var hasLiveTouch: Bool {
-        if window?.allTouches?.isEmpty == false { return true }
+        if uiKitTouchCount > 0 { return true }
         if AevonRingGrip.hasActiveGripTouch { return true }
         return false
     }
@@ -1132,7 +1131,13 @@ final class AevonRingMenu: UIView {
 
     // MARK: - 本地触摸（第二根手指 / 抬手后再按）
 
+    /// V0.2.69（AevonRingIdleFixV269）：UIKit 层活跃触摸计数 —— 静默看门狗的
+    /// 「ended 真漏发」实判。touches 家族是 UIResponder 硬通道（指针喂料通道
+    /// 会漏最后一报，UIKit 不会），计数为 0 = 手指真不在圆盘上。
+    private var uiKitTouchCount = 0
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        uiKitTouchCount += touches.count
         guard let point = touches.first?.location(in: self), !isDismissing else { return }
         handlePointerBegan(at: point, source: "local")
     }
@@ -1143,12 +1148,14 @@ final class AevonRingMenu: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        uiKitTouchCount = max(0, uiKitTouchCount - touches.count)
         guard !isDismissing else { return }
         let point = touches.first?.location(in: self) ?? pointerPoint
         handlePointerEnded(at: point, source: "local")
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        uiKitTouchCount = 0
         handlePointerCancelled(source: "local")
     }
 
