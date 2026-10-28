@@ -2284,7 +2284,7 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                             AevonAppLog(@"[App侧] 画布边缘带落点 %@ 命中可点击控件（%@）→ 放行"
                                         @"（边缘带 tap 豁免：拖动/滑动仍归浮窗手势）"
                                         @"（AevonCanvasBandV268 AevonBandTapV275）",
-                                        NSStringFromCGPoint(p), NSStringFromClass(hit));
+                                        NSStringFromCGPoint(p), [hit class]);
                         } else {
                             [gAevonSwallowedTouches addObject:key];
                             AevonAppLog(@"[App侧] 画布边缘带落点 %@ → 整根丢弃（承载模式：浮窗"
