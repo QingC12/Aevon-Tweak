@@ -853,7 +853,7 @@ final class AevonRecBadge {
 
             button.alpha = 0
             UIView.animate(withDuration: 0.22) { button.alpha = 1 }
-            AevonLog.info("[录屏] 录屏指示胶囊已显示（左缘竖排，点按即停）（AevonRecBadge2V271）")
+            AevonLog.info("[录屏] 录屏指示胶囊已显示（左缘竖排，点按即停）（AevonRecBadgeV269 AevonRecBadge2V271）")
         }
     }
 
