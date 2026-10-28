@@ -892,11 +892,11 @@ final class AevonRecBadge {
                 let path = UIBezierPath()
                 path.move(to: CGPoint(x: side / 2, y: side / 2))
                 path.addCurve(to: CGPoint(x: side / 2, y: side / 2 - petalLen),
-                              control1: CGPoint(x: side / 2 - petalWide, y: side / 2 - petalLen * 0.42),
-                              control2: CGPoint(x: side / 2 - petalWide * 0.55, y: side / 2 - petalLen))
+                              controlPoint1: CGPoint(x: side / 2 - petalWide, y: side / 2 - petalLen * 0.42),
+                              controlPoint2: CGPoint(x: side / 2 - petalWide * 0.55, y: side / 2 - petalLen))
                 path.addCurve(to: CGPoint(x: side / 2, y: side / 2),
-                              control1: CGPoint(x: side / 2 + petalWide * 0.55, y: side / 2 - petalLen),
-                              control2: CGPoint(x: side / 2 + petalWide, y: side / 2 - petalLen * 0.42))
+                              controlPoint1: CGPoint(x: side / 2 + petalWide * 0.55, y: side / 2 - petalLen),
+                              controlPoint2: CGPoint(x: side / 2 + petalWide, y: side / 2 - petalLen * 0.42))
                 path.close()
                 petal.path = path.cgPath
                 petal.fillColor = teal.withAlphaComponent(0.85).cgColor
