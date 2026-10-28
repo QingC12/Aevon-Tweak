@@ -2507,6 +2507,46 @@ final class AevonWindowView: UIView {
             + "（AevonFloatTransitionV264 AevonEntryRevealV265）")
     }
 
+    // MARK: - 再开窗占位直换（V0.2.76，AevonReopenSwapV276）
+    //
+    // 用户 Aevon(48)：「悬浮窗打开时依旧会先出现悬浮窗，然后消失，1 秒后再次出现」。
+    // Aevon(48) 22:02:00 时序账：0.600 直接开窗 → 0.623 入口遮罩（0.2.75 提前档）→
+    // 0.795 第二代遮罩（V274，此刻抓屏抓到的已是 App 画面 = 「像开了」）→ 1.267 画布
+    // 定稿 → 显窗。第二代遮罩的快照内容就是 App —— 盖上 = 「悬浮窗出现」，摘除换
+    // 真窗 = 「消失再出现」。根治：关窗前抓最后一帧当占位图，再开窗面板**立刻显形**
+    //（占位帧垫底），画布切换 / 回弹全程藏在占位后面，定稿后 crossfade 到活画面。
+
+    /// 关窗前抓「最后一帧」当再开窗占位图（优先空闲预抓缓存）。
+    func placeholderSnapshot() -> UIImage? {
+        if let cached = cachedSnapshotImage, imageLooksLikeContent(cached) { return cached }
+        return captureSnapshotImage()
+    }
+
+    private var reopenPlaceholderView: UIImageView?
+
+    /// 开窗时把占位帧铺进内容区（场景内容之上）。
+    func installReopenPlaceholder(_ image: UIImage) {
+        guard reopenPlaceholderView == nil else { return }
+        let iv = UIImageView(image: image)
+        iv.contentMode = .scaleToFill
+        iv.isUserInteractionEnabled = false
+        iv.tag = 0xAE276
+        iv.frame = CGRect(origin: .zero, size: contentClip.bounds.size)
+        iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        contentClip.addSubview(iv)
+        contentClip.bringSubviewToFront(iv)
+        reopenPlaceholderView = iv
+        AevonLog.info("[窗口] 再开窗占位帧已铺进面板（上一关最后一帧直显）（AevonReopenSwapV276）")
+    }
+
+    /// 画布定稿后摘占位（crossfade 到活画面）。
+    func settleReopenPlaceholder() {
+        guard let iv = reopenPlaceholderView else { return }
+        reopenPlaceholderView = nil
+        UIView.animate(withDuration: 0.22, animations: { iv.alpha = 0 },
+                       completion: { _ in iv.removeFromSuperview() })
+    }
+
     private func persistFrame() {
         // V0.2.50：停靠态的坐标不进「主窗几何记忆」（否则下次开窗跑到边角）
         guard !isDocked else { return }

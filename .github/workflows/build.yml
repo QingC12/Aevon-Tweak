@@ -3148,6 +3148,28 @@ jobs:
             || { echo "::error::0.2.75 缺边缘带 tap 豁免标记"; exit 1; }
           echo "V0.2.75 校验: 遮罩提前到唤醒前 + 花瓣围花心 + 录屏快速落兜底/15fps + 边缘带tap豁免 已就位"
 
+          # ── V0.2.76 校验（Aevon(48) 三项）──────────────────────────────────────
+          # #0 系统录屏路线（shim used 常量 + Swift 调用两侧都要在）
+          grep -q 'AevonRecSysRouteV276' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.76 缺系统录屏 shim 标记"; exit 1; }
+          grep -q 'AevonRecSysRouteV276' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.76 缺系统录屏路线标记（还在纯自绘）"; exit 1; }
+          # #1 点停分段打点（非确定性崩溃取证网）
+          grep -q 'AevonStopStageV276' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.76 缺停止分段打点标记"; exit 1; }
+          # #1b 花瓣 6 片
+          grep -q 'AevonRecPetal6V276' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.76 缺六瓣标记"; exit 1; }
+          # #1c 0.2.72 封印令补漏：全类表枚举已在源封死
+          grep -q 'AevonSealP1V276' "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
+            || { echo "::error::0.2.76 缺全类枚举封印标记（AevonProbeSupport 未封）"; exit 1; }
+          # #2 再开窗占位直换
+          grep -q 'AevonReopenSwapV276' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.76 缺占位直换标记（WM 侧）"; exit 1; }
+          grep -q 'AevonReopenSwapV276' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.76 缺占位直换标记（WV 侧）"; exit 1; }
+          echo "V0.2.76 校验: 系统录屏路线 + 点停分段打点 + 六瓣 + 全类枚举封印 + 再开窗占位直换 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

@@ -81,9 +81,12 @@ enum AevonProbeV107 {
     /// 以及**能拿到活的 manager 实例**（这个最值钱：下一版直接向它登记识别器）。
     private static func groupPipeline() {
         let started = CACurrentMediaTime()
+        // V0.2.76（AevonSealP1V276）：全类表枚举已在 ObjC 侧封印（0.2.72 封印令），
+        // 这里恒得空集 —— P1 的价值历史日志已收齐，定向探测（工厂单例 / ivar）照跑。
         let names = AevonAllClassNames() ?? []
         let gesture = names.filter { $0.lowercased().contains("gesture") }.sorted()
-        AevonLog.info("[探针P1] 全进程类 \(names.count) 个，名字含 gesture 的 \(gesture.count) 个（AevonProbeP1V107）")
+        AevonLog.info("[探针P1] 全进程类 \(names.count) 个（0.2.72 封印令生效，恒 0；AevonSealP1V276），"
+            + "名字含 gesture 的 \(gesture.count) 个（AevonProbeP1V107）")
 
         let hooks = ["addgesture", "acquire", "defer", "register", "systemgesture", "shouldreceive", "shouldbegin"]
         var printed = 0

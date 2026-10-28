@@ -368,6 +368,9 @@ final class AevonFrameRecorder: NSObject {
     private var rpMainFirstFrame = false
     /// V0.2.71：启动失败重试上限 1 → 3（0.5s / 1.2s / 2.0s 退避）。
     private var rpRetryCount = 0
+    // V0.2.76（AevonRecSysRouteV276）：系统录屏路线状态 —— 走通时视频由系统收尾存相册。
+    private var systemRecActive = false
+    private var sysRecToken = 0
     /* 自绘兜底档参数（V0.2.66/0.2.67 保留：主路失败才走）。
      * V0.2.71（AevonRecFps12V271，用户 Aevon(43) #4「录的视频明显一卡一卡」）：
      * 兜底节拍 8 → 12fps。0.2.68 串行队列后实测能吃满节拍（73 帧/10s ≈ 7.3 ≈ 8fps
@@ -378,7 +381,7 @@ final class AevonFrameRecorder: NSObject {
     private let fps: Double = 15
     private let recMaxWidth: CGFloat = 540
 
-    var isRunning: Bool { writer != nil || usingSystem }
+    var isRunning: Bool { writer != nil || usingSystem || systemRecActive }
 
     func toggle() {
         if isRunning { stop() } else { start() }
@@ -414,6 +417,44 @@ final class AevonFrameRecorder: NSObject {
 
     private func startSystemCapture() -> Bool {
         let rec = RPScreenRecorder.shared()
+        /* V0.2.76（AevonRecSysRouteV276，用户 Aevon(48)「控制中心录屏存在多个版本了，
+         * 我们还没有找到具体路线吗？为什么还在自绘路线中？」）：系统录屏路线优先。
+         * startCapture 的 -5803 在 SB 进程是本质限制（Aevon(43)~(48) 每版 4+ 连败，
+         * 累计 12+），但系统自己的录屏管线就跑在 SB 进程（SBRecordingIndicatorWindow
+         * x2 常驻窗口栈实锤），控制中心录屏按钮的入口是私有方法
+         * `startSystemRecordingWithMicrophoneEnabled:handler:`（ScreenCore/MangoHello
+         * 逆向双实锤 selector 名；两插件均动态调用未写死宿主类 —— 最可能的宿主就是
+         * RPScreenRecorder 自身）。shim 里 respondsToSelector 探测命中才发调用，
+         * 未命中/抛异常返回 0 → 原有 startCapture 链照旧，行为不变。
+         * 回调带令牌：只认本拍的错误（迟到失败不许拉双兜底，0.2.71 教训）。 */
+        sysRecToken += 1
+        let sysToken = sysRecToken
+        var sysStarted = false
+        sysStarted = AevonTrySystemRecordingStart(rec) { err in
+            DispatchQueue.main.async {
+                guard sysToken == self.sysRecToken, !self.stopRequested else { return }
+                if let err {
+                    AevonLog.warn("[录屏] 系统路线启动失败：\(err.localizedDescription)"
+                        + " → 直接落自绘兜底（不再烧 RP 重试预算）"
+                        + "（AevonRecSysRouteV276 AevonRecFastFallV275）")
+                    if self.systemRecActive {
+                        self.systemRecActive = false
+                        if self.writer == nil { self.startOwnCapture() }
+                    }
+                } else {
+                    AevonLog.info("[录屏] 系统路线回调：已启动（控制中心同款管线）"
+                        + "（AevonRecSysRouteV276）")
+                }
+            }
+        }
+        if sysStarted {
+            systemRecActive = true
+            usingSystem = false   // 不走 RP startCapture 的 sample 回调，帧由系统管线收
+            AevonLog.info("[录屏] 系统路线已发起：控制中心同款私有入口命中"
+                + "（60fps 硬编、视频由系统收尾存相册；花瓣照常显示、点停走 stopSystemRecording）"
+                + "（AevonRecSysRouteV276）")
+            return true
+        }
         guard rec.isAvailable else {
             AevonLog.warn("[录屏] RPScreenRecorder 不可用（isAvailable=否）→ 走自绘兜底"
                 + "（AevonReplayRecV268）")
@@ -695,10 +736,27 @@ final class AevonFrameRecorder: NSObject {
     }
 
     private func stop() {
+        // V0.2.76（AevonStopStageV276，用户 Aevon(48)「点花瓣暂停时会自动注销」）：
+        // Aevon(48) 22:02:31.404 点按 → 32.509 SpringBoard 重新加载 = 点停即崩；
+        // 同版本 21:30:21 那次点停却成功存相册 —— 非确定性崩溃，日志只有最后一条
+        // 「花瓣被点按」，无法定位死在哪一步。停止路径分五段打点，复发日志直接
+        // 指认崩溃段。同轮把 0.2.72 封印令补到漏网的启动探针上（AevonSealP1V276）。
+        AevonLog.info("[录屏] 停止①收到停止请求（AevonStopStageV276）")
         stopRequested = true
         timer?.invalidate()
         timer = nil
         AevonRecBadge.hide()
+        // V0.2.76：系统录屏路线 —— stopSystemRecording: 交给系统，视频收尾与
+        // 存相册都由系统完成（与控制中心录屏的停止一致）。
+        if systemRecActive {
+            systemRecActive = false
+            sysRecToken += 1
+            let ok = AevonTrySystemRecordingStop(RPScreenRecorder.shared())
+            AevonLog.info("[录屏] 停止②系统录屏收尾（\(ok ? "已发 stopSystemRecording，视频由系统存相册" : "系统通道未命中")）"
+                + "（AevonStopStageV276 AevonRecSysRouteV276）")
+            return
+        }
+        AevonLog.info("[录屏] 停止②自绘收尾开始（\(frames) 帧，失败 \(failedFrames) 帧）（AevonStopStageV276）")
         if usingSystem {
             RPScreenRecorder.shared().stopCapture { _ in }
             usingSystem = false
@@ -718,6 +776,7 @@ final class AevonFrameRecorder: NSObject {
             self.input = nil
             self.adaptor = nil
             self.outputURL = nil
+            AevonLog.info("[录屏] 停止③finishWriting 提交（\(total) 帧）（AevonStopStageV276）")
             if total < 2 {
                 AevonLog.warn("[录屏] 只有 \(total) 帧，当成失败处理（AevonReplayRecV268）")
                 if let url { try? FileManager.default.removeItem(at: url) }
@@ -727,6 +786,7 @@ final class AevonFrameRecorder: NSObject {
             assWriter.finishWriting {
                 let status = assWriter.status
                 let failure = assWriter.error?.localizedDescription ?? "未知"
+                AevonLog.info("[录屏] 停止④收尾回调 status=\(status.rawValue)（AevonStopStageV276）")
                 DispatchQueue.main.async {
                     guard status == .completed, let url else {
                         AevonLog.warn("[录屏] 收尾失败：status=\(status.rawValue) \(failure)"
@@ -734,6 +794,7 @@ final class AevonFrameRecorder: NSObject {
                         AevonQuickToast.show("录屏保存失败")
                         return
                     }
+                    AevonLog.info("[录屏] 停止⑤存相册请求已发（AevonStopStageV276）")
                     PHPhotoLibrary.shared().performChanges({
                         PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
                     }, completionHandler: { ok, error in
@@ -884,7 +945,9 @@ final class AevonRecBadge {
             breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             halo.add(breath, forKey: "aevon.halo.breath")
 
-            // ② 花瓣层：4 片「一角贴花心」的花瓣绕中心转（8s/圈，慢速）。
+            // ② 花瓣层：6 片「一角贴花心」的花瓣绕中心转（8s/圈，慢速）。
+            // V0.2.76（AevonRecPetal6V276，用户 Aevon(48)「花瓣的数量可以再增加几片，
+            // 现在的 4 片有点少」）：4 → 6 片，60° 均分；瓣长 21→19 防六瓣拥挤。
             // V0.2.74（AevonRecFlowerV274，用户 Aevon(46) #3「花瓣太大了，应该是花瓣
             // 一角贴近中心圆点」）：椭圆版花瓣整条底边压在花心上（底宽 22pt 一坨挤在
             // 中心圆点周围），视觉臃肿。改贝塞尔花瓣形：尖端（一角）收在中心圆点上，
@@ -892,9 +955,9 @@ final class AevonRecBadge {
             let petalHost = CALayer()
             petalHost.frame = CGRect(x: 0, y: 0, width: side, height: side)
             petalHost.position = CGPoint(x: side / 2, y: side / 2)
-            let petalLen: CGFloat = 21   // 花瓣长（花心尖端 → 圆头）
+            let petalLen: CGFloat = 19   // 花瓣长（花心尖端 → 圆头）
             let petalWide: CGFloat = 8   // 花瓣最宽处半宽
-            for i in 0..<4 {
+            for i in 0..<6 {
                 let petal = CAShapeLayer()
                 // V0.2.75（AevonPetalCenterV275，用户 Aevon(47) #2「应该是四个花瓣围在
                 // 一起，而不是围着一个角转」）：0.2.74 的旋转绕错了点 —— CAShapeLayer
@@ -919,7 +982,7 @@ final class AevonRecBadge {
                 petal.fillColor = teal.withAlphaComponent(0.85).cgColor
                 petal.strokeColor = teal.withAlphaComponent(0.95).cgColor
                 petal.lineWidth = 1
-                petal.transform = CATransform3DMakeRotation(CGFloat(i) * .pi / 2, 0, 0, 1)
+                petal.transform = CATransform3DMakeRotation(CGFloat(i) * .pi / 3, 0, 0, 1)
                 petalHost.addSublayer(petal)
             }
             container.layer.addSublayer(petalHost)
@@ -947,8 +1010,8 @@ final class AevonRecBadge {
 
             container.alpha = 0
             UIView.animate(withDuration: 0.25) { container.alpha = 1 }
-            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 四瓣围花心 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
-                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272 AevonRecFlowerV274 AevonPetalCenterV275）")
+            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 六瓣围花心 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
+                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272 AevonRecFlowerV274 AevonPetalCenterV275 AevonRecPetal6V276）")
         }
     }
 

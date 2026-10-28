@@ -695,18 +695,30 @@ enum AevonWindowManager {
              * 修法：非预热档在激活 presenter **之前**盖同款全屏快照遮罩（tag 0xAE274），
              * 画布定稿回调（onCanvasSettled）里与浮窗淡入同步摘除；1.34s 兜底防永久盖屏。
              */
+            /* V0.2.76（AevonReopenSwapV276，用户 Aevon(48)「先出现悬浮窗 → 消失 → 1 秒
+             * 后再次出现」）：再开窗占位直换。Aevon(48) 22:02:00 时序账：0.600 直接开窗
+             * → 0.623 入口遮罩（0.2.75 提前档）→ 0.795 第二代遮罩（V274，此刻抓屏抓到的
+             * 已是 App 画面 = 「像开了」）→ 1.267 画布定稿 → 显窗。第二代遮罩的快照内容
+             * 就是 App —— 盖上 = 「悬浮窗出现」，摘除换真窗 = 「消失再出现」。
+             * 修法：有关窗缓存的占位帧 → 第二代遮罩退役，浮窗立刻显形（占位帧垫底），
+             * 画布切换 / 回弹全程藏在占位后面，定稿 crossfade 到活画面。
+             * 无占位帧（SB 重启后首开）→ 回退 0.2.75 全屏遮罩档。 */
             var reopenShroudShown = false
-            if !warmupCanvas, let shot = AevonQuickAction.captureScreenImage() {
-                let cover = UIImageView(image: shot)
-                cover.frame = UIScreen.main.bounds
-                cover.contentMode = .scaleToFill
-                cover.isUserInteractionEnabled = false
-                cover.tag = 0xAE274
-                host.addSubview(cover)
-                host.bringSubviewToFront(cover)
-                reopenShroudShown = true
-                AevonLog.info("[窗口] 再开窗遮罩已盖上（罩住 presenter 激活时旧整屏画布冒帧）"
-                    + "（AevonReopenShroudV274）")
+            var reopenPlaceholder: UIImage?
+            if !warmupCanvas {
+                reopenPlaceholder = reopenPlaceholders.removeValue(forKey: bundleID)
+                if reopenPlaceholder == nil, let shot = AevonQuickAction.captureScreenImage() {
+                    let cover = UIImageView(image: shot)
+                    cover.frame = UIScreen.main.bounds
+                    cover.contentMode = .scaleToFill
+                    cover.isUserInteractionEnabled = false
+                    cover.tag = 0xAE274
+                    host.addSubview(cover)
+                    host.bringSubviewToFront(cover)
+                    reopenShroudShown = true
+                    AevonLog.info("[窗口] 再开窗遮罩已盖上（无占位帧 → 回退 0.2.75 档）"
+                        + "（AevonReopenShroudV274）")
+                }
             }
             if reopenShroudShown {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
@@ -774,6 +786,16 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
+            // V0.2.76（AevonReopenSwapV276）：有占位帧 → 面板立刻显形（占位帧垫底），
+            // 不再「藏着等画布定稿」。1.3s 兜底 / 画布定稿回调里的 revealEntryNow
+            // 幂等（entryRevealDone 只生效一次，重复调用是空操作）。
+            if reopenPlaceholder != nil {
+                windowView.installReopenPlaceholder(reopenPlaceholder!)
+                windowView.revealEntryNow("占位直显（AevonReopenSwapV276）")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
+                    windowView?.settleReopenPlaceholder()
+                }
+            }
             /* V0.2.73（AevonWarmShroudV273，用户 Aevon(45) #3「圆盘选中图标打开悬浮窗
              * 会先闪一下，0.5 秒后才淡入出现」）：预热遮罩。
              *
@@ -947,6 +969,8 @@ enum AevonWindowManager {
                                        completion: { _ in cover.removeFromSuperview() })
                     }
                     currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
+                    // V0.2.76（AevonReopenSwapV276）：画布定稿 → 占位帧 crossfade 到活画面。
+                    currentView?.settleReopenPlaceholder()
                 }
             }
             // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
@@ -1058,6 +1082,10 @@ enum AevonWindowManager {
     /// **不写场景的 foreground 标记**。用于「用户点桌面图标要把这个 App 全屏拉起」——
     /// 那一刻 FrontBoard 正在自己接管这个场景，我们再往里写一次 settings 就是抢
     /// 同一份状态机（归档(12)/(13) 的 SIGTRAP 来源），所以这一步只放手、不置位。
+    // V0.2.76（AevonReopenSwapV276）：再开窗占位帧缓存（bundleID → 上一关最后一帧）。
+    // SB 进程内存缓存：关窗抓、再开窗用；SB 重启后自然为空 → 回退 0.2.75 遮罩档。
+    private static var reopenPlaceholders: [String: UIImage] = [:]
+
     static func close(bundleID: String, releaseOnly: Bool = false) {
         // V0.2.50（AevonDockColumnV250）：停靠小窗有自己的关闭路径（主窗变量不指向它）
         if currentBundleID != bundleID, dockedViews.contains(where: { $0.bundleID == bundleID }) {
@@ -1083,6 +1111,12 @@ enum AevonWindowManager {
         // V0.2.65（AevonEdgeShieldV265）：窗没了 → 让 App 侧的边条吞噬判定立刻失效
         // （留一个 0x0 矩形，App 侧看到宽度 <40 就整段跳过）。
         publishFloatFrame(.zero)
+        // V0.2.76（AevonReopenSwapV276）：关窗前抓「最后一帧」当占位图 ——
+        // 再开窗面板立刻显形铺这张图，画布切换/回弹的过渡全程不再可见。
+        if let snap = windowView.placeholderSnapshot() {
+            reopenPlaceholders[bundleID] = snap
+            AevonLog.info("[窗口] 已缓存 \(bundleID) 最后一帧占位图（再开窗直显用）（AevonReopenSwapV276）")
+        }
         windowView.teardown()
         // V0.2.56（AevonCloseDisarmV256）：窗没了 → 拖拽吞咽状态必须一并解除，
         // 残留 floatTouchID 只会误吞同槽位的新触摸（pan 死、点按活）。

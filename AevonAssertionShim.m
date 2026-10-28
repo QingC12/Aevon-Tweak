@@ -1105,3 +1105,39 @@ void AevonNotifySetGripBusy(BOOL busy) {
     } @catch (NSException *exception) {
     }
 }
+
+/* ── V0.2.76（AevonRecSysRouteV276）：系统录屏路线 ─────────────────────────
+ *
+ * 用户 Aevon(48)：「控制中心录屏存在多个版本了，我们还没有找到具体路线吗？」
+ * RP startCapture 在 SB 进程 -5803 是本质限制（每版 4+ 连败），但系统自己的
+ * 录屏管线就在 SB 进程跑（SBRecordingIndicatorWindow x2 常驻窗口栈实锤），
+ * 控制中心录屏按钮走的就是 `startSystemRecordingWithMicrophoneEnabled:handler:`
+ * （ScreenCore / MangoHello 逆向双实锤 selector 名；两个插件都是动态调用，
+ * 没写死宿主类 —— 最可能的宿主就是 RPScreenRecorder 自身的私有方法）。
+ * 这里先对 RPScreenRecorder 实例 respondsToSelector 探测，命中才 objc_msgSend。
+ * handler 由系统在未知线程回调，Swift 侧只认自己那一拍的令牌。 */
+__attribute__((used)) static const char AevonRecSysRouteV276Marker[] = "AevonRecSysRouteV276";
+
+#import <objc/message.h>
+
+BOOL AevonTrySystemRecordingStart(id recorder, void (^handler)(NSError *)) {
+    SEL sel = NSSelectorFromString(@"startSystemRecordingWithMicrophoneEnabled:handler:");
+    if (recorder == nil || ![recorder respondsToSelector:sel]) { return NO; }
+    @try {
+        ((void (*)(id, SEL, BOOL, id))objc_msgSend)(recorder, sel, YES, handler);
+        return YES;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+BOOL AevonTrySystemRecordingStop(id recorder) {
+    SEL sel = NSSelectorFromString(@"stopSystemRecording:");
+    if (recorder == nil || ![recorder respondsToSelector:sel]) { return NO; }
+    @try {
+        ((void (*)(id, SEL, id))objc_msgSend)(recorder, sel, nil);
+        return YES;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}

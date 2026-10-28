@@ -51,7 +51,16 @@ NSString *AevonSafeClassName(id object) {
     return [NSString stringWithUTF8String:name];
 }
 
+/* V0.2.76（AevonSealP1V276）：0.2.72 封印令补漏 —— 本函数自 V107 起被诊断探针
+ * 每次启动调用，在 SB 进程枚举全类表（Aevon(48) 22:02:06.656 实测 99528 个类），
+ * 与 0.2.72 Aevon(44) 崩溃（objc_copyClassList 全类 +initialize → swift_dynamicCast
+ * SIGTRAP）同款地雷，只是没炸到而已。**封印：任何情况下不许在 SB 进程枚举全类表**。
+ * 调用方（AevonProbeV107 的 P1~P5 组）拿 nil 后自动退化为空集 —— 有价值的定向
+ * 探测（指定名单的类方法 / 实例工厂 / ivar）不受影响，历史日志已把要找的名字都找齐。 */
+__attribute__((used)) static const char AevonSealP1V276Marker[] = "AevonSealP1V276";
+
 NSArray<NSString *> *AevonAllClassNames(void) {
+    return nil;   // 0.2.72 封印令（AevonSealP1V276）
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
     if (classes == NULL) { return @[]; }

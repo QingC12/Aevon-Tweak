@@ -67,6 +67,18 @@ BOOL AevonTryExecute(void (^block)(void), NSString **outName, NSString **outReas
 NSInteger AevonBacktrace(void **stack, int max);
 void AevonBacktraceSymbolsFD(void **stack, int size, int fd);
 
+/// V0.2.76（AevonRecSysRouteV276）：系统录屏路线 —— 控制中心录屏按钮同款私有入口
+/// `startSystemRecordingWithMicrophoneEnabled:handler:`（ScreenCore / MangoHello
+/// 逆向双实锤的 selector 名）。RPScreenRecorder 的 startCapture 在 SB 进程 -5803
+/// 本质失败（Aevon(47) 累计 8+ 连败），但系统自己的录屏管线就跑在 SB 进程
+///（SBRecordingIndicatorWindow 在窗口栈实锤），入口即此方法。
+/// 命中并已发起返回 1；未命中 / 抛异常返回 0（调用方落自绘兜底）。
+/// handler 在未知线程回调：err=nil = 已启动；err!=nil = 失败。
+BOOL AevonTrySystemRecordingStart(id recorder, void (^handler)(NSError *));
+/// V0.2.76：停止系统录屏（`stopSystemRecording:`，视频收尾与存相册由系统完成）。
+/// 命中并已发起返回 1；未命中 / 抛异常返回 0。
+BOOL AevonTrySystemRecordingStop(id recorder);
+
 /// V0.0.40（AevonCrashAttrV40）：崩溃归因。
 /// 插件加载时调用一次：算出自身 __TEXT 段地址范围（dladdr + mach-o 解析）。
 /// 真机 Aevon(32) 定论：ZZEvoCenterRuntime.dylib 崩溃也会被我们的信号处理器

@@ -13,10 +13,13 @@
 /// 逐个查 respondsToSelector(startSystemRecordingWithMicrophoneEnabled:handler:)。
 /// 一个都没命中就打「全部未命中」，下一轮换名单继续。
 import ObjectiveC.runtime
+import ReplayKit
 
 enum AevonRecProbe {
     private static var done = false
     /// 候选宿主类名单（反向档案 + iOS 17 命名惯例；命中即日志定档）。
+    /// V0.2.76（AevonRecSysRouteV276）：主路已直接试 RPScreenRecorder 的私有方法，
+    /// 本名单继续作为「宿主在别处」的取证网逐轮扩。
     private static let candidates: [String] = [
         "SBSystemRecordingController",
         "SBSystemRecordingManager",
@@ -24,6 +27,10 @@ enum AevonRecProbe {
         "SBScreenRecordingController",
         "SBScreenRecordingManager",
         "SBScreenRecordingService",
+        "SBCCScreenRecordingModule",
+        "SBRecordingIndicatorController",
+        "SBRecordingEnvironment",
+        "SBRecordingSessionController",
         "SCScreenRecordingController",
         "SCScreenRecordingManager",
         "SCRecordingManager",
@@ -32,6 +39,11 @@ enum AevonRecProbe {
         "SCSystemRecordingManager",
         "SBRecordingController",
         "SBRecordingManager",
+        "CCUIRecordingModule",
+        "CCUIScreenRecordingModule",
+        "CCUISCRecordingModule",
+        "RPScreenRecordingManager",
+        "RPRecordingConnection",
         "UIStatusBarSystemRecordingIndictorView", // Apple 拼写错误的官名，顺带验证
         "UIStatusBarSystemRecordingIndicatorView",
     ]
@@ -42,6 +54,12 @@ enum AevonRecProbe {
             let target = "startSystemRecordingWithMicrophoneEnabled:handler:"
             let sel = NSSelectorFromString(target)
             var hits: [String] = []
+            // V0.2.76（AevonRecSysRouteV276）：先查 RPScreenRecorder 实例自己 ——
+            // 私有方法最可能就挂在它身上（respondsToSelector 不触发 +initialize，安全）。
+            let rec = RPScreenRecorder.shared()
+            if rec.responds(to: sel) {
+                hits.append("RPScreenRecorder(-)")
+            }
             for name in candidates {
                 guard let cls = NSClassFromString(name) else { continue }
                 if class_respondsToSelector(object_getClass(cls), sel) {
