@@ -2669,7 +2669,8 @@ jobs:
               || { echo "::error::0.2.64 App 侧 dylib 缺标记 $s"; exit 1; }
           done
           for s in AevonSwapDockV264 AevonMainAvoidV264 AevonFloatTransitionV264 \
-          AevonFullscreenRecoverV264 AevonQuickShotV264 AevonRecorderFindV264; do
+          AevonFullscreenRecoverV264 AevonQuickShotV264 AevonRecorderFindV264 \
+          AevonFadeInV264; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.64 主库缺标记 $s"; exit 1; }
           done

@@ -1696,13 +1696,20 @@ final class AevonWindowView: UIView {
         }
         if rendering != true { installDarkFreeze(reason: "淡入前兜底") }
         liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
-        UIView.animate(withDuration: 0.12, delay: 0,
-                       options: [.curveEaseIn, .allowUserInteraction]) { [weak self] in
+        /* V0.2.64（AevonFadeInV264，用户 Aevon(38) #5.5「回桌面还在闪」）：
+         * 0.12 秒的淡入在 60fps 下只有 7 帧，观感就是「啪地闪出来」。
+         * 改成 0.22 秒 ease-out + 从 0.985 微微长到 1.0 —— 看起来是「浮现」而不是「弹出」。 */
+        alpha = 0
+        transform = CGAffineTransform(scaleX: 0.985, y: 0.985)
+        UIView.animate(withDuration: 0.22, delay: 0,
+                       options: [.curveEaseOut, .allowUserInteraction],
+                       animations: { [weak self] in
             self?.alpha = 1
-        }
+            self?.transform = .identity
+        })
         AevonLog.info("[窗口] 浮窗淡入（让位 \(String(format: "%.2f", held))s，\(reason)，"
-            + "当前 \(sceneHost.stateSummary())）"
-            + "（AevonLiveFirstV260 AevonLiveHiddenV263）")
+            + "0.22s 浮现动画，当前 \(sceneHost.stateSummary())）"
+            + "（AevonLiveFirstV260 AevonLiveHiddenV263 AevonFadeInV264）")
     }
 
     /// V0.2.63（AevonLiveHiddenV263）：藏着等真画面 —— 连续 2 拍在画才淡入，
@@ -1714,12 +1721,16 @@ final class AevonWindowView: UIView {
             if renderTicks >= 2 {
                 liveAwaitingContent = false
                 liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
-                UIView.animate(withDuration: 0.12, delay: 0,
-                               options: [.curveEaseIn, .allowUserInteraction]) { [weak self] in
+                alpha = 0
+                transform = CGAffineTransform(scaleX: 0.985, y: 0.985)
+                UIView.animate(withDuration: 0.22, delay: 0,
+                               options: [.curveEaseOut, .allowUserInteraction],
+                               animations: { [weak self] in
                     self?.alpha = 1
-                }
-                AevonLog.info("[窗口] 真画面到了（cs=2 连续 2 拍）→ 藏着等的那扇窗淡入"
-                    + "（\(sceneHost.stateSummary())）（AevonLiveHiddenV263）")
+                    self?.transform = .identity
+                })
+                AevonLog.info("[窗口] 真画面到了（cs=2 连续 2 拍）→ 藏着等的那扇窗 0.22s 浮现"
+                    + "（\(sceneHost.stateSummary())）（AevonLiveHiddenV263 AevonFadeInV264）")
             }
         } else {
             renderTicks = 0
