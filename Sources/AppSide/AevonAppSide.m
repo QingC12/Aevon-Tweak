@@ -1314,6 +1314,11 @@ static void AevonCenterContentRefresh(BOOL floatHosted) {
 __attribute__((used)) static const char AevonKeyFitV263Marker[] = "AevonKeyFitV263";
 __attribute__((used)) static const char AevonKeyboardVisibleFixV263Marker[] = "AevonKeyboardVisibleFixV263";
 __attribute__((used)) static const char AevonGripSwallowFixV263Marker[] = "AevonGripSwallowFixV263";
+/* V0.2.64 的同款纪律：带中文的 @"…" 会编成 UTF-16，strings 查不到 —— 标记必须单独放纯 ASCII 常量 */
+__attribute__((used)) static const char AevonCenterCanvasV264Marker[] = "AevonCenterCanvasV264";
+__attribute__((used)) static const char AevonKeyGateV264Marker[] = "AevonKeyGateV264";
+__attribute__((used)) static const char AevonKeyAuditV264Marker[] = "AevonKeyAuditV264";
+__attribute__((used)) static const char AevonFitDebounceV264Marker[] = "AevonFitDebounceV264";
 
 static void AevonKeyFitInstall(void) {
     @try {
