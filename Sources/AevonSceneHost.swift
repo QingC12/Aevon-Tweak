@@ -383,7 +383,8 @@ final class AevonSceneHost {
         let stale = host.height > height + 8 || host.width > width + 8
         guard stale else {
             AevonLog.info("[场景] 断层自查：内容宿主 \(Int(host.width))x\(Int(host.height)) 已贴合画布"
-                + " \(Int(width))x\(Int(height))，无需补踢（AevonDouyinHealV260）")
+                + " \(Int(width))x\(Int(height))，无需补踢"
+                + "（AevonDouyinHealV260 AevonDouyinRepairV261）")
             return
         }
         healKicked = true
