@@ -167,10 +167,10 @@ enum AevonQuickAction {
             return false
         }
         let sharedSel = sel_registerName("sharedInstance")
-        typealias MsgSendId = @convention(c) (AnyObject?, Selector) -> UnsafeRawPointer?
+        typealias MsgSendId = @convention(c) (AnyObject, Selector) -> UnsafeRawPointer?
         let msgSend = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "objc_msgSend")
             .map { unsafeBitCast($0, to: MsgSendId.self) }
-        guard let send = msgSend, let sharedPtr = send(cls, sharedSel) else {
+        guard let send = msgSend, let sharedPtr = send(cls as AnyObject, sharedSel) else {
             AevonLog.warn("[快捷] SBScreenShotter sharedInstance 不可达 → 走自抓帧"
                 + "（AevonShotSysV267）")
             return false
@@ -310,13 +310,13 @@ final class AevonFrameRecorder {
             AevonQuickToast.show("录屏失败：抓不到画面")
             return
         }
-        var w = first.width
+        var w = first.width          // Int（CGImage 像素）
         var h = first.height
         // V0.2.67（AevonRecHdV267）：先降到目标宽度（宽高同比、取偶），再进编码器。
-        if w > recMaxWidth {
-            let scale = recMaxWidth / w
-            w = ((w * scale).rounded(.down) / 2).rounded(.down) * 2
-            h = ((h * scale).rounded(.down) / 2).rounded(.down) * 2
+        if CGFloat(w) > recMaxWidth {
+            let scale = recMaxWidth / CGFloat(w)
+            w = Int((CGFloat(w) * scale).rounded(.down) / 2) * 2
+            h = Int((CGFloat(h) * scale).rounded(.down) / 2) * 2
         }
         w -= w % 2
         h -= h % 2
