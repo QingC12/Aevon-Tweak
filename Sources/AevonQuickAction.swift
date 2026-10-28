@@ -420,7 +420,9 @@ final class AevonFrameRecorder: NSObject {
             failedFrames += 1
             return
         }
-        if adaptor?.append(sb, withPresentationTime: pts) == true {
+        // RP 的 sample buffer 直接喂 input（input 原生接受 CMSampleBuffer，
+        // 走 adaptor 那条只收 CVPixelBuffer，还要转格式多一次拷贝）。
+        if videoInput.append(sb) {
             frames += 1
         } else {
             failedFrames += 1
