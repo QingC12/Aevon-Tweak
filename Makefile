@@ -47,6 +47,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonGestureHandler.swift \
     Sources/AevonAppSideBridge.swift \
     Sources/AevonQuickAction.swift \
+    Sources/AevonRecProbe.swift \
     Sources/Hooks.swift
 
 Aevon_CFLAGS = -fobjc-arc

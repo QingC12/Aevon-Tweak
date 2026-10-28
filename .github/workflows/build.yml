@@ -2758,8 +2758,13 @@ jobs:
           # ③ #3 开窗入场：等画布切完再显（否则第一时间底栏黑）
           grep -q 'func revealEntryNow' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.65 开窗入场没有「等画布就绪再显」"; exit 1; }
-          grep -q 'revealEntryNow("预热隐形复刻完成（画布已切回）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.67 预热隐形复刻后没有触发显窗"; exit 1; }
+          # V0.2.71 反转（AevonRevealEventV271）：显窗 +0.85s 定时版作废，改事件驱动
+          #（Aevon(43) 实测复刻起手漂移 +0.45s，尾排必落显窗后 = 闪好几下）——
+          # 显窗挂进 kick 尾笔画布写回回调，旧串「预热隐形复刻完成（画布已切回）」随之退役。
+          grep -q 'revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71 显窗没挂进画布定稿回调（闪好几下复发）"; exit 1; }
+          grep -q 'onCanvasSettled' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.71 kick 尾笔没有 onCanvasSettled 回调（事件驱动显窗断链）"; exit 1; }
           # ④ #4 键盘：窗口枚举不能再走废弃的 sharedApplication.windows
           grep -q 'static NSArray<UIWindow \*> \*AevonAllWindows' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.65 键盘窗口枚举没换成 _allWindowsIncludingInternalWindows"; exit 1; }
@@ -2831,8 +2836,10 @@ jobs:
             || { echo "::error::0.2.66 SBScreenShotter 缺类型编码自检（fail-closed 纪律）"; exit 1; }
           # V0.2.67 反转：录屏 3fps → 8fps（分辨率同时降到 540x1170，单帧编码量 1/5.7，
           # 主线程负载与 3fps 原生像素相当）——「播放卡顿」的解法不是降帧率是降分辨率。
-          grep -q 'private let fps: Double = 8' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
-            || { echo "::error::0.2.67 录屏帧率没提到 8fps（播放幻灯片）"; exit 1; }
+          # V0.2.71 反转（AevonRecFps12V271）：兜底节拍 8 → 12fps —— 0.2.68 串行队列后
+          # 实测 8fps 能吃满（73帧/10s），瓶颈已不在主线程；12fps 换更顺滑兜底画面。
+          grep -q 'private let fps: Double = 12' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.71 兜底录屏帧率没提到 12fps（AevonRecFps12V271 丢失）"; exit 1; }
           grep -q 'recMaxWidth' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.67 录屏没降分辨率（单帧 360 万像素编码量）"; exit 1; }
           # ⑫ 浮窗矩形文件通道（SB 写文件 + App 读文件，偏好域跨进程已被证伪）
@@ -2999,6 +3006,50 @@ jobs:
           grep -q 'kbLastVisible' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.70 在屏日志没做状态切换频控"; exit 1; }
           echo "V0.2.70 校验: 键盘可见性三关（祖先链非隐藏/alpha/键盘几何）+ 在屏日志频控 已就位"
+          # ── V0.2.71 校验（Aevon(43) 七项）──────────────────────────────────────
+          for s in AevonDockSideFirstV271 AevonRecAttemptV271 AevonRecProbeV271 \
+          AevonRecBadge2V271 AevonRevealEventV271 AevonFullKick2V271 AevonRecFps12V271 \
+          AevonRestoreNoAvoidV271; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.71 主库缺标记 $s"; exit 1; }
+          done
+          for s in AevonRingSwallow2V271 AevonFloatBandV269; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.71 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          # #1/#2 停靠：先钉 dockedSide 再重排 + 装回不避让
+          grep -q 'view.dockedSide = side' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71 dockCurrent 没先钉 dockedSide（双吸附/不吸附复发）"; exit 1; }
+          grep -q 'AevonRestoreNoAvoidV271' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71 装回路径避让没撤（还原改变手动位置复发）"; exit 1; }
+          # #3 圆盘在屏全吞：SB 侧状态位读取器回归（shim + App 侧内置实现）
+          grep -q 'int AevonNotifyGetRing' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.71 shim 缺 AevonNotifyGetRing"; exit 1; }
+          grep -q 'AevonRingActiveNow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.71 App 侧缺圆盘在屏判定"; exit 1; }
+          grep -q 'AevonPrefs.bool("SBSwallow", default: true)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.71 SBSwallow 调试闸没转正（盘上滑动带动 App 复发）"; exit 1; }
+          # #4 录屏：尝试令牌 + 3 次退避重试 + 探针 + 胶囊左缘竖排可点
+          grep -q 'rpAttempt' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.71 RP 缺尝试令牌（迟到失败回调拉起双管线复发）"; exit 1; }
+          # 探针在独立文件（0.2.65 反回退：QuickAction 整段禁类表扫描字样，Aevon(38) 教训）
+          grep -q 'startSystemRecordingWithMicrophoneEnabled:handler:' "$GITHUB_WORKSPACE/Sources/AevonRecProbe.swift" \
+            || { echo "::error::0.2.71 缺控制中心录屏入口探针"; exit 1; }
+          grep -q 'Sources/AevonRecProbe.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::0.2.71 探针文件没进 Makefile（等于没编进去）"; exit 1; }
+          grep -q 'let fps: Double = 12' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.71 兜底录屏 fps 没升 12（卡顿加重）"; exit 1; }
+          grep -q 'overlay.addSubview(button)' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.71 胶囊没直接挂窗口（root.view 关交互 = 永远点不了）"; exit 1; }
+          # #5 显窗事件驱动：kick 尾笔回调显窗，0.85 定时器作废
+          grep -q 'onCanvasSettled' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.71 SceneHost 缺画布定稿回调"; exit 1; }
+          grep -q 'onCanvasSettled' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71 显窗没挂画布定稿回调（闪屏复发）"; exit 1; }
+          # #6/#7 全屏兜底抖动踢两轮 + 画布读回
+          grep -q 'AevonFullKick2V271' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71 全屏兜底缺第二轮抖动踢"; exit 1; }
+          echo "V0.2.71 校验: 停靠先钉side+装回不避让 + 圆盘在屏App侧全吞(SBSwallow转正) + 录屏令牌/3次退避/探针/胶囊左缘可点 + 显窗事件驱动 + 全屏兜底两轮踢 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

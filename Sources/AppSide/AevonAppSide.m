@@ -8,6 +8,8 @@
 #import <stdio.h>
 #import <string.h>
 #import <math.h>
+#import <time.h>
+#import <mach/mach_time.h>
 #import <unistd.h>
 
 /*
@@ -2114,10 +2116,53 @@ static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
  */
 __attribute__((used)) static const char AevonGripSwallowWinV262Marker[] = "AevonGripSwallowWinV262";
 
+#pragma mark - V0.2.71：圆盘在屏 → App 进程整根吞（AevonRingSwallow2V271）
+
+/*
+ * 用户 Aevon(43) #3：「划出圆盘后再在圆盘上滑动，全屏 app 页面也跟着上下/左右滑」。
+ *
+ * 圆盘是 SB 侧窗口，命中归圆盘；但 backboardd 会把同一批触摸**双投**进前景 App
+ * 进程 —— 圆盘动、App 也动。修法：SpringBoard 早就把「圆盘展开」写在共享内存
+ * 状态位（com.aevon.guardzone bit39，AevonNotifyRingBitV34，零时序依赖），
+ * 这里恢复 App 侧读取器：位=1 时本进程的 sendEvent 把事件整根吞掉。
+ * App 侧 dylib 不链 AevonAssertionShim.m，这里内置同一套位格式（低 32 位 =
+ * 设置时刻 CLOCK_MONOTONIC 秒，30 秒新鲜度防 SB 崩溃后位没清把 App 吞哑）。
+ */
+__attribute__((used)) static const char AevonRingSwallow2V271Marker[] = "AevonRingSwallow2V271";
+
+static int gAevonRingZoneToken = -1;
+
+static int AevonRingActiveNow(void) {
+    if (gAevonRingZoneToken < 0) {
+        notify_register_check("com.aevon.guardzone", &gAevonRingZoneToken);
+        if (gAevonRingZoneToken < 0) { return 0; }
+    }
+    uint64_t pack = 0;
+    if (notify_get_state(gAevonRingZoneToken, &pack) != NOTIFY_STATUS_OK) { return 0; }
+    if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
+    if (!(pack & (1ULL << 39))) { return 0; }
+    uint32_t setAt = (uint32_t)(pack & 0xFFFFFFFFULL);
+    uint32_t now = (uint32_t)(clock_gettime_nsec_np(CLOCK_MONOTONIC) / NSEC_PER_SEC);
+    if (setAt != 0 && now - setAt > 30) { return 0; }
+    return 1;
+}
+
 static IMP gAevonWinSendEventOrig;
 
 static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
     @try {
+        /* V0.2.71（AevonRingSwallow2V271）：圆盘在屏 → 本进程整根不投递。
+         * 已登记的吞咽钥匙在抬手时顺手清掉（防集合滞留）。 */
+        if (AevonRingActiveNow()) {
+            NSSet *ringTouches = [event allTouches];
+            for (UITouch *t in ringTouches) {
+                if (t.phase == UITouchPhaseEnded || t.phase == UITouchPhaseCancelled) {
+                    [gAevonSwallowedTouches removeObject:
+                        [NSValue valueWithPointer:(__bridge const void *)t]];
+                }
+            }
+            return;
+        }
         UIWindow *win = (UIWindow *)self;
         NSSet *touches = [event allTouches];
         if (touches.count > 0) {

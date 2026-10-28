@@ -426,6 +426,19 @@ final class AevonSceneHost {
         }
     }
 
+    /// V0.2.71（AevonRevealEventV271，用户 Aevon(43) #5「悬浮窗打开应用时依旧闪屏，闪好几下」）：
+    /// 画布定稿回调 —— kick 的**最后一笔**写回完成后触发一次（自动清位，只发一次）。
+    /// 显窗从「固定 +0.85s 定时」改为「等这笔写完」：定时版在主线程繁忙时（实测复刻
+    /// 起手从 +0.12 漂到 +0.57）尾排会落在显窗之后，内容在用户眼前再跳两笔 = 闪好几下。
+    var onCanvasSettled: (() -> Void)?
+    private var canvasSettledFired = false
+    private func fireCanvasSettled() {
+        guard !canvasSettledFired else { return }
+        canvasSettledFired = true
+        onCanvasSettled?()
+        onCanvasSettled = nil
+    }
+
     /// V0.2.49（AevonRelayoutKickV249）：**强制 App 走一遍完整重排**。
     ///
     /// Aevon(24) 两条同源反馈：
@@ -458,6 +471,8 @@ final class AevonSceneHost {
                 _ = self.writeCanvas(width, height)
                 AevonLog.info("[场景] 强制重排：写回 \(Int(width))x\(Int(height))"
                     + "（\(tag)，App 这一遍布局用的就是最终画布）（AevonRelayoutKickV249）")
+                // V0.2.71（AevonRevealEventV271）：最后一笔画布定稿 → 显窗回调。
+                self.fireCanvasSettled()
             }
         }
     }

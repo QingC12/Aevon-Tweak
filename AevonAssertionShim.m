@@ -119,6 +119,15 @@ static int AevonNotifyZoneToken(void) {
 #define AEVON_NOTIFY_VER (0x34ULL << 40)
 #define AEVON_NOTIFY_RING_BIT (1ULL << 39)
 
+/* V0.2.71（AevonRingSwallow2V271）：圆盘在屏时给状态位补一个**设置时刻**（低 32 位 =
+ * CLOCK_MONOTONIC 秒）。App 侧读取器只在「位=1 且 30 秒内」才认 —— SB 万一崩了位没清，
+ * App 也不会被永久吞哑。 */
+#include <time.h>
+
+static uint32_t AevonMonotonicSecs(void) {
+    return (uint32_t)(clock_gettime_nsec_np(CLOCK_MONOTONIC) / NSEC_PER_SEC);
+}
+
 /* V0.2.51（AevonGripOnlyV251）：AevonNotifySetZone / GetZone 已随热区几何退役。 */
 
 /* V0.0.34：圆盘展开状态位（AevonNotifyRingBitV34）。
@@ -130,7 +139,13 @@ void AevonNotifySetRing(int on) {
         uint64_t pack = 0;
         notify_get_state(token, &pack);
         if (((pack >> 40) & 0xFF) != 0x34) { pack = 0; }
-        if (on) { pack |= AEVON_NOTIFY_RING_BIT; } else { pack &= ~AEVON_NOTIFY_RING_BIT; }
+        if (on) {
+            pack |= AEVON_NOTIFY_RING_BIT;
+            /* V0.2.71：低 32 位写设置时刻（覆盖旧的任意值）。 */
+            pack = (pack & ~0xFFFFFFFFULL) | (uint64_t)AevonMonotonicSecs();
+        } else {
+            pack &= ~AEVON_NOTIFY_RING_BIT;
+        }
         pack |= AEVON_NOTIFY_VER;
         notify_set_state(token, pack);
         notify_post("com.aevon.guardzone");
@@ -138,8 +153,23 @@ void AevonNotifySetRing(int on) {
     }
 }
 
-
-/* V0.2.51（AevonGripOnlyV251）：AevonNotifyGetRing 已随 App 侧识别器退役（bit39 写入保留）。 */
+/* V0.2.71（AevonRingSwallow2V271，用户 Aevon(43) #3「划出圆盘后在圆盘上滑动，
+ * 全屏 app 页面也跟着滑」）：App 侧读取器回归 —— 圆盘展开时 App 进程的
+ * sendEvent 把事件整根吞掉。0.2.51 把读取器随 App 侧识别器一起退役了，但圆盘
+ * 自己的窗口只接得住「圆盘那一块」的命中，App 进程依然收到同一批触摸的副本
+ * （backboardd 双投），于是盘上滑动 = 盘和 App 同时动。新鲜度 30 秒防卡死。 */
+int AevonNotifyGetRing(void) {
+    int token = AevonNotifyZoneToken();
+    if (token < 0) { return 0; }
+    uint64_t pack = 0;
+    if (notify_get_state(token, &pack) != NOTIFY_STATUS_OK) { return 0; }
+    if (((pack >> 40) & 0xFF) != 0x34) { return 0; }
+    if (!(pack & AEVON_NOTIFY_RING_BIT)) { return 0; }
+    uint32_t setAt = (uint32_t)(pack & 0xFFFFFFFFULL);
+    uint32_t now = AevonMonotonicSecs();
+    if (setAt != 0 && now - setAt > 30) { return 0; }
+    return 1;
+}
 
 
 void AevonPrefSetBool(NSString *key, BOOL value) {

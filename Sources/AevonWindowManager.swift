@@ -156,13 +156,27 @@ enum AevonWindowManager {
                 // 上一轮浮窗画布 737 排版（frame 写入不必然触发 relayout）。这里不依赖
                 // sceneHost（浮窗已关、承载器可能已 invalidate），直接对场景做一次
                 // 「429x931 → 430x932」抖动写入，逼 App 用真实屏幕尺寸重排一遍。
+                // V0.2.71（AevonFullKick2V271，用户 Aevon(43) #6/#7「重复开关后断层 /
+                // 桌面再开黑屏」）：一轮抖动踢不够 —— Aevon(43) 里 FullKick 完成后全屏
+                // 仍黑。补第二轮（+0.35s 再抖一次）并在每轮后打画布读回，下一份日志
+                // 直接能看到「写回 932 后读回还是不是 932」。
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                     let w = screen.width, h = screen.height
                     _ = AevonMainSceneSetFrame(scene, Double(w - 1), Double(h - 1))
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                         _ = AevonMainSceneSetFrame(scene, Double(w), Double(h))
                         AevonLog.info("[窗口] 全屏兜底抖动踢完成：\(Int(w - 1))x\(Int(h - 1)) → "
-                            + "\(Int(w))x\(Int(h))（逼 App 按真实屏幕重排）（AevonFullKickV266）")
+                            + "\(Int(w))x\(Int(h))（逼 App 按真实屏幕重排，读回 "
+                            + "\(AevonMainSceneFrameState(scene) ?? "")）（AevonFullKickV266 AevonFullKick2V271）")
+                    }
+                    // 第二轮：有些 App 第一轮抖动时还没进渲染（场景刚转前台），白抖。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        _ = AevonMainSceneSetFrame(scene, Double(w - 1), Double(h - 1))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            _ = AevonMainSceneSetFrame(scene, Double(w), Double(h))
+                            AevonLog.info("[窗口] 全屏兜底第二轮抖动踢完成：读回 "
+                                + "\(AevonMainSceneFrameState(scene) ?? "")（AevonFullKick2V271）")
+                        }
                     }
                 }
             }
@@ -784,23 +798,28 @@ enum AevonWindowManager {
                                                             height: mainCanvas.height,
                                                             tag: "预热隐形复刻 \(bundleID)")
                     }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+                    /* V0.2.71（AevonRevealEventV271，用户 Aevon(43) #5「闪屏，闪好几下」）：
+                     * 显窗 +0.85s 定时版作废。时序账（Aevon(43) 18:25:18 实测）：复刻起手
+                     * +0.12 计划、实际 +0.57 落地（主线程忙），尾排 = 起手+0.57 → 显窗
+                     * 0.85 时尾排还有两笔没写完，内容在用户眼前又跳两遍 = 闪好几下。
+                     * 现在显窗挂进 kick 最后一笔画布写回的回调（onCanvasSettled），
+                     * 写完才显 —— 画布没定稿前用户看不到窗。1.3s 兜底不变。 */
+                    sceneHost?.onCanvasSettled = {
                         guard currentBundleID == bundleID else { return }
-                        /* V0.2.69（AevonRevealLateV269，用户 Aevon(41) #1「悬浮窗先闪一下
-                         * 才打开」）：0.48 → 0.85。时序账：+0.12 复刻起手 → +0.24 写回
-                         * → kick 两笔 +0.44 / +0.69 —— 尾排全在 0.85 之前；0.2.68 的
-                         * 0.48 显窗时尾排还剩两笔，内容在用户眼前又跳两遍 = 闪一下。
-                         * 显窗时机 = 画布彻底定稿之后，开窗即终态。 */
-                        AevonLog.info("[窗口] 显窗时机 +0.85s（画布定稿 +0.69s 之后，开窗即终态）"
-                            + "（AevonRevealLateV269）")
-                        currentView?.revealEntryNow("预热隐形复刻完成（画布已切回）")
+                        AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
+                            + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
+                            + "（AevonRevealEventV271）")
+                        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
                     }
                 }
             } else {
-                // 非预热档：画布在开窗前就已经写好了，给系统 0.25 秒把第一帧排出来再显。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                // 非预热档：画布在开窗前就已经写好了，但 kick 微扰还有两笔
+                //（+0.20 / +0.45）——同样等定稿回调，不再固定 +0.25。
+                sceneHost?.onCanvasSettled = {
                     guard currentBundleID == bundleID else { return }
-                    currentView?.revealEntryNow("画布早已就绪")
+                    AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态）"
+                        + "（AevonRevealEventV271 AevonRevealLateV269）")
+                    currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
                 }
             }
             // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
@@ -1024,6 +1043,14 @@ enum AevonWindowManager {
         currentBundleID = nil
         dockedViews.removeAll { $0 === view }
         dockedViews.append(view)
+        // V0.2.71（AevonDockSideFirstV271，用户 Aevon(43) #1「已开的悬浮窗有概率不自动吸附，
+        // 点边缘吸附会一下出现两个吸附小窗」）：**先钉死 dockedSide 再重排**。
+        // relayoutDock 按 dockedSide 过滤，而旧时序里 dockedSide 要等 enterDock 里才写 ——
+        // 过滤时用的还是旧值/默认值(.right)：目标侧列过滤为空（Aevon(43) 18:25:20.202
+        // 「已吸附到屏幕左侧（该侧现有 0 个）」实锤）→ 窗根本没进目标列（不吸附）；
+        // 随后另一侧的 relayout 又把它按旧值扫进那一列（18:25:20.208 BatteryInfo 左刚停、
+        // 右侧第 2 格又出现同一个窗）= 双吸附小窗。
+        view.dockedSide = side
         relayoutDock(side: side, animated: true)
         // App 侧「浮窗承载」信号清掉：停靠窗只是一块缩略图，不该再让 App 按画布尺寸
         // 覆盖 UIScreen（那个信号全机只有一份，留给真正的主窗）。
@@ -1032,7 +1059,7 @@ enum AevonWindowManager {
         AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧"
             + "（该侧现有 \(dockedViews.filter { $0.dockedSide == side }.count) 个，"
             + "尺寸 \(Int(AevonDock.size.width))x\(Int(AevonDock.size.height))，顶部起依次向下）"
-            + "（AevonDockColumnV250 AevonDockDropV250）")
+            + "（AevonDockColumnV250 AevonDockDropV250 AevonDockSideFirstV271）")
         // V0.2.53（AevonDockArbiterV253）：记录本次停靠，供 0.8s 防抖窗用。
         lastDockAt = CACurrentMediaTime()
         lastDockedBundleID = bundleID
@@ -1092,8 +1119,8 @@ enum AevonWindowManager {
             AevonAssertionShim.resumePID(Int32(pid))
             AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
         }
-        AevonLog.info("[窗口] \(bundleID) 已从停靠列装回主窗（画面不中断，未重建场景）"
-            + "（AevonDockColumnV250）")
+        AevonLog.info("[窗口] \(bundleID) 已从停靠列装回主窗（画面不中断，未重建场景，"
+            + "装回后不再自动避让）（AevonDockColumnV250 AevonRestoreNoAvoidV271）")
         // V0.2.53（AevonDockArbiterV253）：记录本次装回，供 0.8s 防抖窗用。
         lastRestoreAt = CACurrentMediaTime()
         lastRestoredBundleID = bundleID
@@ -1101,10 +1128,11 @@ enum AevonWindowManager {
         publishDockStages()
         // V0.2.62（AevonDockNoOrphanV262）：装回之后立刻做一次一致性清扫。
         enforceSingleMainWindow(reason: "装回 \(bundleID)")
-        // V0.2.64（AevonMainAvoidV264）：装回后若另一侧还有停靠列 → 主窗让开。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
-            AevonWindowManager.avoidDockColumns(reason: "装回 \(bundleID)")
-        }
+        /* V0.2.71（AevonRestoreNoAvoidV271，用户 Aevon(43) #2「每次小窗还原时都会自动避让，
+         * 改变手动挪动后的位置」）：装回路径的 avoidDockColumns 整建制撤除。
+         * 装回 = 几何回到主窗记忆（用户手动摆的位置就在里面），此时再避让等于
+         * 每次还原都把主窗从用户摆的位置上推开。避让保留在「开窗」那一拍
+         * （AevonMainAvoidV264 语义不变），装回后位置完全归用户。 */
     }
 
     /// V0.2.62（AevonDockNoOrphanV262）：单窗铁律的兜底 —— 承载层里只许有

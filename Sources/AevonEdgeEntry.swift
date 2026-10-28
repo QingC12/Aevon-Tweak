@@ -786,9 +786,11 @@ enum AevonEdgeEntry {
 
         ringSource = "global"
         swallowDeadline = CACurrentMediaTime() + swallowLimit
-        // 圆盘张开之后这根手指仍要吞到抬手（SBSwallow 调试闸，默认关：
-        // 把手是真实控件，App 那份由 hitTest 天然路由，平时不需要吞）。
-        if AevonPrefs.bool("SBSwallow", default: false),
+        // V0.2.71（AevonRingSwallow2V271，用户 Aevon(43) #3）：SBSwallow 调试闸转正
+        // （默认开）。Aevon(43) 实锤「盘上滑动时全屏 App 也跟着滑」—— 圆盘窗口接住
+        // 命中的同时，App 进程还收到 backboardd 双投的副本；SB 侧把这根手指吞到抬手，
+        // 副本从源头消失（对没有 App 侧 dylib 的 App，如抖音，这是唯一覆盖）。
+        if AevonPrefs.bool("SBSwallow", default: true),
            globalTouchID != 0, now - lastTouchAt < 0.6 {
             ownsTouch = true
             globalOwnedForTouch = globalTouchID

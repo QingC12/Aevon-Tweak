@@ -2224,7 +2224,12 @@ final class AevonWindowView: UIView {
     /// 当前是否在停靠列里（吸附小窗）。
     private(set) var isDocked = false
     /// 停靠在左列还是右列
-    private(set) var dockedSide: AevonDockSide = .right
+    /* V0.2.71（AevonDockSideFirstV271）：setter 开放到模块内。
+     * 事故：停靠入口先 relayoutDock、enterDock 后才写 dockedSide —— relayoutDock
+     * 按旧值过滤，刚停靠的窗永远不在「目标侧」列里（Aevon(43)「该侧现有 0 个」实锤）：
+     * 左列过滤为空 = 窗没吸附；装回路径 relayoutDock(.right) 又把它按旧值扫进右列 =
+     * 「一下出现两个吸附小窗」。修法 = 停靠前先钉死 dockedSide。 */
+    var dockedSide: AevonDockSide = .right
     /// V0.2.50：这个窗承载的是自建场景吗（关窗收尾补写整屏画布时要排除 —— 自建场景已被销毁）
     var usesSelfScene: Bool { return sceneHost.isSelfBuilt }
 

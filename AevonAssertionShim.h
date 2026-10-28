@@ -26,6 +26,10 @@ UIImage *AevonIconImage(NSString *bundleID, CGFloat scale);
 /// SpringBoard 在圆盘开 / 关时调用；Guard 每条 sendEvent 直接读共享内存，
 /// 不再依赖 Darwin 广播送达（沙盒 App 里 fire-and-forget 通知不可靠）。
 void AevonNotifySetRing(int on);
+/// V0.2.71（AevonRingSwallow2V271）：App 侧读取器回归 —— 圆盘在屏（位=1 且 30 秒内
+/// 设置过）返回 1。App 进程 sendEvent 据此整根吞事件：圆盘展开时盘上滑动不再带动
+/// 全屏 App（backboardd 双投的触摸副本在 App 进程里就地丢弃）。
+int AevonNotifyGetRing(void);
 /// V0.2.49（AevonAppScreenFitV249）：把「浮窗里装的是哪个 App」发到共享内存。
 /// 单开一个 notify 名字 `com.aevon.floatstage`，state = bundleID 的 FNV-1a 32 位散列
 /// （0 = 没有浮窗）。App 侧据此决定要不要把 `UIScreen.bounds` 报成画布尺寸 ——
@@ -40,7 +44,7 @@ void AevonNotifyPublishDockStages(NSArray<NSString *> *bundleIDs);
 /* V0.2.63（AevonGripBusyV263）：手指落在把手上 → YES；抬手 / 超时 → NO。
  * App 侧据此临时关掉自己的窗口交互，滑把手不再带动 App 内操作。 */
 void AevonNotifySetGripBusy(BOOL busy);
-/// V0.2.51（AevonGripOnlyV251）：GetRing 已随 App 侧识别器退役（bit39 写入保留）。
+/// V0.2.71（AevonRingSwallow2V271）：GetRing 回归（见上）。
 
 /// V0.0.39（AevonBootShieldV39）：ObjC 异常保护块。
 /// 同步执行 block；抛出 NSException 时捕获并把名称 / 原因带回（任一出参可为 NULL），

@@ -240,12 +240,20 @@ enum AevonQuickAction {
         dlsym(UnsafeMutableRawPointer(bitPattern: -2), "objc_msgSend")!
     }
 
+    /* V0.2.71：截图日志限频 —— 自绘兜底录屏每帧都走 captureScreenImage，
+     * 12fps 下一秒 12 条会把日志刷爆（Aevon(43) 18:26 段每 125ms 一条就是它在录屏）。 */
+    private static var lastCaptureLogAt = CACurrentMediaTime()
+
     @discardableResult
     static func captureScreenImage() -> UIImage? {
         if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_UICreateScreenUIImageWithRotation") {
             let fn = unsafeBitCast(symbol, to: ScreenUIImageFn.self)
             if let image = fn(0)?.takeUnretainedValue() as? UIImage, image.size.width > 10 {
-                AevonLog.info("[快捷] 截图走 _UICreateScreenUIImageWithRotation：\(Int(image.size.width))x\(Int(image.size.height))（AevonQuickShotV264）")
+                let now = CACurrentMediaTime()
+                if now - lastCaptureLogAt > 2.0 {
+                    lastCaptureLogAt = now
+                    AevonLog.info("[快捷] 截图走 _UICreateScreenUIImageWithRotation：\(Int(image.size.width))x\(Int(image.size.height))（AevonQuickShotV264）")
+                }
                 return image
             }
         }
@@ -322,6 +330,10 @@ enum AevonQuickAction {
 ///     sample buffer（后台线程、硬件帧、零拷贝），串行队列 append 进
 ///     AVAssetWriter（H.264 硬编）。纯 Swift，无需 delegate 垫片。
 ///
+/// V0.2.71（AevonRecProbeV271）：录屏探针本体已挪到 Sources/AevonRecProbe.swift
+///（0.2.65 反回退铁律：本文件不许出现全量类表扫描字样 —— Aevon(38) 实测遍历类表
+/// + perform 会注销录屏单例；探针只扫不调，但断言按文件整段禁，独立文件最干净）。
+
 /// 兜底：RPScreenRecorder 不可用/启动失败 → 回落自绘管线，但 append 改**专用串行
 /// 队列** + 时间戳在 append 队列内现取（单调，永不倒退），status=3 不可能复发。
 final class AevonFrameRecorder: NSObject {
@@ -338,12 +350,21 @@ final class AevonFrameRecorder: NSObject {
     private var failedFrames = 0
     private var usingSystem = false
     private var stopRequested = false
-    /// V0.2.69（AevonRecRetryV269）：RP 启动失败自动重试一次的计数。
-    /// Aevon(41) #8 实锤首次 startCapture 直接「无法开始录制」——可能是上一次
-    /// 会话还没释放干净 / 系统服务冷启动，重试一发能救回来就不落自绘。
+    /// V0.2.71（AevonRecAttemptV271）：RP 启动尝试令牌。
+    /// Aevon(43) #4 实锤：第一次 startCapture 失败（-5803）→ 0.6s 重试 → 重试的
+    /// 「成功」只是同步返回值；13ms 后**第二次尝试的** completionHandler 又报 -5803，
+    /// 落进自绘兜底 —— 用户拿到的 73 帧视频（≈7.3fps）就是兜底 8fps 节拍录的。
+    /// 现在每次尝试带自增令牌，completionHandler 只认「自己那一拍」；迟到回调一律忽略。
+    private var rpAttempt = 0
+    /// 主路是否确认活着（首帧已到）。V0.2.71 起日志用它判「主路真起来了」。
+    private var rpMainFirstFrame = false
+    /// V0.2.71：启动失败重试上限 1 → 3（0.5s / 1.2s / 2.0s 退避）。
     private var rpRetryCount = 0
-    /* 自绘兜底档参数（V0.2.66/0.2.67 保留：主路失败才走，8fps/540 宽已够看）。 */
-    private let fps: Double = 8
+    /* 自绘兜底档参数（V0.2.66/0.2.67 保留：主路失败才走）。
+     * V0.2.71（AevonRecFps12V271，用户 Aevon(43) #4「录的视频明显一卡一卡」）：
+     * 兜底节拍 8 → 12fps。0.2.68 串行队列后实测能吃满节拍（73 帧/10s ≈ 7.3 ≈ 8fps
+     * 打满），说明瓶颈已不在主线程；12fps 换更顺滑的兜底画面，540 宽不变。 */
+    private let fps: Double = 12
     private let recMaxWidth: CGFloat = 540
 
     var isRunning: Bool { writer != nil || usingSystem }
@@ -358,12 +379,14 @@ final class AevonFrameRecorder: NSObject {
         failedFrames = 0
         stopRequested = false
         rpRetryCount = 0
+        rpMainFirstFrame = false
         outputURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("Aevon-\(Int(Date().timeIntervalSince1970)).mp4")
         if let url = outputURL { try? FileManager.default.removeItem(at: url) }
         // V0.2.68（AevonRecSerialV268）：append 只走这一条**串行**队列 ——
         // 时间戳永不倒退，status=3 从根上消灭（两条通路共用）。
         appendQueue = DispatchQueue(label: "com.aevon.recorder.append")
+        AevonRecProbe.runOnce()
         if startSystemCapture() {
             // V0.2.69（AevonRecBadgeV269，用户 Aevon(41) #8「录屏开始时灵动岛没有
             // 提示…需要其他方式显示正在录屏，不然误触后不知道」）：SB 侧常驻
@@ -386,21 +409,38 @@ final class AevonFrameRecorder: NSObject {
             return false
         }
         usingSystem = true
+        // V0.2.71（AevonRecAttemptV271）：尝试令牌 —— completionHandler 只认自己
+        // 那一拍；上一拍迟到的失败回调（Aevon(43) 18:25:59.919 实锤）直接忽略，
+        // 不再把已经成功的主路拽下来、更不会再拉起一份自绘兜底。
+        rpAttempt += 1
+        let attempt = rpAttempt
         rec.startCapture(handler: { [weak self] sample, bufferType, error in
-            guard let self, self.usingSystem, !self.stopRequested else { return }
+            guard let self, self.usingSystem, !self.stopRequested, attempt == self.rpAttempt else { return }
             if let error {
                 AevonLog.warn("[录屏] 系统抓屏帧错误：\(error.localizedDescription)"
                     + "（AevonReplayRecV268）")
                 return
             }
             guard bufferType == .video else { return }
+            if !self.rpMainFirstFrame {
+                self.rpMainFirstFrame = true
+                AevonLog.info("[录屏] 主路首帧已到（RP 管线确认存活，帧率与系统一致）"
+                    + "（AevonRecAttemptV271）")
+            }
             self.appendQueue?.async { [weak self] in
                 self?.appendSystemSample(sample)
             }
         }, completionHandler: { [weak self] error in
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard let error, self.usingSystem, !self.stopRequested else { return }
+                guard attempt == self.rpAttempt, !self.stopRequested else {
+                    if error != nil, attempt != self.rpAttempt {
+                        AevonLog.info("[录屏] 忽略第 \(attempt) 拍的迟到失败回调"
+                            + "（当前已是第 \(self.rpAttempt) 拍）（AevonRecAttemptV271）")
+                    }
+                    return
+                }
+                guard let error else { return }
                 // V0.2.69（AevonRecRetryV269）：失败日志带上 domain/code ——
                 // 「无法开始录制」没有 code 就定不了因（权限？会话占用？服务冷启动？）。
                 let code = (error as NSError).code
@@ -408,21 +448,23 @@ final class AevonFrameRecorder: NSObject {
                 AevonLog.warn("[录屏] RPScreenRecorder 启动失败：\(error.localizedDescription)"
                     + "（domain=\(domain) code=\(code)）（AevonReplayRecV268 AevonRecRetryV269）")
                 self.usingSystem = false
-                if self.rpRetryCount < 1 {
-                    self.rpRetryCount += 1
-                    AevonLog.info("[录屏] 0.6 秒后自动重试主路（第 \(self.rpRetryCount) 次）"
-                        + "（AevonRecRetryV269）")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                        guard let self, !self.stopRequested, !self.isRunning else { return }
-                        if self.startSystemCapture() {
-                            AevonLog.info("[录屏] 主路重试成功（AevonRecRetryV269）")
-                        } else {
-                            self.startOwnCapture()
-                        }
-                    }
+                guard self.rpRetryCount < 3 else {
+                    self.startOwnCapture()
                     return
                 }
-                self.startOwnCapture()
+                self.rpRetryCount += 1
+                let backoff = [0.5, 1.2, 2.0][self.rpRetryCount - 1]
+                AevonLog.info("[录屏] \(String(format: "%.1f", backoff)) 秒后重试主路"
+                    + "（第 \(self.rpRetryCount)/3 次）（AevonRecRetryV269 AevonRecAttemptV271）")
+                DispatchQueue.main.asyncAfter(deadline: .now() + backoff) { [weak self] in
+                    guard let self, !self.stopRequested, !self.isRunning else { return }
+                    if self.startSystemCapture() {
+                        AevonLog.info("[录屏] 主路重试已发起（第 \(self.rpRetryCount) 拍）"
+                            + "（AevonRecAttemptV271）")
+                    } else {
+                        self.startOwnCapture()
+                    }
+                }
             }
         })
         AevonLog.info("[录屏] 主路启动：RPScreenRecorder 系统级抓屏（硬编、帧率与系统录屏"
@@ -577,7 +619,7 @@ final class AevonFrameRecorder: NSObject {
         timer = ticker
         AevonLog.info("[录屏] 开始录制（自绘兜底）：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
             + "（再点一次「录屏」结束并存相册）"
-            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267）")
+            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267 AevonRecFps12V271）")
         AevonRecBadge.show()
         AevonQuickToast.show("开始录屏")
     }
@@ -774,8 +816,15 @@ final class AevonRecBadge {
             overlay.isHidden = false
             overlay.frame = UIScreen.main.bounds
             overlay.windowLevel = AevonWindowLevels.overlay + 2
-            guard let host = overlay.rootViewController?.view else { return }
-            host.subviews.filter { $0.tag == tag }.forEach { $0.removeFromSuperview() }
+            /* V0.2.71（AevonRecBadge2V271，用户 Aevon(43) #4「红色胶囊无法点击」+「移到
+             * 屏幕左侧靠近边缘，竖着摆放」）：
+             * ① 点不了的根因 = 按钮挂在 makeOverlayWindow 的 root.view 上，而那个
+             *    root.view `isUserInteractionEnabled = false` —— 整棵子树收不到触摸，
+             *    hitTest 永远命不中按钮。现在按钮**直接挂到窗口上**（UIWindow 本身
+             *    可交互，hitTest 命中按钮 ≠ 窗口 → 穿透逻辑放行，窗口其余区域照旧穿透）。
+             * ② 左缘竖排：按钮旋转 -90°，贴屏幕左边缘 4pt、纵向居中 —— 右下角是
+             *    圆盘/浮窗手势的密集区，挪到左缘中部避开。 */
+            overlay.subviews.filter { $0.tag == tag }.forEach { $0.removeFromSuperview() }
 
             let button = UIButton(type: .system)
             button.tag = tag
@@ -787,22 +836,24 @@ final class AevonRecBadge {
             button.layer.cornerCurve = .continuous
             button.clipsToBounds = true
             button.contentEdgeInsets = UIEdgeInsets(top: 7, left: 14, bottom: 7, right: 14)
-            button.sizeToFit()
-            let size = button.intrinsicContentSize
-            let screen = UIScreen.main.bounds
-            button.frame = CGRect(x: (screen.width - size.width - 28) / 2,
-                                  y: screen.height - max(size.height + 14, 30) - 34,
-                                  width: size.width + 28, height: max(size.height + 14, 30))
+            button.isExclusiveTouch = true
             button.addAction(UIAction { _ in
-                AevonLog.info("[录屏] 指示胶囊被点按 → 停止录制（AevonRecBadgeV269）")
+                AevonLog.info("[录屏] 指示胶囊被点按 → 停止录制（AevonRecBadge2V271）")
                 AevonFrameRecorder.shared.toggle()
             }, for: .touchUpInside)
-            host.addSubview(button)
+            let size = button.intrinsicContentSize
+            let capsuleW = size.width + 28
+            let capsuleH = max(size.height + 14, 30)
+            // 旋转 -90° 后视觉占位 = 竖条；用「中心点」定位：竖条中心在 x = 半高+4，y = 屏高一半。
+            button.frame = CGRect(x: 0, y: 0, width: capsuleW, height: capsuleH)
+            button.center = CGPoint(x: capsuleH / 2 + 4, y: UIScreen.main.bounds.midY)
+            button.transform = CGAffineTransform(rotationAngle: -CGFloat.pi / 2)
+            overlay.addSubview(button)
             badge = button
 
             button.alpha = 0
             UIView.animate(withDuration: 0.22) { button.alpha = 1 }
-            AevonLog.info("[录屏] 录屏指示胶囊已显示（点按即停）（AevonRecBadgeV269）")
+            AevonLog.info("[录屏] 录屏指示胶囊已显示（左缘竖排，点按即停）（AevonRecBadge2V271）")
         }
     }
 
