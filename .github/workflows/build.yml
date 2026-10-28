@@ -953,9 +953,17 @@ jobs:
           #   · 全屏 App 侧的「圆盘出来、页面不跟滚」是 App 内识别器的功劳
           #     （12:30:56 / 12:32:55 两次「App 触摸已被合法取消」），跟 SB 吞不吞无关。
           # 结论：SB 侧吞摸对 App 收益为 0，代价是整个桌面与系统手势 → 焊死。
+          # V0.2.71 反转（AevonRingSwallow2V271，用户 Aevon(43) #3「划出圆盘后全屏
+          # App 页面跟着滚」）：SBSwallow 调试闸转正 default: true。与 0.2.12 事故的
+          # 语义区别：当年 = SB 侧无条件下吞整机单指（ownsTouch 泄漏，桌面翻页/Dock/
+          # 图标全死）；现在 = 仅圆盘在屏时（bit39 状态位 + 30 秒新鲜度）才吞，且
+          # App 侧 sendEvent 同步整根吞（AevonRingActiveNow）。防回退网 = 下面必须
+          # 同时看到 App 侧全吞实现，缺一个就不许开 SB 闸。
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            | grep -q 'AevonPrefs.bool("SBSwallow", default: false)' \
-            || { echo "::error::SB 侧吞摸没被焊死 —— 桌面会重新出现整机单指失灵"; exit 1; }
+            | grep -q 'AevonPrefs.bool("SBSwallow", default: true)' \
+            || { echo "::error::0.2.71 SBSwallow 没转正（盘上滑动带动 App 复发）"; exit 1; }
+          grep -q 'AevonRingActiveNow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.71 SB 吞闸开了但 App 侧全吞没跟上（回退到 0.2.12 事故形态）"; exit 1; }
           # V0.2.51：断言退役 —— V0.2.15 标记不足两处（吞摸焊死 + 全局呼盘下线）
           # 只留浮窗拖拽这一条吞：浮窗是 SB 自己的窗口，不吞会带着桌面一起拖
           grep -q 'floatGestureActive, touchID == floatTouchID' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
