@@ -2008,7 +2008,8 @@ final class AevonWindowView: UIView {
          * 直接摘掉垫帧 = 快照与实时的交接近似同帧完成，无溶解糊感。 */
         view.removeFromSuperview()
         AevonLog.info("[窗口] 撤掉最后一帧冻结（\(reason)，第 \(freezeRemoveCount) 次，即时交接）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263 AevonSnapPadV269）")
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFlashDampV263"
+            + " AevonFreezeCrossFadeV265 AevonFreezeSoftV266 AevonSnapPadV269）")
     }
 
     /// 点冻结图：用户主动要画面。
