@@ -1955,6 +1955,31 @@ static BOOL AevonPointInFloatEdge(CGPoint p) {
         || (p.y >= CGRectGetMaxY(r) - bottomBand);
 }
 
+/* V0.2.68（AevonCanvasBandV268，用户 Aevon(40) #5「全屏 App 上叠浮窗，双击浮窗底边
+ * 关窗或点击吸附时依旧会触发全屏 App 的操作」）：
+ * 0.2.67 的 `fullScreen` 闸门把**承载模式一刀切放行**了 —— Aevon(40) 16:02:37 与
+ * 16:06:29（Sileo）两条「浮窗承载=是 …→ 吞=否」实锤：浮窗承载 App 时 App 窗口是
+ * 画布尺寸（430x737），fullScreen=否，浮窗手势带的触摸整段放行 → 点浮窗边条 /
+ * 双击底边关窗，浮窗里显示的那个 App 跟着动。0.2.66 的问题是「画布坐标比屏幕矩形」
+ * 坐标系错配（误吞内容），0.2.67 修成全放行矫枉过正（该吞的不吞）。
+ * 正解：承载模式下本窗口**就是**画布，SB 侧浮窗手势带（左/右 30pt、底 44pt、顶 8pt，
+ * 屏幕 pt）按 canvasH / floatH **等比**映射到画布空间 —— 坐标系自洽，
+ * 两个旧 bug（错配误吞 / 一刀切放行）一起根治。 */
+static BOOL AevonPointInCanvasBand(UIWindow *win, CGPoint p) {
+    CGRect fb = AevonFloatFrameRect();
+    if (fb.size.width < 40 || fb.size.height < 40) { return NO; }
+    CGSize cs = win.bounds.size;
+    if (cs.height < 40 || cs.width < 40) { return NO; }
+    CGFloat scale = cs.height / fb.size.height;
+    CGFloat band = 30.0 * scale;
+    CGFloat bottomBand = 44.0 * scale;
+    CGFloat topBand = 8.0 * scale;
+    return (p.x <= band)
+        || (p.x >= cs.width - band)
+        || (p.y <= topBand)
+        || (p.y >= cs.height - bottomBand);
+}
+
 static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
     /* V0.2.63（AevonGripSwallowFixV263）：不再要求 `touch.window != nil`。
      * UIApplication 这一层 touch.window 恒为 nil（0.2.61 实测），但
@@ -2092,12 +2117,21 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                      * 画布空间（430x737），而浮窗矩形是 SB 侧屏幕坐标（430x932）——
                      * 两个坐标系相差一个窗口原点 + 缩放，拿画布坐标去比屏幕矩形，
                      * 既会误吞承载内容（右缘 30pt 带整条失效），也拦不住真正的窗边手势
-                     * （窗边手势由 SB 侧浮窗自己处理，App 侧根本不用管）。 */
+                     * （窗边手势由 SB 侧浮窗自己处理，App 侧根本不用管）。
+                     * V0.2.68（AevonCanvasBandV268，用户 Aevon(40) #5）：承载模式
+                     * **不再一刀切放行** —— 那等于把「点浮窗边条带动浮窗里的 App」
+                     * 合法化。承载模式下改按**画布自身边缘带**判定（坐标系自洽）。 */
                     if (fullScreen && AevonPointInFloatEdge(p)) {
                         [gAevonSwallowedTouches addObject:key];
                         AevonAppLog(@"[App侧] 浮窗手势区落点 %@ → 整根丢弃（窗边归浮窗，"
                                     @"App 内的双击/滑动不许被带着走）（AevonEdgeShieldV265）",
                                     NSStringFromCGPoint(p));
+                    } else if (!fullScreen && !AevonKeyboardVisible()
+                               && AevonPointInCanvasBand(win, p)) {
+                        [gAevonSwallowedTouches addObject:key];
+                        AevonAppLog(@"[App侧] 画布边缘带落点 %@ → 整根丢弃（承载模式：浮窗"
+                                    @"边条/底边归浮窗手势，浮窗里的 App 不许跟手）"
+                                    @"（AevonCanvasBandV268）", NSStringFromCGPoint(p));
                     } else if (inRect && fullScreen && !AevonKeyboardVisible()) {
                         [gAevonSwallowedTouches addObject:key];
                         AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（窗口层，"

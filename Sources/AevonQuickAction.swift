@@ -155,15 +155,53 @@ enum AevonQuickAction {
      * saveScreenshot:YES]` 就是系统截图）。装前用 method_getTypeEncoding 自检
      * （0.2.52 安全模式铁律），类或方法不存在、编码不符就回落自抓帧老路。 */
     private static func takeSystemScreenshot() -> Bool {
-        /* V0.2.67（AevonShotSysV267，用户 Aevon(40) #4「截图依旧不会联动」）：
-         * 0.2.66 的 `NSClassFromString(...) as? NSObject.Type` 在 SBScreenShotter 上
-         * **静默失败**（Aevon(40) 日志：一条 SBScreenShotter 日志都没有，直接走了
-         * 自抓帧回落）—— 该类可能不是 NSObject 直系/或 Swift 元类型转换不认。
-         * 改成纯 ObjC runtime：objc_getClass → objc_msgSend 取单例 →
-         * method_getTypeEncoding 自检（fail-closed 铁律不变）→ objc_msgSend 调用。 */
+        /* V0.2.68（AevonShotMgrV268，用户 Aevon(40) #4「截屏依旧无法触发联动」）：
+         * Aevon(40) 16:05:04 实锤：`objc_getClass("SBScreenShotter")` 在本机
+         * iOS 17.3.1 **返回 nil**（0.2.67 的警告日志），系统截图类早已换代 ——
+         * The Apple Wiki（Updating extensions for iOS 9.3.3）明确记载：
+         *   "SBScreenShotter has been replaced with SBScreenshotManager.
+         *    An instance is available through SpringBoard's screenshotManager
+         *    property. Use saveScreenshotsWithCompletion:."
+         * 即：单例走 `SpringBoard.screenshotManager` 属性，方法是
+         * `-saveScreenshotsWithCompletion:`（侧键+音量上那条真管线，
+         * 快门音/闪光/缩略图/相册/第三方插件联动全由系统完成）。
+         * 探测链（每一级都打日志，真机一测就能锁定命中级）：
+         *   ① SpringBoard.screenshotManager + saveScreenshotsWithCompletion:
+         *   ② SBScreenShotter.sharedInstance + saveScreenshot:（0.2.67 老路保留）
+         * 两级全空才回落自抓帧。completion 传真空 block 最稳。
+         * 装前照旧 method_getTypeEncoding 自检（fail-closed 铁律）。 */
+        let sb = UIApplication.shared as NSObject
+        if let mgr = sb.value(forKey: "screenshotManager") as? NSObject {
+            let sel = NSSelectorFromString("saveScreenshotsWithCompletion:")
+            if let m = class_getInstanceMethod(type(of: mgr), sel),
+               let rawTypes = method_getTypeEncoding(m) {
+                let types = String(cString: rawTypes)
+                // v16@0:8@?16 = (void)(id self, SEL, block)
+                if types.hasPrefix("v"), types.contains("@0:8@"), types.contains("@?") {
+                    typealias ShotFn = @convention(c) (UnsafeRawPointer, Selector, AnyObject) -> Void
+                    let fn = unsafeBitCast(msgSendRaw(), to: ShotFn.self)
+                    let done: @convention(block) () -> Void = {}
+                    fn(Unmanaged.passUnretained(mgr).toOpaque(), sel,
+                       unsafeBitCast(done, to: AnyObject.self))
+                    AevonLog.info("[快捷] 截图走系统管线 SBScreenshotManager"
+                        + " -saveScreenshotsWithCompletion:（快门/闪光/相册/联动全由系统完成）"
+                        + "（AevonShotMgrV268 AevonShotSysV267）")
+                    return true
+                }
+                AevonLog.warn("[快捷] SBScreenshotManager.saveScreenshotsWithCompletion: "
+                    + "编码不符（\(types)）→ 试老类（AevonShotMgrV268）")
+            } else {
+                AevonLog.warn("[快捷] SBScreenshotManager 在但无 saveScreenshotsWithCompletion:"
+                    + " → 试老类（AevonShotMgrV268）")
+            }
+        } else {
+            AevonLog.warn("[快捷] SpringBoard.screenshotManager 属性不可达 → 试老类"
+                + "（AevonShotMgrV268）")
+        }
+
+        // 候选②：SBScreenShotter（0.2.67 原路；本机实测类不存在，保留防 iOS 回换）
         guard let cls = objc_getClass("SBScreenShotter") else {
-            AevonLog.warn("[快捷] SBScreenShotter 类不存在（本机 iOS 未提供）→ 走自抓帧"
-                + "（AevonShotSysV267）")
+            AevonLog.warn("[快捷] SBScreenShotter 类不存在 → 走自抓帧（AevonShotMgrV268）")
             return false
         }
         let sharedSel = sel_registerName("sharedInstance")
@@ -172,7 +210,7 @@ enum AevonQuickAction {
             .map { unsafeBitCast($0, to: MsgSendId.self) }
         guard let send = msgSend, let sharedPtr = send(cls as AnyObject, sharedSel) else {
             AevonLog.warn("[快捷] SBScreenShotter sharedInstance 不可达 → 走自抓帧"
-                + "（AevonShotSysV267）")
+                + "（AevonShotMgrV268）")
             return false
         }
         let shared = Unmanaged<AnyObject>.fromOpaque(sharedPtr).takeUnretainedValue()
@@ -180,21 +218,21 @@ enum AevonQuickAction {
         guard let m = class_getInstanceMethod(type(of: shared), sel),
               let rawTypes = method_getTypeEncoding(m) else {
             AevonLog.warn("[快捷] SBScreenShotter 无 saveScreenshot: → 走自抓帧"
-                + "（AevonShotSysV267）")
+                + "（AevonShotMgrV268）")
             return false
         }
         let types = String(cString: rawTypes)
         // v24@0:8@16B24 = (void)(id self, SEL, BOOL)
         guard types.hasPrefix("v"), types.contains("@0:8@"), types.contains("B") else {
             AevonLog.warn("[快捷] SBScreenShotter saveScreenshot: 编码不符（\(types)）→ 走自抓帧"
-                + "（AevonShotSysV267）")
+                + "（AevonShotMgrV268）")
             return false
         }
         typealias ShotFn = @convention(c) (UnsafeRawPointer, Selector, Bool) -> Void
         let fn = unsafeBitCast(msgSendRaw(), to: ShotFn.self)
         fn(sharedPtr, sel, true)
         AevonLog.info("[快捷] 截图走系统管线 SBScreenShotter -saveScreenshot:YES"
-            + "（快门/闪光/相册/联动全由系统完成）（AevonSysShotV266 AevonShotSysV267）")
+            + "（快门/闪光/相册/联动全由系统完成）（AevonShotMgrV268）")
         return true
     }
 
@@ -265,46 +303,188 @@ enum AevonQuickAction {
 }
 
 
-/// V0.2.65（AevonOwnRecorderV265，用户 Aevon(38) #5「录屏依旧不可用（并且点击录屏时会自动注销）」）
+/// V0.2.68（AevonReplayRecV268，用户 Aevon(40) #1「为什么不按照系统中的录屏那样记录视频？
+/// 系统中录制的视频是 94 帧，播放时很流畅」+ #4「录屏有时候会失败」）
 ///
-/// 前面三版都在找「系统那个录屏服务」：
-///   0.2.63 硬编码四个类名 → 本机一个都不存在；
-///   0.2.64 改成遍历所有类、`perform` 取单例 → **一点就注销**。
-/// 崩溃栈给了答案：`swift_dynamicCast` ← `_CF_forwarding_prep_0` ← dispatch 主队列，
-/// 就是给某些类发 `perform(sharedInstance)` 拿回一个非 NSObject 的返回值（NSProxy 之类），
-/// 再 `as? NSObject` 时走了消息转发 → 陷阱。这条路本身就不该走。
+/// 用户问到了根上：自绘管线（drawHierarchy 抓帧 → 软编）天生不可能流畅 ——
+/// Aevon(40) 实测 18 秒只录到 **31 帧**（约 1.7fps，标称 8fps 全被主线程吃掉），
+/// 而且收尾 `status=3 这项操作无法完成`：真凶是 0.2.66 起把 append 扔进
+/// `DispatchQueue.global` —— **那是并发队列**，多帧并行 append 时 presentationTime
+/// 乱序倒退，AVAssetWriter 直接置 failed，finishWriting 必然 status=3。
 ///
-/// 现在自己录：每 1/6 秒用 `_UICreateScreenUIImageWithRotation`（和截图同一条已验证通路）
-/// 抓一帧，AVAssetWriter 写 H.264 MP4，停止时存相册。不碰任何系统私有服务，
-/// 也就不可能把 SpringBoard 带走。
-final class AevonFrameRecorder {
+/// 主路改走 **RPScreenRecorder**（ReplayKit 公开框架，AevonQuickAction.swift 自
+/// 0.2.62 就 import 了）：
+///   · 逆向档案 `analysis/screencore`（ScreenCore 插件 strings）实锤它就是在
+///     SpringBoard 进程里用 `RPScreenRecorder` + start/stop + NSError 回调做系统级
+///     录屏 —— 硬件编码、帧率与系统录屏一致，正是用户要的那条管线；
+///   · `startCapture(handler:completionHandler:)`（iOS 11+，Apple 文档实锤的
+///     Swift 签名：handler = (CMSampleBuffer, RPSampleBufferType, Error?)）收
+///     sample buffer（后台线程、硬件帧、零拷贝），串行队列 append 进
+///     AVAssetWriter（H.264 硬编）。纯 Swift，无需 delegate 垫片。
+///
+/// 兜底：RPScreenRecorder 不可用/启动失败 → 回落自绘管线，但 append 改**专用串行
+/// 队列** + 时间戳在 append 队列内现取（单调，永不倒退），status=3 不可能复发。
+final class AevonFrameRecorder: NSObject {
     static let shared = AevonFrameRecorder()
 
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var appendQueue: DispatchQueue?
     private var timer: Timer?
     private var outputURL: URL?
     private var startTime = CACurrentMediaTime()
     private var frames = 0
     private var failedFrames = 0
-    /* V0.2.66（AevonRecLightV266）：像素搬运挪后台，主线程只剩抓帧。
-     * V0.2.67（AevonRecHdV267，用户 Aevon(40) #4「开启不卡了，但录完播放很卡顿」）：
-     * 3fps 播放就是幻灯片。抓帧拿到的是 3x 原生像素（1290x2796）—— 每帧编码
-     * 360 万像素才是真正的负担。现在**落盘前先降到 540x1170**（约 1.25x 点尺寸，
-     * 手机上看不出差别），单帧编码量降到 1/5.7，帧率提回 **8fps**（主线程负载
-     * 与 3fps 原生像素时相当），播放明显顺滑。 */
+    private var usingSystem = false
+    private var stopRequested = false
+    /* 自绘兜底档参数（V0.2.66/0.2.67 保留：主路失败才走，8fps/540 宽已够看）。 */
     private let fps: Double = 8
     private let recMaxWidth: CGFloat = 540
 
-    var isRunning: Bool { writer != nil }
+    var isRunning: Bool { writer != nil || usingSystem }
 
     func toggle() {
         if isRunning { stop() } else { start() }
     }
 
     private func start() {
-        guard writer == nil else { return }
+        guard !isRunning else { return }
+        frames = 0
+        failedFrames = 0
+        stopRequested = false
+        outputURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("Aevon-\(Int(Date().timeIntervalSince1970)).mp4")
+        if let url = outputURL { try? FileManager.default.removeItem(at: url) }
+        // V0.2.68（AevonRecSerialV268）：append 只走这一条**串行**队列 ——
+        // 时间戳永不倒退，status=3 从根上消灭（两条通路共用）。
+        appendQueue = DispatchQueue(label: "com.aevon.recorder.append")
+        if startSystemCapture() {
+            AevonQuickToast.show("开始录屏")
+            return
+        }
+        startOwnCapture()
+    }
+
+    // MARK: 主路：RPScreenRecorder（AevonReplayRecV268）
+
+    private func startSystemCapture() -> Bool {
+        let rec = RPScreenRecorder.shared()
+        guard rec.isAvailable else {
+            AevonLog.warn("[录屏] RPScreenRecorder 不可用（isAvailable=否）→ 走自绘兜底"
+                + "（AevonReplayRecV268）")
+            return false
+        }
+        usingSystem = true
+        rec.startCapture(handler: { [weak self] sample, bufferType, error in
+            guard let self, self.usingSystem, !self.stopRequested else { return }
+            if let error {
+                AevonLog.warn("[录屏] 系统抓屏帧错误：\(error.localizedDescription)"
+                    + "（AevonReplayRecV268）")
+                return
+            }
+            guard bufferType == .video else { return }
+            self.appendQueue?.async { [weak self] in
+                self?.appendSystemSample(sample)
+            }
+        }, completionHandler: { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let error, self.usingSystem, !self.stopRequested {
+                    AevonLog.warn("[录屏] RPScreenRecorder 启动失败：\(error.localizedDescription)"
+                        + " → 走自绘兜底（AevonReplayRecV268）")
+                    self.usingSystem = false
+                    self.startOwnCapture()
+                }
+            }
+        })
+        AevonLog.info("[录屏] 主路启动：RPScreenRecorder 系统级抓屏（硬编、帧率与系统录屏"
+            + "一致）（AevonReplayRecV268 AevonRecSerialV268）")
+        return true
+    }
+
+    // MARK: 主路收帧（ReplayKit 内部队 → 串行 append 队列）
+
+    private func appendSystemSample(_ sb: CMSampleBuffer) {
+        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        guard let pb = CMSampleBufferGetImageBuffer(sb) else {
+            failedFrames += 1
+            return
+        }
+        // 首帧先建 writer（首帧时 writer 还是 nil，必须在 status 检查之前）。
+        if writer == nil {
+            guard ensureSystemWriter(pixelBuffer: pb, firstPTS: pts) else { return }
+        }
+        guard let assWriter = writer, assWriter.status == .writing else { return }
+        guard let videoInput = input, videoInput.isReadyForMoreMediaData else {
+            failedFrames += 1
+            return
+        }
+        if adaptor?.append(sb, withPresentationTime: pts) == true {
+            frames += 1
+        } else {
+            failedFrames += 1
+            if assWriter.status == .failed, failedFrames <= 2 {
+                AevonLog.warn("[录屏] 系统帧 append 失败：\(assWriter.error?.localizedDescription ?? "未知")"
+                    + "（AevonReplayRecV268）")
+            }
+        }
+    }
+
+    /// 第一帧到达时才建 writer（RP 帧的尺寸/格式到那时才确定；会话起点 = 首帧 PTS）。
+    private func ensureSystemWriter(pixelBuffer: CVPixelBuffer, firstPTS: CMTime) -> Bool {
+        if writer != nil { return true }
+        let w = CVPixelBufferGetWidth(pixelBuffer)
+        let h = CVPixelBufferGetHeight(pixelBuffer)
+        guard w > 16, h > 16, let url = outputURL else { return false }
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: w,
+            AVVideoHeightKey: h,
+        ]
+        let assWriter: AVAssetWriter
+        do {
+            assWriter = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        } catch {
+            AevonLog.warn("[录屏] 建不了输出文件：\(error.localizedDescription)"
+                + "（AevonReplayRecV268）")
+            usingSystem = false
+            return false
+        }
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        videoInput.expectsMediaDataInRealTime = true
+        // 不钉像素格式（RP 给的帧格式由系统定），只给尺寸。
+        let bufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: videoInput,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferWidthKey as String: w,
+                kCVPixelBufferHeightKey as String: h,
+            ])
+        guard assWriter.canAdd(videoInput) else {
+            AevonLog.warn("[录屏] 写入器不接受视频轨（AevonReplayRecV268）")
+            usingSystem = false
+            return false
+        }
+        assWriter.add(videoInput)
+        guard assWriter.startWriting() else {
+            AevonLog.warn("[录屏] startWriting 失败：\(assWriter.error?.localizedDescription ?? "未知")"
+                + "（AevonReplayRecV268）")
+            usingSystem = false
+            return false
+        }
+        assWriter.startSession(atSourceTime: firstPTS)
+        writer = assWriter
+        input = videoInput
+        adaptor = bufferAdaptor
+        AevonLog.info("[录屏] 已开始录制（系统抓屏 \(w)x\(h)，再点一次「录屏」结束并存相册）"
+            + "（AevonReplayRecV268）")
+        return true
+    }
+
+    // MARK: 兜底：自绘抓帧（0.2.65 管线，append 改串行队列）
+
+    private func startOwnCapture() {
+        guard writer == nil, !usingSystem else { return }
         guard let first = AevonQuickAction.captureFrameForRecorder() else {
             AevonLog.warn("[录屏] 抓不到第一帧，取消录制（AevonOwnRecorderV265）")
             AevonQuickToast.show("录屏失败：抓不到画面")
@@ -312,7 +492,6 @@ final class AevonFrameRecorder {
         }
         var w = first.width          // Int（CGImage 像素）
         var h = first.height
-        // V0.2.67（AevonRecHdV267）：先降到目标宽度（宽高同比、取偶），再进编码器。
         if CGFloat(w) > recMaxWidth {
             let scale = recMaxWidth / CGFloat(w)
             w = Int((CGFloat(w) * scale).rounded(.down) / 2) * 2
@@ -321,9 +500,7 @@ final class AevonFrameRecorder {
         w -= w % 2
         h -= h % 2
         guard w > 16, h > 16 else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("Aevon-\(Int(Date().timeIntervalSince1970)).mp4")
-        try? FileManager.default.removeItem(at: url)
+        guard let url = outputURL else { return }
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: w,
@@ -360,17 +537,13 @@ final class AevonFrameRecorder {
         writer = assWriter
         input = videoInput
         adaptor = bufferAdaptor
-        outputURL = url
         startTime = CACurrentMediaTime()
-        frames = 0
-        failedFrames = 0
         let ticker = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in
             self?.tick()
         }
         RunLoop.main.add(ticker, forMode: .common)
         timer = ticker
-        appendOffMain(first, at: CMTime(seconds: 0, preferredTimescale: 600))
-        AevonLog.info("[录屏] 开始录制：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
+        AevonLog.info("[录屏] 开始录制（自绘兜底）：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
             + "（再点一次「录屏」结束并存相册）"
             + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267）")
         AevonQuickToast.show("开始录屏")
@@ -382,16 +555,21 @@ final class AevonFrameRecorder {
             failedFrames += 1
             return
         }
-        let elapsed = CACurrentMediaTime() - startTime
-        // V0.2.66（AevonRecLightV266）：像素搬运挪后台，主线程只留抓帧一次调用。
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.appendOffMain(frame, at: CMTime(seconds: elapsed, preferredTimescale: 600))
+        // V0.2.68（AevonRecSerialV268）：帧丢进**串行** append 队列 —— 时间戳在队列内
+        // 现取（单调），并发乱序导致的 status=3 从根上消灭。
+        appendQueue?.async { [weak self] in
+            self?.appendOwnFrame(frame)
         }
     }
 
-    private func appendOffMain(_ image: CGImage, at time: CMTime) {
-        guard let adaptor, let pool = adaptor.pixelBufferPool else { return }
-        guard adaptor.assetWriterInput.isReadyForMoreMediaData else { return }
+    private func appendOwnFrame(_ image: CGImage) {
+        guard let adaptor, let assWriter = writer, assWriter.status == .writing else { return }
+        guard adaptor.assetWriterInput.isReadyForMoreMediaData else {
+            failedFrames += 1
+            return
+        }
+        let time = CMTime(seconds: CACurrentMediaTime() - startTime, preferredTimescale: 600)
+        guard let pool = adaptor.pixelBufferPool else { return }
         var pixelBuffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess,
               let buffer = pixelBuffer else { return }
@@ -412,56 +590,69 @@ final class AevonFrameRecorder {
         CVPixelBufferUnlockBaseAddress(buffer, [])
         if adaptor.append(buffer, withPresentationTime: time) {
             frames += 1
+        } else {
+            failedFrames += 1
         }
     }
 
     private func stop() {
+        stopRequested = true
         timer?.invalidate()
         timer = nil
+        if usingSystem {
+            RPScreenRecorder.shared().stopCapture { _ in }
+            usingSystem = false
+            AevonLog.info("[录屏] 停止系统抓屏，正在收尾（\(frames) 帧，失败 \(failedFrames) 帧）"
+                + "（AevonReplayRecV268）")
+        }
         guard let assWriter = writer, let videoInput = input else { return }
         let url = outputURL
         let total = frames
         let missed = failedFrames
-        videoInput.markAsFinished()
-        writer = nil
-        input = nil
-        adaptor = nil
-        outputURL = nil
-        if total < 2 {
-            AevonLog.warn("[录屏] 只有 \(total) 帧，当成失败处理（AevonOwnRecorderV265）")
-            if let url { try? FileManager.default.removeItem(at: url) }
-            AevonQuickToast.show("录屏失败：没抓到足够画面")
-            return
-        }
-        AevonLog.info("[录屏] 停止录制，正在收尾（\(total) 帧，失败 \(missed) 帧）"
-            + "（AevonOwnRecorderV265）")
-        assWriter.finishWriting {
-            let status = assWriter.status
-            let failure = assWriter.error?.localizedDescription ?? "未知"
-            DispatchQueue.main.async {
-                guard status == .completed, let url else {
-                    AevonLog.warn("[录屏] 收尾失败：status=\(status.rawValue) \(failure)"
-                        + "（AevonOwnRecorderV265）")
-                    AevonQuickToast.show("录屏保存失败")
-                    return
-                }
-                PHPhotoLibrary.shared().performChanges({
-                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-                }, completionHandler: { ok, error in
-                    DispatchQueue.main.async {
-                        if ok {
-                            AevonLog.info("[录屏] 已存相册（\(total) 帧 / \(String(format: "%.1f", Double(total) / 6.0)) 秒）"
-                                + "（AevonOwnRecorderV265）")
-                            AevonQuickToast.show("录屏已存相册")
-                        } else {
-                            AevonLog.warn("[录屏] 存相册失败：\(error?.localizedDescription ?? "未知")"
-                                + "（AevonOwnRecorderV265）")
-                            AevonQuickToast.show("录屏已生成（相册保存失败）")
-                        }
+        // V0.2.68（AevonRecSerialV268）：markAsFinished / finishWriting 排在 append
+        // 队列末尾 —— 飞行中的帧先落地，绝不在收尾后再 append（status=3 的另一半根因）。
+        appendQueue?.async { [weak self] in
+            guard let self else { return }
+            videoInput.markAsFinished()
+            self.writer = nil
+            self.input = nil
+            self.adaptor = nil
+            self.outputURL = nil
+            if total < 2 {
+                AevonLog.warn("[录屏] 只有 \(total) 帧，当成失败处理（AevonReplayRecV268）")
+                if let url { try? FileManager.default.removeItem(at: url) }
+                DispatchQueue.main.async { AevonQuickToast.show("录屏失败：没抓到足够画面") }
+                return
+            }
+            assWriter.finishWriting {
+                let status = assWriter.status
+                let failure = assWriter.error?.localizedDescription ?? "未知"
+                DispatchQueue.main.async {
+                    guard status == .completed, let url else {
+                        AevonLog.warn("[录屏] 收尾失败：status=\(status.rawValue) \(failure)"
+                            + "（AevonReplayRecV268）")
+                        AevonQuickToast.show("录屏保存失败")
+                        return
                     }
-                })
+                    PHPhotoLibrary.shared().performChanges({
+                        PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                    }, completionHandler: { ok, error in
+                        DispatchQueue.main.async {
+                            if ok {
+                                AevonLog.info("[录屏] 已存相册（\(total) 帧，失败 \(missed) 帧）"
+                                    + "（AevonReplayRecV268）")
+                                AevonQuickToast.show("录屏已存相册")
+                            } else {
+                                AevonLog.warn("[录屏] 存相册失败：\(error?.localizedDescription ?? "未知")"
+                                    + "（AevonReplayRecV268）")
+                                AevonQuickToast.show("录屏已生成（相册保存失败）")
+                            }
+                        }
+                    })
+                }
             }
         }
+        appendQueue = nil
     }
 }
 

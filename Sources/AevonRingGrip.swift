@@ -184,17 +184,23 @@ enum AevonRingGrip {
     private static var grip: AevonRingGripView?
     private static var lastInstalledAt: CFTimeInterval = 0
 
-    // MARK: 键盘在屏 → 把手整条抑制（V0.2.67，AevonKbHideV267）
+    // MARK: 键盘在屏 → 把手整条抑制（V0.2.67 引入；V0.2.68 换主驱动源，AevonKbSenseV268）
     //
     // 用户 Aevon(40) #3「全屏 App 打开键盘时，键盘右侧会和手势触发条冲突」：
-    // 把手是 SB 进程的覆盖视图，键盘是 App 进程的远程键盘窗口 —— 把手压在键盘
-    // 右列（p / l / ⌫）上面，触摸先被把手命中区吃掉。App 侧最清楚键盘什么时候
-    // 在屏上（AevonKeyboardVisible），通过 Darwin 通知把状态广播过来，
-    // SB 侧把把手整体藏掉 + 命中判定返回否。键盘收起后自动恢复。
+    // 0.2.67 让 App 侧发 Darwin 通知广播键盘状态 —— **方向错了**。Aevon(40) 整篇
+    // 日志「键盘=否」一条没变过（通知链一次都没触发），因为**全屏 App 的键盘窗口
+    // （SBMedusaHostedKeyboardWindow / _UISceneSessionRoleKeyboard 键盘场景）活在
+    // SpringBoard 进程里**，App 进程根本不知道它显没显示。
+    //
+    // V0.2.68 主驱动源改为 **SB 侧现场检测**：枚举本进程全部场景的窗口，看到
+    // 非隐藏、够高的 `*KeyboardWindow`（UIRemoteKeyboardWindow /
+    // SBMedusaHostedKeyboardWindow）就抑制把手；0.5s 缓存，判定成本可忽略。
+    // Darwin 通知监听保留当辅助（承载浮窗内的键盘在 App 进程，那一路仍有用）。
 
-    /// 键盘在屏中（由 Darwin 通知驱动，SB 侧只读）。
+    /// 键盘在屏中（现场检测 + Darwin 通知双通道驱动，SB 侧只读）。
     static var keyboardSuppressed = false
     private static var kbObserversInstalled = false
+    private static var kbSenseAt: CFTimeInterval = 0
 
     fileprivate static func setKeyboardSuppressed(_ on: Bool) {
         guard keyboardSuppressed != on else { return }
@@ -203,7 +209,28 @@ enum AevonRingGrip {
         grip.isHidden = on ? true : (AevonRingMenu.presented != nil)
         grip.isUserInteractionEnabled = !on
         AevonLog.info("[圆盘] 键盘\((on ? "在屏" : "收起")) → 把手触发条\((on ? "临时屏蔽（防压键盘右列）" : "恢复"))"
-            + "（AevonKbHideV267）")
+            + "（AevonKbSenseV268 AevonKbHideV267）")
+    }
+
+    /// V0.2.68（AevonKbSenseV268）：现场检测键盘窗口是否在屏（0.5s 缓存）。
+    /// 判据纯几何 + 类名，不依赖任何跨进程通知的时序。
+    static func syncKeyboardSuppression() {
+        let now = CACurrentMediaTime()
+        if now - kbSenseAt < 0.5 { return }
+        kbSenseAt = now
+        var visible = false
+        let app = UIApplication.shared
+        for scene in app.connectedScenes {
+            guard let ws = scene as? UIWindowScene else { continue }
+            for w in ws.windows where !w.isHidden && w.frame.height > 150 {
+                if NSStringFromClass(type(of: w)).contains("KeyboardWindow") {
+                    visible = true
+                    break
+                }
+            }
+            if visible { break }
+        }
+        setKeyboardSuppressed(visible)
     }
 
     private static func installKbObserversIfNeeded() {
@@ -274,6 +301,7 @@ enum AevonRingGrip {
 
     /// V0.2.60（AevonGripSwipeGlobalV260）：屏幕点是否落在把手命中区（给全局通道问）。
     static func hitTestScreenPoint(_ point: CGPoint) -> Bool {
+        syncKeyboardSuppression()   // V0.2.68 AevonKbSenseV268：判定前先现场核一次键盘（0.5s 缓存）
         guard !keyboardSuppressed else { return false }   // V0.2.67 AevonKbHideV267
         guard AevonPrefs.bool("RingGripEnabled", default: true) else { return false }
         guard let grip = grip, grip.superview != nil else { return false }

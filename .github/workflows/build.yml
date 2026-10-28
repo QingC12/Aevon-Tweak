@@ -2894,6 +2894,49 @@ jobs:
             || { echo "::error::0.2.67 浮窗手势区吞噬缺全屏闸门（承载内容被误吞）"; exit 1; }
           echo "V0.2.67 校验: 贴边侧屏蔽 + 缩放方向修复 + 键盘屏蔽把手 + 截图runtime加固 + 录屏8fps降分辨率 + 预热隐形复刻 + 残留矩形治理 + 吞咽收敛窗口层 已就位"
 
+          # ── V0.2.68 校验（Aevon(40) 五项）──────────────────────────────────────
+          # ①录屏换 RPScreenRecorder 硬编主路 + append 串行队列 ②缩放径向连续公式
+          # ③键盘 SB 侧现场检测 ④截图换 SBScreenshotManager ⑤承载模式画布边缘带吞咽
+          for s in AevonReplayRecV268 AevonRecSerialV268 AevonZoomRadialV268 \
+          AevonKbSenseV268 AevonShotMgrV268; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.68 主库缺标记 $s"; exit 1; }
+          done
+          strings "$APP_DYLIB" | grep -q "AevonCanvasBandV268" \
+            || { echo "::error::0.2.68 App 侧 dylib 缺标记 AevonCanvasBandV268"; exit 1; }
+          # ① 录屏主路：RPScreenRecorder startCapture（ScreenCore 逆向实证的 SB 进程系统级录屏）
+          grep -q 'RPScreenRecorder.shared()' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.68 录屏没走 RPScreenRecorder（自绘抓帧帧率上不去）"; exit 1; }
+          grep -q 'startCapture(handler:' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.68 缺 startCapture 帧回调（硬件 sample buffer 通路）"; exit 1; }
+          # ①-b append 只走串行队列（0.2.66 用 DispatchQueue.global 并发队列导致
+          #     时间戳乱序倒退 → writer failed → finishWriting status=3）
+          grep -q 'com.aevon.recorder.append' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.68 录屏 append 缺专用串行队列（status=3 复发）"; exit 1; }
+          grep -q 'DispatchQueue.global(qos: .utility).async' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            && { echo "::error::0.2.68 录屏又回到 global 并发队列 append（时间戳乱序）"; exit 1; } || true
+          # ② 缩放径向连续（角块 k=r/r0，消除 abs(dx)>=abs(dy) 口径切换跳变）
+          grep -q 'hypot(resizeOriginPoint.x - anchorPt.x' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.68 缩放缺径向因子（快速缩放一跳一跳复发）"; exit 1; }
+          grep -q 'abs(dx) >= abs(dy)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.68 缩放又回到横竖口径切换（跳变复发）"; exit 1; } || true
+          # ③ 键盘 SB 侧现场检测（App 侧 Darwin 通知方向错误：全屏 App 的键盘窗口在 SB 进程）
+          grep -q 'func syncKeyboardSuppression' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.68 缺键盘现场检测"; exit 1; }
+          grep -q 'contains("KeyboardWindow")' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.68 现场检测没认 KeyboardWindow 类名"; exit 1; }
+          # ④ 截图主路：SBScreenShotter 已换代 → SBScreenshotManager.screenshotManager
+          grep -q 'screenshotManager' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.68 截图没走 SBScreenshotManager（本机无 SBScreenShotter）"; exit 1; }
+          grep -q 'saveScreenshotsWithCompletion:' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.68 缺 saveScreenshotsWithCompletion: 调用"; exit 1; }
+          # ⑤ 承载模式画布边缘带吞咽（0.2.67 fullScreen 闸门一刀切放行 = 浮窗边条带动 App）
+          grep -q 'static BOOL AevonPointInCanvasBand' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.68 App 侧缺画布边缘带判定"; exit 1; }
+          grep -q '!fullScreen && !AevonKeyboardVisible()' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.68 承载模式吞咽分支没接（或没带键盘保护）"; exit 1; }
+          echo "V0.2.68 校验: 录屏系统抓屏硬编 + append串行队列 + 缩放径向连续 + 键盘现场检测 + SBScreenshotManager + 画布边缘带吞咽 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

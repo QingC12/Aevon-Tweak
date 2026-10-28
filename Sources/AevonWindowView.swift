@@ -1261,7 +1261,8 @@ final class AevonWindowView: UIView {
     private func applyCornerResize(to point: CGPoint, edges: UIRectEdge) {
         let dx = point.x - resizeOriginPoint.x
         let dy = point.y - resizeOriginPoint.y
-        let width = clampedCornerWidth(dx: dx, dy: dy, base: resizeOriginFrame, edges: edges)
+        let width = clampedCornerWidth(dx: dx, dy: dy, base: resizeOriginFrame,
+                                       edges: edges, point: point)
         let height = width / AevonWindowView.contentAspectCurrent
         let anchor = resizeAnchor
         let fixed = CGPoint(x: resizeOriginFrame.minX + anchor.x * resizeOriginFrame.width,
@@ -1273,31 +1274,39 @@ final class AevonWindowView: UIView {
         layoutIfNeeded()   // 立即把 bounds/圆角/呈现层缩放落到位（拖动要跟手）
     }
 
-    /// 只有「宽度」一个自由度：高度 = 宽度 × 5/3（高:宽 = 5:3，AevonFloat53V221）。
-    /// 横向按 dx（拖左角反向），纵向按 dy（拖顶角反向）；
-    /// 角块横竖都在动，取变化更明显的那个方向，斜拖也跟手，拖不出细长条。
+    /// 只有「宽度」一个自由度：高度 = 宽度 × 比例（高:宽 = 7:12，AevonFloat53PortraitV222）。
+    ///
+    /// **V0.2.68（AevonZoomRadialV268，用户 Aevon(40) #2「快速缩放时，悬浮窗会一跳一跳的」）：**
+    /// 0.2.67 修好了底边方向（+dy），但「横向按 dx / 纵向按 dy、按绝对值大小
+    /// 切换口径」这个机制还在 —— 快速斜拖时手指在切换点两侧来回穿越，两次取的
+    /// 是**两个不同的值**（横向宽度 vs 纵向换算宽度），宽度帧间无过渡地来回跳，
+    /// 这就是「一跳一跳」的真凶。
+    /// 现在角块改**径向因子**：k = 当前指尖到锚点的距离 / 起手指尖到锚点的距离，
+    /// 宽度 = 起手宽 × k —— 任何方向、任何速度都连续（缩放手势的标准做法）；
+    /// 纯边拖动保持单一轴向（本来就连续）。同一手势内 edges 不变，口径永不切换。
     private func clampedCornerWidth(dx: CGFloat, dy: CGFloat, base: CGRect,
-                                    edges: UIRectEdge) -> CGFloat {
+                                    edges: UIRectEdge, point: CGPoint) -> CGFloat {
         let aspect = AevonWindowView.contentAspectCurrent
         let screen = UIScreen.main.bounds
 
+        let horizontal = edges.contains(.left) || edges.contains(.right)
+        let vertical = edges.contains(.top) || edges.contains(.bottom)
+        let anchorPt = CGPoint(x: base.minX + resizeAnchor.x * base.width,
+                               y: base.minY + resizeAnchor.y * base.height)
         var width: CGFloat? = nil
-        if edges.contains(.left) || edges.contains(.right) {
+        if horizontal && vertical {
+            /* 角块：径向因子（V0.2.68 AevonZoomRadialV268）。
+             * r0 有下限 20pt，防起手点与锚点重合时除零。 */
+            let r0 = hypot(resizeOriginPoint.x - anchorPt.x, resizeOriginPoint.y - anchorPt.y)
+            let r = hypot(point.x - anchorPt.x, point.y - anchorPt.y)
+            width = base.width * (r / max(r0, 20.0))
+        } else if horizontal {
             let signed = edges.contains(.left) ? -dx : dx
             width = base.width + signed
-        }
-        if edges.contains(.top) || edges.contains(.bottom) {
-            /* V0.2.67（AevonCornerDirV267，用户 Aevon(40) #2「拖动缩放时一帧突然变大
-             * 或缩小」）：原来 top/bottom 共用 `-dy` —— 对顶边是对的（上拖 = 放大），
-             * 对**底边是反的**（下拖明明该放大，却被算成缩小）。且横向/纵向两套口径
-             * 按 `abs(dx) >= abs(dy)` 切换，斜拖过切换点时两个值毫无过渡地互换，
-             * 就是用户看到的「一帧跳变」。现在底边用 `+dy`（下拖 = 放大），
-             * 两个口径在切换点附近数值连续，跳变消失。 */
+        } else if vertical {
+            /* 底边 +dy（下拖 = 放大）、顶边 -dy（上拖 = 放大）（V0.2.67 AevonCornerDirV267）。 */
             let signedY = edges.contains(.top) ? -dy : dy
-            let widthFromY = (base.height + signedY) * aspect
-            width = width.map { current in
-                abs(dx) >= abs(dy) ? current : widthFromY
-            } ?? widthFromY
+            width = (base.height + signedY) * aspect
         }
         var result = width ?? base.width
         // 上限：不超屏高 92%，宽度不超屏宽 95%
@@ -1541,7 +1550,7 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 缩放到 \(Int(frame.width))x\(Int(frame.height))"
             + "（实时缩放：画布恒 \(Int(canvas.width))x\(Int(canvas.height)) 未变，"
             + "呈现层缩放 \(String(format: "%.2f", canvas.width / max(1, frame.width)))）"
-            + "（AevonEdgeResizeV37 AevonCanvasFixedV248 AevonCornerDirV267）")
+            + "（AevonEdgeResizeV37 AevonCanvasFixedV248 AevonCornerDirV267 AevonZoomRadialV268）")
     }
 
     /// V0.2.48（AevonCanvasFixedV248）：把窗口**完整夹进屏幕**。
