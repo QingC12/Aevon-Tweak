@@ -30,6 +30,15 @@ void AevonNotifySetRing(int on);
 /// 设置过）返回 1。App 进程 sendEvent 据此整根吞事件：圆盘展开时盘上滑动不再带动
 /// 全屏 App（backboardd 双投的触摸副本在 App 进程里就地丢弃）。
 int AevonNotifyGetRing(void);
+/// V0.2.73（AevonRectNotifyV273）：浮窗矩形 notify 通道 —— 两个 notify state token
+/// 装 4 个 float（left/top / width/height）。文件通道在 QQ 等带 container 沙盒的
+/// App 进程里读不到 /var/mobile/Library 下的越狱文件（Aevon(45) mqq 全篇 0 条
+/// App 侧边带日志），notifyd 的 token state 全进程可达无沙盒依赖。
+/// SB 侧 publishFloatFrame 每次几何变化调用；App 侧优先读它、文件通道回退。
+void AevonFloatRectPublish(float l, float t, float w, float h);
+/// 读回浮窗矩形（SB 侧诊断用；App 侧在 AevonAppSide.m 内置同款实现）。
+/// 返回 1 = 读到有效矩形（范围校验通过），0 = 无效/未发布。
+int AevonFloatRectRead(float *l, float *t, float *w, float *h);
 /// V0.2.49（AevonAppScreenFitV249）：把「浮窗里装的是哪个 App」发到共享内存。
 /// 单开一个 notify 名字 `com.aevon.floatstage`，state = bundleID 的 FNV-1a 32 位散列
 /// （0 = 没有浮窗）。App 侧据此决定要不要把 `UIScreen.bounds` 报成画布尺寸 ——

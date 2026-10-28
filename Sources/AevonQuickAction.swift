@@ -349,6 +349,13 @@ final class AevonFrameRecorder: NSObject {
     private var startTime = CACurrentMediaTime()
     private var frames = 0
     private var failedFrames = 0
+    /// V0.2.73（AevonRecTimebaseV273，用户 Aevon(45) #5「录屏播放明显一卡一卡」）：
+    /// **时隙计数器** —— 每拍 tick 消耗一个 1/fps 时隙（无论抓没抓到帧），append 的
+    /// PTS = 时隙序号 × 1/fps。Aevon(45) 实锤 79 帧/12.8s ≈ 6fps：Timer 12Hz 被主线程
+    /// 截图耗时压到 6fps，且 PTS 按实际抓帧时刻取 → 帧间隔忽大忽小 = 播放卡顿。
+    /// 时隙计数自动吸收 Timer 抖动：帧间隔恒为 1/12 的整数倍，视频时长 = ticks/12
+    /// = 真实时长，丢帧时隙 = 画面多停一拍而不是时间轴扭曲。
+    private var recTickSlot = 0
     private var usingSystem = false
     private var stopRequested = false
     /// V0.2.71（AevonRecAttemptV271）：RP 启动尝试令牌。
@@ -613,6 +620,7 @@ final class AevonFrameRecorder: NSObject {
         input = videoInput
         adaptor = bufferAdaptor
         startTime = CACurrentMediaTime()
+        recTickSlot = 0
         let ticker = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -626,25 +634,31 @@ final class AevonFrameRecorder: NSObject {
     }
 
     private func tick() {
+        // V0.2.73（AevonRecTimebaseV273）：每拍先消耗一个时隙（成败无关），
+        // PTS 走时隙轴而不是抓帧时刻轴 —— 帧间隔均匀，播放不再卡。
+        recTickSlot += 1
         guard let assWriter = writer, assWriter.status == .writing else { return }
         guard let frame = AevonQuickAction.captureFrameForRecorder() else {
             failedFrames += 1
             return
         }
+        let slot = recTickSlot
         // V0.2.68（AevonRecSerialV268）：帧丢进**串行** append 队列 —— 时间戳在队列内
         // 现取（单调），并发乱序导致的 status=3 从根上消灭。
         appendQueue?.async { [weak self] in
-            self?.appendOwnFrame(frame)
+            self?.appendOwnFrame(frame, slot: slot)
         }
     }
 
-    private func appendOwnFrame(_ image: CGImage) {
+    private func appendOwnFrame(_ image: CGImage, slot: Int) {
         guard let adaptor, let assWriter = writer, assWriter.status == .writing else { return }
         guard adaptor.assetWriterInput.isReadyForMoreMediaData else {
             failedFrames += 1
             return
         }
-        let time = CMTime(seconds: CACurrentMediaTime() - startTime, preferredTimescale: 600)
+        // V0.2.73（AevonRecTimebaseV273）：PTS = 时隙序号 × 1/fps —— 时隙由 tick
+        // 按拍分配（Timer 慢了时隙也慢，自动贴住真实时间轴），帧间隔恒定不抖。
+        let time = CMTime(seconds: Double(slot) / fps, preferredTimescale: 600)
         guard let pool = adaptor.pixelBufferPool else { return }
         var pixelBuffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess,

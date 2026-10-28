@@ -1538,10 +1538,39 @@ final class AevonWindowView: UIView {
     /// 抓不到/是空壳才退回滚动缓存。
     private func lastContentFrame() -> UIImage? {
         if let fresh = captureSnapshotImage() {
-            cachedSnapshotImage = fresh
-            return fresh
+            // V0.2.73（AevonLivePadDarkV273，用户 Aevon(45) #5「回桌面黑屏 1 秒左右才出
+            // 实时画面」）：**黑帧拒垫** —— 现场抓帧发生在 App 场景退场过程中时，
+            // drawHierarchy 抓出来的可能整幅发黑；黑帧垫上去 = 用户看到的「黑屏 1 秒」。
+            // 中心 + 四角采样，全黑（RGB 均 < 8/255）就丢弃，回落滚动缓存帧
+            //（refreshRollingSnapshot 每 3 秒保温的那张「离黑屏最近的帧」）。
+            if isMostlyBlack(fresh) {
+                AevonLog.warn("[窗口] 现场抓帧全黑（退场中抓到黑画面）→ 弃用，垫滚动缓存帧"
+                    + "（AevonLivePadDarkV273）")
+            } else {
+                cachedSnapshotImage = fresh
+                return fresh
+            }
         }
         return cachedSnapshotImage
+    }
+
+    /// V0.2.73（AevonLivePadDarkV273）：中心 + 四角五点采样，全部 RGB < 8 视为黑帧。
+    private func isMostlyBlack(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage, cg.width > 4, cg.height > 4 else { return false }
+        guard let data = cg.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return false }
+        let bpr = cg.bytesPerRow, bpp = cg.bitsPerPixel / 8
+        let pts = [(cg.width / 2, cg.height / 2),
+                   (cg.width / 4, cg.height / 4),
+                   ((cg.width * 3) / 4, cg.height / 4),
+                   (cg.width / 4, (cg.height * 3) / 4),
+                   ((cg.width * 3) / 4, (cg.height * 3) / 4)]
+        for (px, py) in pts {
+            let off = py * bpr + px * bpp
+            guard off + 3 < CFDataGetLength(data) else { continue }
+            let r = Int(bytes[off]), g = Int(bytes[off + 1]), b = Int(bytes[off + 2])
+            if r > 8 || g > 8 || b > 8 { return false }
+        }
+        return true
     }
 
     /// 空闲时预抓快照进缓存（窗口创建后首帧、每次缩放提交后各一次）。

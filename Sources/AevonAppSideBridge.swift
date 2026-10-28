@@ -14,7 +14,10 @@ import Foundation
 /// plist 文件是缓存异常时的兜底 —— 这是 0.2.0 唯一需要验证的「读侧」能力。
 enum AevonAppSideBridge {
     /// 只有这两个域会有人写（与 AevonApp.plist 的 Filter 一致）
-    private static let watchedDomains = ["com.apple.mobilesafari", "com.apple.Preferences"]
+    // V0.2.73（AevonBridgeQQV273，用户 Aevon(45) #4/#6）：加 com.tencent.mqq ——
+    // Aevon(45) 里 mqq 全篇 0 条 App 侧日志（桥接白名单只有 safari/Preferences），
+    // 边带失效无法定位。QQ 是用户最常用的全屏叠浮窗宿主，桥接必须能看到它。
+    private static let watchedDomains = ["com.apple.mobilesafari", "com.apple.Preferences", "com.tencent.mqq"]
     /// V0.2.5（AevonAppProbeWideV205）：0.2.4 起 App 侧注入全部 App，沙盒 App
     /// 写不了 /var/mobile/Aevon.log，只会写**自己 bundleID 的域** —— 桥必须跟着
     /// 扩容，否则第三方 App 的 App 侧行为全程不可见（Aevon(91) 实证：威锋 / Turrit

@@ -713,9 +713,25 @@ enum AevonEntryHost {
         }
         let layerCount = floatLayer?.subviews.count ?? 0
         let mount = container?.superview.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "无"
+        // V0.2.73（AevonProbeHostHitV273，用户 Aevon(45) #2「系统手势有时突然失效，
+        // 只能点击和长按」）：**宿主命中审计** —— Aevon 位标志全 0 + 识别器 state=可能
+        //（Aevon(45) 实锤）说明失效不在 Aevon 吞咽层；触摸到没到 SB 主屏内容视图是
+        // 剩下的唯一分叉。对 SBHomeScreenWindow / SBMainSwitcherWindow 的中心点做
+        // hitTest，命中的类名直接进日志 —— 若命中的是来路不明的视图（比如某个
+        // passthrough / 特殊容器），失效现场就锁死了。
+        var hostHits: [String] = []
+        for scene in UIApplication.shared.connectedScenes {
+            for win in (scene as? UIWindowScene)?.windows ?? [] {
+                let name = AevonRuntime.className(win) ?? "\(type(of: win))"
+                guard name.contains("SBHomeScreen") || name.contains("SBMainSwitcher") else { continue }
+                let hit = win.hitTest(CGPoint(x: screen.midX, y: screen.midY), with: nil)
+                let hitName = hit.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "穿透"
+                hostHits.append("\(name)→\(hitName)")
+            }
+        }
         AevonLog.info("[诊断] 失效瞬间探针：\(AevonEdgeEntry.forensicStateText) | 入口命中 "
             + parts.joined(separator: " ") + " | 浮窗层子视图=\(layerCount) 容器挂载=\(mount)"
-            + "（AevonTouchProbeV257）")
+            + " | 宿主命中 \(hostHits.joined(separator: " | "))（AevonTouchProbeV257 AevonProbeHostHitV273）")
         dumpGestureRecognizerProbe(tag: "began触发")
     }
 }

@@ -3086,6 +3086,34 @@ jobs:
             || { echo "::error::0.2.72 浮窗手势带加宽标记丢失"; exit 1; }
           echo "V0.2.72 校验: 探针定向名单(全类表永久封印) + 青色花瓣指示器(慢旋/呼吸光晕/点停) + SBSwallow重新焊死 + 浮窗手势带加宽44/64/22 已就位"
 
+          # ── V0.2.73 校验（Aevon(45) 六项）──────────────────────────────────────
+          # #4/#6 浮窗矩形 notify 通道（QQ 等沙盒 App 读不到文件通道的根治）
+          grep -q 'AevonFloatRectPublish' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.73 shim 缺矩形 notify 发布"; exit 1; }
+          grep -q 'AevonRectNotifyV273' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.73 App 侧缺 notify 矩形读取（内置实现）"; exit 1; }
+          grep -q 'AevonFloatRectPublish' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.73 publishFloatFrame 没接 notify 通道"; exit 1; }
+          # #5b 录屏固定帧时基
+          grep -q 'AevonRecTimebaseV273' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.73 录屏缺时隙计数时基（播放卡顿复发）"; exit 1; }
+          # #5a 垫帧黑检测
+          grep -q 'AevonLivePadDarkV273' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.73 垫帧缺黑帧检测（回桌面黑屏复发）"; exit 1; }
+          # #3 预热遮罩
+          grep -q 'AevonWarmShroudV273' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.73 缺预热遮罩（开窗闪一下复发）"; exit 1; }
+          # #2 宿主命中审计
+          grep -q 'AevonProbeHostHitV273' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.73 失效探针缺宿主命中审计"; exit 1; }
+          # #1 停靠重排诊断
+          grep -q 'AevonDockDiagV273' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.73 停靠重排缺诊断"; exit 1; }
+          # 桥接白名单含 mqq
+          grep -q 'com.tencent.mqq' "$GITHUB_WORKSPACE/Sources/AevonAppSideBridge.swift" \
+            || { echo "::error::0.2.73 桥接白名单没加 mqq（QQ 侧日志不可见）"; exit 1; }
+          echo "V0.2.73 校验: 矩形notify通道 + 录屏时隙时基 + 垫帧黑检测 + 预热遮罩 + 宿主命中审计 + 停靠重排诊断 + 桥接mqq 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

@@ -87,7 +87,7 @@
 			<key>label</key>
 			<string>运行与排查</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.72（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
+			<string>Aevon 0.2.73（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

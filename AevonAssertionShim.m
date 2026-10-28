@@ -171,6 +171,83 @@ int AevonNotifyGetRing(void) {
     return 1;
 }
 
+/* ── V0.2.73（AevonRectNotifyV273，用户 Aevon(45) #4/#6「全屏 App 叠浮窗，点边条
+ * 依旧触发 App 内操作」）：浮窗矩形 notify 通道 ──
+ *
+ * 根因链（Aevon(45) 实锤）：mqq 全篇 **0 条 App 侧日志** —— 桥接白名单只有
+ * safari/Preferences 看不到 mqq，但用户实测边带判定没生效 = App 侧
+ * AevonFloatFrameRect() 在 mqq 进程里读到的是**零矩形**。文件通道
+ * /var/mobile/Library/Aevon/floatframe.txt 在 Filza/设置里验过能读，但 QQ 这类
+ * 大 App 有自己的 container 沙盒约束，读 /var/mobile/Library 下的越狱文件会被
+ * 拦（roothide 替身 + container 双重原因）—— 文件通道对它们天然失效。
+ *
+ * 修法 = **notify state 通道**（与 bit39 圆盘位同基建）：notifyd 是系统服务，
+ * token state 全进程可达，无沙盒、无路径、无 cfprefsd 依赖。一个 state 是 64 位，
+ * 两个 token 装 4 个 float（left/top 一包、width/height 一包）。读出后按范围
+ * 校验（40~3000pt，NaN/inf 拒收）当 magic —— 零矩形永远过不了这道校验。 */
+static int AevonRectTokenA(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.floatrect.a", &token);
+    });
+    return token;
+}
+
+static int AevonRectTokenB(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.floatrect.b", &token);
+    });
+    return token;
+}
+
+static inline uint64_t AevonPack2f(float a, float b) {
+    uint32_t ia, ib;
+    memcpy(&ia, &a, 4);
+    memcpy(&ib, &b, 4);
+    return ((uint64_t)ia << 32) | (uint64_t)ib;
+}
+
+static BOOL AevonUnpackValid(float v) {
+    return !(v != v) && v > -10.0f && v < 4000.0f;   /* NaN 拒收 + 合理范围 */
+}
+
+void AevonFloatRectPublish(float l, float t, float w, float h) {
+    @try {
+        int ta = AevonRectTokenA(), tb = AevonRectTokenB();
+        if (ta < 0 || tb < 0) { return; }
+        notify_set_state(ta, AevonPack2f(l, t));
+        notify_set_state(tb, AevonPack2f(w, h));
+        notify_post("com.aevon.guardzone");
+    } @catch (NSException *exception) {
+    }
+}
+
+/* App 侧不链本 shim（AevonApp 目标独立编译），AppSide.m 内置同款读取；
+ * 这里给 SB 侧诊断用。返回 1 = 读到有效矩形。 */
+int AevonFloatRectRead(float *l, float *t, float *w, float *h) {
+    int ta = AevonRectTokenA(), tb = AevonRectTokenB();
+    if (ta < 0 || tb < 0) { return 0; }
+    uint64_t pa = 0, pb = 0;
+    if (notify_get_state(ta, &pa) != NOTIFY_STATUS_OK) { return 0; }
+    if (notify_get_state(tb, &pb) != NOTIFY_STATUS_OK) { return 0; }
+    float fl, ft, fw, fh;
+    uint32_t ia = (uint32_t)(pa >> 32), ib = (uint32_t)(pa & 0xFFFFFFFF);
+    uint32_t ic = (uint32_t)(pb >> 32), id = (uint32_t)(pb & 0xFFFFFFFF);
+    memcpy(&fl, &ia, 4); memcpy(&ft, &ib, 4);
+    memcpy(&fw, &ic, 4); memcpy(&fh, &id, 4);
+    if (!AevonUnpackValid(fl) || !AevonUnpackValid(ft)
+        || !AevonUnpackValid(fw) || !AevonUnpackValid(fh)
+        || fw < 40.0f || fh < 40.0f) { return 0; }
+    if (l) { *l = fl; }
+    if (t) { *t = ft; }
+    if (w) { *w = fw; }
+    if (h) { *h = fh; }
+    return 1;
+}
+
 
 void AevonPrefSetBool(NSString *key, BOOL value) {
     @try {

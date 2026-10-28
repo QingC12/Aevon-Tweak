@@ -1901,6 +1901,50 @@ static BOOL AevonPointInGrip(CGPoint p) {
 static CGRect gAevonFloatFrameCache = {{0, 0}, {0, 0}};
 static CFTimeInterval gAevonFloatFrameReadAt = 0;
 
+/* V0.2.73（AevonRectNotifyV273，用户 Aevon(45) #4/#6）：notify state 矩形通道
+ * —— 与 shim 内 AevonFloatRectRead 同款，App 侧不链 shim 所以内置。
+ * 文件通道 /var/mobile/Library/Aevon/floatframe.txt 在 Filza/设置这类系统工具
+ * 进程里验过能读，但 mqq 全篇 0 条边带日志 + 用户实测边带失效 = QQ 这类带
+ * container 沙盒约束的 App 读不到该路径。notifyd 的 token state 全进程可达，
+ * 无沙盒无路径依赖；范围校验（40~4000pt + NaN 拒收）当 magic，零矩形过不了。 */
+static int AevonRectTokenNamed(NSString *name) {
+    static NSDictionary<NSString *, NSNumber *> *tokens = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableDictionary<NSString *, NSNumber *> *m = [NSMutableDictionary dictionary];
+        for (NSString *n in @[@"com.aevon.floatrect.a", @"com.aevon.floatrect.b"]) {
+            int t = -1;
+            notify_register_check(n, &t);
+            m[n] = @(t);
+        }
+        tokens = [m copy];
+    });
+    return tokens[name].intValue;
+}
+
+static BOOL AevonRectNotifyRead(CGRect *outRect) {
+    int ta = AevonRectTokenNamed(@"com.aevon.floatrect.a");
+    int tb = AevonRectTokenNamed(@"com.aevon.floatrect.b");
+    if (ta < 0 || tb < 0) { return NO; }
+    uint64_t pa = 0, pb = 0;
+    if (notify_get_state(ta, &pa) != NOTIFY_STATUS_OK) { return NO; }
+    if (notify_get_state(tb, &pb) != NOTIFY_STATUS_OK) { return NO; }
+    uint32_t raw[4] = {
+        (uint32_t)(pa >> 32), (uint32_t)(pa & 0xFFFFFFFF),
+        (uint32_t)(pb >> 32), (uint32_t)(pb & 0xFFFFFFFF)
+    };
+    float v[4];
+    memcpy(v, raw, sizeof(v));
+    for (int i = 0; i < 4; i++) {
+        if (v[i] != v[i] || v[i] < -10.0f || v[i] > 4000.0f) { return NO; }  /* NaN/范围 */
+    }
+    if (v[2] < 40.0f || v[3] < 40.0f) { return NO; }
+    if (outRect) { *outRect = CGRectMake(v[0], v[1], v[2], v[3]); }
+    return YES;
+}
+
+__attribute__((used)) static const char AevonRectNotifyV273Marker[] = "AevonRectNotifyV273";
+
 static CGRect AevonFloatFrameRect(void) {
     CFTimeInterval now = CACurrentMediaTime();
     if (now - gAevonFloatFrameReadAt < 0.5 && gAevonFloatFrameReadAt > 0) {
@@ -1909,10 +1953,13 @@ static CGRect AevonFloatFrameRect(void) {
     gAevonFloatFrameReadAt = now;
     CGRect rect = CGRectZero;
     @try {
-        /* V0.2.66（AevonFrameFileV266）：优先走**文件通道**。Aevon(39) 整篇零条
-         * 「浮窗手势区落点」= 偏好域通道在 App 进程里读不到 SB 写的值。文件是我们
-         * 自己的日志同款可写区（/var/mobile/Library/Aevon/），SB 侧 publishFloatFrame
-         * 每次都写，读取零依赖 cfprefsd。文件读不到再回落偏好（双保险）。 */
+        /* V0.2.73（AevonRectNotifyV273）：**优先 notify 通道**。 */
+        CGRect fromNotify = CGRectZero;
+        if (AevonRectNotifyRead(&fromNotify)) {
+            gAevonFloatFrameCache = fromNotify;
+            return fromNotify;
+        }
+        /* V0.2.66（AevonFrameFileV266）：文件通道（系统工具类 App 仍走这里）。 */
         NSString *text = nil;
         NSString *filePath = @"/var/mobile/Library/Aevon/floatframe.txt";
         NSDictionary *attrs = [[NSFileManager defaultManager]
@@ -2220,13 +2267,16 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                     @"AevonGripSwallowWinV262）", NSStringFromCGPoint(p));
                     } else if (fullScreen && !AevonKeyboardVisible()) {
                         /* V0.2.69（AevonFloatBandV269）：全屏 + 有浮窗矩形时的漏判诊断
-                         * （5 秒限频）—— #10 复发时这条直接给出「落点 vs 矩形」的差值，
-                         * 不用再猜是矩形过期还是带宽不够。排在把手分支之后只诊断不吞。 */
+                         * —— #10 复发时这条直接给出「落点 vs 矩形」的差值，
+                         * 不用再猜是矩形过期还是带宽不够。排在把手分支之后只诊断不吞。
+                         * V0.2.73（AevonFloatBandV273）：诊断口径与吞判定**完全同款**
+                         *（矩形外扩 22pt，Aevon(45) 是 10pt 旧口径——22pt 与 10pt 之间
+                         * 的落点判否吞不掉也不打日志 = 诊断盲区）；限频 5s → 2s。 */
                         CGRect r = AevonFloatFrameRect();
-                        CGRect inflated = CGRectInset(r, -10.0, -10.0);
+                        CGRect inflated = CGRectInset(r, -22.0, -22.0);
                         if (r.size.width > 40 && CGRectContainsPoint(inflated, p)) {
                             CFTimeInterval nowB = CACurrentMediaTime();
-                            if (nowB - gAevonGripMissLoggedAt > 5.0) {
+                            if (nowB - gAevonGripMissLoggedAt > 2.0) {
                                 gAevonGripMissLoggedAt = nowB;
                                 AevonAppLog(@"[App侧] 浮窗外沿落点 %@ 未吞（矩形 %@，压边判否，"
                                             @"疑矩形过期/带宽不够）（AevonFloatBandV269）",

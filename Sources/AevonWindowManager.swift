@@ -272,6 +272,13 @@ enum AevonWindowManager {
         let path = dir + "/floatframe.txt"
         FileManager.default.createFile(atPath: path, contents: text.data(using: .utf8),
                                        attributes: nil)
+        // V0.2.73（AevonRectNotifyV273，用户 Aevon(45) #4/#6）：第三通道 = notify state
+        //（与 bit39 圆盘位同基建）。Aevon(45) 实锤 mqq 全篇 0 条 App 侧边带日志且
+        // 用户实测边带失效 —— 文件通道在 QQ 等带 container 沙盒约束的 App 进程里
+        // 读不到 /var/mobile/Library 下的文件，偏好域更早被证伪（0.2.66）。notifyd
+        // 的 token state 全进程可达，无沙盒、无路径依赖，零矩形过不了范围校验。
+        AevonFloatRectPublish(Float(rect.minX), Float(rect.minY),
+                              Float(rect.width), Float(rect.height))
     }
 
     static func title(for bundleID: String) -> String {
@@ -699,6 +706,40 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
+            /* V0.2.73（AevonWarmShroudV273，用户 Aevon(45) #3「圆盘选中图标打开悬浮窗
+             * 会先闪一下，0.5 秒后才淡入出现」）：预热遮罩。
+             *
+             * Aevon(45) 时序账：03.084 外壳创建 → 03.530 画布切 737 → 03.653 预热
+             * 隐形复刻 → 04.014 显窗。预热期要把主场景**推前台**渲染整屏一拍
+             *（AevonWarmupForegroundV262）—— 推前台的那一帧，App 画面会先在**整屏**
+             * 上冒出来一瞬（presenter 还没把它接进浮窗），用户看到的就是「全屏闪一下
+             * App 画面」然后浮窗才淡入。
+             *
+             * 修法 = 开窗当下在入口容器最顶盖一张**全屏屏幕快照**（静态、不透明），
+             * 把推前台冒帧 / 画布切换 / 复刻往返全部罩在下面；显窗回调里把遮罩淡出。
+             * 用户视角：桌面静止（没有任何变化）→ 浮窗淡入，全程零闪。 */
+            var shroudShown = false
+            if warmupCanvas, let shot = AevonQuickAction.captureScreenImage() {
+                let cover = UIImageView(image: shot)
+                cover.frame = UIScreen.main.bounds
+                cover.contentMode = .scaleToFill
+                cover.isUserInteractionEnabled = false
+                cover.tag = 0xAE273
+                host.addSubview(cover)
+                host.bringSubviewToFront(cover)
+                shroudShown = true
+                AevonLog.info("[窗口] 预热遮罩已盖上（全屏快照，罩住推前台冒帧与画布切换）"
+                    + "（AevonWarmShroudV273）")
+            }
+            if shroudShown {
+                // 1.3s 兜底显窗路径也要撤遮罩（防 onCanvasSettled 未触发时遮罩永久盖屏）。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
+                    if let cover = host.viewWithTag(0xAE273) {
+                        UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
+                                       completion: { _ in cover.removeFromSuperview() })
+                    }
+                }
+            }
             /* V0.2.64（AevonFloatTransitionV264，用户 Aevon(38) #3「动画更流畅真实，
              * 而不是突然出现的」）：开窗补一段入场动画 —— 淡入 + 从 0.965 弹到 1.0。
              * 之前是 addSubview 之后 alpha 直接就是 1，视觉上「啪」地出现一块窗。 */
@@ -809,6 +850,12 @@ enum AevonWindowManager {
                         AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
                             + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
                             + "（AevonRevealEventV271）")
+                        // V0.2.73（AevonWarmShroudV273）：遮罩淡出与浮窗淡入同步 ——
+                        // 遮罩下面是什么无所谓（浮窗此刻已在终态），0.18s 后摘掉。
+                        if let cover = host.viewWithTag(0xAE273) {
+                            UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
+                                           completion: { _ in cover.removeFromSuperview() })
+                        }
                         currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
                     }
                 }
@@ -1206,6 +1253,15 @@ enum AevonWindowManager {
     /// 会出现「每格错位、1 秒后自愈」。这里直接用数组顺序（加入顺序）当槽位号。
     static func relayoutDock(side: AevonDockSide, animated: Bool = true) {
         let column = dockedViews.filter { $0.dockedSide == side }
+        // V0.2.73（AevonDockDiagV273，用户 Aevon(45) #1「吸附停靠会自动乱排序，左右
+        // 随机吸附」）：本轮日志没有乱序实锤（只有一次正常的「右侧第 1 格」）——
+        // 这里把重排全程摊开：每窗的 dockedSide、目标格位、目标 frame、left/right
+        // 两列各几个。复发时直接对出「哪个窗被排错了侧/格」。
+        let leftN = dockedViews.filter { $0.dockedSide == .left }.count
+        let rightN = dockedViews.filter { $0.dockedSide == .right }.count
+        AevonLog.info("[停靠] 重排 \(side.title)列（该侧 \(column.count) 个；全表：左 \(leftN) 右 \(rightN)，"
+            + column.map { "\($0.bundleID)=\($0.dockedSide.title)" }.joined(separator: " ")
+            + "）（AevonDockDiagV273）")
         for (index, view) in column.enumerated() {
             view.enterDock(side: side, index: index, animated: animated)
         }
