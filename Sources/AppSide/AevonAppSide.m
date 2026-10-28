@@ -1378,6 +1378,8 @@ __attribute__((used)) static const char AevonSwallowOneV267Marker[] = "AevonSwal
 /* V0.2.68（AevonCanvasBandV268）：承载模式画布边缘带吞咽 —— 标记必须放纯 ASCII
  * used 常量（ObjC 中文字符串编 UTF-16，strings 搜不到，0.2.61 老雷区）。 */
 __attribute__((used)) static const char AevonCanvasBandV268Marker[] = "AevonCanvasBandV268";
+/* V0.2.75（AevonBandTapV275）：边缘带 tap 豁免（可点击控件放行）—— 同上老雷区。 */
+__attribute__((used)) static const char AevonBandTapV275Marker[] = "AevonBandTapV275";
 
 static void AevonKeyFitInstall(void) {
     @try {
@@ -2256,10 +2258,39 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                     NSStringFromCGRect(AevonFloatFrameRect()));
                     } else if (!fullScreen && !AevonKeyboardVisible()
                                && AevonPointInCanvasBand(win, p)) {
-                        [gAevonSwallowedTouches addObject:key];
-                        AevonAppLog(@"[App侧] 画布边缘带落点 %@ → 整根丢弃（承载模式：浮窗"
-                                    @"边条/底边归浮窗手势，浮窗里的 App 不许跟手）"
-                                    @"（AevonCanvasBandV268）", NSStringFromCGPoint(p));
+                        /* V0.2.75（AevonBandTapV275，用户 Aevon(47) #4「部分应用使用
+                         * 悬浮窗打开时，四个角落的按钮不易触发（尤其 Filza 右上角
+                         * 编辑按钮，需要多次点击才有概率触发）」）：边缘带 tap 豁免。
+                         * Aevon(47) 实锤（21:29:23~27）：Filza 编辑按钮（画布坐标
+                         * x≈390-411）落在右侧 44pt 带内，每次点击都被「整根丢弃」
+                         * = 按钮永远收不到 touch，多点几次只是赌落点飘出带外。
+                         * 豁免判据：落点 hit-test 沿祖先链命中可点击控件
+                         *（UIControl，或挂了 UITapGestureRecognizer 的视图）→
+                         * 整根放行。安全边界：UIControl 的 touchUpInside 在**抬手**
+                         * 且仍在控件内才 fire —— 从按钮上起手拖浮窗、滑走的触摸
+                         * 不会误触发按钮；scroll/pan 不命中控件照旧整根吞
+                         *（不带动 App 内滑动，AevonCanvasBandV268 的初衷不破）。 */
+                        UIView *hit = [win hitTest:p withEvent:event];
+                        BOOL tapTarget = NO;
+                        for (UIView *v = hit; v != nil && !tapTarget; v = v.superview) {
+                            if ([v isKindOfClass:[UIControl class]]) { tapTarget = YES; break; }
+                            for (UIGestureRecognizer *g in v.gestureRecognizers) {
+                                if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+                                    tapTarget = YES; break;
+                                }
+                            }
+                        }
+                        if (tapTarget) {
+                            AevonAppLog(@"[App侧] 画布边缘带落点 %@ 命中可点击控件（%@）→ 放行"
+                                        @"（边缘带 tap 豁免：拖动/滑动仍归浮窗手势）"
+                                        @"（AevonCanvasBandV268 AevonBandTapV275）",
+                                        NSStringFromCGPoint(p), NSStringFromClass(hit));
+                        } else {
+                            [gAevonSwallowedTouches addObject:key];
+                            AevonAppLog(@"[App侧] 画布边缘带落点 %@ → 整根丢弃（承载模式：浮窗"
+                                        @"边条/底边归浮窗手势，浮窗里的 App 不许跟手）"
+                                        @"（AevonCanvasBandV268）", NSStringFromCGPoint(p));
+                        }
                     } else if (inRect && fullScreen && !AevonKeyboardVisible()) {
                         [gAevonSwallowedTouches addObject:key];
                         AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（窗口层，"

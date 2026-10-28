@@ -378,6 +378,39 @@ enum AevonWindowManager {
         // 而它正是最需要「UIScreen = 画布」的那个 App。
         AevonNotifySetFloatStage(bundleID)
         AevonForegroundManager.shared.add(bundleID: bundleID, sceneID: sceneID)
+        /* V0.2.75（AevonReopenShroudEarlyV275，用户 Aevon(47) #3「打开过的 App 再开悬浮窗
+         * 依旧先闪一下才淡入」）：遮罩再提前 —— Aevon(47) 时序账（21:30:43 设置）：
+         * 43.357「已有场景，直接开窗」→ 43.537 遮罩盖上（+0.18s）→ 43.539 presenter
+         * 已激活。0.2.74 的遮罩盖在 +0.15s 闭包内，但冒帧发生在**更早**：open() 入口
+         * 的 wakeUp（V0.2.49 定序「置位 → 唤醒 → 改画布」）在这里就把已有场景推前台
+         * —— 此刻画布还是关窗时还原的整屏 430x932，场景以整屏在 SB 呈现层冒一拍。
+         * 新开 App 场景是「生」的、首帧渲染要几百 ms，遮罩来得及（所以预热档不闪）；
+         * 再开窗档画面现成、wakeUp 当拍就上屏 = 闪。
+         * 修法：场景已存在时，遮罩盖在 wakeUp **之前**；摘除仍挂画布定稿回调，
+         * 1.34s 兜底不变。 */
+        var entryShroudShown = false
+        if AevonSceneHelper.scene(for: bundleID) != nil,
+           host.viewWithTag(0xAE274) == nil,
+           let shot = AevonQuickAction.captureScreenImage() {
+            let cover = UIImageView(image: shot)
+            cover.frame = UIScreen.main.bounds
+            cover.contentMode = .scaleToFill
+            cover.isUserInteractionEnabled = false
+            cover.tag = 0xAE274
+            host.addSubview(cover)
+            host.bringSubviewToFront(cover)
+            entryShroudShown = true
+            AevonLog.info("[窗口] 再开窗遮罩已盖上（提前到唤醒前，罩住 wakeUp 整屏冒帧）"
+                + "（AevonReopenShroudEarlyV275）")
+        }
+        if entryShroudShown {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
+                if let cover = host.viewWithTag(0xAE274) {
+                    UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
+                                   completion: { _ in cover.removeFromSuperview() })
+                }
+            }
+        }
         AevonSceneHelper.wakeUp(bundleID)
 
         // 开窗失败要把这条信号清掉，否则该 App 的右缘识别器会一直处于「浮窗里」的
@@ -754,7 +787,10 @@ enum AevonWindowManager {
              * 把推前台冒帧 / 画布切换 / 复刻往返全部罩在下面；显窗回调里把遮罩淡出。
              * 用户视角：桌面静止（没有任何变化）→ 浮窗淡入，全程零闪。 */
             var shroudShown = false
-            if warmupCanvas, let shot = AevonQuickAction.captureScreenImage() {
+            /* V0.2.75：入口已在 wakeUp 前盖过遮罩时这里跳过（不重复盖、不重复日志）；
+             * 场景原本不存在（launchAndOpen 刚拉起）时入口盖不上，这里兜住预热冒帧。 */
+            if host.viewWithTag(0xAE274) == nil,
+               let shot = AevonQuickAction.captureScreenImage() {
                 let cover = UIImageView(image: shot)
                 cover.frame = UIScreen.main.bounds
                 cover.contentMode = .scaleToFill
@@ -887,9 +923,13 @@ enum AevonWindowManager {
                             + "（AevonRevealEventV271）")
                         // V0.2.73（AevonWarmShroudV273）：遮罩淡出与浮窗淡入同步 ——
                         // 遮罩下面是什么无所谓（浮窗此刻已在终态），0.18s 后摘掉。
-                        if let cover = host.viewWithTag(0xAE273) {
-                            UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
-                                           completion: { _ in cover.removeFromSuperview() })
+                        // V0.2.75：两代遮罩 tag 都摘（0.2.73 异步盖的 0xAE273 +
+                        // 0.2.75 入口提前盖的 0xAE274，可能同时只有其一）。
+                        for shroudTag in [0xAE273, 0xAE274] {
+                            if let cover = host.viewWithTag(shroudTag) {
+                                UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
+                                               completion: { _ in cover.removeFromSuperview() })
+                            }
                         }
                         currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
                     }

@@ -371,8 +371,11 @@ final class AevonFrameRecorder: NSObject {
     /* 自绘兜底档参数（V0.2.66/0.2.67 保留：主路失败才走）。
      * V0.2.71（AevonRecFps12V271，用户 Aevon(43) #4「录的视频明显一卡一卡」）：
      * 兜底节拍 8 → 12fps。0.2.68 串行队列后实测能吃满节拍（73 帧/10s ≈ 7.3 ≈ 8fps
-     * 打满），说明瓶颈已不在主线程；12fps 换更顺滑的兜底画面，540 宽不变。 */
-    private let fps: Double = 12
+     * 打满），说明瓶颈已不在主线程；12fps 换更顺滑的兜底画面，540 宽不变。
+     * V0.2.75（AevonRecFps15V275，用户 Aevon(47) #1「帧率依旧很低」）：12 → 15fps
+     * ——时隙时基（AevonRecTimebaseV273）下 PTS 与节拍解耦，丢拍只降实际帧数不跳帧；
+     * 540 宽 15fps 单帧编码余量实测充足（12fps 稳跑），再高一档画质顺滑度。 */
+    private let fps: Double = 15
     private let recMaxWidth: CGFloat = 540
 
     var isRunning: Bool { writer != nil || usingSystem }
@@ -456,14 +459,20 @@ final class AevonFrameRecorder: NSObject {
                 AevonLog.warn("[录屏] RPScreenRecorder 启动失败：\(error.localizedDescription)"
                     + "（domain=\(domain) code=\(code)）（AevonReplayRecV268 AevonRecRetryV269）")
                 self.usingSystem = false
-                guard self.rpRetryCount < 3 else {
+                // V0.2.75（AevonRecFastFallV275，用户 Aevon(47) #1「录屏完成的视频帧率
+                // 依旧很低」）：Aevon(47) 时序账（21:30:16~21:30:21）——用户点录屏后
+                // RP 主路 -5803 三连败，退避 0.5+1.2+2.0 烧掉 **4 秒**才落兜底：用户
+                // 以为在录的前 4 秒什么都没录上（花瓣已在转 = 假在录）。SB 进程 -5803
+                // 已 7+ 连败 = 本质限制，重试预算砍半：2 次、0.3/0.6s 退避，+0.9s 内
+                // 兜底开录，不再让用户对着不转的录制等 4 秒。
+                guard self.rpRetryCount < 2 else {
                     self.startOwnCapture()
                     return
                 }
                 self.rpRetryCount += 1
-                let backoff = [0.5, 1.2, 2.0][self.rpRetryCount - 1]
+                let backoff = [0.3, 0.6][self.rpRetryCount - 1]
                 AevonLog.info("[录屏] \(String(format: "%.1f", backoff)) 秒后重试主路"
-                    + "（第 \(self.rpRetryCount)/3 次）（AevonRecRetryV269 AevonRecAttemptV271）")
+                    + "（第 \(self.rpRetryCount)/2 次）（AevonRecRetryV269 AevonRecAttemptV271 AevonRecFastFallV275）")
                 DispatchQueue.main.asyncAfter(deadline: .now() + backoff) { [weak self] in
                     guard let self, !self.stopRequested, !self.isRunning else { return }
                     if self.startSystemCapture() {
@@ -887,6 +896,14 @@ final class AevonRecBadge {
             let petalWide: CGFloat = 8   // 花瓣最宽处半宽
             for i in 0..<4 {
                 let petal = CAShapeLayer()
+                // V0.2.75（AevonPetalCenterV275，用户 Aevon(47) #2「应该是四个花瓣围在
+                // 一起，而不是围着一个角转」）：0.2.74 的旋转绕错了点 —— CAShapeLayer
+                // 没设 bounds 时 anchorPoint 落在 layer 坐标 (0,0)（= petalHost 左上角），
+                // CATransform3DMakeRotation 全部绕那个角转，四瓣散成一圈「围着一个角」。
+                // 修法：显式设 bounds + position，让 anchorPoint 恰好落在花心
+                //（layer 坐标 (side/2, side/2) 对齐 petalHost 中心），旋转绕花心。
+                petal.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+                petal.position = CGPoint(x: side / 2, y: side / 2)
                 // 花瓣 = 尖端在花心 (side/2, side/2)、长轴竖直向外的对称贝塞尔形，
                 // 再整体绕花心转 i*90°。
                 let path = UIBezierPath()
@@ -930,8 +947,8 @@ final class AevonRecBadge {
 
             container.alpha = 0
             UIView.animate(withDuration: 0.25) { container.alpha = 1 }
-            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 尖角贴花心 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
-                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272 AevonRecFlowerV274）")
+            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 四瓣围花心 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
+                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272 AevonRecFlowerV274 AevonPetalCenterV275）")
         }
     }
 
