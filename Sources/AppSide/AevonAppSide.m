@@ -1003,6 +1003,12 @@ __attribute__((used)) static const char AevonKeyFitV262Marker[] = "AevonKeyFitV2
 static IMP gAevonKeyFrameOrig;
 static BOOL gAevonKeyLogged;
 
+/* V0.2.63：这三个函数定义在下面（画布尺寸推算 + 对位），setFrame: 钩子先用到 ——
+ * C99 不支持隐式声明（0.0.52 同款坑），必须先声明。 */
+static CGSize AevonAppFloatCanvasSize(void);
+static CGFloat AevonAppIsFloatHostedScreenHeight(void);
+static CGFloat AevonAppIsFloatHostedScreenWidth(void);
+
 static BOOL AevonIsKeyboardWindow(UIWindow *window) {
     if (window == nil) { return NO; }
     @try {
