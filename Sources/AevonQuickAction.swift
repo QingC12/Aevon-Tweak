@@ -330,9 +330,10 @@ enum AevonQuickAction {
 ///     sample buffer（后台线程、硬件帧、零拷贝），串行队列 append 进
 ///     AVAssetWriter（H.264 硬编）。纯 Swift，无需 delegate 垫片。
 ///
-/// V0.2.71（AevonRecProbeV271）：录屏探针本体已挪到 Sources/AevonRecProbe.swift
-///（0.2.65 反回退铁律：本文件不许出现全量类表扫描字样 —— Aevon(38) 实测遍历类表
-/// + perform 会注销录屏单例；探针只扫不调，但断言按文件整段禁，独立文件最干净）。
+/// V0.2.72（AevonRecProbe2V272）：录屏探针已改**定向名单**（objc_getClass，零类表
+/// 扫描），本体在 Sources/AevonRecProbe.swift。0.2.71 的全类表枚举实锤「点录屏
+/// 扫描实锤「点击录屏图标自动注销」（Aevon(44) 崩溃栈 + 0.2.65 Aevon(38) 同款）——
+/// **SB 进程全类表枚举永久封印**。
 
 /// 兜底：RPScreenRecorder 不可用/启动失败 → 回落自绘管线，但 append 改**专用串行
 /// 队列** + 时间戳在 append 队列内现取（单调，永不倒退），status=3 不可能复发。
@@ -794,17 +795,32 @@ final class AevonQuickToast {
     }
 }
 
-/// V0.2.69（AevonRecBadgeV269，用户 Aevon(41) #8）：录屏常驻指示胶囊。
+/// 花瓣点按转发目标（AevonRecFlowerV272）。
+private final class AevonFlowerTapTarget: NSObject {
+    @objc func tapped() {
+        AevonLog.info("[录屏] 花瓣被点按 → 停止录制（AevonRecFlowerV272）")
+        AevonFrameRecorder.shared.toggle()
+    }
+}
+
+/// V0.2.69（AevonRecBadgeV269，用户 Aevon(41) #8）：录屏常驻指示器。
 ///
-/// 「录屏开始时灵动岛没有提示开始录屏（我们不需要灵动岛显示，但是需要其他方式
-/// 显示正在录屏，不然误触后不知道）」。自绘管线本就不触发系统的录屏指示器，
-/// RP 主路在 SB 进程里灵动岛也可能不出 —— 这里在屏幕底部常驻一颗小红胶囊
-/// 「● 录屏中 · 点按停止」，录屏开始出现、结束/失败消失，点它 = stop()。
-/// 挂在自己的 overlay 窗口上（与 toast 同基建），不接管屏幕其余触摸。
+/// V0.2.72（AevonRecFlowerV272，用户 Aevon(44) #2「改成一个青色的花瓣悬浮在屏幕
+/// 左上侧（距顶部约 25%，不贴左缘），动态随录制时间旋转（速度不要太快），花瓣
+/// 周围有柔和光晕（不要太亮太夺目），点击花瓣结束录屏，花瓣消失」）：
+/// 红胶囊退役，换「青色花瓣」—— 4 片椭圆花瓣组成的花层绕中心慢速旋转（8s/圈），
+/// 底下叠一层青色低透明度光晕圆做呼吸脉冲（3s 往返，不夺目）；点击花瓣 = 停止
+/// 录制，花瓣淡出消失。仍直接挂在 overlay 窗口上（0.2.71 已证 root.view 关交互
+/// 挂法永远点不了）。
 final class AevonRecBadge {
     private static var window: UIWindow?
-    private static var badge: UIButton?
+    private static var flower: UIView?
     private static let tag = 0x7A52
+    /// 点按转发目标（UITapGestureRecognizer 的 target 必须是对象，static 方法挂它转发）。
+    private static let tapTarget = AevonFlowerTapTarget()
+
+    /// 青色主色（系统 teal 区间，柔和不刺眼）。
+    private static let teal = UIColor(red: 0.18, green: 0.77, blue: 0.71, alpha: 1)
 
     static func show() {
         DispatchQueue.main.async {
@@ -816,55 +832,99 @@ final class AevonRecBadge {
             overlay.isHidden = false
             overlay.frame = UIScreen.main.bounds
             overlay.windowLevel = AevonWindowLevels.overlay + 2
-            /* V0.2.71（AevonRecBadge2V271，用户 Aevon(43) #4「红色胶囊无法点击」+「移到
-             * 屏幕左侧靠近边缘，竖着摆放」）：
-             * ① 点不了的根因 = 按钮挂在 makeOverlayWindow 的 root.view 上，而那个
-             *    root.view `isUserInteractionEnabled = false` —— 整棵子树收不到触摸，
-             *    hitTest 永远命不中按钮。现在按钮**直接挂到窗口上**（UIWindow 本身
-             *    可交互，hitTest 命中按钮 ≠ 窗口 → 穿透逻辑放行，窗口其余区域照旧穿透）。
-             * ② 左缘竖排：按钮旋转 -90°，贴屏幕左边缘 4pt、纵向居中 —— 右下角是
-             *    圆盘/浮窗手势的密集区，挪到左缘中部避开。 */
             overlay.subviews.filter { $0.tag == tag }.forEach { $0.removeFromSuperview() }
 
-            let button = UIButton(type: .system)
-            button.tag = tag
-            button.setTitle("● 录屏中 · 点按停止", for: .normal)
-            button.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .semibold)
-            button.setTitleColor(.white, for: .normal)
-            button.backgroundColor = UIColor(red: 0.78, green: 0.12, blue: 0.14, alpha: 0.92)
-            button.layer.cornerRadius = 15
-            button.layer.cornerCurve = .continuous
-            button.clipsToBounds = true
-            button.contentEdgeInsets = UIEdgeInsets(top: 7, left: 14, bottom: 7, right: 14)
-            button.isExclusiveTouch = true
-            button.addAction(UIAction { _ in
-                AevonLog.info("[录屏] 指示胶囊被点按 → 停止录制（AevonRecBadge2V271）")
-                AevonFrameRecorder.shared.toggle()
-            }, for: .touchUpInside)
-            let size = button.intrinsicContentSize
-            let capsuleW = size.width + 28
-            let capsuleH = max(size.height + 14, 30)
-            // 旋转 -90° 后视觉占位 = 竖条；用「中心点」定位：竖条中心在 x = 半高+4，y = 屏高一半。
-            button.frame = CGRect(x: 0, y: 0, width: capsuleW, height: capsuleH)
-            button.center = CGPoint(x: capsuleH / 2 + 4, y: UIScreen.main.bounds.midY)
-            button.transform = CGAffineTransform(rotationAngle: -CGFloat.pi / 2)
-            overlay.addSubview(button)
-            badge = button
+            let screen = UIScreen.main.bounds
+            let side: CGFloat = 88
+            let container = UIView(frame: CGRect(x: 0, y: 0, width: side, height: side))
+            container.tag = tag
+            container.isUserInteractionEnabled = true
+            container.backgroundColor = .clear
+            // 左上：距顶约 25% 屏高，x 取屏宽 14%（不贴左缘）。
+            container.center = CGPoint(x: screen.width * 0.14, y: screen.height * 0.25)
 
-            button.alpha = 0
-            UIView.animate(withDuration: 0.22) { button.alpha = 1 }
-            AevonLog.info("[录屏] 录屏指示胶囊已显示（左缘竖排，点按即停）（AevonRecBadgeV269 AevonRecBadge2V271）")
+            // ① 光晕层：大圆，青色低透明 + 呼吸脉冲（3s 往返，柔和）。
+            let halo = CAShapeLayer()
+            let haloRect = CGRect(x: (side - 76) / 2, y: (side - 76) / 2, width: 76, height: 76)
+            halo.path = UIBezierPath(ovalIn: haloRect).cgPath
+            halo.fillColor = teal.withAlphaComponent(0.10).cgColor
+            halo.strokeColor = teal.withAlphaComponent(0.18).cgColor
+            halo.lineWidth = 1.5
+            container.layer.addSublayer(halo)
+            let breath = CABasicAnimation(keyPath: "opacity")
+            breath.fromValue = 0.45
+            breath.toValue = 1.0
+            breath.duration = 3.0
+            breath.autoreverses = true
+            breath.repeatCount = .infinity
+            breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            halo.add(breath, forKey: "aevon.halo.breath")
+
+            // ② 花瓣层：4 片椭圆花瓣绕中心转（8s/圈，慢速）。
+            let petalHost = CALayer()
+            petalHost.frame = CGRect(x: 0, y: 0, width: side, height: side)
+            petalHost.position = CGPoint(x: side / 2, y: side / 2)
+            let petalLen: CGFloat = 30   // 花瓣长半径
+            let petalWide: CGFloat = 11  // 花瓣短半径
+            for i in 0..<4 {
+                let petal = CAShapeLayer()
+                // 花瓣 = 以中心为基的椭圆，长轴竖直、中心上移 petalLen/2，
+                // 再整体绕花心转 i*90°。
+                let rect = CGRect(x: side / 2 - petalWide,
+                                  y: side / 2 - petalLen,
+                                  width: petalWide * 2,
+                                  height: petalLen)
+                petal.path = UIBezierPath(ovalIn: rect).cgPath
+                petal.fillColor = teal.withAlphaComponent(0.85).cgColor
+                petal.strokeColor = teal.withAlphaComponent(0.95).cgColor
+                petal.lineWidth = 1
+                var t = CATransform3DIdentity
+                t = CATransform3DTranslate(t, 0, -petalLen / 2, 0)
+                t = CATransform3DRotate(t, CGFloat(i) * .pi / 2, 0, 0, 1)
+                t = CATransform3DTranslate(t, 0, petalLen / 2, 0)
+                petal.transform = t
+                petalHost.addSublayer(petal)
+            }
+            container.layer.addSublayer(petalHost)
+            let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+            spin.fromValue = 0
+            spin.toValue = CGFloat.pi * 2
+            spin.duration = 8.0
+            spin.repeatCount = .infinity
+            spin.timingFunction = CAMediaTimingFunction(name: .linear)
+            petalHost.add(spin, forKey: "aevon.flower.spin")
+
+            // ③ 中心小圆芯（盖住四瓣交汇处，颜色略深）。
+            let core = CAShapeLayer()
+            let coreRect = CGRect(x: side / 2 - 5.5, y: side / 2 - 5.5, width: 11, height: 11)
+            core.path = UIBezierPath(ovalIn: coreRect).cgPath
+            core.fillColor = UIColor(red: 0.10, green: 0.55, blue: 0.52, alpha: 1).cgColor
+            container.layer.addSublayer(core)
+
+            // ④ 点花瓣 = 停止录制。
+            let tap = UITapGestureRecognizer(target: tapTarget,
+                                             action: #selector(AevonFlowerTapTarget.tapped))
+            container.addGestureRecognizer(tap)
+            overlay.addSubview(container)
+            flower = container
+
+            container.alpha = 0
+            UIView.animate(withDuration: 0.25) { container.alpha = 1 }
+            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
+                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272）")
         }
     }
 
     static func hide() {
         DispatchQueue.main.async {
             guard Thread.isMainThread else { return }
-            guard let button = badge else { return }
-            UIView.animate(withDuration: 0.22, animations: { button.alpha = 0 },
+            guard let v = flower else { return }
+            // 停掉两层动画再淡出，避免收窗时动画层残影。
+            v.layer.sublayers?.forEach { $0.removeAllAnimations() }
+            UIView.animate(withDuration: 0.25, animations: { v.alpha = 0 },
                            completion: { _ in
-                               button.removeFromSuperview()
-                               if badge === button { badge = nil }
+                               v.removeFromSuperview()
+                               if flower === v { flower = nil }
                                window?.isHidden = true
                            })
         }

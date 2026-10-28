@@ -91,6 +91,9 @@ static const char *AevonAppLogPath = "/var/mobile/Aevon.log";
 /* CI 校验标记（本文件编进 AevonApp.dylib，不进主插件）。
  * V200 四条是 0.2.0 只读探针的历史标记，只加不能改（历史校验串纪律）。 */
 __attribute__((used)) static const char AevonAppSideV200Marker[] = "AevonAppSideV200";
+/* V0.2.72（AevonFloatBandWideV272，用户 Aevon(44) #1）：浮窗手势带加宽
+ * （带 30→44 / 底 44→64 / 顶 8→20 / 外扩 10→22pt）。 */
+__attribute__((used)) static const char AevonFloatBandWideV272Marker[] = "AevonFloatBandWideV272";
 __attribute__((used)) static const char AevonAppObserveV200Marker[] = "AevonAppObserveV200";
 __attribute__((used)) static const char AevonAppPrefDomainV200Marker[] = "AevonAppPrefDomainV200";
 __attribute__((used)) static const char AevonAppWhitelistV200Marker[] = "AevonAppWhitelistV200";
@@ -1958,26 +1961,32 @@ static BOOL AevonPointInFloatEdge(CGPoint p) {
     CGRect r = AevonFloatFrameRect();
     if (r.size.width < 40 || r.size.height < 40) { return NO; }
     if (!CGRectContainsPoint(r, p)) { return NO; }
-    CGFloat band = 30.0;
-    CGFloat bottomBand = 44.0;
+    /* V0.2.72（AevonFloatBandWideV272，用户 Aevon(44) #1「依旧触发 App 内操作，
+     * 可以适当加宽热区」）：手势带加宽 —— 30→44 / 底 44→64 / 顶 8→20。
+     * Aevon(44) 19:46:08 实锤：落点 {286,710} 距底边 56pt，44pt 底带差 12pt 没进
+     * =「点边条触发 App 内操作」。代价 = 边带更宽会多吞边上的 App 内触摸，
+     * 用户已明确授权。 */
+    CGFloat band = 44.0;
+    CGFloat bottomBand = 64.0;
     return (p.x <= r.origin.x + band)
         || (p.x >= CGRectGetMaxX(r) - band)
-        || (p.y <= r.origin.y + 8.0)
+        || (p.y <= r.origin.y + 20.0)
         || (p.y >= CGRectGetMaxY(r) - bottomBand);
 }
 
-/* V0.2.69（AevonFloatBandV269）：浮窗矩形外扩 10pt 后再判一次手势带 ——
- * SB 侧手柄压边 10pt（FloatGripOverlapV224 同口径），App 侧窄一圈就会把
- * 边条外沿的触摸漏给 App（= #10 的「点边条带动 App」）。 */
+/* V0.2.69（AevonFloatBandV269）：浮窗矩形外扩后再判一次手势带 ——
+ * SB 侧手柄压边同口径，App 侧窄一圈就会把边条外沿的触摸漏给 App。
+ * V0.2.72 外扩 10 → 22pt（AevonFloatBandWideV272）：矩形过期/口径差在
+ * 12~22pt 级别时也能兜住。 */
 static BOOL AevonPointInFloatEdgeInflated(CGPoint p) {
-    CGRect r = CGRectInset(AevonFloatFrameRect(), -10.0, -10.0);
+    CGRect r = CGRectInset(AevonFloatFrameRect(), -22.0, -22.0);
     if (r.size.width < 40 || r.size.height < 40) { return NO; }
     if (!CGRectContainsPoint(r, p)) { return NO; }
-    CGFloat band = 30.0;
-    CGFloat bottomBand = 44.0;
+    CGFloat band = 44.0;
+    CGFloat bottomBand = 64.0;
     return (p.x <= r.origin.x + band)
         || (p.x >= CGRectGetMaxX(r) - band)
-        || (p.y <= r.origin.y + 8.0)
+        || (p.y <= r.origin.y + 20.0)
         || (p.y >= CGRectGetMaxY(r) - bottomBand);
 }
 

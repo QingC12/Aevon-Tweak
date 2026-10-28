@@ -786,11 +786,14 @@ enum AevonEdgeEntry {
 
         ringSource = "global"
         swallowDeadline = CACurrentMediaTime() + swallowLimit
-        // V0.2.71（AevonRingSwallow2V271，用户 Aevon(43) #3）：SBSwallow 调试闸转正
-        // （默认开）。Aevon(43) 实锤「盘上滑动时全屏 App 也跟着滑」—— 圆盘窗口接住
-        // 命中的同时，App 进程还收到 backboardd 双投的副本；SB 侧把这根手指吞到抬手，
-        // 副本从源头消失（对没有 App 侧 dylib 的 App，如抖音，这是唯一覆盖）。
-        if AevonPrefs.bool("SBSwallow", default: true),
+        // V0.2.72（AevonSBSwallowSealV272）：SBSwallow **重新焊死**（回退 0.2.71 转正）。
+        // Aevon(44) 实锤：转正后圆盘内触摸走进本函数的接管分支（0.2.70 前恒 false 的
+        // 死代码），在 SB 进程 main queue 上 swift_dynamicCast SIGTRAP = SpringBoard
+        // 注销（用户感知「点录屏图标自动注销」）。按 0.2.12 原判：SB 侧吞路径对
+        // 稳定性风险不可控 —— 盘上滑动的 App 侧覆盖改由 AevonAppSide.m 的 bit39
+        // 全吞（纯 ObjC @try 包裹，无 dynamicCast）承担；无注入 App（抖音）场景
+        // 本轮放弃覆盖，等崩溃面切除后另寻 ObjC 通道。
+        if AevonPrefs.bool("SBSwallow", default: false),
            globalTouchID != 0, now - lastTouchAt < 0.6 {
             ownsTouch = true
             globalOwnedForTouch = globalTouchID
@@ -798,7 +801,9 @@ enum AevonEdgeEntry {
         }
         // V0.0.34（AevonNotifyRingBitV34）：圆盘状态写进 notify(3) 共享内存。
         AevonNotifySetRing(1)
-        AevonLog.info("[圆盘] 指针已交给圆盘（来源 \(source)；把手是真实控件，命中无需吞摸）（AevonRingSwallowV24 AevonGripOnlyV251）")
+        AevonLog.info("[圆盘] 指针已交给圆盘（来源 \(source)；把手是真实控件，命中无需吞摸；"
+            + "V0.2.72 SBSwallow 已重新焊死，盘上覆盖走 App 侧 bit39）"
+            + "（AevonRingSwallowV24 AevonGripOnlyV251 AevonSBSwallowSealV272）")
     }
 
     /// 圆盘收起：立刻解除接管，把事件通道还给系统。
