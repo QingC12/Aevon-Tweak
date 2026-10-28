@@ -1914,7 +1914,7 @@ static int AevonRectTokenNamed(NSString *name) {
         NSMutableDictionary<NSString *, NSNumber *> *m = [NSMutableDictionary dictionary];
         for (NSString *n in @[@"com.aevon.floatrect.a", @"com.aevon.floatrect.b"]) {
             int t = -1;
-            notify_register_check(n, &t);
+            notify_register_check(n.UTF8String, &t);
             m[n] = @(t);
         }
         tokens = [m copy];
