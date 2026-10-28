@@ -1370,6 +1370,9 @@ __attribute__((used)) static const char AevonTopAlignV266Marker[] = "AevonTopAli
 __attribute__((used)) static const char AevonShieldFSV267Marker[] = "AevonShieldFSV267";
 __attribute__((used)) static const char AevonKbHideV267Marker[] = "AevonKbHideV267";
 __attribute__((used)) static const char AevonSwallowOneV267Marker[] = "AevonSwallowOneV267";
+/* V0.2.68（AevonCanvasBandV268）：承载模式画布边缘带吞咽 —— 标记必须放纯 ASCII
+ * used 常量（ObjC 中文字符串编 UTF-16，strings 搜不到，0.2.61 老雷区）。 */
+__attribute__((used)) static const char AevonCanvasBandV268Marker[] = "AevonCanvasBandV268";
 
 static void AevonKeyFitInstall(void) {
     @try {
