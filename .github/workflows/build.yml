@@ -2129,8 +2129,10 @@ jobs:
           # 把手：识别器必须挂在 handle（真实控件）上，全屏宿主零识别器
           grep -q 'handle.addGestureRecognizer(pan)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.55 把手 pan 识别器必须挂 handle（全屏宿主持识别器 = Aevon(29) pan 失效的头号结构嫌疑）"; exit 1; }
+          # V0.2.60 反转（用户 Aevon(34) #3：「移除触发条的点击显示圆盘功能，只保留滑动触发圆盘」）：
+          # 0.2.55 的「tap 必须挂 handle」随「点击呼盘」整建制退役 → 改成反向防回退网。
           grep -q 'handle.addGestureRecognizer(tap)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
-            || { echo "::error::0.2.55 把手 tap 识别器必须挂 handle"; exit 1; }
+            && { echo "::error::0.2.60 把手又挂回 tap 识别器（点击呼盘已退役，只保留左滑）"; exit 1; } || true
           # V0.2.59（AevonGripCustomV259）反转：位置改偏好驱动（GripY 滑条，默认 30），
           # 常量 centerRatio=0.70 退役 —— 默认值语义不变，只是从常量变成偏好默认。
           grep -q 'static let ratioDefault: CGFloat = 0.30' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
