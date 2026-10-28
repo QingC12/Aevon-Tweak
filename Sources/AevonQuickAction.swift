@@ -628,7 +628,7 @@ final class AevonFrameRecorder: NSObject {
         timer = ticker
         AevonLog.info("[录屏] 开始录制（自绘兜底）：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
             + "（再点一次「录屏」结束并存相册）"
-            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267 AevonRecFps12V271）")
+            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267 AevonRecFps12V271 AevonRecTimebaseV273）")
         AevonRecBadge.show()
         AevonQuickToast.show("开始录屏")
     }

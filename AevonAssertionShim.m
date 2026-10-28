@@ -194,6 +194,8 @@ static int AevonRectTokenA(void) {
     return token;
 }
 
+__attribute__((used)) static const char AevonRectNotifyV273Marker[] = "AevonRectNotifyV273";
+
 static int AevonRectTokenB(void) {
     static int token = -1;
     static dispatch_once_t once;
