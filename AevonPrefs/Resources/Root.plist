@@ -7,10 +7,10 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>Aevon 分屏</string>
 			<key>footerText</key>
 			<string>浮窗 · 圆盘 · 停靠小窗。开关后面的 ⓘ 是这一项的完整说明。</string>
+			<key>label</key>
+			<string>Aevon 分屏</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -19,29 +19,29 @@
 			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
+			<key>infoText</key>
+			<string>总开关（0.2.17 起默认开）。关掉后不创建入口窗口、不挂任何触摸通道：浮窗和圆盘把手都不再出现。开关改动要注销（或重启桌面）才生效。
+它管的是「有没有 Aevon 这个人」，下面那些开关管的是「它怎么动」。</string>
 			<key>key</key>
 			<string>Enabled</string>
 			<key>label</key>
 			<string>启用插件</string>
-			<key>infoText</key>
-			<string>总开关（0.2.17 起默认开）。关掉后不创建入口窗口、不挂任何触摸通道：浮窗和圆盘把手都不再出现。开关改动要注销（或重启桌面）才生效。
-它管的是「有没有 Aevon 这个人」，下面那些开关管的是「它怎么动」。</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>aevonShowGuide</string>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
 			<string>ⓘ 分屏使用说明</string>
-			<key>action</key>
-			<string>aevonShowGuide</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>圆盘把手</string>
 			<key>footerText</key>
 			<string>呼盘唯一入口：把手上左滑 14pt。位置与长短在下面单独调。</string>
+			<key>label</key>
+			<string>圆盘把手</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -50,44 +50,44 @@
 			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
+			<key>infoText</key>
+			<string>0.2.58 新增的诊断开关（AevonGripToggleV258），默认开。关掉后圆盘把手整体摘除、呼盘入口停用（浮窗也随之无法呼出），用于 A/B 定位「滑动手势失效」是否与把手链路相关：关掉 → 注销 → 正常使用一轮，若失效不再出现即锁定把手；若仍出现则与把手无关。开关改动要注销生效。定位完成后请恢复打开。</string>
 			<key>key</key>
 			<string>RingGripEnabled</string>
 			<key>label</key>
 			<string>启用圆盘把手</string>
-			<key>infoText</key>
-			<string>0.2.58 新增的诊断开关（AevonGripToggleV258），默认开。关掉后圆盘把手整体摘除、呼盘入口停用（浮窗也随之无法呼出），用于 A/B 定位「滑动手势失效」是否与把手链路相关：关掉 → 注销 → 正常使用一轮，若失效不再出现即锁定把手；若仍出现则与把手无关。开关改动要注销生效。定位完成后请恢复打开。</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>aevonOpenGrip</string>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
 			<string>把手位置 / 长度调整</string>
-			<key>action</key>
-			<string>aevonOpenGrip</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>细节调整</string>
 			<key>footerText</key>
 			<string>圆盘 App 列表、浮窗几何。</string>
+			<key>label</key>
+			<string>细节调整</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>aevonOpenDetail</string>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
 			<string>圆盘 / 浮窗细节调整</string>
-			<key>action</key>
-			<string>aevonOpenDetail</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Aevon 0.2.74（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
 			<key>label</key>
 			<string>运行与排查</string>
-			<key>footerText</key>
-			<string>Aevon 0.2.73（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -96,14 +96,14 @@
 			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
-			<key>key</key>
-			<string>LogEnabled</string>
-			<key>label</key>
-			<string>写运行日志</string>
 			<key>infoText</key>
 			<string>把运行日志写到 /var/mobile/Aevon.log（Filza 里能看）。
 
 排查问题时必须开着 —— 日志只保留最近约 100 秒，用完就会被新内容截断，所以出问题后要尽快导出。</string>
+			<key>key</key>
+			<string>LogEnabled</string>
+			<key>label</key>
+			<string>写运行日志</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -112,14 +112,14 @@
 			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
-			<key>key</key>
-			<string>CrashGuard</string>
-			<key>label</key>
-			<string>开机崩溃保护</string>
 			<key>infoText</key>
 			<string>启动过程中捕获 Aevon 自身引起的异常，直接跳过本次初始化，避免 SpringBoard 反复崩溃（俗称「卡开机」）。
 
 默认开，建议一直保持。它只保护 Aevon 自己的帧，别的插件崩溃不会触发它。</string>
+			<key>key</key>
+			<string>CrashGuard</string>
+			<key>label</key>
+			<string>开机崩溃保护</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -128,14 +128,14 @@
 			<false/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
-			<key>key</key>
-			<string>ProbeV107</string>
-			<key>label</key>
-			<string>运行时探针</string>
 			<key>infoText</key>
 			<string>每次 SpringBoard 启动跑一轮只读探针：类表、窗口栈、识别器宿主、宿主审计等，各打一行日志（约 70 行、6 秒）。
 
 只读、不改任何状态，排错时非常有用（右缘的很多结论都是它给的）。0.2.17 起默认关 —— 圆盘手势已经定档，日常不需要这几十行日志；要查东西时再打开。</string>
+			<key>key</key>
+			<string>ProbeV107</string>
+			<key>label</key>
+			<string>运行时探针</string>
 		</dict>
 	</array>
 	<key>title</key>

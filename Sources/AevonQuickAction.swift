@@ -859,7 +859,8 @@ final class AevonRecBadge {
 
             // ① 光晕层：大圆，青色低透明 + 呼吸脉冲（3s 往返，柔和）。
             let halo = CAShapeLayer()
-            let haloRect = CGRect(x: (side - 76) / 2, y: (side - 76) / 2, width: 76, height: 76)
+            // V0.2.74（AevonRecFlowerV274）：花瓣收小，光晕 76→60 同步收。
+            let haloRect = CGRect(x: (side - 60) / 2, y: (side - 60) / 2, width: 60, height: 60)
             halo.path = UIBezierPath(ovalIn: haloRect).cgPath
             halo.fillColor = teal.withAlphaComponent(0.10).cgColor
             halo.strokeColor = teal.withAlphaComponent(0.18).cgColor
@@ -874,29 +875,34 @@ final class AevonRecBadge {
             breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             halo.add(breath, forKey: "aevon.halo.breath")
 
-            // ② 花瓣层：4 片椭圆花瓣绕中心转（8s/圈，慢速）。
+            // ② 花瓣层：4 片「一角贴花心」的花瓣绕中心转（8s/圈，慢速）。
+            // V0.2.74（AevonRecFlowerV274，用户 Aevon(46) #3「花瓣太大了，应该是花瓣
+            // 一角贴近中心圆点」）：椭圆版花瓣整条底边压在花心上（底宽 22pt 一坨挤在
+            // 中心圆点周围），视觉臃肿。改贝塞尔花瓣形：尖端（一角）收在中心圆点上，
+            // 向外鼓成圆头花瓣，整体收小（长 30→21、宽 11→8）。side 88 不动，保点按热区。
             let petalHost = CALayer()
             petalHost.frame = CGRect(x: 0, y: 0, width: side, height: side)
             petalHost.position = CGPoint(x: side / 2, y: side / 2)
-            let petalLen: CGFloat = 30   // 花瓣长半径
-            let petalWide: CGFloat = 11  // 花瓣短半径
+            let petalLen: CGFloat = 21   // 花瓣长（花心尖端 → 圆头）
+            let petalWide: CGFloat = 8   // 花瓣最宽处半宽
             for i in 0..<4 {
                 let petal = CAShapeLayer()
-                // 花瓣 = 以中心为基的椭圆，长轴竖直、中心上移 petalLen/2，
+                // 花瓣 = 尖端在花心 (side/2, side/2)、长轴竖直向外的对称贝塞尔形，
                 // 再整体绕花心转 i*90°。
-                let rect = CGRect(x: side / 2 - petalWide,
-                                  y: side / 2 - petalLen,
-                                  width: petalWide * 2,
-                                  height: petalLen)
-                petal.path = UIBezierPath(ovalIn: rect).cgPath
+                let path = UIBezierPath()
+                path.move(to: CGPoint(x: side / 2, y: side / 2))
+                path.addCurve(to: CGPoint(x: side / 2, y: side / 2 - petalLen),
+                              control1: CGPoint(x: side / 2 - petalWide, y: side / 2 - petalLen * 0.42),
+                              control2: CGPoint(x: side / 2 - petalWide * 0.55, y: side / 2 - petalLen))
+                path.addCurve(to: CGPoint(x: side / 2, y: side / 2),
+                              control1: CGPoint(x: side / 2 + petalWide * 0.55, y: side / 2 - petalLen),
+                              control2: CGPoint(x: side / 2 + petalWide, y: side / 2 - petalLen * 0.42))
+                path.close()
+                petal.path = path.cgPath
                 petal.fillColor = teal.withAlphaComponent(0.85).cgColor
                 petal.strokeColor = teal.withAlphaComponent(0.95).cgColor
                 petal.lineWidth = 1
-                var t = CATransform3DIdentity
-                t = CATransform3DTranslate(t, 0, -petalLen / 2, 0)
-                t = CATransform3DRotate(t, CGFloat(i) * .pi / 2, 0, 0, 1)
-                t = CATransform3DTranslate(t, 0, petalLen / 2, 0)
-                petal.transform = t
+                petal.transform = CATransform3DMakeRotation(CGFloat(i) * .pi / 2, 0, 0, 1)
                 petalHost.addSublayer(petal)
             }
             container.layer.addSublayer(petalHost)
@@ -924,8 +930,8 @@ final class AevonRecBadge {
 
             container.alpha = 0
             UIView.animate(withDuration: 0.25) { container.alpha = 1 }
-            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
-                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272）")
+            AevonLog.info("[录屏] 花瓣指示器已显示（青色花瓣 · 尖角贴花心 · 左上 25% · 慢旋 · 柔光晕 · 点按即停）"
+                + "（AevonRecBadgeV269 AevonRecBadge2V271 AevonRecFlowerV272 AevonRecFlowerV274）")
         }
     }
 

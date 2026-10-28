@@ -3114,6 +3114,18 @@ jobs:
             || { echo "::error::0.2.73 桥接白名单没加 mqq（QQ 侧日志不可见）"; exit 1; }
           echo "V0.2.73 校验: 矩形notify通道 + 录屏时隙时基 + 垫帧黑检测 + 预热遮罩 + 宿主命中审计 + 停靠重排诊断 + 桥接mqq 已就位"
 
+          # ── V0.2.74 校验（Aevon(46) 三项）──────────────────────────────────────
+          # #1 停靠降级回原侧（左右随机横跳根治）
+          grep -q 'AevonDemoteSideFixV274' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.74 缺停靠降级侧定档（切回主窗后左右随机复发）"; exit 1; }
+          # #2 再开窗遮罩（打开过的 App 再开闪一下）
+          grep -q 'AevonReopenShroudV274' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.74 缺再开窗遮罩（再开闪一下复发）"; exit 1; }
+          # #3 花瓣尖角贴花心
+          grep -q 'AevonRecFlowerV274' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.74 缺花瓣整形标记"; exit 1; }
+          echo "V0.2.74 校验: 停靠降级回原侧 + 再开窗遮罩 + 花瓣尖角贴花心已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

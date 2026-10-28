@@ -648,6 +648,41 @@ enum AevonWindowManager {
                 // 已还原的 430x932 写回画布尺寸（Aevon(18) 真机日志两处）。
             }
 
+            /* V0.2.74（AevonReopenShroudV274，用户 Aevon(46) #2「圆盘选中图标打开悬浮窗
+             * 时会先闪一下（新打开的应用不会，打开过的会继续闪一下才淡入）」）：再开窗遮罩。
+             *
+             * Aevon(46) 时序账（20:58:51 SileoStore 再开窗）：51.796 S2 写画布 737 已提交
+             * → 51.799 presenter 激活 → 51.810 画布核对**仍是 430x932**（写入被 FrontBoard
+             * 回弹，+0.35s 复查 52.167「被回弹已补写」实锤）。关窗时画布已还原成整屏，
+             * 再开窗 presenter 激活那一拍，场景先以**旧整屏画布**在 SB 呈现层冒出 App
+             * 全屏画面，等浮窗外壳接住才藏起 —— 用户看到的就是「闪一下」。
+             * 新开 App 走预热档（0.2.73 AevonWarmShroudV273 已有遮罩罩住），只有再开窗
+             * 档裸奔。
+             *
+             * 修法：非预热档在激活 presenter **之前**盖同款全屏快照遮罩（tag 0xAE274），
+             * 画布定稿回调（onCanvasSettled）里与浮窗淡入同步摘除；1.34s 兜底防永久盖屏。
+             */
+            var reopenShroudShown = false
+            if !warmupCanvas, let shot = AevonQuickAction.captureScreenImage() {
+                let cover = UIImageView(image: shot)
+                cover.frame = UIScreen.main.bounds
+                cover.contentMode = .scaleToFill
+                cover.isUserInteractionEnabled = false
+                cover.tag = 0xAE274
+                host.addSubview(cover)
+                host.bringSubviewToFront(cover)
+                reopenShroudShown = true
+                AevonLog.info("[窗口] 再开窗遮罩已盖上（罩住 presenter 激活时旧整屏画布冒帧）"
+                    + "（AevonReopenShroudV274）")
+            }
+            if reopenShroudShown {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
+                    if let cover = host.viewWithTag(0xAE274) {
+                        UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
+                                       completion: { _ in cover.removeFromSuperview() })
+                    }
+                }
+            }
             AevonSceneHelper.setForeground(hostScene, true)
 
             // 关键：`launchApplicationWithIdentifier:suspended:` 拉起的进程是挂起态，
@@ -866,6 +901,11 @@ enum AevonWindowManager {
                     guard currentBundleID == bundleID else { return }
                     AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态）"
                         + "（AevonRevealEventV271 AevonRevealLateV269）")
+                    // V0.2.74（AevonReopenShroudV274）：再开窗遮罩与浮窗淡入同步摘除。
+                    if let cover = host.viewWithTag(0xAE274) {
+                        UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
+                                       completion: { _ in cover.removeFromSuperview() })
+                    }
                     currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
                 }
             }
@@ -1132,9 +1172,19 @@ enum AevonWindowManager {
         }
         let columnSide = view.dockedSide
         if let main = currentView, main.bundleID != bundleID {
-            let side = AevonDock.side(forDropAt: main.frame) ?? columnSide.opposite
+            // V0.2.74（AevonDemoteSideFixV274，用户 Aevon(46) #1「吸附停靠时切回主悬浮窗
+            // 后会自动乱排序，左右随机吸附」）：降级侧定档。
+            // Aevon(46) 日志三连实锤（20:58:32~36）：装回 BatteryInfo 时 Preferences
+            // 被降到左（它明明是从右列停靠的）、装回 SileoStore 时 BatteryInfo 降到左、
+            // 装回 Preferences 时 SileoStore 降到右 —— 旧判据
+            // `AevonDock.side(forDropAt: main.frame)` 按主窗**当前落点**判侧，主窗被
+            // 用户拖到哪半屏、前主窗就被挤到哪侧 = 左右随机横跳。
+            // 定档：前主窗降回**它自己上次停靠的那一侧**（dockedSide 记忆），列内格位
+            // 由 relayoutDock 顶部补齐 —— 用户视觉 = 装回谁、其余小窗在原侧依次补位，
+            // 永不横跳。从未停靠过的主窗 dockedSide 默认 .right，与全局默认一致。
+            let side: AevonDockSide = main.dockedSide
             AevonLog.info("[停靠] 主窗里还有 \(main.bundleID) → 先把它降到\(side.title)侧，"
-                + "把主窗位让给 \(bundleID)（AevonDockColumnV250）")
+                + "把主窗位让给 \(bundleID)（AevonDockColumnV250 AevonDemoteSideFixV274）")
             // V0.2.62（AevonDockNoOrphanV262，用户 Aevon(36) #4「多个吸附小窗时快速点击还原，
             // 会有概率出现多个主悬浮窗，并且无法关闭」）：降级失败（停靠列满 5 格 / 场景
             // 已失效）时原来只是 `_ = dockCurrent(...)` 丢掉返回值 —— 那个窗口既不是
