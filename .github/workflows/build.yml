@@ -2352,8 +2352,14 @@ jobs:
           grep -q 'liveWaitLimit: TimeInterval = 1.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.60 让位上限必须是 1.0 秒（总时长不许拖长）"; exit 1; }
           # cs 会 2→0→2 抖一次：必须连续 2 拍都抓到真画面才淡入，否则「亮一下又黑」
-          grep -q 'liveWaitTicks >= 2' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.60 让位淡入缺稳定性判定（单拍命中会亮一下又黑）"; exit 1; }
+          # V0.2.62 反转（AevonLiveQuietV262）：从「连续 2 拍」放宽成「>=1 拍 + 让位已过
+          # 0.12s」—— Aevon(36) 实测让位 0.43/0.65 秒才淡入，这段「窗口消失」本身就是
+          # 用户说的闪；0.12s 足够避开系统回桌面首帧，又不会让窗口看起来「没了」。
+          grep -q 'if liveWaitTicks >= 1, now - liveWaitStartedAt > 0.12' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.60/0.2.62 让位淡入判定丢了（>=1 拍 + 0.12s 下限）"; exit 1; }
+          grep -q 'liveWaitLimit: TimeInterval = 1.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.60 让位上限（1.0s）被改动了"; exit 1; }
           grep -q 'guard liveWaitDeadline == 0 else { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.60 让位期仍在盖定格帧（installDarkFreeze 未拦）"; exit 1; }
           # ②停靠：手柄摘除 + 仲裁窗收窄 + 装回光晕延后
