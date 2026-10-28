@@ -2984,6 +2984,21 @@ jobs:
           grep -q 'startIdleKickTimerOnly' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.69 拖动降载缺重申拍子重启助手"; exit 1; }
           echo "V0.2.69 校验: 熄屏断言释放 + 圆盘触摸实判 + 编辑页SF图标 + 录屏重试/指示胶囊 + 快照垫底即时交接 + 显窗定稿后 + 键盘UIKeyboardImpl + 浮窗压边 + 拖动降载 已就位"
+          # ── V0.2.70 校验（Aevon(42)：键盘误报把手永久屏蔽，圆盘呼不出）─────────
+          for s in AevonKbVisGateV270; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.70 主库缺标记 $s"; exit 1; }
+          done
+          # TextEffects 子树判据必须带可见性三关（0.2.69 只查类名 = 常驻管理视图误报）
+          grep -q 'subtreeContainsVisibleKeyboard' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.70 缺可见键盘子树判定（误报复发）"; exit 1; }
+          grep -q 'node.alpha < 0.9' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.70 可见性判据缺 alpha 关卡"; exit 1; }
+          grep -q 'frame.height >= 150' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.70 可见性判据缺键盘尺寸关卡"; exit 1; }
+          grep -q 'kbLastVisible' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.70 在屏日志没做状态切换频控"; exit 1; }
+          echo "V0.2.70 校验: 键盘可见性三关（祖先链非隐藏/alpha/键盘几何）+ 在屏日志频控 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

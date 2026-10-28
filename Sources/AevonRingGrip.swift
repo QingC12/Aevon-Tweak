@@ -227,6 +227,7 @@ enum AevonRingGrip {
     static var keyboardSuppressed = false
     private static var kbObserversInstalled = false
     private static var kbSenseAt: CFTimeInterval = 0
+    private static var kbLastVisible = false   // V0.2.70：在屏日志只在状态切换时打
 
     fileprivate static func setKeyboardSuppressed(_ on: Bool) {
         guard keyboardSuppressed != on else { return }
@@ -302,28 +303,52 @@ enum AevonRingGrip {
                         break scan
                     }
                     if name.contains("TextEffects") {
-                        // 键盘画在 UITextEffectsWindow 里：翻一层子树找 Keyboard 类视图
-                        if AevonRingGrip.subtreeContainsKeyboard(w, depth: 0) {
+                        // 键盘画在 UITextEffectsWindow 里：翻子树找「真在显示」的键盘视图。
+                        // V0.2.70（AevonKbVisGateV270）：0.2.69 只查类名 = 误报实锤
+                        //（Aevon(42) 全篇「键盘在屏」刷屏 70s+，把手被永久 hidden，
+                        // 用户实锤「触发条自动消失，无法呼出圆盘」）——
+                        // UITextEffectsWindow 是**常驻窗口**，键盘收起时里面照样挂着
+                        // UIKeyboard* 管理视图（hidden / alpha=0 / 零尺寸）。加可见性三关：
+                        // 祖先链全非 hidden + alpha≥0.9 + 键盘几何（高≥150 宽≥半屏）。
+                        if AevonRingGrip.subtreeContainsVisibleKeyboard(w, depth: 0) {
                             visible = true
-                            probe = "\(name) 内含键盘视图"
+                            probe = "\(name) 内含可见键盘视图"
                             break scan
                         }
                     }
                 }
             }
         }
+        // V0.2.70：只在本轮状态发生变化时打 probe 日志（0.2.69 每 0.5s 刷一条 = 噪音）
+        let changed = (visible != kbLastVisible)
         setKeyboardSuppressed(visible)
-        if visible {
-            AevonLog.info("[圆盘] 键盘在屏（\(probe)）→ 把手触发条临时屏蔽（AevonKbSense2V269）")
+        if visible && changed {
+            AevonLog.info("[圆盘] 键盘在屏（\(probe)）→ 把手触发条临时屏蔽（AevonKbSense2V269 AevonKbVisGateV270）")
         }
+        kbLastVisible = visible
     }
 
-    /// V0.2.69：UITextEffectsWindow 子树里有没有 Keyboard 类视图（限深 4 层防大遍历）。
-    private static func subtreeContainsKeyboard(_ view: UIView, depth: Int) -> Bool {
-        if depth > 4 { return false }
+    /// V0.2.70（AevonKbVisGateV270）：UITextEffectsWindow 子树里有没有「真在显示」的
+    /// Keyboard 类视图（限深 5 层防大遍历）。可见性三关防误报：
+    /// 自身与祖先链全非 hidden、alpha≥0.9、高≥150pt 且宽≥半屏（键盘的几何）。
+    /// 判据宁可漏报不可误报：漏报只退回 0.2.68 的「键盘碰触发条」小痛点，
+    /// 误报 = 把手永久 hidden、圆盘整个呼不出（0.2.69 Aevon(42) 实锤）。
+    private static func subtreeContainsVisibleKeyboard(_ view: UIView, depth: Int) -> Bool {
+        if depth > 5 { return false }
         for sub in view.subviews {
-            if NSStringFromClass(type(of: sub)).contains("Keyboard") { return true }
-            if subtreeContainsKeyboard(sub, depth: depth + 1) { return true }
+            if NSStringFromClass(type(of: sub)).contains("Keyboard") {
+                let halfW = UIScreen.main.bounds.width / 2
+                if sub.frame.height >= 150, sub.frame.width >= halfW {
+                    var cur: UIView? = sub
+                    var allVisible = true
+                    while let node = cur {
+                        if node.isHidden || node.alpha < 0.9 { allVisible = false; break }
+                        cur = node.superview
+                    }
+                    if allVisible { return true }
+                }
+            }
+            if subtreeContainsVisibleKeyboard(sub, depth: depth + 1) { return true }
         }
         return false
     }
