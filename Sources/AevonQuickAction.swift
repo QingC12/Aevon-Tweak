@@ -155,22 +155,51 @@ enum AevonQuickAction {
      * saveScreenshot:YES]` 就是系统截图）。装前用 method_getTypeEncoding 自检
      * （0.2.52 安全模式铁律），类或方法不存在、编码不符就回落自抓帧老路。 */
     private static func takeSystemScreenshot() -> Bool {
-        guard let cls = NSClassFromString("SBScreenShotter") as? NSObject.Type,
-              let shared = cls.perform(NSSelectorFromString("sharedInstance"))?.takeUnretainedValue()
-        else { return false }
+        /* V0.2.67（AevonShotSysV267，用户 Aevon(40) #4「截图依旧不会联动」）：
+         * 0.2.66 的 `NSClassFromString(...) as? NSObject.Type` 在 SBScreenShotter 上
+         * **静默失败**（Aevon(40) 日志：一条 SBScreenShotter 日志都没有，直接走了
+         * 自抓帧回落）—— 该类可能不是 NSObject 直系/或 Swift 元类型转换不认。
+         * 改成纯 ObjC runtime：objc_getClass → objc_msgSend 取单例 →
+         * method_getTypeEncoding 自检（fail-closed 铁律不变）→ objc_msgSend 调用。 */
+        guard let cls = objc_getClass("SBScreenShotter") else {
+            AevonLog.warn("[快捷] SBScreenShotter 类不存在（本机 iOS 未提供）→ 走自抓帧"
+                + "（AevonShotSysV267）")
+            return false
+        }
+        let sharedSel = sel_registerName("sharedInstance")
+        typealias MsgSendId = @convention(c) (AnyObject?, Selector) -> UnsafeRawPointer?
+        let msgSend = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "objc_msgSend")
+            .map { unsafeBitCast($0, to: MsgSendId.self) }
+        guard let send = msgSend, let sharedPtr = send(cls, sharedSel) else {
+            AevonLog.warn("[快捷] SBScreenShotter sharedInstance 不可达 → 走自抓帧"
+                + "（AevonShotSysV267）")
+            return false
+        }
+        let shared = Unmanaged<AnyObject>.fromOpaque(sharedPtr).takeUnretainedValue()
         let sel = NSSelectorFromString("saveScreenshot:")
         guard let m = class_getInstanceMethod(type(of: shared), sel),
-              let rawTypes = method_getTypeEncoding(m) else { return false }
+              let rawTypes = method_getTypeEncoding(m) else {
+            AevonLog.warn("[快捷] SBScreenShotter 无 saveScreenshot: → 走自抓帧"
+                + "（AevonShotSysV267）")
+            return false
+        }
         let types = String(cString: rawTypes)
         // v24@0:8@16B24 = (void)(id self, SEL, BOOL)
         guard types.hasPrefix("v"), types.contains("@0:8@"), types.contains("B") else {
-            AevonLog.warn("[快捷] SBScreenShotter saveScreenshot: 编码不符（\(types)）→ 走自抓帧（AevonSysShotV266）")
+            AevonLog.warn("[快捷] SBScreenShotter saveScreenshot: 编码不符（\(types)）→ 走自抓帧"
+                + "（AevonShotSysV267）")
             return false
         }
-        shared.perform(sel, with: NSNumber(value: true))
+        typealias ShotFn = @convention(c) (UnsafeRawPointer, Selector, Bool) -> Void
+        let fn = unsafeBitCast(msgSendRaw(), to: ShotFn.self)
+        fn(sharedPtr, sel, true)
         AevonLog.info("[快捷] 截图走系统管线 SBScreenShotter -saveScreenshot:YES"
-            + "（快门/闪光/相册/联动全由系统完成）（AevonSysShotV266）")
+            + "（快门/闪光/相册/联动全由系统完成）（AevonSysShotV266 AevonShotSysV267）")
         return true
+    }
+
+    private static func msgSendRaw() -> UnsafeMutableRawPointer {
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), "objc_msgSend")!
     }
 
     @discardableResult
@@ -259,12 +288,14 @@ final class AevonFrameRecorder {
     private var startTime = CACurrentMediaTime()
     private var frames = 0
     private var failedFrames = 0
-    /* V0.2.66（AevonRecLightV266，用户 Aevon(39) #9「录屏可以开关，但开启期间手机
-     * 非常卡顿」）：6fps → 3fps。卡顿主因是每帧 `_UICreateScreenUIImageWithRotation`
-     * 全屏合成渲染 —— 6fps 下主线程每秒被吃掉 6 次；3fps 减半。像素搬运
-     * （CGContext 绘制 + CVPixelBuffer 填充）同时挪到后台队列，主线程只剩抓帧本身。
-     * 顺滑度换流畅度：录教程/存证 3fps 够用，追求丝滑需要系统录屏（不可用）。 */
-    private let fps: Double = 3
+    /* V0.2.66（AevonRecLightV266）：像素搬运挪后台，主线程只剩抓帧。
+     * V0.2.67（AevonRecHdV267，用户 Aevon(40) #4「开启不卡了，但录完播放很卡顿」）：
+     * 3fps 播放就是幻灯片。抓帧拿到的是 3x 原生像素（1290x2796）—— 每帧编码
+     * 360 万像素才是真正的负担。现在**落盘前先降到 540x1170**（约 1.25x 点尺寸，
+     * 手机上看不出差别），单帧编码量降到 1/5.7，帧率提回 **8fps**（主线程负载
+     * 与 3fps 原生像素时相当），播放明显顺滑。 */
+    private let fps: Double = 8
+    private let recMaxWidth: CGFloat = 540
 
     var isRunning: Bool { writer != nil }
 
@@ -281,6 +312,12 @@ final class AevonFrameRecorder {
         }
         var w = first.width
         var h = first.height
+        // V0.2.67（AevonRecHdV267）：先降到目标宽度（宽高同比、取偶），再进编码器。
+        if w > recMaxWidth {
+            let scale = recMaxWidth / w
+            w = ((w * scale).rounded(.down) / 2).rounded(.down) * 2
+            h = ((h * scale).rounded(.down) / 2).rounded(.down) * 2
+        }
         w -= w % 2
         h -= h % 2
         guard w > 16, h > 16 else { return }
@@ -335,7 +372,7 @@ final class AevonFrameRecorder {
         appendOffMain(first, at: CMTime(seconds: 0, preferredTimescale: 600))
         AevonLog.info("[录屏] 开始录制：\(w)x\(h) @ \(Int(fps))fps → \(url.lastPathComponent)"
             + "（再点一次「录屏」结束并存相册）"
-            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266）")
+            + "（AevonOwnRecorderV265 AevonQuickSystemV263 AevonRecLightV266 AevonRecHdV267）")
         AevonQuickToast.show("开始录屏")
     }
 

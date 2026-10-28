@@ -1194,7 +1194,15 @@ static NSInteger AevonKeyAlignWindows(NSString *tag, BOOL verbose) {
 
 static void AevonKeyAuditTick(void);
 
+/* V0.2.67（AevonKbHideV267）：前向声明 —— 定义在文件后部（AevonKeyboardVisible 之后），
+ * 而第一个调用点（AevonKeyRepositionNow）在前面，C 必须先声明（0.2.62 实锤过）。 */
+static void AevonKbVisSync(void);
+
 static void AevonKeyRepositionNow(NSNotification *note) {
+    /* V0.2.67（AevonKbHideV267）：键盘显一收一都从这里过 —— 顺手把「键盘在屏」
+     * 状态用 Darwin 通知广播给 SB（SB 收到后把把手触发条临时藏掉，
+     * 防止它压在键盘右列 p/l/⌫ 上）。 */
+    AevonKbVisSync();
     @try {
         NSInteger found = AevonKeyAlignWindows(@"收到键盘通知", YES);
         if (found <= 0) { return; }
@@ -1359,6 +1367,9 @@ __attribute__((used)) static const char AevonKeyAlignV265Marker[] = "AevonKeyAli
 __attribute__((used)) static const char AevonNoCapsFileV265Marker[] = "AevonNoCapsFileV265";
 __attribute__((used)) static const char AevonFrameFileV266Marker[] = "AevonFrameFileV266";
 __attribute__((used)) static const char AevonTopAlignV266Marker[] = "AevonTopAlignV266";
+__attribute__((used)) static const char AevonShieldFSV267Marker[] = "AevonShieldFSV267";
+__attribute__((used)) static const char AevonKbHideV267Marker[] = "AevonKbHideV267";
+__attribute__((used)) static const char AevonSwallowOneV267Marker[] = "AevonSwallowOneV267";
 
 static void AevonKeyFitInstall(void) {
     @try {
@@ -1774,6 +1785,23 @@ static CGSize AevonRealScreenSize(void) {
  * 必须挡掉：把手的竖直带子会压在键盘右列上（默认位置 30% = 屏高 70% 处，
  * 92pt 高、右缘 45pt 宽），如果照吞，用户在别的 App 里打字会「偶尔按不出 p / l / ⌫」。
  * 键盘窗口扫一遍很便宜，而且只在 began 这一拍查。 */
+/* V0.2.67（AevonKbHideV267，用户 Aevon(40) #3「全屏 App 开键盘时键盘右侧和触发条
+ * 冲突」）：键盘在屏状态一变，就用 Darwin 通知广播给 SB —— SB 收到后把把手触发条
+ * 整条临时屏蔽（防压键盘右列 p/l/⌫），收起后恢复。Darwin 通知不带载荷，
+ * 用 on/off 两个通知名表达状态。 */
+static BOOL gAevonKbVisLast = NO;
+static BOOL AevonKeyboardVisible(void);   /* V0.2.67：前向声明（定义在本函数之后） */
+static void AevonKbVisSync(void) {
+    BOOL vis = NO;
+    @try { vis = AevonKeyboardVisible(); } @catch (NSException *e) { vis = NO; }
+    if (vis == gAevonKbVisLast) { return; }
+    gAevonKbVisLast = vis;
+    CFNotificationCenterPostNotification(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        vis ? CFSTR("com.aevon.kbvis.on") : CFSTR("com.aevon.kbvis.off"),
+        NULL, NULL, TRUE);
+}
+
 static BOOL AevonKeyboardVisible(void) {
     NSArray *windows = nil;
     /* -[UIApplication windows] 在 iOS 15+ 标了 deprecated，而本工程开着 -Werror：
@@ -1980,11 +2008,21 @@ static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                         AevonShouldConsiderSwallow(touch, p) ? @"是" : @"否");
                         }
                     }
+                    /* V0.2.67（AevonSwallowOneV267，用户 Aevon(40) #8「0.2.66 有概率屏幕
+                     * 点击失效」）：这一层**不再吞咽，只做诊断**。原因：UIApplication 层
+                     * 拿不到 touch.window（恒 nil），locationInView:nil 在承载模式下返回
+                     * 的是画布坐标（430x737 空间），而浮窗矩形/把手矩形都是 SB 屏幕坐标
+                     * （430x932 空间）—— 两个坐标系差一个窗口原点+缩放，拿画布坐标比
+                     * 屏幕矩形 = 误吞承载内容（Aevon(40) 14:51:00 的三连吞就是残留矩形
+                     * 撞上这层无闸门的判定）。窗口层钩子有 win + fullScreen 闸门，
+                     * 是唯一该吞的地方（V0.2.62 已定主通道）。 */
                     if (AevonShouldConsiderSwallow(touch, p)) {
-                        [gAevonSwallowedTouches addObject:key];
-                        AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（不再带着 App 内滑动）"
-                                    @"（AevonGripSwallowV261 AevonGripSwallowFixV263）",
-                                    NSStringFromCGPoint(p));
+                        CFTimeInterval nowLog2 = CACurrentMediaTime();
+                        if (nowLog2 - gAevonGripMissLoggedAt > 3.0) {
+                            gAevonGripMissLoggedAt = nowLog2;
+                            AevonAppLog(@"[App侧] 命中吞咽判据（本层只记不吞，吞咽在窗口层）"
+                                        @"%@（AevonSwallowOneV267）", NSStringFromCGPoint(p));
+                        }
                     }
                 }
                 BOOL swallowed = [gAevonSwallowedTouches containsObject:key];
@@ -2049,10 +2087,13 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                     BOOL inRect = !CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(gAevonGripRect, p);
                     CGSize real = AevonRealScreenSize();
                     BOOL fullScreen = win.bounds.size.height >= real.height - 60.0;
-                    /* V0.2.65（AevonEdgeShieldV265，用户 Aevon(38) #2）：浮窗自己的手势区
-                     * （左/右 30pt 全高边条、底 44pt 全宽、顶 8pt）里的触摸一律不投递 ——
-                     * 用户双击浮窗底边关窗时，全屏 App 也会同时收到两下双击。 */
-                    if (AevonPointInFloatEdge(p)) {
+                    /* V0.2.67（AevonShieldFSV267，用户 Aevon(40) #8）：浮窗手势区吞噬
+                     * 必须**只在 App 占满整屏时生效**。本 App 被浮窗承载时，窗口坐标是
+                     * 画布空间（430x737），而浮窗矩形是 SB 侧屏幕坐标（430x932）——
+                     * 两个坐标系相差一个窗口原点 + 缩放，拿画布坐标去比屏幕矩形，
+                     * 既会误吞承载内容（右缘 30pt 带整条失效），也拦不住真正的窗边手势
+                     * （窗边手势由 SB 侧浮窗自己处理，App 侧根本不用管）。 */
+                    if (fullScreen && AevonPointInFloatEdge(p)) {
                         [gAevonSwallowedTouches addObject:key];
                         AevonAppLog(@"[App侧] 浮窗手势区落点 %@ → 整根丢弃（窗边归浮窗，"
                                     @"App 内的双击/滑动不许被带着走）（AevonEdgeShieldV265）",

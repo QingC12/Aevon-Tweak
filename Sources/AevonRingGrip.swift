@@ -184,6 +184,41 @@ enum AevonRingGrip {
     private static var grip: AevonRingGripView?
     private static var lastInstalledAt: CFTimeInterval = 0
 
+    // MARK: 键盘在屏 → 把手整条抑制（V0.2.67，AevonKbHideV267）
+    //
+    // 用户 Aevon(40) #3「全屏 App 打开键盘时，键盘右侧会和手势触发条冲突」：
+    // 把手是 SB 进程的覆盖视图，键盘是 App 进程的远程键盘窗口 —— 把手压在键盘
+    // 右列（p / l / ⌫）上面，触摸先被把手命中区吃掉。App 侧最清楚键盘什么时候
+    // 在屏上（AevonKeyboardVisible），通过 Darwin 通知把状态广播过来，
+    // SB 侧把把手整体藏掉 + 命中判定返回否。键盘收起后自动恢复。
+
+    /// 键盘在屏中（由 Darwin 通知驱动，SB 侧只读）。
+    static var keyboardSuppressed = false
+    private static var kbObserversInstalled = false
+
+    fileprivate static func setKeyboardSuppressed(_ on: Bool) {
+        guard keyboardSuppressed != on else { return }
+        keyboardSuppressed = on
+        guard let grip = grip, grip.superview != nil else { return }
+        grip.isHidden = on ? true : (AevonRingMenu.presented != nil)
+        grip.isUserInteractionEnabled = !on
+        AevonLog.info("[圆盘] 键盘\((on ? "在屏" : "收起")) → 把手触发条\((on ? "临时屏蔽（防压键盘右列）" : "恢复"))"
+            + "（AevonKbHideV267）")
+    }
+
+    private static func installKbObserversIfNeeded() {
+        guard !kbObserversInstalled else { return }
+        kbObserversInstalled = true
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        // 两个通知名各配一个无捕获回调（Swift 非捕获闭包可直接当 C 函数指针）。
+        CFNotificationCenterAddObserver(center, nil, { _, _, _, _, _ in
+            DispatchQueue.main.async { AevonRingGrip.setKeyboardSuppressed(true) }
+        }, "com.aevon.kbvis.on" as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, nil, { _, _, _, _, _ in
+            DispatchQueue.main.async { AevonRingGrip.setKeyboardSuppressed(false) }
+        }, "com.aevon.kbvis.off" as CFString, nil, .deliverImmediately)
+    }
+
     /// 装到入口容器最上层（容器会搬进全屏 App 的画面容器，所以全屏 App 里也在）。
     /// 幂等：重复调用只做一次真正的安装。
     /// V0.2.58（AevonGripToggleV258）：偏好 RingGripEnabled（默认开）= 隔离实验开关
@@ -220,6 +255,7 @@ enum AevonRingGrip {
         view.alpha = 0.85
         guard AevonEntryHost.attachOverlay(view) else { return }
         grip = view
+        installKbObserversIfNeeded()
         AevonLog.info("[圆盘] 右缘把手已就位（V0.2.59 起为贴边小短竖条，位置/长度可在设置页调，"
             + "命中区向外扩 \(Int(AevonRingGripView.hitOutsetX))pt，把手外一律不拦，"
             + "识别器挂在真实控件上，全屏宿主零识别器）"
@@ -238,6 +274,7 @@ enum AevonRingGrip {
 
     /// V0.2.60（AevonGripSwipeGlobalV260）：屏幕点是否落在把手命中区（给全局通道问）。
     static func hitTestScreenPoint(_ point: CGPoint) -> Bool {
+        guard !keyboardSuppressed else { return false }   // V0.2.67 AevonKbHideV267
         guard AevonPrefs.bool("RingGripEnabled", default: true) else { return false }
         guard let grip = grip, grip.superview != nil else { return false }
         return grip.containsScreenPoint(point)

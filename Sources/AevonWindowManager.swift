@@ -768,19 +768,26 @@ enum AevonWindowManager {
                     // 把 429x736 当成「被回弹」又补写一遍）。现在传原值。
                     sceneHost?.kickRelayout(width: mainCanvas.width, height: mainCanvas.height,
                                             tag: "预热切换 \(bundleID)")
-                    // V0.2.65（AevonEntryRevealV265）：画布已经切到浮窗尺寸并踢过一次重排 ——
-                    // 现在才让窗口出现。用户 Aevon(38) #3 的「第一时间底栏黑屏」就是
-                    // 在这一拍之前把窗显出来造成的。
-                    currentView?.revealEntryNow("画布已切到浮窗尺寸")
-            // V0.2.66（AevonNoReplayV266，用户 Aevon(39) #11「抖音打开时屏幕会闪一下才
-            // 真重排」）：**预热复刻往返退役**（0.2.62 曾在这里再做一次「整屏 → 画布」
-            // 第二次往返）。Aevon(39) 日志三次抖音开窗，预热复刻之后的断层几何自查
-            // 全部「内容宿主已贴合画布，无需补踢」—— 复刻收益为零，而它必然制造一次
-            // 可见闪（窗口已显出，画布又跳回整屏一拍再跳回来）。
-            // 预热那一拍（开窗前的整屏渲染）保留 —— 那才是「全屏打开一次」的本体。
-            AevonLog.info("[场景] 预热复刻已退役：不再做「整屏 → 画布」第二次往返"
-                + "（Aevon(39) 日志证明收益为零，徒增一闪）"
-                + "（AevonSeamRepairFixedV262 AevonNoReplayV266）")
+                    /* V0.2.67（AevonWarmBounceV267，用户 Aevon(40) #5「抖音真重排速度
+                     * 没有上一版快，会显示几秒断层才自动真重排」）：0.2.66 把预热复刻
+                     * 往返整建制退役（当时它在窗口显出**之后**跑 = 必闪一下）。现在把
+                     * 往返挪回窗口还藏着的时候做：+0.12s 起手「整屏 0.18s → 画布」，
+                     * 真重排在显窗前完成；+0.48s 才 reveal。用户既拿到上一版的重排
+                     * 速度，又不用付「可见闪」的代价。显窗兜底 1.3s 不变（往返完成
+                     * ≈0.72s，比兜底早）。 */
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        guard currentBundleID == bundleID else { return }
+                        AevonLog.info("[场景] 预热隐形复刻：趁窗口还藏着做一次「整屏 → 画布」往返"
+                            + "，真重排在显窗前完成（不再有可见闪）"
+                            + "（AevonSeamRepairFixedV262 AevonNoReplayV266 AevonWarmBounceV267）")
+                        sceneHost?.bounceFullscreenThenBack(width: mainCanvas.width,
+                                                            height: mainCanvas.height,
+                                                            tag: "预热隐形复刻 \(bundleID)")
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.48) {
+                        guard currentBundleID == bundleID else { return }
+                        currentView?.revealEntryNow("预热隐形复刻完成（画布已切回）")
+                    }
                 }
             } else {
                 // 非预热档：画布在开窗前就已经写好了，给系统 0.25 秒把第一帧排出来再显。
@@ -905,6 +912,9 @@ enum AevonWindowManager {
             return
         }
         guard let windowView = currentView, currentBundleID == bundleID else { return }
+        // V0.2.67（AevonFrameGuardV267）：先把「关窗中」钉在窗上再清 0 矩形 ——
+        // teardown 的收尾动画 completion 会再进 persistFrame，不钉住就会把矩形复活。
+        windowView.isClosing = true
         // V0.2.50（AevonFloatRestoreV250）：关窗收尾要多写一拍整屏画布，
         // 先把这个 App 的主场景抓在手上（teardown 之后 AevonSceneHelper 还能查到，但抓早更稳）。
         let mainScene = AevonSceneHelper.scene(for: bundleID)

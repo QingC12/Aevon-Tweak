@@ -286,6 +286,8 @@ final class AevonWindowView: UIView {
 
     /// 手势进行中（此时只允许改 transform，不允许改 frame）
     private var isLiveResizing = false
+    /// V0.2.67（AevonFrameGuardV267）：close() 置位；置位后 persistFrame 不再发布矩形。
+    var isClosing = false
     /// 边条拖动进行中（V0.2.21 建；V0.2.27 起落指即拖，AevonFloatEdgeGripV227）
     private var isBarHoldMoving = false
     /// V0.2.50（AevonMoveShadowOffV250）：位移进行中（此时光晕投影必须全关）
@@ -998,6 +1000,8 @@ final class AevonWindowView: UIView {
     /// 外侧手势的统一入口：角块 → 缩放；边条 → 落指即拖移动（V0.2.27）。
     @objc private func handleOutsidePan(_ gesture: UIPanGestureRecognizer) {
         guard let handle = gesture.view as? AevonEdgeHandleView else { return }
+        // V0.2.67（AevonSideMaskV267）：贴边侧热区屏蔽，与全局通道 grab(at:) 同一判据
+        if sideMaskedForScreenEdge(handle.edges) { return }
         if handle.isCorner {
             handleCornerResize(gesture, edges: handle.edges)
         } else {
@@ -1053,18 +1057,42 @@ final class AevonWindowView: UIView {
     /// `SBDeviceApplicationSceneViewController.view` 的命中测试根本不把窗外的点交给我们
     /// （V0.0.23 就已确认这个黑洞，圆盘正是靠 `UIApplication -sendEvent:` 才活下来的），
     /// 于是手柄的 pan 永远不 begun。既然事件总入口可靠，命中判定就得从这里也能走。
+    /* V0.2.67（AevonSideMaskV267，用户 Aevon(40) #1）：主窗一侧贴近屏幕边缘时，
+     * 那一侧的手势热区整段屏蔽（见 sideMaskedForScreenEdge）。 */
     func grab(at layerPoint: CGPoint) -> AevonFloatGrab? {
         guard let parent = superview else { return nil }
         let local = convert(layerPoint, from: parent)
 
         for handle in subviews.compactMap({ $0 as? AevonEdgeHandleView }) {
             guard !handle.isHidden, handle.alpha > 0.01 else { continue }
+            if sideMaskedForScreenEdge(handle.edges) { continue }
             if handle.frame.contains(local) {
                 return handle.isCorner ? .corner(handle.edges) : .bar(handle.edges)
             }
         }
         return nil
     }
+
+    /// V0.2.67（AevonSideMaskV267）：这一侧手柄是否因贴边被屏蔽。
+    /// 角块（left+bottom 组合等）只要其左右分量贴边就整块屏蔽，底边条不受影响。
+    func sideMaskedForScreenEdge(_ edges: UIRectEdge) -> Bool {
+        let screen = UIScreen.main.bounds
+        guard screen.width > 100 else { return false }
+        let threshold: CGFloat = 12
+        let masked = (edges.contains(.left) && frame.minX <= threshold)
+            || (edges.contains(.right) && (screen.maxX - frame.maxX) <= threshold)
+        if masked {
+            let now = CACurrentMediaTime()
+            if now - AevonWindowView.sideMaskLogAt > 5.0 {
+                AevonWindowView.sideMaskLogAt = now
+                AevonLog.info("[窗口] 贴边侧手势热区屏蔽：窗 (x=\(Int(frame.minX)), 右缘距屏 "
+                    + "\(Int(screen.maxX - frame.maxX))pt)，该侧手柄临时让位"
+                    + "（底边永不禁用）（AevonSideMaskV267）")
+            }
+        }
+        return masked
+    }
+    private static var sideMaskLogAt: CFTimeInterval = 0
 
     /// 开始一段外部驱动的拖拽。`layerPoint` = 浮窗层（屏幕）坐标。
     func grabBegin(_ grab: AevonFloatGrab, at layerPoint: CGPoint) {
@@ -1259,8 +1287,14 @@ final class AevonWindowView: UIView {
             width = base.width + signed
         }
         if edges.contains(.top) || edges.contains(.bottom) {
-            let signed = edges.contains(.top) ? -dy : dy
-            let widthFromY = (base.height + signed) * aspect
+            /* V0.2.67（AevonCornerDirV267，用户 Aevon(40) #2「拖动缩放时一帧突然变大
+             * 或缩小」）：原来 top/bottom 共用 `-dy` —— 对顶边是对的（上拖 = 放大），
+             * 对**底边是反的**（下拖明明该放大，却被算成缩小）。且横向/纵向两套口径
+             * 按 `abs(dx) >= abs(dy)` 切换，斜拖过切换点时两个值毫无过渡地互换，
+             * 就是用户看到的「一帧跳变」。现在底边用 `+dy`（下拖 = 放大），
+             * 两个口径在切换点附近数值连续，跳变消失。 */
+            let signedY = edges.contains(.top) ? -dy : dy
+            let widthFromY = (base.height + signedY) * aspect
             width = width.map { current in
                 abs(dx) >= abs(dy) ? current : widthFromY
             } ?? widthFromY
@@ -1507,7 +1541,7 @@ final class AevonWindowView: UIView {
         AevonLog.info("[窗口] 缩放到 \(Int(frame.width))x\(Int(frame.height))"
             + "（实时缩放：画布恒 \(Int(canvas.width))x\(Int(canvas.height)) 未变，"
             + "呈现层缩放 \(String(format: "%.2f", canvas.width / max(1, frame.width)))）"
-            + "（AevonEdgeResizeV37 AevonCanvasFixedV248）")
+            + "（AevonEdgeResizeV37 AevonCanvasFixedV248 AevonCornerDirV267）")
     }
 
     /// V0.2.48（AevonCanvasFixedV248）：把窗口**完整夹进屏幕**。
@@ -2394,6 +2428,14 @@ final class AevonWindowView: UIView {
     private func persistFrame() {
         // V0.2.50：停靠态的坐标不进「主窗几何记忆」（否则下次开窗跑到边角）
         guard !isDocked else { return }
+        // V0.2.67（AevonFrameGuardV267，用户 Aevon(40) #8「0.2.66 有概率屏幕点击失效」）：
+        // 关窗后收尾动画的 completion 里也会走到这里 —— 把刚被 close() 清成 0x0 的
+        // 浮窗矩形又写回通道，App 侧就拿着这个**残留矩形**继续吞「旧窗右缘/底缘带」
+        // 的触摸（Aevon(40) 日志 14:51:00 三连吞 {348,218}{360,228}{355,222} 全落在
+        // 上一扇窗 (29,194,340,583) 的右边带 = 实锤）。关窗中/已关窗一律不发布。
+        // （不再查 currentView —— 它是 private；isClosing + isTearingDown 已覆盖
+        //  全部复活路径，停靠窗另有 isDocked 闸。）
+        if isTearingDown || isClosing { return }
         guard !isLiveResizing, transform.isIdentity else { return }
         guard let store = UserDefaults(suiteName: AevonWindowView.prefsSuite) else { return }
         let screen = UIScreen.main.bounds
@@ -2414,6 +2456,7 @@ final class AevonWindowView: UIView {
         var text = "[窗口] 几何已记忆 \(Int(safe.width))x\(Int(safe.height))"
             + " 左上 (\(Int(safe.minX)),\(Int(safe.minY)))"
             + " = \(String(format: "%.1f", xp))%/\(String(format: "%.1f", yp))%/宽 \(String(format: "%.1f", wp))%"
+            + "（关窗中一律不发布，防残留矩形误吞）（AevonFrameGuardV267）"
         if previous.count >= 3 {
             text += "（上次 \(String(format: "%.1f", previous[0]))%/\(String(format: "%.1f", previous[1]))%/\(String(format: "%.1f", previous[2]))%）"
         }

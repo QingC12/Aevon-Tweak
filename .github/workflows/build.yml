@@ -2758,8 +2758,8 @@ jobs:
           # ③ #3 开窗入场：等画布切完再显（否则第一时间底栏黑）
           grep -q 'func revealEntryNow' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.65 开窗入场没有「等画布就绪再显」"; exit 1; }
-          grep -q 'revealEntryNow("画布已切到浮窗尺寸")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.65 预热切完画布没有触发显窗"; exit 1; }
+          grep -q 'revealEntryNow("预热隐形复刻完成（画布已切回）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.67 预热隐形复刻后没有触发显窗"; exit 1; }
           # ④ #4 键盘：窗口枚举不能再走废弃的 sharedApplication.windows
           grep -q 'static NSArray<UIWindow \*> \*AevonAllWindows' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.65 键盘窗口枚举没换成 _allWindowsIncludingInternalWindows"; exit 1; }
@@ -2829,8 +2829,12 @@ jobs:
             || { echo "::error::0.2.66 截图没走系统管线（无法联动其他插件）"; exit 1; }
           grep -q "method_getTypeEncoding(m)" "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.66 SBScreenShotter 缺类型编码自检（fail-closed 纪律）"; exit 1; }
-          grep -q 'private let fps: Double = 3' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
-            || { echo "::error::0.2.66 录屏帧率没降到 3fps（开启期间卡顿）"; exit 1; }
+          # V0.2.67 反转：录屏 3fps → 8fps（分辨率同时降到 540x1170，单帧编码量 1/5.7，
+          # 主线程负载与 3fps 原生像素相当）——「播放卡顿」的解法不是降帧率是降分辨率。
+          grep -q 'private let fps: Double = 8' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.67 录屏帧率没提到 8fps（播放幻灯片）"; exit 1; }
+          grep -q 'recMaxWidth' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.67 录屏没降分辨率（单帧 360 万像素编码量）"; exit 1; }
           # ⑫ 浮窗矩形文件通道（SB 写文件 + App 读文件，偏好域跨进程已被证伪）
           grep -q 'floatframe.txt' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.66 SB 侧缺浮窗矩形文件通道"; exit 1; }
@@ -2840,6 +2844,55 @@ jobs:
           grep -q 'AevonFullKickV266' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.66 全屏兜底缺抖动踢"; exit 1; }
           echo "V0.2.66 校验: 外观叫醒 + 浮窗手势优先 + 圆盘静默自收 + 把手即时归位 + 顶对齐 + 系统截图管线 + 录屏降载 + 淡出加柔 + 复刻退役 + 抖动踢 + 矩形文件通道 已就位"
+
+          # ── V0.2.67 校验（Aevon(40) 八项）──────────────────────────────────────
+          # ①贴边侧热区屏蔽 ②缩放方向反转修复 ③键盘在屏屏蔽把手 ④截图系统管线加固
+          #   + 录屏降分辨率提帧率 ⑤预热隐形复刻 ⑥⑦残留矩形治理 ⑧吞咽收敛到窗口层
+          for s in AevonSideMaskV267 AevonCornerDirV267 AevonKbHideV267 \
+          AevonShotSysV267 AevonRecHdV267 AevonWarmBounceV267; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.67 主库缺标记 $s"; exit 1; }
+          done
+          for s in AevonShieldFSV267 AevonKbHideV267 AevonSwallowOneV267; do
+            strings "$APP_DYLIB" | grep -q "$s" \
+              || { echo "::error::0.2.67 App 侧 dylib 缺标记 $s"; exit 1; }
+          done
+          # ① 贴边侧手势热区屏蔽（左右各 12pt 内，底边永不禁用）
+          grep -q 'func sideMaskedForScreenEdge' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.67 缺贴边侧屏蔽判定"; exit 1; }
+          grep -q 'sideMaskedForScreenEdge(handle.edges) { continue }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.67 grab(at:) 没接贴边屏蔽"; exit 1; }
+          grep -q 'if sideMaskedForScreenEdge(handle.edges) { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.67 本地手势入口没接贴边屏蔽"; exit 1; }
+          # ② 缩放底边方向修复（top/bottom 不再共用 -dy）
+          grep -q 'let signedY = edges.contains(.top) ? -dy : dy' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.67 缩放底边方向没修（拖底角一帧跳变）"; exit 1; }
+          grep -q 'let signed = edges.contains(.top) ? -dy : dy' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            && { echo "::error::0.2.67 缩放方向又回到 top/bottom 共用 -dy"; exit 1; } || true
+          # ③ 键盘在屏 → 把手触发条临时屏蔽（Darwin 通知通道）
+          grep -q 'com.aevon.kbvis.on' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.67 App 侧没广播键盘在屏"; exit 1; }
+          grep -q 'static var keyboardSuppressed' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.67 SB 侧没接键盘抑制状态"; exit 1; }
+          grep -q 'guard !keyboardSuppressed else { return false }' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.67 把手命中判定没接键盘抑制"; exit 1; }
+          # ④ 截图系统管线走纯 ObjC runtime（Swift 元类型转换在该类上静默失败）
+          grep -q 'objc_getClass("SBScreenShotter")' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
+            || { echo "::error::0.2.67 SBScreenShotter 没走 objc_getClass（as? NSObject.Type 会静默失败）"; exit 1; }
+          # ⑤ 预热隐形复刻（窗口藏着时做往返，显窗前完成真重排）
+          grep -q 'AevonWarmBounceV267' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.67 缺预热隐形复刻"; exit 1; }
+          # ⑦ 残留矩形治理：关窗后 persistFrame 不再发布
+          grep -q 'var isClosing = false' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.67 缺 isClosing 关窗标记"; exit 1; }
+          grep -q 'windowView.isClosing = true' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.67 close 没置 isClosing"; exit 1; }
+          grep -q 'if isTearingDown || isClosing { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.67 persistFrame 没把关窗期挡掉（残留矩形误吞）"; exit 1; }
+          # ⑧ 浮窗手势区吞噬必须带全屏闸门（承载模式下坐标系错配 = 误吞内容）
+          grep -q 'if (fullScreen && AevonPointInFloatEdge(p)) {' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.67 浮窗手势区吞噬缺全屏闸门（承载内容被误吞）"; exit 1; }
+          echo "V0.2.67 校验: 贴边侧屏蔽 + 缩放方向修复 + 键盘屏蔽把手 + 截图runtime加固 + 录屏8fps降分辨率 + 预热隐形复刻 + 残留矩形治理 + 吞咽收敛窗口层 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
