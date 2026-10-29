@@ -111,7 +111,7 @@ private func installExperimentalHooks() {
               let method = class_getInstanceMethod(cls, sceneGuardSel),
               let encoding = method_getTypeEncoding(method) else { return false }
         let text = String(cString: encoding)
-        let args = sceneGuardSel.rawValue.filter { $0 == ":" }.count
+        let args = NSStringFromSelector(sceneGuardSel).filter { $0 == ":" }.count
         return text.hasPrefix("v") && args == 3
     }()
     if !sceneGuardSafe {
