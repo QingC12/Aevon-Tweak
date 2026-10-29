@@ -1837,7 +1837,7 @@ final class AevonWindowView: UIView {
                 transform = .identity
                 AevonLog.info("[窗口] 真画面到了（cs=2 连续 2 拍）→ 藏着等的那扇窗瞬时上屏，"
                     + "无淡入无缩放（\(sceneHost.stateSummary())）"
-                    + "（AevonLiveHiddenV263 AevonLiveInstantV288）")
+                    + "（AevonLiveHiddenV263 AevonFadeInV264 AevonLiveInstantV288）")
             }
         } else {
             renderTicks = 0
