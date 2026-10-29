@@ -2228,7 +2228,9 @@ jobs:
           # 它当初为「pan 突然失效」取证，0.2.73 已定档（失效不在 Aevon 吞咽层）；
           # Aevon(54) 实测它每根手指遍历所有窗口视图树，日志里两行识别器噪声（112+93 行）
           # 全出自它。反回退网：不许再挂回来。
-          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+          # V0.2.82：过滤规则补上块注释续行（` * ` / `/*`）—— 0.2.81 就被自己写的
+          # 「这个函数已删」注释绊倒一次（grep -v '\s*//' 滤不掉以 `*` 开头的续行）。
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
                | grep -q 'dumpGestureRecognizerProbe'; then
             echo "::error::0.2.81 手势识别器探针又接回来了（每根手指扫全窗口）"
             exit 1
@@ -3394,7 +3396,9 @@ jobs:
             || { echo "::error::0.2.81 缺多场景判据标记"; exit 1; }
 
           # ④ 死代码清理：手势识别器探针不许回来（每根手指扫全部窗口视图树）
-          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+          # V0.2.82：过滤规则补上块注释续行（` * ` / `/*`）—— 0.2.81 就被自己写的
+          # 「这个函数已删」注释绊倒一次（grep -v '\s*//' 滤不掉以 `*` 开头的续行）。
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
                | grep -q 'dumpGestureRecognizerProbe'; then
             echo "::error::0.2.81 手势识别器探针又接回来了（每根手指扫全窗口，日志噪声 30%）"
             exit 1
