@@ -39,10 +39,11 @@ jobs:
           sed -i '' "s/^let AevonVersion = .*/let AevonVersion = \"${VERSION}\"/" Sources/Aevon.swift
           grep -n 'let AevonVersion' Sources/Aevon.swift
           # 设置页页脚里的版本号也一起同步，避免设置里显示上一版的旧号
-          # V0.2.81（AevonDeadCodeV281）：Root.plist 是**二进制** plist，sed 在 UTF-8 locale 下
-          # 碰到非法的多字节片段会直接 "RE error: illegal byte sequence" 并以 1 退出（0.2.81
-          # 第一次构建就是这么死的）。改到 C locale 做纯字节替换 —— 版本号 x.y.z 长度固定，
-          # 等长替换不会破坏 bplist 的偏移表。
+          # V0.2.81（AevonDeadCodeV281）：Root.plist 必须保持**XML 文本格式**（历史一直是 XML）。
+          # 0.2.81 一度被误写成 bplist，连环炸两处：① sed 在 UTF-8 locale 下报
+          # "RE error: illegal byte sequence" 并退出 1；② grep -c 'infoText' 在 bplist 上
+          # 整个文件只算 1 行 → 「开关说明 ≥ 4 条」断言直接挂。改到 C locale 做纯字节替换，
+          # 版本号 x.y.z 长度固定，等长替换对 XML / 任何编码都不会破坏内容。
           LC_ALL=C sed -i '' -E "s/Aevon [0-9]+\.[0-9]+\.[0-9]+/Aevon ${VERSION}/g" AevonPrefs/Resources/Root.plist
           grep -c "Aevon ${VERSION}" AevonPrefs/Resources/Root.plist || echo "::warning::设置页页脚版本号未同步（不影响功能）"
 
