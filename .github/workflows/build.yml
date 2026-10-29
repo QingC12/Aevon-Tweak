@@ -154,7 +154,7 @@ jobs:
                    AevonGripBusyRetireV287 AevonRingDismissInstantV288 AevonLiveInstantV288 \
                    AevonNoShellFadeV289 AevonCloseInstantV289 AevonRingOrphanEndV289 \
                    AevonWarmupSoloV290 AevonRootFreezeV290 \
-                   AevonWarmupPollV291 AevonCloseReviveV291 AevonHomeFreezeV291
+                   AevonWarmupPollV291 AevonCloseReviveV291 AevonHomeFreezeV291 \
                    AevonSameBeatSwapV292 AevonLaunchReviveV292 AevonKickCompressV292 AevonStableRevealV292; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.2.92 二进制里缺标记 $m"; exit 1; }
@@ -3917,9 +3917,11 @@ jobs:
           grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             | grep -q 'now() + 0.12' \
             || { echo "::error::0.2.92 kick 起手必须压缩到 0.12（AevonKickCompressV292）"; exit 1; }
-          grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
-            | grep -q 'now() + 0.25) { \[weak self\] in' \
-            && { echo "::error::0.2.92 kick 尾笔 0.25 回潮（应压到 0.18，AevonKickCompressV292）"; exit 1; } || true
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+               | grep -q 'now() + 0.25) { \[weak self\] in'; then
+            echo "::error::0.2.92 kick 尾笔 0.25 回潮（应压到 0.18，AevonKickCompressV292）"
+            exit 1
+          fi
           # ③ 揭幕稳定判据：让位期撤冻结必须连续 2 拍（Stheno 连续采样纪律）
           grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             | grep -q 'liveWaitTicks >= 2' \
