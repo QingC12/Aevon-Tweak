@@ -1195,11 +1195,11 @@ __attribute__((used)) static const char AevonGestureProbeV2V256Marker[] = "Aevon
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
-/* iOS SDK 没有独立的 <ucontext.h>（它是 macOS 的），ucontext_t 由 <signal.h>
- * 经 <sys/_types/_ucontext.h> 带出来。用 __has_include 兼容两种 SDK。 */
-#if __has_include(<ucontext.h>)
-#include <ucontext.h>
-#endif
+/* 注意：**不能** include <ucontext.h>。iOS SDK 里那份是 macOS 的 XNU 头
+ *（要 _XOPEN_SOURCE，而且 `__darwin_arm_thread_state64` 的成员名对不上，
+ * 第一次构建就死在 "no member named '__pc'"）。`<signal.h>` 已经通过
+ * `<sys/_types/_ucontext.h>` 给出了 ucontext_t，下面按 **ABI 固定偏移**读寄存器，
+ * 不依赖任何成员名。 */
 
 static const char kAevonCrashLogPath[] = "/var/mobile/Aevon.crash.log";
 static const char kAevonCrashOwnerPath[] = "/var/mobile/Aevon.crash.owner";
@@ -1248,11 +1248,22 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
 
 #if defined(__arm64__)
     if (uctx != NULL) {
-        ucontext_t *uc = (ucontext_t *)uctx;
-        pc = uc->uc_mcontext->__ss.__pc;
-        lr = uc->uc_mcontext->__ss.__lr;
-        sp = uc->uc_mcontext->__ss.__sp;
-        fp = uc->uc_mcontext->__ss.__fp;
+        /* arm64 / Darwin 的 ucontext ABI 布局（固定，不随头文件变）：
+         *   ucontext_t                    → uc_mcontext 在 +48
+         *     (int uc_onstack 4 + sigset 4 + sigaltstack 24 + uc_link 8 + uc_mcsize 8)
+         *   __darwin_mcontext64           → __ss 在 +24（前面是 __es：3 × uint64）
+         *   __darwin_arm_thread_state64   → x[29] 232 字节，随后 fp / lr / sp / pc 各 8
+         * 于是 pc = mcontext + 24 + 232 + 24 = mcontext + 280，其余依次 +8。
+         * 为什么不用成员名：iOS SDK 那份 ucontext.h 是 macOS 的，成员名对不上
+         *（0.2.83 第一次构建就死在 "no member named '__pc'"）。 */
+        uintptr_t ucAddress = (uintptr_t)uctx;
+        uintptr_t mcontext = *(uintptr_t *)(ucAddress + 48);
+        if (mcontext != 0) {
+            fp = *(uint64_t *)(mcontext + 24 + 232);
+            lr = *(uint64_t *)(mcontext + 24 + 240);
+            sp = *(uint64_t *)(mcontext + 24 + 248);
+            pc = *(uint64_t *)(mcontext + 24 + 256);
+        }
     }
 #else
     (void)uctx;

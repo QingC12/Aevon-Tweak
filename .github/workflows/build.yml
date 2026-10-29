@@ -3515,8 +3515,14 @@ jobs:
             || { echo "::error::0.2.83 没装 sa_sigaction（拿不到 ucontext）"; exit 1; }
           grep -q 'SA_SIGINFO' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::0.2.83 sigaction 没带 SA_SIGINFO"; exit 1; }
-          grep -q '__ss.__pc' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
-            || { echo "::error::0.2.83 没读 ucontext 的 pc（拿不到崩溃指令）"; exit 1; }
+          # 读 pc 用的是 ABI 固定偏移（mcontext + 24 + 256），不是成员名 ——
+          # iOS SDK 的 ucontext.h 是 macOS 的，字段名对不上（0.2.83 第一次构建实锤）。
+          grep -q 'mcontext + 24 + 256' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.83 没按 ABI 偏移读 pc（拿不到崩溃指令）"; exit 1; }
+          if grep -q '#include <ucontext.h>' "$GITHUB_WORKSPACE/AevonAssertionShim.m"; then
+            echo "::error::0.2.83 又把 macOS 的 ucontext.h 引回来了（编译必死）"
+            exit 1
+          fi
           grep -q 'AevonCrashInstall()' "$GITHUB_WORKSPACE/Sources/AevonCrashCatcher.swift" \
             || { echo "::error::0.2.83 Swift 侧没切到 AevonCrashInstall"; exit 1; }
           # 老的「一参数 signal() 处理器」不许回来（它是整条假栈的来源）
