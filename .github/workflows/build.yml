@@ -154,9 +154,10 @@ jobs:
                    AevonGripBusyRetireV287 AevonRingDismissInstantV288 AevonLiveInstantV288 \
                    AevonNoShellFadeV289 AevonCloseInstantV289 AevonRingOrphanEndV289 \
                    AevonWarmupSoloV290 AevonRootFreezeV290 \
-                   AevonWarmupPollV291 AevonCloseReviveV291 AevonHomeFreezeV291; do
+                   AevonWarmupPollV291 AevonCloseReviveV291 AevonHomeFreezeV291
+                   AevonSameBeatSwapV292 AevonLaunchReviveV292 AevonKickCompressV292 AevonStableRevealV292; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.91 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.92 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -2431,9 +2432,12 @@ jobs:
           # V0.2.62 反转（AevonLiveQuietV262）：从「连续 2 拍」放宽成「>=1 拍 + 让位已过
           # 0.12s」—— Aevon(36) 实测让位 0.43/0.65 秒才淡入，这段「窗口消失」本身就是
           # 用户说的闪；0.12s 足够避开系统回桌面首帧，又不会让窗口看起来「没了」。
-          grep -q 'if liveWaitTicks >= 1, now - liveWaitStartedAt > 0.12' \
+          # V0.2.92（AevonStableRevealV292）反转：让位揭幕从「>=1 拍」收回「连续 2 拍」——
+          # 0.2.62 放宽的前提（窗口消失感）在瞬时显形+冻结帧全程在盖之后已不成立；
+          # Stheno 揭幕纪律 = 连续采样判就绪（Aevon(61) #3 闪/黑屏）。
+          grep -q 'if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.60/0.2.62 让位淡入判定丢了（>=1 拍 + 0.12s 下限）"; exit 1; }
+            || { echo "::error::0.2.92 让位揭幕必须连续 2 拍稳定（AevonStableRevealV292，0.2.60/0.2.62 的 >=1 拍已反转）"; exit 1; }
           grep -q 'liveWaitLimit: TimeInterval = 1.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.60 让位上限（1.0s）被改动了"; exit 1; }
           # 0.2.65 反转：让位期**必须**允许垫定格帧（窗口不再靠隐藏遮黑，改由最后一帧顶住）
@@ -2606,8 +2610,10 @@ jobs:
             || { echo "::error::0.2.90 预热时长不在 0.30 秒（开窗提速回潮）"; exit 1; }
           grep -q 'now() + 0.30' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.90 预热切换与预热时长不一致（应同为 0.30）"; exit 1; }
-          grep -q 'now() + 0.20' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
-            || { echo "::error::0.2.62 kickRelayout 起手没压到 0.20 秒"; exit 1; }
+          # V0.2.92（AevonKickCompressV292）反转：kick 起手 0.20 → 0.12（Aevon(61) #2
+          # 时序账：poll 就绪后 kick 双笔 0.45 是最后大头；0.20/0.25 只是保守等待值）。
+          grep -q 'now() + 0.12' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.92 kickRelayout 起手没压到 0.12 秒（0.2.62 的 0.20 已反转）"; exit 1; }
           # ①预热切换不能再把 (w-1) 传进去（kickRelayout 内部已经 -1，画布会差 1pt）
           grep -q 'kickRelayout(width: mainCanvas.width, height: mainCanvas.height,' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -3899,6 +3905,32 @@ jobs:
           grep -q 'AevonTransitionSentry' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.91 过渡哨类缺失"; exit 1; }
           echo "V0.2.91 校验: 预热就绪poll + 关窗唤醒被覆盖App + 回桌面过渡哨根级冻结 已就位"
+
+          # ── V0.2.92 校验（Aevon(61)：抖音卡死依旧 + 还要 1 秒 + 回桌面闪/黑屏）──
+          # ① 关窗唤醒第 1 轮改 launchApplicationWithIdentifier 真激活（settings 裸写已证不生效）
+          grep -q 'AevonLaunchReviveV292' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.92 缺「关窗 launch 真激活」标记"; exit 1; }
+          grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            | grep -q 'AevonRuntime.sendVoid(UIApplication.shared, launchSel,' \
+            || { echo "::error::0.2.92 关窗唤醒第 1 轮必须走 launchApplicationWithIdentifier（AevonLaunchReviveV292）"; exit 1; }
+          # ② kick 双笔压缩 0.20/0.25 → 0.12/0.18（机制不动，只压等待）
+          grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            | grep -q 'now() + 0.12' \
+            || { echo "::error::0.2.92 kick 起手必须压缩到 0.12（AevonKickCompressV292）"; exit 1; }
+          grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            | grep -q 'now() + 0.25) { \[weak self\] in' \
+            && { echo "::error::0.2.92 kick 尾笔 0.25 回潮（应压到 0.18，AevonKickCompressV292）"; exit 1; } || true
+          # ③ 揭幕稳定判据：让位期撤冻结必须连续 2 拍（Stheno 连续采样纪律）
+          grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            | grep -q 'liveWaitTicks >= 2' \
+            || { echo "::error::0.2.92 揭幕必须连续 2 拍稳定（AevonStableRevealV292）"; exit 1; }
+          # ④ 哨命中同拍提交：搬家+盖帧必须包进同一 CATransaction
+          grep -q 'AevonSameBeatSwapV292' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.92 缺「哨命中同拍提交」标记"; exit 1; }
+          grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            | grep -q 'CATransaction.setDisableActions(true)' \
+            || { echo "::error::0.2.92 哨命中搬家+盖帧必须同拍 CATransaction 提交（AevonSameBeatSwapV292）"; exit 1; }
+          echo "V0.2.92 校验: 关窗launch真激活 + kick双笔压缩 + 揭幕连续2拍 + 哨同拍提交 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

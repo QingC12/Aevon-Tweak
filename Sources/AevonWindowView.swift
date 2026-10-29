@@ -1814,7 +1814,7 @@ final class AevonWindowView: UIView {
          * 常驻看门会在 cs=2 时撤掉它。 */
         AevonLog.info("[窗口] 回桌面让位结束（\(String(format: "%.2f", held))s，\(reason)，"
             + "画面=\(rendering == true ? "实时" : "仍定格")，窗口 alpha 全程 1）"
-            + "（\(sceneHost.stateSummary())）（AevonNoVanishV265）")
+            + "（\(sceneHost.stateSummary())）（AevonNoVanishV265 AevonStableRevealV292）")
     }
 
     /// V0.2.63（AevonLiveHiddenV263）：藏着等真画面 —— 连续 2 拍在画才淡入。
@@ -1913,9 +1913,14 @@ final class AevonWindowView: UIView {
             // V0.2.60（AevonLiveFirstV260）：要求稳定才淡入。
             // V0.2.62（AevonLiveQuietV262，Aevon(36) #5）：从「连续 2 拍」放宽成
             // 「至少 1 拍 + 让位已过 0.12 秒」。Aevon(36) 实测让位 0.43 / 0.65 秒才淡入，
-            // 这么长的「窗口消失」本身就是一次闪；0.12 秒足够避开系统回桌面动画的首帧，
-            // 又不至于让用户觉得窗口「没了」。
-            if liveWaitTicks >= 1, now - liveWaitStartedAt > 0.12 {
+            // 这么长的「窗口消失」本身就是一次闪。
+            // V0.2.92（AevonStableRevealV292，Aevon(61) #3「会闪或者黑屏，然后才出现
+            // 实时内容」+ 逆向对照报告 §4.3）：Stheno/ScreenCore 的揭幕纪律 =
+            // **连续 N 次采样都判定内容就绪才揭幕**（防「刚出图又掉层」的出现→消失）。
+            // 0.2.62 放宽的前提（窗口消失感）在 0.2.87 瞬时显形 + 冻结帧全程在盖之后
+            // 已经不成立 —— 现在撤帧前画面一直是冻结帧，多等 1 拍（0.1s）无感；
+            // 而撤早了 = cs 先报 2、远程表面还没真画上 → 用户看到黑一瞬。收回 2 拍。
+            if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12 {
                 finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍）")
             } else if now > liveWaitDeadline {
                 finishLiveWait(reason: "上限到达")

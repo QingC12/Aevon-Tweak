@@ -495,17 +495,25 @@ final class AevonSceneHost {
         // 起手 0.45 → 0.20 秒。0.45 是为了让过 0.35s 那一拍防回弹复查，但那一拍只
         // 认「读回值 ≠ 目标」才补写，微扰窗口和它错开 0.15s 已足够；0.45 等于让用户
         // 白等半秒才看到内容排好。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+        // V0.2.92（AevonKickCompressV292，Aevon(61) #2「快多了但还要等 1 秒」）：
+        // Aevon(61) 时序账（预热档 txn 0.71s = 拉起+poll 0.23 + **kick 双笔 0.45**
+        // + 显形零头）：poll 已就绪、kick 双笔成了最后的大头。0.20/0.25 的等待只是
+        // 「给 App 反应时间」的保守值 —— 写 FBScene frame 是异步提交，App 侧收到
+        // 尺寸回调不需要几百毫秒；压到 0.12/0.18（省 0.15s）。微扰机制本身不动
+        //（0.2.62 Aevon(36) 实锤不微扰有断层）。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self, !self.invalidated else { return }
             _ = self.writeCanvas(width - 1, height - 1)
             AevonLog.info("[场景] 强制重排：先写 \((Int(width - 1)))x\((Int(height - 1)))"
-                + "（\(tag)，让 App 收到一次尺寸变化）（AevonRelayoutKickV249 AevonKickFastV262）")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                + "（\(tag)，让 App 收到一次尺寸变化）（AevonRelayoutKickV249 AevonKickFastV262"
+                + " AevonKickCompressV292）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
                 guard let self else { return }
                 guard !self.invalidated else { return }
                 _ = self.writeCanvas(width, height)
                 AevonLog.info("[场景] 强制重排：写回 \(Int(width))x\(Int(height))"
-                    + "（\(tag)，App 这一遍布局用的就是最终画布）（AevonRelayoutKickV249）")
+                    + "（\(tag)，App 这一遍布局用的就是最终画布）（AevonRelayoutKickV249"
+                    + " AevonKickCompressV292）")
                 // V0.2.71（AevonRevealEventV271）：最后一笔画布定稿 → 显窗回调。
                 // V0.2.84（AevonKickDrainV284）：**只在没有第二条链在途时**才 fire。
                 self.pendingKicks = max(0, self.pendingKicks - 1)

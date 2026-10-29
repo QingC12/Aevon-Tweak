@@ -1342,18 +1342,41 @@ enum AevonWindowManager {
             // force = 绕过记账账本（这是补救路径，0.2.79 的 force 语义）。被覆盖
             // App 的画布我们从未动过（它一直整屏），不需要抖动踢，只要前台。
             // 守卫：用户已又开了别的窗（covered 正被承载）→ 不抢前台。
+            // V0.2.92（AevonLaunchReviveV292，Aevon(61) #1「抖音卡死的问题依旧存在，
+            // 相同触发方式」）：Aevon(61) 日志实锤两轮 settings 写入都触发了、读回
+            // fg=0 —— **裸写 FBScene.settings.foreground 系统不认**（没有
+            // transitionContext，FrontBoard 不把它当激活请求；对照报告
+            // 《-_didUpdateClientSettingsWithDiff:transitionContext:》）。而用户
+            // 「划掉后台从图标重开」100% 能恢复 = **launchApplicationWithIdentifier
+            // 这条 SB 官方激活链必然有效**。第 1 轮（+0.45s）改走它（suspended:false
+            // = 等价用户点图标，对已存在场景的 App 就是重新激活）；第 2 轮（+0.85s）
+            // 保留 settings 写入兜底（第 1 轮已成功的场合被
+            // currentForegroundBundleID 守卫拦住，不会重复打扰）。
             let covered = coveredFullscreenBundleID
             coveredFullscreenBundleID = ""
             if !covered.isEmpty, covered != bundleID {
                 for (delay, round) in [(0.45, 1), (0.85, 2)] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         guard !isWindowed(covered) else { return }
-                        // 已自行回到前台（用户从图标重新全屏拉起）→ 不再补写
+                        // 已自行回到前台（用户从图标重新全屏拉起 / 第 1 轮已生效）→ 不再补
                         guard covered != AevonEntryHost.currentForegroundBundleID else { return }
                         guard let coveredScene = AevonSceneHelper.scene(for: covered) else {
                             AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(covered) 场景取不到（已不在后台？）跳过"
                                 + "（AevonCloseReviveV291）")
                             return
+                        }
+                        if round == 1 {
+                            let launchSel = Selector(("launchApplicationWithIdentifier:suspended:"))
+                            if UIApplication.shared.responds(to: launchSel) {
+                                AevonLog.info("[窗口] 关窗唤醒第 1 轮：\(covered) 走 launchApplicationWithIdentifier"
+                                    + "（suspended:false，等价点图标真激活；settings 裸写已证不生效）"
+                                    + "（AevonLaunchReviveV292）")
+                                AevonRuntime.sendVoid(UIApplication.shared, launchSel,
+                                                       covered as NSString, false)
+                                return
+                            }
+                            AevonLog.info("[窗口] 关窗唤醒第 1 轮：launch 通道不可用 → 退回 settings 写入"
+                                + "（AevonLaunchReviveV292）")
                         }
                         AevonSceneHelper.setForeground(coveredScene, true,
                                                        reason: "关窗唤醒被覆盖 App 第\(round)轮",

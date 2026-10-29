@@ -90,10 +90,18 @@ final class AevonTransitionSentry: NSObject {
         disarm()
         AevonLog.warn("[入口] 回桌面过渡哨命中：场景视图几何连续 \(deviationTicks) 拍变化"
             + "（\(Int(lastRect.width))x\(Int(lastRect.height)) → \(Int(rect.width))x\(Int(rect.height))，"
-            + "transform=\(transformed ? "非恒等" : "恒等")）→ 容器立即归位 + 根级冻结帧"
-            + "（AevonHomeFreezeV291）")
+            + "transform=\(transformed ? "非恒等" : "恒等")）→ 容器归位+根级冻结帧同拍提交"
+            + "（AevonHomeFreezeV291 AevonSameBeatSwapV292）")
+        // V0.2.92（AevonSameBeatSwapV292，Aevon(61) #3「上滑返回桌面时悬浮窗会闪或者
+        // 黑屏」）：0.2.91 哨命中后「先搬家、20ms 后盖帧」是两次独立 CA 提交 —— 搬家
+        // 瞬间浮窗从场景视图的缩放坐标系跳回窗口根原尺寸（视觉跳变 = 闪），盖帧才把
+        // 画面按住。现在两个动作包进同一个 CATransaction 且禁用隐式动画，合成**一帧**
+        // 提交：用户看到的就是「画面原地停住」，没有中间态。
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         AevonEntryHost.attachToWindowRoot(reason: "回桌面过渡哨（缩放动画第一帧）")
         AevonWindowManager.noteTransitionFreeze()
+        CATransaction.commit()
         // 误报还原网：+1.5s 后场景还在屏、几何已稳、容器仍在窗口根 → 判误报
         //（如控制中心半拉时 App 视图轻微位移），把容器搬回场景视图恢复常态。
         // 真回桌面的场景此刻已被收走（appSceneView == nil），还原网自然不命中；
