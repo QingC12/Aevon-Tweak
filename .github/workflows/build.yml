@@ -137,6 +137,13 @@ jobs:
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.80 二进制里缺标记 $m"; exit 1; }
           done
+          # V0.2.82（Aevon(55) 闪 + 自动注销）：三条修复必须各自带着标记进二进制。
+          # 注意 Swift 日志串是 UTF-8，strings 能查到；ObjC 中文串则查不到（0.2.68/0.2.81 教训）。
+          for m in AevonShroudOnTopV282 AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
+                   AevonYieldAlphaV282; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::0.2.82 二进制里缺标记 $m"; exit 1; }
+          done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
           if strings "$DYLIB" | grep -q '_UISceneLayerHostContainerView'; then
@@ -3395,6 +3402,47 @@ jobs:
           grep -q 'AevonDeadCodeV281' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::0.2.81 缺死代码清理标记（AevonDeadCodeV281）"; exit 1; }
           echo "V0.2.81 校验: 切换器让位下线 + 自建默认关 + 学习降级修正 + 多场景判据 + 探针退役 已就位"
+
+          # ── V0.2.82 校验（Aevon(55)：闪 + 自动注销）────────────────────────────
+          # 依据 Aevon(55) 三份现场：
+          #   ① Aevon.crash.log.old：SIGSEGV=11，帧1 = sendEvent 钩子、帧3-10 紧随其后的判定
+          #      → 崩溃在触摸链上；两次崩溃分别紧跟「开窗完成 0.53s」「让位 0.285s」。
+          #   ② 12:35:00 时序：00.227 占位直显（窗已可见）→ 00.427 写 429x736
+          #      → 00.692 写回 430x737 → 00.694 才摘遮罩 = 中间 467ms 重排两次（闪）。
+          #   ③ 触摸链上唯一遍历系统窗口视图树的是「失效瞬间探针」的 hitTest。
+
+          # ① 遮罩必须提到窗口之上（否则 kick 的两笔画布抖动全暴露）
+          grep -q 'AevonShroudOnTopV282' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.82 遮罩没提到窗口之上（画布抖动会在用户眼前跳两次）"; exit 1; }
+          grep -q 'host.bringSubviewToFront(cover)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.82 缺「遮罩重新置顶」的实现"; exit 1; }
+
+          # ② 触摸热路径上不许再有任何 hitTest 调用（判据只认 `.hitTest(` 调用形态，
+          #   注释里提到这个词不算 —— 0.2.81 就被自己的块注释绊过一次）
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+               | sed -n '/func touchTriggeredProbeIfDue/,/^    }/p' | grep -q '\.hitTest('; then
+            echo "::error::0.2.82 失效瞬间探针又在对视图做 hitTest（触摸热路径，SIGSEGV 源头）"
+            exit 1
+          fi
+          grep -q 'AevonProbeHitRetireV282' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.82 缺「触摸链 hitTest 退役」标记"; exit 1; }
+
+          # ③ 让位必须过「手指还在屏上」闸门（否则 isHidden 当场把 UITouch 摘成野指针）
+          grep -q 'AevonYieldTouchGuardV282' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.82 让位没过触点闸门（触摸中隐藏窗口 = use-after-free）"; exit 1; }
+          grep -q 'AevonEdgeEntry.hasActiveTouches' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.82 让位巡检没查 hasActiveTouches"; exit 1; }
+          grep -q 'static func noteTouchFrame' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.82 触点计数没进触摸回调（闸门会恒假 = 让位永不生效）"; exit 1; }
+          # ④ 让位不许再用 isHidden（会 cancel 触摸 → UITouch 野指针）
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+               | grep -q 'view.isHidden = yielding'; then
+            echo "::error::0.2.82 让位又用 isHidden 了（UIKit 会当场 cancel 触摸 → 野指针崩溃）"
+            exit 1
+          fi
+          grep -q 'AevonYieldAlphaV282' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.82 缺「让位改 alpha」标记"; exit 1; }
+          echo "V0.2.82 校验: 遮罩置顶 + 触摸链零 hitTest + 让位触点闸门 + 让位改 alpha 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

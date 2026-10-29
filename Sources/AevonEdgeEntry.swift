@@ -171,6 +171,40 @@ enum AevonEdgeEntry {
 
     // MARK: - 全局触摸分发（由 AevonTouchHook.m 在 sendEvent 里回调）
 
+    // ── V0.2.82（AevonYieldTouchGuardV282）：活动触点计数 ────────────────────
+    //
+    // Aevon(55) 两次崩溃（SIGSEGV=11，SpringBoard 直接退出）都发生在「浮窗让位」之后
+    // 0.28 / 0.53 秒。让位 = 把浮窗 `view.isHidden = true`，而 UIKit 在窗口被隐藏的
+    // 那一刻会**立刻 cancel 该窗口上的所有触摸，并把对应 UITouch 从事件簿记里摘掉**；
+    // 我们的 `AevonHookSendEvent` 还握着同一个 UITouch 指针，下一帧读 `touch.phase` /
+    // `[touch locationInView:nil]` 就是 use-after-free —— 与崩溃栈
+    // （帧1 = sendEvent 钩子、帧3-10 = 紧随其后的 Swift 判定）完全吻合。
+    //
+    // ObjC 层没法判断一个 UITouch 是不是已经失效（判据本身就要读它），所以从源头拦：
+    // **手指还在屏上就不让位**，等它抬起来，下一次 0.25 秒巡检再让。
+    // 计数丢帧（cancel 可能丢）靠「2 秒没有任何帧 → 清零」自愈，不会卡死让位。
+    private static var activeTouchCount = 0
+    private static var lastTouchFrameAt: CFTimeInterval = 0
+
+    static func noteTouchFrame(phase: UITouch.Phase) {
+        let now = CACurrentMediaTime()
+        if lastTouchFrameAt > 0, now - lastTouchFrameAt > 2.0 {
+            activeTouchCount = 0
+        }
+        lastTouchFrameAt = now
+        switch phase {
+        case .began: activeTouchCount += 1
+        case .ended, .cancelled: activeTouchCount = max(0, activeTouchCount - 1)
+        default: break
+        }
+    }
+
+    /// 屏上还有手指（或 0.25 秒内刚有过触摸帧）。让位巡检据此延后。
+    static var hasActiveTouches: Bool {
+        if activeTouchCount > 0 { return true }
+        return CACurrentMediaTime() - lastTouchFrameAt < 0.25
+    }
+
     static func handleGlobal(phase: UITouch.Phase, point: CGPoint, touchID: UInt) {
         guard AevonPrefs.bool("Enabled", default: true) else { return }
         let screen = UIScreen.main.bounds
@@ -878,6 +912,9 @@ public func AevonGlobalTouchPhase(_ phase: Int, _ touchID: UInt, _ x: CGFloat, _
     case 4: mapped = .cancelled
     default: return
     }
+    // V0.2.82（AevonYieldTouchGuardV282）：每帧都记一笔「手指还在不在屏上」。
+    // 让位巡检要用它拦住「触摸进行中把窗 isHidden」这条崩溃面，见 noteTouchFrame。
+    AevonEdgeEntry.noteTouchFrame(phase: mapped)
     AevonEdgeEntry.handleGlobal(phase: mapped, point: CGPoint(x: x, y: y), touchID: touchID)
 }
 

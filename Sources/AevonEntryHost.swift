@@ -541,6 +541,8 @@ enum AevonEntryHost {
     private static var overlayWatch: Timer?
     private static var overlayHitName = ""
     private static var yieldGuardLogged = false
+    /// V0.2.82（AevonYieldTouchGuardV282）：触点闸门的日志节流。
+    private static var yieldTouchLogAt: CFTimeInterval = 0
 
     static func startOverlayWatch() {
         guard overlayWatch == nil else { return }
@@ -608,6 +610,19 @@ enum AevonEntryHost {
             if !hit.isEmpty { break }
         }
         let present = !hit.isEmpty
+        /* V0.2.82（AevonYieldTouchGuardV282）：手指还在屏上时绝不让位。
+         * 让位会让 UIKit 当场 cancel 这根手指并把 UITouch 摘掉，sendEvent 钩子手里的
+         * 指针随之失效 —— Aevon(55) 两次 SIGSEGV 都紧跟让位 0.28 / 0.53 秒。
+         * 推迟一拍对用户没有可见差别（他手指还按着，本来也点不到窗）。 */
+        if present, AevonEdgeEntry.hasActiveTouches {
+            let nowT = CACurrentMediaTime()
+            if nowT - yieldTouchLogAt > 2.0 {
+                yieldTouchLogAt = nowT
+                AevonLog.info("[窗口] 命中 \(hit) 但手指还在屏上 → 本轮不让位，等抬手后再让"
+                    + "（AevonYieldTouchGuardV282）")
+            }
+            return
+        }
         if present, AevonSwitchCoordinator.shared.hasActive {
             if !yieldGuardLogged {
                 yieldGuardLogged = true
@@ -715,46 +730,35 @@ enum AevonEntryHost {
         let now = CACurrentMediaTime()
         guard now - lastTouchProbeAt >= 3.0 else { return }
         lastTouchProbeAt = now
-        let screen = UIScreen.main.bounds
-        let probes: [(String, CGPoint)] = [
-            ("中", CGPoint(x: screen.midX, y: screen.midY)),
-            ("右", CGPoint(x: screen.maxX - 6, y: screen.midY)),
-            ("底", CGPoint(x: screen.midX, y: screen.maxY - 12)),
-            ("右下", CGPoint(x: screen.maxX - 6, y: screen.maxY - 110)),
-        ]
-        var parts: [String] = []
-        for (label, pt) in probes {
-            let hit = window?.hitTest(pt, with: nil)
-            let hitName = hit.map { AevonSafeClassName($0) ?? "?" } ?? "穿透"
-            let floatHit = pointHitsFloatingWindow(at: pt) ? 1 : 0
-            parts.append("\(label)=\(hitName)/浮\(floatHit)")
-        }
+        /* V0.2.82（AevonProbeHitRetireV282，Aevon(55)「打开悬浮窗时依旧会闪，并且还会
+         * 伴随着自动注销」）：**触摸热路径上的全部 hitTest 退役**。
+         *
+         * Aevon(55) 的崩溃栈（SIGSEGV=11，SpringBoard 直接被带走，Aevon.crash.log.old）：
+         *     1   Aevon.dylib  AevonTouchHookInstall +15516   ← -[UIApplication sendEvent:] 钩子
+         *     3-10 Aevon.dylib （AevonEdgeEntry 那一片：+134756…+169048）
+         *     17  libdispatch  _dispatch_main_queue_callback_4CF
+         * 两次崩溃都落在「开窗完成 / 让位」之后 0.3~0.5 秒，即**每根手指 began 都会走**的链上。
+         *
+         * 这条链上唯一在遍历**系统窗口视图树**的就是本函数：4 次入口窗口 hitTest，
+         * 再加对 SBHomeScreenWindow / SBMainSwitcherWindow 各一次 hitTest。
+         * hitTest 根本不是只读操作 —— 它递归调用每个子视图的 point(inside:with:)，
+         * SpringBoard 的私有视图会在这条路径上做惰性初始化与断言，正是「点一下就注销」
+         * 的经典形态（与 0.2.72「全类表遍历只扫不调也会死」同一类事故）。
+         *
+         * 它要回答的「手势为什么突然失效」0.2.73 已经定档（不在 Aevon 吞咽层）；
+         * 兄弟探针 dumpGestureRecognizerProbe 0.2.81 已删。这里保留**纯字段读取**的摘要
+         *（状态位 / 浮窗层子视图数 / 容器挂载点），不再对任何视图调用 hitTest。 */
         let layerCount = floatLayer?.subviews.count ?? 0
         let mount = container?.superview.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "无"
-        // V0.2.73（AevonProbeHostHitV273，用户 Aevon(45) #2「系统手势有时突然失效，
-        // 只能点击和长按」）：**宿主命中审计** —— Aevon 位标志全 0 + 识别器 state=可能
-        //（Aevon(45) 实锤）说明失效不在 Aevon 吞咽层；触摸到没到 SB 主屏内容视图是
-        // 剩下的唯一分叉。对 SBHomeScreenWindow / SBMainSwitcherWindow 的中心点做
-        // hitTest，命中的类名直接进日志 —— 若命中的是来路不明的视图（比如某个
-        // passthrough / 特殊容器），失效现场就锁死了。
-        var hostHits: [String] = []
-        for scene in UIApplication.shared.connectedScenes {
-            for win in (scene as? UIWindowScene)?.windows ?? [] {
-                let name = AevonRuntime.className(win) ?? "\(type(of: win))"
-                guard name.contains("SBHomeScreen") || name.contains("SBMainSwitcher") else { continue }
-                let hit = win.hitTest(CGPoint(x: screen.midX, y: screen.midY), with: nil)
-                let hitName = hit.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "穿透"
-                hostHits.append("\(name)→\(hitName)")
-            }
-        }
-        AevonLog.info("[诊断] 失效瞬间探针：\(AevonEdgeEntry.forensicStateText) | 入口命中 "
-            + parts.joined(separator: " ") + " | 浮窗层子视图=\(layerCount) 容器挂载=\(mount)"
-            + " | 宿主命中 \(hostHits.joined(separator: " | "))（AevonTouchProbeV257 AevonProbeHostHitV273）")
+        AevonLog.info("[诊断] 失效瞬间探针（只读版，零 hitTest）：\(AevonEdgeEntry.forensicStateText)"
+            + " | 浮窗层子视图=\(layerCount) 容器挂载=\(mount)"
+            + "（AevonTouchProbeV257 AevonProbeHostHitV273 AevonProbeHitRetireV282）")
         // V0.2.81（AevonDeadCodeV281）：此处原本还会调 dumpGestureRecognizerProbe ——
         // Aevon(54) 实测它每根手指都遍历 SB 所有窗口的整棵视图树列举 UIGestureRecognizer
         //（日志里 [SBFluidSwitcherTouchPassThroughScrollView]=112 / [SBIconScrollView]=93
         //  两行噪声都出自它），而它当初要查的「pan 突然失效」已在 0.2.73 定档
-        //（不在 Aevon 吞咽层）→ 整段移除。上面这一行是 4 次 hitTest 的轻量摘要，保留。
+        //（不在 Aevon 吞咽层）→ 整段移除。
+        // V0.2.82（AevonProbeHitRetireV282）：连本函数里的 hitTest 也一并退役（见上）。
     }
 }
 

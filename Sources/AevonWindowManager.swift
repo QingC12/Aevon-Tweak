@@ -67,12 +67,27 @@ enum AevonWindowManager {
         overlayYielded = yielding
         let windows = allWindows
         for view in windows {
-            if view.isHidden != yielding { view.isHidden = yielding }
+            /* V0.2.82（AevonYieldAlphaV282，Aevon(55)「自动注销」）：让位从 `isHidden`
+             * 改成「alpha=0 + 关交互」。
+             *
+             * 0.2.78 用的是 `view.isHidden = YES`，而 UIKit 在窗口被隐藏的那一刻会
+             * **立刻 cancel 该窗口上的所有触摸，并把对应 UITouch 从事件簿记里摘掉**；
+             * 我们的 sendEvent 钩子（AevonTouchHook.m）还握着同一个 UITouch 指针，
+             * 下一帧读 `touch.phase` / `[touch locationInView:nil]` 就是 use-after-free。
+             * Aevon(55) 两次 SIGSEGV 分别落在「让位后 0.28 秒」和「开窗完成 0.53 秒」，
+             * 同一批手指还在屏上 —— 与崩溃栈（帧1 = sendEvent 钩子）吻合。
+             *
+             * alpha=0 同样达到「让出画面与触摸」：alpha ≤ 0.01 的视图不参与 hitTest，
+             * 新触摸天然穿透；但它**不会 cancel 已经在屏上的手指**，钩子手里的指针
+             * 始终有效。而 `pointHitsFloatingWindow` / `grabFloatingWindow` 本来就以
+             * `alpha > 0.01` 过滤，让位态下这一整套判定自动失效，不需要额外分支。 */
+            view.alpha = yielding ? 0 : 1
+            view.isUserInteractionEnabled = !yielding
         }
         AevonRingGrip.setOverlayYield(yielding)
         AevonLog.info("[窗口] 系统浮层让位 \(yielding ? "开" : "关")："
-            + "\(windows.count) 扇浮窗\(yielding ? "隐藏（控制中心/通知中心/切换器在屏，让出触摸与画面）" : "恢复显示")"
-            + "（AevonOverlayYieldV278）")
+            + "\(windows.count) 扇浮窗\(yielding ? "淡出隐藏（控制中心/通知中心在屏，让出触摸与画面）" : "恢复显示")"
+            + "（AevonOverlayYieldV278 AevonYieldAlphaV282）")
     }
 
     /// 当前是否处于让位态（给入口巡检做去重）。
@@ -876,6 +891,33 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
+            /* V0.2.82（AevonShroudOnTopV282，Aevon(55)「打开悬浮窗时依旧会闪」）：
+             * 上面这行把窗口视图提到了遮罩**上面** —— 0.2.75 提前盖好的整屏快照
+             *（tag 0xAE274，盖在 wakeUp 之前）只罩住了 wakeUp 的整屏冒帧，
+             * 罩不住 kickRelayout 之后的两笔画布抖动。
+             *
+             * Aevon(55) 时序账（com.apple.Preferences，12:35:00）：
+             *     00.053  再开窗遮罩已盖上（提前到唤醒前）
+             *     00.227  开窗直显 → 窗 alpha=1，**已可见**
+             *     00.427  强制重排：先写 429x736   ← App 重排一次，用户眼前跳第一下
+             *     00.692  强制重排：写回 430x737   ← 再跳第二下
+             *     00.694  画布定稿 → 这时才摘遮罩
+             * 中间 467 毫秒里窗在用户眼前重排两次 = 他说的「闪」。
+             *
+             * 修法 = 加完子视图就把遮罩提回最前，全程只看到开窗前那张静态桌面；
+             * 定稿回调里遮罩 0.18s 淡出，那一刻窗已是终态（垫底图已 crossfade 到活画面）。
+             * 注意 `isUserInteractionEnabled = false` 已设，提上来不会挡触摸。 */
+            var shroudLifted = false
+            for shroudTag in [0xAE273, 0xAE274] where host.viewWithTag(shroudTag) != nil {
+                if let cover = host.viewWithTag(shroudTag) {
+                    host.bringSubviewToFront(cover)
+                    shroudLifted = true
+                }
+            }
+            if shroudLifted {
+                AevonLog.info("[窗口] 遮罩已提到窗口之上（罩住 kick 的画布抖动，定稿后再淡出）"
+                    + "（AevonShroudOnTopV282）")
+            }
             /* V0.2.77（AevonRevealOnceV277，用户 Aevon(49) #1「第二次开启悬浮窗时有概率
              * 不显示悬浮窗」+ #3「依旧先出现 → 消失 → 1 秒后再现」）：
              * 0.2.76 的占位直显撞上了**下面那段**「先藏着」的入场复位 ——
