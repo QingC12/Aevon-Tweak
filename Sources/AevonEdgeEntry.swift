@@ -51,6 +51,8 @@ enum AevonEdgeEntry {
     private static var lastHealLogAt: CFTimeInterval = 0
     /// V0.2.55（AevonGripHealV255）：吞咽日志节流
     private static var lastSwallowLogAt: CFTimeInterval = 0
+    /// V0.2.86（AevonRingMissLogV286）：圆盘展开中「手指没被吞」的上一次日志时刻（节流用）
+    private static var lastRingMissLogAt: CFTimeInterval = 0
     /// V0.2.56（AevonDedupBeganV256）：重投 began 静默消费的节流日志
     private static var lastDedupLogAt: CFTimeInterval = 0
     // V0.2.57（AevonZombieSealV257）：被吞过 began 的触摸「终身封印」状态。
@@ -567,7 +569,31 @@ enum AevonEdgeEntry {
            touchID == globalTouchID, CACurrentMediaTime() <= swallowDeadline {
             return true
         }
-        guard globalTouchID != 0, touchID == globalTouchID else { return false }
+        guard globalTouchID != 0, touchID == globalTouchID else {
+            /* V0.2.86（AevonRingMissLogV286）—— **抖音那条链的诊断哨**。
+             *
+             * Aevon(59)「抖音中滑动圆盘时会让视频暂停播放，并且会滑动到视频博主主页卡住」。
+             * 0.2.84 已确认 `AevonApp.dylib` **根本没被注入抖音进程**（App 侧日志里 20 多个
+             * 进程都有，独独没有 com.ss.iphone.ugc.Aweme，连启动那句「scene 探针已挂」
+             * 都没有，最可能是抖音 __RESTRICT 段挡了 dyld 插入），所以「把手占用广播」
+             * 对抖音是空的 —— 唯一能挡住那根手指的只剩这条 SB 侧吞层。
+             *
+             * 这条日志就是在回答「吞层到底漏没漏」：圆盘已经展开、却有一根手指走到
+             * 「不是我的手指」这个出口 → 它会被投给抖音，落指 = 暂停、横滑 = 进主页。
+             * 下一份日志里只要出现这一行，就说明要动的是吞层判据（不是 App 侧）；
+             * 一次都不出现，说明手指压根没到 SpringBoard 的 sendEvent（另有一条链要查）。 */
+            if AevonRingMenu.isPresented, phase == 0 {
+                let nowMiss = CACurrentMediaTime()
+                if nowMiss - lastRingMissLogAt > 1.0 {
+                    lastRingMissLogAt = nowMiss
+                    AevonLog.warn("[边缘] 圆盘展开中却有手指未被吞 \(touchID) → 会漏给下层 App"
+                        + "（globalTouchID=\(globalTouchID) ringSource=\(ringSource) ownsTouch=\(ownsTouch)"
+                        + " 剩余=\(String(format: "%.1f", swallowDeadline - nowMiss))s）"
+                        + "（AevonRingMissLogV286）")
+                }
+            }
+            return false
+        }
         guard CACurrentMediaTime() <= swallowDeadline else { return false }
         if ownsTouch { return true }
         guard AevonRingMenu.isPresented, ringSource == "global" else { return false }
