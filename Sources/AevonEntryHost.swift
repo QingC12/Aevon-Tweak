@@ -849,11 +849,11 @@ enum AevonEntryHost {
                 AevonWindowManager.rescueStuckScene(probeBid, round: stuckRescueCount[probeBid]!)
             }
         } else {
-            if stuckRescueBundle != probeBid {
-                stuckRescueBundle = probeBid
-                stuckRescueTicks = 0
-                stuckRescueCount.removeAll()
-            }
+            // 离开 cs=1 状态（恢复 cs=2 / 回桌面）：额度无条件清零——救援按「每次
+            // 卡滞事件」独立计，之前耗尽的额度不该带到下一次卡滞。
+            stuckRescueBundle = probeBid
+            stuckRescueTicks = 0
+            if !stuckRescueCount.isEmpty { stuckRescueCount.removeAll() }
         }
     }
 

@@ -1588,7 +1588,9 @@ final class AevonWindowView: UIView {
 
     /// 「离黑屏最近的那一帧」：优先现场抓（画面还在时抓到的就是真·最后一帧），
     /// 抓不到/是空壳才退回滚动缓存。
-    private func lastContentFrame() -> UIImage? {
+    /// V0.2.98（AevonCacheFreezeV298）：新增 refreshCache 开关 —— 盖帧路径传 false，
+    /// 绝不把回桌面转场中抓到的模糊帧写进滚缓存（污染后续垫帧）。
+    private func lastContentFrame(refreshCache: Bool = true) -> UIImage? {
         if let fresh = captureSnapshotImage() {
             // V0.2.73（AevonLivePadDarkV273，用户 Aevon(45) #5「回桌面黑屏 1 秒左右才出
             // 实时画面」）：**黑帧拒垫** —— 现场抓帧发生在 App 场景退场过程中时，
@@ -1599,7 +1601,7 @@ final class AevonWindowView: UIView {
                 AevonLog.warn("[窗口] 现场抓帧全黑（退场中抓到黑画面）→ 弃用，垫滚动缓存帧"
                     + "（AevonLivePadDarkV273）")
             } else {
-                cachedSnapshotImage = fresh
+                if refreshCache { cachedSnapshotImage = fresh }
                 return fresh
             }
         }
@@ -2197,11 +2199,6 @@ final class AevonWindowView: UIView {
         // 盖一张最后一帧顶住**（否则那一秒就是一块空窗）。所以只在「让位期且不是
         // 让位自己要求盖」时才拒绝。
         guard liveWaitDeadline == 0 || liveWaitFreezeAllowed else { return }
-        guard let image = lastContentFrame() else {
-            AevonLog.warn("[窗口] 内容不出画但没有可用快照 → 无法冻结（只能等重申生效，\(reason)）"
-                + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
-            return
-        }
         let bounds = contentClip.bounds
         guard bounds.width > 1, bounds.height > 1 else { return }
         /* V0.2.98（AevonCacheFreezeV298，用户 Aevon(75)「能否直接取消模糊状态，我记得
@@ -2215,15 +2212,19 @@ final class AevonWindowView: UIView {
          * 同时修掉一个污染漏洞：原 lastContentFrame() 现场抓帧成功会把模糊帧写进
          * cachedSnapshotImage（滚缓存被污染 → 后续垫帧全模糊）。 */
         let padSource: String
-        let image: UIImage?
+        let resolvedImage: UIImage?
         if let cached = cachedSnapshotImage {
-            image = cached
+            resolvedImage = cached
             padSource = "缓存帧"
         } else {
-            image = lastContentFrame()
+            resolvedImage = lastContentFrame(refreshCache: false)
             padSource = "现场帧"
         }
-        guard let image else {
+        guard let image = resolvedImage else {
+            AevonLog.warn("[窗口] 内容不出画但没有可用快照 → 无法冻结（只能等重申生效，\(reason)）"
+                + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonCacheFreezeV298）")
+            return
+        }
         let view = UIImageView(image: image)
         view.contentMode = .scaleToFill
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
