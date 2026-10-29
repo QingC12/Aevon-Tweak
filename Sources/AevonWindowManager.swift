@@ -657,7 +657,7 @@ enum AevonWindowManager {
                     for delay in [1.5, 3.5] {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak hostScene] in
                             guard let hs = hostScene else { return }
-                            let state = AevonSelfSceneConnectionState(hs)
+                            let state = AevonSelfSceneConnectionState(hs) ?? ""
                             AevonLog.info("[场景] 连接取证（+\(delay)s）：\(state)（AevonSceneRouteV235）")
                             // ── V0.2.80（AevonSelfSceneLearnV280）：学习式降级 ──────────
                             // cap=1 是历史 100% 对齐的判据，但真机仍有极小概率被 App 端拒
