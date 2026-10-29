@@ -560,7 +560,17 @@ enum AevonWindowManager {
         }
 
         // 等待场景就绪后再承载
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        // ── V0.2.95（AevonSceneFastGateV295）：0.2.49 的固定 0.15s 保守延迟退役 ──
+        // Aevon(72) 六次开窗全部白付这 0.15s：走到这里之前「场景已就绪」poll 已经
+        // 确认场景存在，固定延迟违反 SCWSSwitch 事务纪律（deadline+poll，从不固定
+        // 延迟）。场景已就绪 → asyncAfter(0) 下一拍直通；未就绪才保留 0.15s 兜底。
+        var gateScene = AevonSceneHelper.scene(for: bundleID)
+        if gateScene == nil, let sid = sceneID {
+            gateScene = AevonSceneHelper.scene(for: sid)
+        }
+        let gateDelay: TimeInterval = gateScene != nil ? 0 : 0.15
+        AevonLog.info("[窗口] 开窗快门：\(bundleID) 场景\(gateScene != nil ? "已就绪 → 0 延迟直通" : "未到 → 0.15s 兜底延迟")（AevonSceneFastGateV295）")
+        DispatchQueue.main.asyncAfter(deadline: .now() + gateDelay) {
             var scene = AevonSceneHelper.scene(for: bundleID)
             if scene == nil, let sid = sceneID {
                 scene = AevonSceneHelper.scene(for: sid)
@@ -616,20 +626,40 @@ enum AevonWindowManager {
             // application:configurationForConnectingSceneSession:options:」——
             // 由 App 侧 AevonAppSceneCapRegistry 算完写 /var/mobile/aevon_caps.txt，
             // 这里只读表：0 → 旧路径；1 → 自建；-1（未登记）→ 维持自建（旧行为）。
-            let routeDump = AevonSelfSceneRouteDump(bundleID)
-            // ── V0.2.80（AevonSceneCapWaitV280）：cap=-1 时短轮询，别再把路线 B 判死 ──
-            // Aevon(52) 日志实锤断链：SB 侧读到 cap=-1（App 侧明明算出 cap=1，但 0.2.65
-            // 起「仅进程内不落盘」）→ `cap==1 || forceSelf` 恒假 → 自建场景全灭 →
-            // 19 个版本全挤在 S2（主场景改画布）。S2 必然「整屏渲染 → 跳 430x737」，
-            // 这一跳就是用户看到的闪。这里等表：App 刚被拉起时它 +0.2s/+0.6s 才落盘。
+            // ── V0.2.95（AevonCapSkipV295）：cap 表只在自建场景开启时才有消费方 ──
+            // Aevon(72) 六次开窗事务账实锤：设置/Sileo（cap=0 已落盘）事务段 0.22~0.25s；
+            // 微信/酷安/抖音（cap=-1，App 侧从未写 caps.txt）每次开窗白付 0.65s 等表
+            //（AevonSelfSceneAppCapWait）+ routeDump 二进制扫描（微信 477MB 实测 ~0.35s），
+            // 事务段拉到 0.88~1.24s —— 而这两样唯一的消费方是 routeSelf 判据，
+            // 自建场景 0.2.81 起默认关（六次全走 S2），等待结果根本没人读。
+            // 整体挪进「自建开启」分支：默认档零成本跳过；路线 B 复活
+            //（SelfBuiltScene=YES / SceneRouteForceSelf=YES）时行为与 0.2.80~94 完全一致。
+            // 历史标记收容：AevonSceneCapWaitV280 / AevonSceneCapsV241 / AevonSceneRouteV238
+            // 原本寄生在被挪动的日志串里，这条无条件日志串给它们保底。
+            let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: false)
+            let forceSelf = AevonPrefs.bool("SceneRouteForceSelf", default: false)
+            let capWaitNeeded = selfSceneOn || forceSelf
             var capVerdict = AevonSelfSceneAppCapVerdict(bundleID)
-            if capVerdict == -1 {
-                capVerdict = AevonSelfSceneAppCapWait(bundleID, 0.65)
-                AevonLog.info("[场景] 能力表等表结束：\(bundleID) cap=\(capVerdict)"
-                    + "（等 0.65s 上限；仍 -1 就走 S2，绝不把未知当可自建）"
-                    + "（AevonSceneCapWaitV280 AevonCapsPersistV280）")
+            var routeDump = "自建场景关闭，未做取证扫描"
+            if capWaitNeeded {
+                // ── V0.2.80（AevonSceneCapWaitV280）：cap=-1 时短轮询，别再把路线 B 判死 ──
+                // Aevon(52) 日志实锤断链：SB 侧读到 cap=-1（App 侧明明算出 cap=1，但 0.2.65
+                // 起「仅进程内不落盘」）→ `cap==1 || forceSelf` 恒假 → 自建场景全灭 →
+                // 19 个版本全挤在 S2（主场景改画布）。S2 必然「整屏渲染 → 跳 430x737」，
+                // 这一跳就是用户看到的闪。这里等表：App 刚被拉起时它 +0.2s/+0.6s 才落盘。
+                if capVerdict == -1 {
+                    capVerdict = AevonSelfSceneAppCapWait(bundleID, 0.65)
+                    AevonLog.info("[场景] 能力表等表结束：\(bundleID) cap=\(capVerdict)"
+                        + "（等 0.65s 上限；仍 -1 就走 S2，绝不把未知当可自建）"
+                        + "（AevonSceneCapWaitV280 AevonCapsPersistV280）")
+                }
+                AevonLog.info("[场景] 能力登记：\(bundleID) cap=\(capVerdict)（1=scene App 可自建，0=老式必拒，-1=未登记）（AevonSceneCapsV241）")
+                routeDump = AevonSelfSceneRouteDump(bundleID)
+            } else {
+                AevonLog.info("[场景] 能力表跳过：自建场景关闭，0.65s 等表 + 大二进制取证扫描无消费方"
+                    + "（Aevon(72) 微信事务段 1.24→约 0.25s 的实测依据）"
+                    + "（AevonCapSkipV295 AevonSceneCapWaitV280 AevonSceneCapsV241 AevonSceneRouteV238）")
             }
-            AevonLog.info("[场景] 能力登记：\(bundleID) cap=\(capVerdict)（1=scene App 可自建，0=老式必拒，-1=未登记）（AevonSceneCapsV241）")
             // ── V0.2.42（AevonSceneRouteV242 / AevonMainSceneResizeV242）──────────
             // 0.2.41 真机（Aevon(17)）三点判读：
             //   ① 能力登记表工作正常（/var/mobile/aevon_caps.txt：Sileo/Filza/
@@ -667,8 +697,8 @@ enum AevonWindowManager {
             // 同时这里把默认档关掉：**先把画面显示对（回 S2），再谈自建** ——
             // 用户 Aevon(54) 的诉求顺序就是「先修闪和黑屏」。
             // 试验入口仍在：偏好域 SelfBuiltScene=YES 或 SceneRouteForceSelf=YES 都能开。
-            let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: false)
-            let forceSelf = AevonPrefs.bool("SceneRouteForceSelf", default: false)
+            // V0.2.95：selfSceneOn / forceSelf 的读取已上移到 cap 等表块之前
+            //（AevonCapSkipV295 —— 等表只在它们为真时才执行）。
             // V0.2.48（AevonMainSceneFixedV248）：Aevon(23)「设置中的主场景改画布开关也
             // 默认写入代码中，并且移除开关项」→ 从偏好读取降级为常量 true。
             // 这个开关本来默认就是开、且是「真重排」唯一可用通路（cap=-1 的老式 App 只能走它），
@@ -694,7 +724,7 @@ enum AevonWindowManager {
                 + "（S2 主场景改画布已定档常开，设置页开关已移除）"
                 + "（AevonSceneRouteV242 AevonScreenAspectV244 AevonMainSceneFixedV248"
                 + " AevonCapsPersistV280 AevonSelfSceneLearnV280 AevonSelfSceneOffV281）")
-            if !routeSelf {
+            if !routeSelf && capWaitNeeded {
                 AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
             }
             if routeSelf {
