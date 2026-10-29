@@ -1075,12 +1075,16 @@ enum AevonWindowManager {
                         + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")，"
                         + "就绪方式=\(via)）"
                         + "（AevonDouyinWarmupV251 AevonWarmupFastV262 AevonKickExactV262 AevonWarmupPollV291）")
-                    // V0.2.62（AevonKickExactV262）：这里原来传的是 (width-1, height-1)，
-                    // 而 kickRelayout 内部还要再 -1 一次 → 日志里「先写 428x735 / 写回
-                    // 429x736」，最终画布比目标少 1pt（Aevon(36) 实锤 44.112 那次复查
-                    // 把 429x736 当成「被回弹」又补写一遍）。现在传原值。
-                    sceneHost.kickRelayout(width: mainCanvas.width, height: mainCanvas.height,
-                                           tag: "预热切换 \(bundleID)")
+                    // V0.2.93（AevonSingleShotCanvasV293，用户 Aevon(62)「依旧不是秒开」
+                    // + 用户确认按 Stheno 方案 X）：**kick 双笔退役（预热路径）**。
+                    // Stheno SCWSSwitch 提交链 = poll 就绪 → presentReady → commit，结构上
+                    // 没有「人为等 App 反应」的第二拍。0.2.49 时代的双笔微扰防的是「App 漏掉
+                    // 第一次尺寸变化」——那时预热固定 1.0s、切画布与首帧渲染挤在一起；现在
+                    // poll 就绪（cs=2 整屏已在画）才切画布，App 必然收到完整 size change，
+                    // 防回弹复查（0.35/1.2/2.5 三拍）与 2.2s 断层自查兜底都在。
+                    // Aevon(62) 账目：txn 0.560s 里 kick 双笔占 0.30s → 单笔后预期 ≈0.30s。
+                    sceneHost.writeCanvasDirect(width: mainCanvas.width, height: mainCanvas.height,
+                                                tag: "预热切换 \(bundleID)")
                     /* V0.2.67（AevonWarmBounceV267，用户 Aevon(40) #5「抖音真重排速度
                      * 没有上一版快，会显示几秒断层才自动真重排」）：0.2.66 把预热复刻
                      * 往返整建制退役（当时它在窗口显出**之后**跑 = 必闪一下）。现在把

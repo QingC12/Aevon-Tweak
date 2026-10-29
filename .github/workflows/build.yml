@@ -155,7 +155,8 @@ jobs:
                    AevonNoShellFadeV289 AevonCloseInstantV289 AevonRingOrphanEndV289 \
                    AevonWarmupSoloV290 AevonRootFreezeV290 \
                    AevonWarmupPollV291 AevonCloseReviveV291 AevonHomeFreezeV291 \
-                   AevonSameBeatSwapV292 AevonLaunchReviveV292 AevonKickCompressV292 AevonStableRevealV292; do
+                   AevonSameBeatSwapV292 AevonLaunchReviveV292 AevonKickCompressV292 AevonStableRevealV292 \
+                   AevonSingleShotCanvasV293 AevonFrameMatchRevealV293; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.2.92 二进制里缺标记 $m"; exit 1; }
           done
@@ -2615,9 +2616,12 @@ jobs:
           grep -q 'now() + 0.12' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.92 kickRelayout 起手没压到 0.12 秒（0.2.62 的 0.20 已反转）"; exit 1; }
           # ①预热切换不能再把 (w-1) 传进去（kickRelayout 内部已经 -1，画布会差 1pt）
-          grep -q 'kickRelayout(width: mainCanvas.width, height: mainCanvas.height,' \
+          # V0.2.93（AevonSingleShotCanvasV293）反转：预热路径 kickRelayout 双笔退役，
+          # 改走单笔直写 writeCanvasDirect（传原值，无 -1 问题）；全屏兜底路径的
+          # kickRelayout 调用保留（V0.2.93 校验块 forbid 已钉预热回潮）。
+          grep -q 'sceneHost.writeCanvasDirect(width: mainCanvas.width, height: mainCanvas.height,' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.62 预热切换又传了 (w-1)（最终画布会比目标少 1pt）"; exit 1; }
+            || { echo "::error::0.2.93 预热切换没走单笔直写（0.2.62 的 kickRelayout 传原值断言已反转）"; exit 1; }
           # ⑧预热期必须把主场景推前台（fg=0 时 App 不渲染，预热等于没做）
           grep -q 'AevonSceneHelper.setForeground(scene, true)' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -3933,6 +3937,27 @@ jobs:
             | grep -q 'CATransaction.setDisableActions(true)' \
             || { echo "::error::0.2.92 哨命中搬家+盖帧必须同拍 CATransaction 提交（AevonSameBeatSwapV292）"; exit 1; }
           echo "V0.2.92 校验: 关窗launch真激活 + kick双笔压缩 + 揭幕连续2拍 + 哨同拍提交 已就位"
+          # ── V0.2.93 校验（Aevon(62)：虚到实淡入仍在 + 仍非秒开，用户确认方案 A + X）──
+          # ① 方案 X：预热 poll 就绪 → 单笔直写（kick 双笔在预热路径退役，Stheno poll→commit 同构）
+          grep -q 'func writeCanvasDirect(width: CGFloat, height: CGFloat, tag: String)' \
+            "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.93 缺单笔直写 writeCanvasDirect（AevonSingleShotCanvasV293）"; exit 1; }
+          grep -q 'sceneHost.writeCanvasDirect(width: mainCanvas.width' \
+            "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.93 预热路径必须走单笔直写（AevonSingleShotCanvasV293）"; exit 1; }
+          # 预热段 kickRelayout 回潮 forbid（934 行全屏兜底的 kickRelayout 保留，mainCanvas 只属于预热段）
+          if grep -q 'sceneHost.kickRelayout(width: mainCanvas.width' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.93 预热路径 kickRelayout 回潮（应走 writeCanvasDirect，AevonSingleShotCanvasV293）"
+            exit 1
+          fi
+          # ② 方案 A：撤帧判据升级——让位期冻结帧与实时帧比对一致才提前交接
+          grep -q 'func freezeMatchesLive' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.93 缺帧比对判定 freezeMatchesLive（AevonFrameMatchRevealV293）"; exit 1; }
+          grep -q 'AevonFrameMatchRevealV293' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.93 缺「帧比对撤帧」标记"; exit 1; }
+          grep -q 'darkFreezeImage = image' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.93 冻结帧图像必须留存供比对（AevonFrameMatchRevealV293）"; exit 1; }
+          echo "V0.2.93 校验: 单笔直写(poll→commit 同构) + 帧比对零跳变交接 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

@@ -1439,6 +1439,41 @@ final class AevonWindowView: UIView {
         return image
     }
 
+    /// V0.2.93（AevonFrameMatchRevealV293）：冻结帧 vs 实时帧「结构一致」判定。
+    ///
+    /// 双图降采样 16x16 灰度，平均绝对差 < 10/255 视为一致 —— 内容是静态 UI（设置、
+    /// Sileo 等）时撤帧瞬间零跳变；视频内容帧间运动大时大概率不一致 → 走回 2 拍
+    /// 稳定撤（fail-open，行为不劣于 0.2.92）。不对齐 alpha（裁剪后统一不透明化）。
+    private func freezeMatchesLive(_ freeze: UIImage, _ live: UIImage) -> Bool {
+        guard let fcg = freeze.cgImage, let lcg = live.cgImage else { return false }
+        let n = 16
+        var fBuf = [UInt8](repeating: 0, count: n * n * 4)
+        var lBuf = [UInt8](repeating: 0, count: n * n * 4)
+        guard let fCtx = CGContext(data: &fBuf, width: n, height: n, bitsPerComponent: 8,
+                                   bytesPerRow: n * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let lCtx = CGContext(data: &lBuf, width: n, height: n, bitsPerComponent: 8,
+                                   bytesPerRow: n * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return false
+        }
+        fCtx.interpolationQuality = .low
+        lCtx.interpolationQuality = .low
+        fCtx.draw(fcg, in: CGRect(x: 0, y: 0, width: n, height: n))
+        lCtx.draw(lcg, in: CGRect(x: 0, y: 0, width: n, height: n))
+        var total = 0
+        for i in stride(from: 0, to: fBuf.count, by: 4) {
+            // 不透明化：黑底合成（远端表面抓帧可能带 alpha）
+            let fl = (Int(fBuf[i]) * Int(fBuf[i + 3]) * 3 + Int(fBuf[i + 1]) * Int(fBuf[i + 3]) * 6
+                + Int(fBuf[i + 2]) * Int(fBuf[i + 3])) / (10 * 255)
+            let ll = (Int(lBuf[i]) * Int(lBuf[i + 3]) * 3 + Int(lBuf[i + 1]) * Int(lBuf[i + 3]) * 6
+                + Int(lBuf[i + 2]) * Int(lBuf[i + 3])) / (10 * 255)
+            total += abs(fl - ll)
+        }
+        let avg = total / (n * n)
+        return avg < 10
+    }
+
     /// 判「这张图是一幅画面，还是一块纯色空壳」。
     ///
     /// 采样 8×8：既要有不透明像素（全透明 = 远程表面没抓到），
@@ -1704,6 +1739,14 @@ final class AevonWindowView: UIView {
     private var liveWaitTicks = 0
     /// V0.2.65（AevonNoVanishV265）：让位期**不再现场抓帧**，次数计数器随之退休。
     private static let liveWaitLimit: TimeInterval = 1.0
+    /// V0.2.93（AevonFrameMatchRevealV293，用户 Aevon(62)「从虚变实的淡入还在」+ 用户
+    /// 确认按 Stheno 方案 A）：**撤帧判据升级为「冻结帧与实时画面比对一致」**。
+    /// Stheno 揭幕纪律 = 封面与目标内容连续采样**一致**才揭幕（startupCoverReadySamples）
+    /// —— 撤帧瞬间定格与实时若画面一致，视觉就是零跳变；「虚→实」从机制上消失。
+    /// 冻结帧图像本体（installDarkFreeze 时留存），供比对；撤帧即清。
+    private var darkFreezeImage: UIImage?
+    /// 让位期比对只做一次（0.2.65 教训：drawHierarchy 强迫重绘 = 闪，绝不逐拍抓）。
+    private var frameMatchTried = false
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
     /// 回桌面那一下 cs 会 2→0→2 来回抖（Aevon(35)：让位 0.22s 淡入，随后系统还在
@@ -1784,6 +1827,7 @@ final class AevonWindowView: UIView {
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
         liveAwaitingContent = false
+        frameMatchTried = false   // V0.2.93（AevonFrameMatchRevealV293）每次让位重置比对额度
         alpha = 1
         liveSettleUntil = 0
         /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
@@ -1910,6 +1954,26 @@ final class AevonWindowView: UIView {
              * 判定只看场景的 contentState（cs=2 = 在画），足够了。 */
             let live = (sceneHost.contentLooksRendering == true)
             liveWaitTicks = live ? liveWaitTicks + 1 : 0
+            /* V0.2.93（AevonFrameMatchRevealV293，用户 Aevon(62)「从虚变实的淡入还在」
+             * + 用户确认按 Stheno 方案 A）：Stheno 揭幕纪律 = 封面与目标内容**一致**才揭幕。
+             * 0.2.92 的 2 拍稳定撤帧里，撤帧瞬间「定格→实时」的画面差异 = 用户看到的
+             * 虚→实。现在 cs 回来第一拍就抓一次实时帧与冻结帧比对：一致 → 立即交接
+             * （视觉零跳变，且比 2 拍更快）；不一致（视频内容在动）→ 退回 2 拍稳定
+             * （行为底线 = 0.2.92，fail-open）。抓帧有界：让位期最多 1 次（0.2.65 教训
+             * drawHierarchy 强迫重绘 = 闪，绝不逐拍抓）。 */
+            if live, darkFreezeView != nil, !frameMatchTried, liveWaitTicks >= 1 {
+                frameMatchTried = true
+                var matched = false
+                if let freeze = darkFreezeImage, let liveImg = captureSnapshotImage() {
+                    matched = freezeMatchesLive(freeze, liveImg)
+                }
+                AevonLog.info("[窗口] 让位期帧比对：\(matched ? "一致 → 提前交接" : "不一致 → 退回 2 拍稳定")"
+                    + "（AevonFrameMatchRevealV293）")
+                if matched {
+                    finishLiveWait(reason: "实时画面与冻结帧比对一致，零跳变交接（AevonFrameMatchRevealV293）")
+                    return
+                }
+            }
             // V0.2.60（AevonLiveFirstV260）：要求稳定才淡入。
             // V0.2.62（AevonLiveQuietV262，Aevon(36) #5）：从「连续 2 拍」放宽成
             // 「至少 1 拍 + 让位已过 0.12 秒」。Aevon(36) 实测让位 0.43 / 0.65 秒才淡入，
@@ -2092,6 +2156,7 @@ final class AevonWindowView: UIView {
          * 改成不参与事件：触摸穿透到下面的 contentClip（实时恢复的瞬间就能点）。 */
         view.isUserInteractionEnabled = false
         darkFreezeView = view
+        darkFreezeImage = image   // V0.2.93（AevonFrameMatchRevealV293）留存供让位期比对
         AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，帧不挡触摸，重申由看门自动兜底；"
             + "根级覆盖 \(Int(view.frame.width))x\(Int(view.frame.height))，"
             + "帧 \(Int(image.size.width))x\(Int(image.size.height))，父层=\(view.superview.map { String(describing: type(of: $0)) } ?? "无")）"
@@ -2120,6 +2185,7 @@ final class AevonWindowView: UIView {
     private func removeDarkFreeze(reason: String) {
         guard let view = darkFreezeView else { return }
         darkFreezeView = nil
+        darkFreezeImage = nil   // V0.2.93（AevonFrameMatchRevealV293）比对基准随帧清
         freezeRemoveCount += 1
         // V0.2.63（AevonFlashDampV263）：记下撤帧时刻，1.2 秒内不再盖（防「盖/撤」抖动）。
         lastFreezeRemovedAt = CACurrentMediaTime()

@@ -528,6 +528,33 @@ final class AevonSceneHost {
         }
     }
 
+    /// V0.2.93（AevonSingleShotCanvasV293，用户 Aevon(62)「依旧不是秒开」+ 用户确认按
+    /// Stheno 方案 X）：**poll 就绪 → 单笔直写目标画布 → 定稿回调显形**。
+    ///
+    /// 逆向对照报告 §4.1：SCWSSwitch 的提交链 = captureTarget → poll → presentReady →
+    /// **commitReadyTarget**，poll 轮询到就绪就 commit —— 结构上**不存在**「人为等待
+    /// App 反应」的第二拍。Aevon 的 kick 双笔（写 w-1 → 等 → 写回 w）是 0.2.49 时代的
+    /// 保守微扰：当时预热固定 1.0s、切画布与首帧渲染挤在一起，App 侧经常漏掉第一次
+    /// 尺寸变化，需要二次扰动兜底。
+    ///
+    /// 现在（0.2.91 起）时序已经变过：预热 poll 就绪（cs=2，整屏已在画）才切画布，
+    /// App 必然收到一次完整的整屏→画布 size change；防回弹复查（0.35/1.2/2.5 三拍）
+    /// 与 WindowView 侧 2.2s 断层自查兜底都还在 —— 单笔漏重排会被自动接住。
+    /// Aevon(62) 账目：预热档 txn 0.560s = 拉起+poll 0.23 + **kick 双笔 0.30** + 零头；
+    /// 单笔直写后预期 ≈0.30s（就绪即提交，与 Stheno 同构）。
+    ///
+    /// kickRelayout（双笔微扰）**保留**：全屏兜底抖动踢（WindowManager）仍走它，
+    /// 那条路径没有 poll 就绪信号可依赖。
+    func writeCanvasDirect(width: CGFloat, height: CGFloat, tag: String) {
+        guard !invalidated, width > 2, height > 2 else { return }
+        let ok = writeCanvas(width, height)
+        AevonLog.info("[场景] 单笔直写画布 \(Int(width))x\(Int(height))（\(tag)，"
+            + "\(ok ? "已提交" : "失败")；poll 就绪即 commit，无常备双笔等待，防回弹复查与"
+            + "断层自查兜底仍在）（AevonSingleShotCanvasV293）")
+        guard ok else { return }
+        fireCanvasSettled()
+    }
+
     /// 只写画布（自建场景 / 主场景两档口径不变），不写任何前台状态。
     @discardableResult
     private func writeCanvas(_ width: CGFloat, _ height: CGFloat) -> Bool {
