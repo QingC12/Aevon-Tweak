@@ -112,10 +112,22 @@ import UIKit
 // MARK: - FBSceneLayerManager：图层变化时刷新浮窗
 
 @objc final class AevonSceneLayerManagerHooks: NSObject {
-    @objc func sk_fbslm_setLayers(_ layers: Any) {
+    /* V0.2.83（AevonLayerNilSafeV283）：参数从 `Any` 改成 `Any?`。
+     *
+     * `_setLayers:` 在图层**被清空**时（App 挂起 / 切屏 / presenter 拆除）确实会传 nil，
+     * 而 Swift 的 `@objc` 方法参数写成非可选 `Any` 时，nil 会在桥接 thunk 里直接 trap
+     *（_unexpectedlyFoundNil），是「多个方面都会触发自动注销」的一个现成候选面。
+     * 改成 `Any?` 之后 nil 原样透传，行为与不装 hook 完全一致。 */
+    @objc func sk_fbslm_setLayers(_ layers: Any?) {
         AevonTrace.once("layer.setLayers", "FBSceneLayerManager _setLayers 首次调用")
         AevonRuntime.sendVoid(self, Selector(("sk_fbslm_setLayers:")), layers)
-        AevonWindowManager.notifyLayersUpdated()
+        /* V0.2.83：刷新推到下一个 runloop。
+         * `_setLayers` 是在渲染帧中间被调用的，同步调 `setNeedsLayout` 会在别人的
+         * 布局流程里插一次我们自己的布局（UIKit 对此没有承诺，属「在系统渲染链路里
+         * 改自己的视图树」）。挪到主队列下一拍只是晚一帧，风险小一个量级。 */
+        DispatchQueue.main.async {
+            AevonWindowManager.notifyLayersUpdated()
+        }
     }
 }
 
@@ -204,42 +216,29 @@ import UIKit
 //   · 只对 AevonForegroundManager 登记中的场景生效（浮窗承载期），转正交接期
 //     （用户点桌面图标全屏拉起同一个 App）`shouldKeepForeground` 会返回 false，自动放行。
 @objc final class AevonSceneSettingsGuardHooks: NSObject {
-    /// 日志节流：同一次承载里 updateSettings 会被频繁调用，改写只打第一条 + 每 3 秒一条。
-    private static var lastLogAt: [String: CFTimeInterval] = [:]
-    private static var rewriteCount = 0
+    /// V0.2.83（AevonFgGuardRetireV283）：改写分支下线后只剩透传计数 ——
+    /// 「hook 装了、透传了 N 次」这个事实仍然可查（AevonSceneFgGuardV278 的语义保留）。
+    static var forwardCount = 0
 
     @objc func sk_scene_updateSettings(_ settings: AnyObject?,
                                        withTransitionContext context: AnyObject?,
                                        completion: AnyObject?) {
-        var forwarded = settings
-        if let settings,
-           let identifier = AevonRuntime.send(self, Selector(("identifier"))) as? String,
-           AevonSceneLedger.shared.wantsForeground(identifier: identifier)
-               || AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
-           let mutable = (settings as? NSObject)?.mutableCopy() as? NSObject,
-           mutable.responds(to: Selector(("setForeground:"))),
-           AevonRuntime.bool(mutable, key: "foreground") == false {
-            if AevonRuntime.setBool(mutable, key: "foreground", true) {
-                forwarded = mutable
-                AevonSceneSettingsGuardHooks.rewriteCount += 1
-                // V0.2.79（AevonSceneLedgerV279）：把「系统想把我们写的前台改回 NO」记进账本。
-                // 这个计数就是「到底被改了几次」的判据 —— 以前只能靠日志肉眼数。
-                if let bid = AevonSceneLedger.shared.bookID(matching: identifier) {
-                    AevonSceneLedger.shared.noteOverridden(bundleID: bid, identifier: identifier)
-                }
-                let now = CACurrentMediaTime()
-                let last = AevonSceneSettingsGuardHooks.lastLogAt[identifier] ?? 0
-                if now - last > 3.0 {
-                    AevonSceneSettingsGuardHooks.lastLogAt[identifier] = now
-                    let ledger = AevonSceneLedger.shared.summaryIfDue() ?? "-"
-                    AevonLog.info("[场景] 拦下系统写 foreground=NO（\(identifier)）→ 改写为 YES "
-                        + "再放行，累计 \(AevonSceneSettingsGuardHooks.rewriteCount) 次"
-                        + " 账本[\(ledger)]（AevonSceneFgGuardV278 AevonSceneLedgerV279）")
-                }
-            }
-        }
+        /* V0.2.83（AevonFgGuardRetireV283）：**改写分支下线，只透传**。
+         *
+         * 下线依据不是「怕崩」，是**它从来没命中过**：Aevon(56) 全文 891 行日志里
+         * 「拦下系统写 foreground=NO」**0 条**，`rewriteCount` 一次都没加过。
+         * 也就是说这条 0.2.78 加进来的路径，收益为零，但每次 updateSettings 都要付：
+         *   ① 两次 objc 消息（identifier / mutableCopy）
+         *   ② 一次 FBS settings 深拷贝（每秒可能几十次）
+         *   ③ 把**非原始对象**交给 FrontBoard —— 0.1.5 时代就是栽在「在 FrontBoard
+         *      处理场景设置的过程中给它换了对象」上（归档(14)：FBS 断言 → SIGTRAP，
+         *      @try 捕不到）。当时那次是写原对象，这次是交副本，形式不同、风险同类。
+         *
+         * 所以保留 hook（透传 + 记账所需的观察点都在别处），把「造一份新 settings
+         * 塞回去」这一步彻底删掉。将来若真需要改写，先用账本证明系统确实在写 NO。 */
+        AevonSceneSettingsGuardHooks.forwardCount += 1
         AevonRuntime.sendVoid(self,
                               Selector(("sk_scene_updateSettings:withTransitionContext:completion:")),
-                              forwarded, context, completion)
+                              settings, context, completion)
     }
 }

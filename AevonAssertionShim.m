@@ -1167,3 +1167,152 @@ __attribute__((used)) static const char AevonSystemGestureSelV281[] = "addGestur
  * 这两串在探针退役前都只由探针文件携带 —— 一删，CI 的「必须可查」就落空。 */
 __attribute__((used)) static const char AevonSystemGestureMgrV281[] = "_UISystemGestureManager";
 __attribute__((used)) static const char AevonGestureProbeV2V256Marker[] = "AevonGestureProbeV2V256";
+
+/* ── V0.2.83（AevonCrashPCV283）：崩溃现场取证（SA_SIGINFO + ucontext）──────
+ *
+ * 为什么必须换掉老做法：0.2.82 及以前用 `signal(sig, handler)` 装一参数处理器，
+ * 里面调 `backtrace()`。0.2.82 的崩溃日志反汇编核对（我逐条比对过）：
+ *
+ *     帧0 = 0xf6fc `bl AevonBacktrace` 的返回点
+ *     帧1 = 0xf700 handler 里 `mov x23,x0`（AevonBacktrace 的调用者）
+ *     帧2 = libsystem_platform + 22664（sigtramp 跳板）
+ *     帧3.. = 0x43c54 附近同一片代码反复出现
+ *
+ * 也就是说**帧 1 之后没有任何一帧是崩溃现场** —— handler 里 backtrace 走的是
+ * 处理器自己的 fp 链，崩溃线程的 pc 根本拿不到。0.2.81 / 0.2.82 两版都在这条
+ * 无效栈上做归因，等于瞎猜（Ark 上「自动注销仍然存在、多个方面都会触发」）。
+ *
+ * 正确做法 = `sigaction` 带 `SA_SIGINFO`：第三个参数是 ucontext，里面直接有
+ * 崩溃瞬间的 pc / lr / sp / fp。pc 就是**导致 SIGSEGV 的那条指令**，lr 是它的
+ * 调用者，fp 链可以自己走。全部是纯指针读，async-signal-safe。
+ *
+ * 输出格式（供离线对偏移，配 CI 上传的未 strip dylib）：
+ *   [崩溃] 致命信号=11 code=1 addr=0x... pc=0x... lr=0x... sp=0x... fp=0x...
+ *   [崩溃] 归因：崩溃指令在 Aevon 内 / 不在 Aevon
+ *   [崩溃] 帧链： #0 lr=0x... [A] / [.] ...
+ */
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
+/* iOS SDK 没有独立的 <ucontext.h>（它是 macOS 的），ucontext_t 由 <signal.h>
+ * 经 <sys/_types/_ucontext.h> 带出来。用 __has_include 兼容两种 SDK。 */
+#if __has_include(<ucontext.h>)
+#include <ucontext.h>
+#endif
+
+static const char kAevonCrashLogPath[] = "/var/mobile/Aevon.crash.log";
+static const char kAevonCrashOwnerPath[] = "/var/mobile/Aevon.crash.owner";
+
+static void AevonCW(int fd, const char *text) {
+    if (fd < 0 || text == NULL) { return; }
+    size_t len = strlen(text);
+    if (len == 0) { return; }
+    ssize_t ignored = write(fd, text, len);
+    (void)ignored;
+}
+
+static void AevonCInt(int fd, long value) {
+    char buf[24];
+    int i = 23;
+    buf[i] = '\0';
+    unsigned long v = value < 0 ? (unsigned long)(-value) : (unsigned long)value;
+    if (v == 0) { buf[--i] = '0'; }
+    while (v > 0 && i > 0) { buf[--i] = (char)('0' + (v % 10)); v /= 10; }
+    if (value < 0 && i > 0) { buf[--i] = '-'; }
+    AevonCW(fd, buf + i);
+}
+
+static void AevonCHex(int fd, uint64_t value) {
+    static const char hex[] = "0123456789abcdef";
+    char buf[20];
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 0; i < 16; i++) { buf[2 + i] = hex[(value >> (60 - 4 * i)) & 0xF]; }
+    buf[18] = '\0';
+    ssize_t ignored = write(fd, buf, 18);
+    (void)ignored;
+}
+
+static void AevonCrashWriteOwner(int owned) {
+    int fd = open(kAevonCrashOwnerPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { return; }
+    const char *payload = owned ? "aevon" : "external";
+    ssize_t ignored = write(fd, payload, strlen(payload));
+    (void)ignored;
+    close(fd);
+}
+
+static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
+    int fd = open(kAevonCrashLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    uint64_t pc = 0, lr = 0, sp = 0, fp = 0;
+
+#if defined(__arm64__)
+    if (uctx != NULL) {
+        ucontext_t *uc = (ucontext_t *)uctx;
+        pc = uc->uc_mcontext->__ss.__pc;
+        lr = uc->uc_mcontext->__ss.__lr;
+        sp = uc->uc_mcontext->__ss.__sp;
+        fp = uc->uc_mcontext->__ss.__fp;
+    }
+#else
+    (void)uctx;
+#endif
+
+    int owned = (pc != 0 && pc >= aevonTextStart && pc < aevonTextEnd) ? 1 : 0;
+
+    AevonCW(fd, "[崩溃] 致命信号=");
+    AevonCInt(fd, sig);
+    AevonCW(fd, " code=");
+    AevonCInt(fd, info != NULL ? (long)info->si_code : -1);
+    AevonCW(fd, " addr=");
+    AevonCHex(fd, info != NULL ? (uint64_t)(uintptr_t)info->si_addr : 0);
+    AevonCW(fd, " pc=");
+    AevonCHex(fd, pc);
+    AevonCW(fd, " lr=");
+    AevonCHex(fd, lr);
+    AevonCW(fd, " sp=");
+    AevonCHex(fd, sp);
+    AevonCW(fd, " fp=");
+    AevonCHex(fd, fp);
+    AevonCW(fd, "\n");
+
+    AevonCW(fd, owned ? "[崩溃] 归因：崩溃指令在 Aevon 内（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283）\n"
+                      : "[崩溃] 归因：崩溃指令不在 Aevon（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283）\n");
+
+    /* 自己走 fp 链：arm64 的帧记录是 {prev_fp, lr}，fp 指向它。
+     * 边界校验只做「对齐 + 单调递增 + 幅度合理」，不碰任何锁 / malloc。 */
+    AevonCW(fd, "[崩溃] 帧链（fp 回溯 AevonCrashPCV283）：\n");
+    uint64_t cursor = fp;
+    int written = 0;
+    while (cursor != 0 && written < 16) {
+        if ((cursor & 0x7) != 0) { break; }
+        uint64_t *record = (uint64_t *)cursor;
+        uint64_t callerLR = record[1];
+        uint64_t nextFP = record[0];
+        AevonCW(fd, "  #");
+        AevonCInt(fd, written);
+        AevonCW(fd, " lr=");
+        AevonCHex(fd, callerLR);
+        AevonCW(fd, (callerLR >= aevonTextStart && callerLR < aevonTextEnd) ? " [A]\n" : " [.]\n");
+        written += 1;
+        if (nextFP <= cursor) { break; }
+        if (nextFP - cursor > 0x1000000ULL) { break; }
+        cursor = nextFP;
+    }
+
+    AevonCrashWriteOwner(owned);
+    if (fd >= 0) { close(fd); }
+
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void AevonCrashInstall(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = AevonCrashSignalHandler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    sigemptyset(&sa.sa_mask);
+    int signals[6] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE};
+    for (int i = 0; i < 6; i++) { sigaction(signals[i], &sa, NULL); }
+}

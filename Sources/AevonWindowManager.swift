@@ -434,39 +434,26 @@ enum AevonWindowManager {
         let switchTxn = AevonSwitchCoordinator.shared.begin(bundleID: bundleID, reason: "开窗")
         AevonSceneLedger.shared.open(bundleID: bundleID, sceneID: sceneID ?? "", reason: "开窗")
         AevonSceneLedger.shared.wishForeground(bundleID, reason: "开窗")
-        /* V0.2.75（AevonReopenShroudEarlyV275，用户 Aevon(47) #3「打开过的 App 再开悬浮窗
-         * 依旧先闪一下才淡入」）：遮罩再提前 —— Aevon(47) 时序账（21:30:43 设置）：
-         * 43.357「已有场景，直接开窗」→ 43.537 遮罩盖上（+0.18s）→ 43.539 presenter
-         * 已激活。0.2.74 的遮罩盖在 +0.15s 闭包内，但冒帧发生在**更早**：open() 入口
-         * 的 wakeUp（V0.2.49 定序「置位 → 唤醒 → 改画布」）在这里就把已有场景推前台
-         * —— 此刻画布还是关窗时还原的整屏 430x932，场景以整屏在 SB 呈现层冒一拍。
-         * 新开 App 场景是「生」的、首帧渲染要几百 ms，遮罩来得及（所以预热档不闪）；
-         * 再开窗档画面现成、wakeUp 当拍就上屏 = 闪。
-         * 修法：场景已存在时，遮罩盖在 wakeUp **之前**；摘除仍挂画布定稿回调，
-         * 1.34s 兜底不变。 */
-        var entryShroudShown = false
-        if AevonSceneHelper.scene(for: bundleID) != nil,
-           host.viewWithTag(0xAE274) == nil,
-           let shot = AevonQuickAction.captureScreenImage() {
-            let cover = UIImageView(image: shot)
-            cover.frame = UIScreen.main.bounds
-            cover.contentMode = .scaleToFill
-            cover.isUserInteractionEnabled = false
-            cover.tag = 0xAE274
-            host.addSubview(cover)
-            host.bringSubviewToFront(cover)
-            entryShroudShown = true
-            AevonLog.info("[窗口] 再开窗遮罩已盖上（提前到唤醒前，罩住 wakeUp 整屏冒帧）"
-                + "（AevonReopenShroudEarlyV275）")
-        }
-        if entryShroudShown {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
-                if let cover = host.viewWithTag(0xAE274) {
-                    UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
-                                   completion: { _ in cover.removeFromSuperview() })
-                }
-            }
-        }
+        /* V0.2.83（AevonNoShroudV283，用户 Aevon(56)：「我们是否需要摘除之前版本中悬浮窗的
+         * 遮罩，并且在 stheno 等逆向数据中并没有明确显示切换悬浮窗时拥有遮罩」+「选中图标后
+         * 需要等 2 秒左右才会出现悬浮窗」）—— **两代开窗遮罩全部摘除**。
+         *
+         * 先回答「要不要摘」：要摘，但理由不是「Stheno 没有」—— 遮罩本来就不是抄来的，
+         * 是 0.2.73 为「罩住推前台冒帧」自己加的补丁，之后每一版都在给它打补丁
+         * （0.2.74 挪到 presenter 之前 / 0.2.75 提到 wakeUp 之前 / 0.2.82 提到窗口之上）。
+         * 真正的问题是它治的是我们**自己制造的**抖动：kickRelayout 的两笔
+         *（-1pt → 写回）和主场景改画布都发生在窗口已经可见之后。
+         *
+         * 代价账（Aevon(56) 12:54:08 与 12:55:31 两段）：
+         *   08.117 截图走 _UICreateScreenUIImageWithRotation（整屏快照，同步，几百 ms）
+         *   08.118 遮罩盖上 → 用户看到的是**静止的旧画面**
+         *   08.293 窗其实已经显形了，但被遮罩盖着 → 用户看不见
+         *   08.760 画布定稿才淡出遮罩 → 这时候才「出现」浮窗
+         * 也就是「等 2 秒」里至少有 0.6~1.3 秒是遮罩在挡着，而且每次都白做一次整屏截图。
+         *
+         * 摘掉之后怎么保证不闪：把「显形」从「创建窗口时」推迟到「画布定稿回调」——
+         * kick 的两笔画布写回都发生在窗还藏着的时候，用户看到的第一次画面就是终态。
+         * 见下面 onCanvasSettled 与 revealEntryNow 的调用点。 */
         AevonSceneHelper.wakeUp(bundleID)
 
         // 开窗失败要把这条信号清掉，否则该 App 的右缘识别器会一直处于「浮窗里」的
@@ -786,52 +773,18 @@ enum AevonWindowManager {
                 // 已还原的 430x932 写回画布尺寸（Aevon(18) 真机日志两处）。
             }
 
-            /* V0.2.74（AevonReopenShroudV274，用户 Aevon(46) #2「圆盘选中图标打开悬浮窗
-             * 时会先闪一下（新打开的应用不会，打开过的会继续闪一下才淡入）」）：再开窗遮罩。
+            /* V0.2.83（AevonNoShroudV283）：这一段的第二代遮罩（tag 0xAE274，无占位帧时
+             * 现场抓一张整屏快照盖住 presenter 冒帧）随 0.2.73 的第一代一起摘除。
              *
-             * Aevon(46) 时序账（20:58:51 SileoStore 再开窗）：51.796 S2 写画布 737 已提交
-             * → 51.799 presenter 激活 → 51.810 画布核对**仍是 430x932**（写入被 FrontBoard
-             * 回弹，+0.35s 复查 52.167「被回弹已补写」实锤）。关窗时画布已还原成整屏，
-             * 再开窗 presenter 激活那一拍，场景先以**旧整屏画布**在 SB 呈现层冒出 App
-             * 全屏画面，等浮窗外壳接住才藏起 —— 用户看到的就是「闪一下」。
-             * 新开 App 走预热档（0.2.73 AevonWarmShroudV273 已有遮罩罩住），只有再开窗
-             * 档裸奔。
+             * 顺带削掉一次**多余的整屏截图**：原来一次再开窗最多会截两张整屏
+             *（入口 0.2.75 一张 + 这里一张），`_UICreateScreenUIImageWithRotation` 是
+             * 同步调用、几百毫秒，全部记在用户「等 2 秒」的账上。现在只剩占位帧
+             * （关窗时缓存的那一张，零成本）。
              *
-             * 修法：非预热档在激活 presenter **之前**盖同款全屏快照遮罩（tag 0xAE274），
-             * 画布定稿回调（onCanvasSettled）里与浮窗淡入同步摘除；1.34s 兜底防永久盖屏。
-             */
-            /* V0.2.76（AevonReopenSwapV276，用户 Aevon(48)「先出现悬浮窗 → 消失 → 1 秒
-             * 后再次出现」）：再开窗占位直换。Aevon(48) 22:02:00 时序账：0.600 直接开窗
-             * → 0.623 入口遮罩（0.2.75 提前档）→ 0.795 第二代遮罩（V274，此刻抓屏抓到的
-             * 已是 App 画面 = 「像开了」）→ 1.267 画布定稿 → 显窗。第二代遮罩的快照内容
-             * 就是 App —— 盖上 = 「悬浮窗出现」，摘除换真窗 = 「消失再出现」。
-             * 修法：有关窗缓存的占位帧 → 第二代遮罩退役，浮窗立刻显形（占位帧垫底），
-             * 画布切换 / 回弹全程藏在占位后面，定稿 crossfade 到活画面。
-             * 无占位帧（SB 重启后首开）→ 回退 0.2.75 全屏遮罩档。 */
-            var reopenShroudShown = false
+             * 没有占位帧时不显形、不截图 —— 等画布定稿回调再淡入（见 onCanvasSettled）。 */
             var reopenPlaceholder: UIImage?
             if !warmupCanvas {
                 reopenPlaceholder = reopenPlaceholders.removeValue(forKey: bundleID)
-                if reopenPlaceholder == nil, let shot = AevonQuickAction.captureScreenImage() {
-                    let cover = UIImageView(image: shot)
-                    cover.frame = UIScreen.main.bounds
-                    cover.contentMode = .scaleToFill
-                    cover.isUserInteractionEnabled = false
-                    cover.tag = 0xAE274
-                    host.addSubview(cover)
-                    host.bringSubviewToFront(cover)
-                    reopenShroudShown = true
-                    AevonLog.info("[窗口] 再开窗遮罩已盖上（无占位帧 → 回退 0.2.75 档）"
-                        + "（AevonReopenShroudV274）")
-                }
-            }
-            if reopenShroudShown {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
-                    if let cover = host.viewWithTag(0xAE274) {
-                        UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
-                                       completion: { _ in cover.removeFromSuperview() })
-                    }
-                }
             }
             AevonSceneHelper.setForeground(hostScene, true)
 
@@ -891,108 +844,36 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
-            /* V0.2.82（AevonShroudOnTopV282，Aevon(55)「打开悬浮窗时依旧会闪」）：
-             * 上面这行把窗口视图提到了遮罩**上面** —— 0.2.75 提前盖好的整屏快照
-             *（tag 0xAE274，盖在 wakeUp 之前）只罩住了 wakeUp 的整屏冒帧，
-             * 罩不住 kickRelayout 之后的两笔画布抖动。
+            /* V0.2.83（AevonNoShroudV283，Aevon(56)）—— 遮罩全部摘除，这里只剩两件事。
              *
-             * Aevon(55) 时序账（com.apple.Preferences，12:35:00）：
-             *     00.053  再开窗遮罩已盖上（提前到唤醒前）
-             *     00.227  开窗直显 → 窗 alpha=1，**已可见**
-             *     00.427  强制重排：先写 429x736   ← App 重排一次，用户眼前跳第一下
-             *     00.692  强制重排：写回 430x737   ← 再跳第二下
-             *     00.694  画布定稿 → 这时才摘遮罩
-             * 中间 467 毫秒里窗在用户眼前重排两次 = 他说的「闪」。
+             * 【为什么摘】0.2.73 起三代遮罩（0xAE273 预热档 / 0xAE274 入口提前档 /
+             * 0xAE274 无占位帧回退档）遮的都是**我们自己制造的抖动**：kickRelayout 的
+             * 两笔画布写回、主场景改画布的回弹，全都发生在窗口已经可见之后。
+             * 遮罩只是把这些丑盖住，代价是用户什么都看不见 —— Aevon(56) 两段时序账：
+             *   08.117 整屏截图（同步，几百 ms）→ 08.118 遮罩盖上 → 08.293 窗其实已显形
+             *   但被盖着 → 08.760 定稿才淡出 → 他看到的「等 2 秒」里至少 0.6~1.3 秒是遮罩。
              *
-             * 修法 = 加完子视图就把遮罩提回最前，全程只看到开窗前那张静态桌面；
-             * 定稿回调里遮罩 0.18s 淡出，那一刻窗已是终态（垫底图已 crossfade 到活画面）。
-             * 注意 `isUserInteractionEnabled = false` 已设，提上来不会挡触摸。 */
-            var shroudLifted = false
-            for shroudTag in [0xAE273, 0xAE274] where host.viewWithTag(shroudTag) != nil {
-                if let cover = host.viewWithTag(shroudTag) {
-                    host.bringSubviewToFront(cover)
-                    shroudLifted = true
-                }
-            }
-            if shroudLifted {
-                AevonLog.info("[窗口] 遮罩已提到窗口之上（罩住 kick 的画布抖动，定稿后再淡出）"
-                    + "（AevonShroudOnTopV282）")
-            }
-            /* V0.2.77（AevonRevealOnceV277，用户 Aevon(49) #1「第二次开启悬浮窗时有概率
-             * 不显示悬浮窗」+ #3「依旧先出现 → 消失 → 1 秒后再现」）：
-             * 0.2.76 的占位直显撞上了**下面那段**「先藏着」的入场复位 ——
-             * 占位路径在这里已经 revealEntryNow（entryRevealDone 置位、alpha 动到 1），
-             * 紧接着 60 行后的「入场复位」又把整窗硬压回 0；而 revealEntryNow
-             * 幂等（再来一次是空操作），画布定稿 / 1.3s 兜底都救不回来 →
-             * 「面板闪一下（占位帧）→ 消失 → 1 秒后（新的开窗路径或兜底）才又出现」，
-             * 运气不好就一直是隐形窗（= 有概率不显示）。
+             * 【摘了怎么不闪】把「显形」整体推迟到画布定稿回调（onCanvasSettled）：
+             * kick 的两笔、主场景回弹、预热复刻全部发生在 alpha=0 的窗背后，
+             * 用户看到的第一个画面就是终态。省下来的还有每次开窗 1~2 次整屏截图。
              *
-             * 现在定序：① 先把 alpha/transform 复位成入场初态（只此处一处）
-             * ② 铺垫底图（优先关窗缓存的最后一帧；没有就现场裁一块**窗口区域的屏幕快照**
-             * —— 新开 App 时那块是桌面，等于「什么都没发生」）
-             * ③ 立刻显形 ④ 画布定稿后 crossfade 到活画面。
-             * 用户视角：窗一直都在（先显示上一关最后一帧 / 桌面），内容自己换过去，
-             * 没有「出现 → 消失 → 再现」的中间态。 */
+             * 【垫底图】只用关窗时缓存的最后一帧（零成本、内容正确），
+             * **不再现场抓 windowRegionSnapshot** —— 那也是一次同步快照，而且抓到转场
+             * 瞬间必判黑（Aevon(56) 12:55:41.744「窗口区域快照判黑（转场瞬间抓帧）」），
+             * 抓了也白抓。没有缓存就干脆不铺，等定稿。 */
             windowView.alpha = 0
             windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
-            /* V0.2.78（AevonRevealInstantV278 AevonSnapDarkV278）：有垫底图 → **零动画直显**
-             * （不再走 revealEntryNow 的 alpha=0 + 0.34s 淡入，那正是「先黑屏再出现画面」）；
-             * 垫底图拿不到（无缓存 + 快照判黑）→ 干脆藏着，等画布定稿回调淡入。 */
-            let placeholderImage = reopenPlaceholder
-                ?? AevonWindowView.windowRegionSnapshot(for: windowView.frame)
-            if let placeholder = placeholderImage {
-                windowView.installReopenPlaceholder(
-                    placeholder,
-                    reason: reopenPlaceholder != nil ? "上一关最后一帧" : "窗口区域屏幕快照")
-                windowView.revealEntryInstant(reopenPlaceholder != nil
-                    ? "占位直显（AevonReopenSwapV276 AevonRevealInstantV278）"
-                    : "区域快照直显（AevonSnapDarkV278 AevonRevealInstantV278）")
-                _ = AevonSwitchCoordinator.shared.mark(switchTxn, "显窗(占位直显)", phase: .revealing)
+            if let placeholder = reopenPlaceholder {
+                windowView.installReopenPlaceholder(placeholder, reason: "上一关最后一帧")
+                _ = AevonSwitchCoordinator.shared.mark(switchTxn, "铺垫底图", phase: .revealing)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
-                    // V0.2.79：关窗之后这条收尾不该再跑（否则会给已释放的窗做 crossfade）
+                    // 定稿回调没触发时的兜底交叉淡入（关窗之后不再跑，AevonSwitchTxnV279）
                     guard AevonSwitchCoordinator.shared.isAlive(switchTxn) else { return }
                     windowView?.settleReopenPlaceholder()
                 }
             } else {
-                AevonLog.info("[窗口] 垫底图不可用（无缓存且快照判黑）→ 保持藏着，"
-                    + "等画布定稿回调再淡入（AevonSnapDarkV278）")
-            }
-            /* V0.2.73（AevonWarmShroudV273，用户 Aevon(45) #3「圆盘选中图标打开悬浮窗
-             * 会先闪一下，0.5 秒后才淡入出现」）：预热遮罩。
-             *
-             * Aevon(45) 时序账：03.084 外壳创建 → 03.530 画布切 737 → 03.653 预热
-             * 隐形复刻 → 04.014 显窗。预热期要把主场景**推前台**渲染整屏一拍
-             *（AevonWarmupForegroundV262）—— 推前台的那一帧，App 画面会先在**整屏**
-             * 上冒出来一瞬（presenter 还没把它接进浮窗），用户看到的就是「全屏闪一下
-             * App 画面」然后浮窗才淡入。
-             *
-             * 修法 = 开窗当下在入口容器最顶盖一张**全屏屏幕快照**（静态、不透明），
-             * 把推前台冒帧 / 画布切换 / 复刻往返全部罩在下面；显窗回调里把遮罩淡出。
-             * 用户视角：桌面静止（没有任何变化）→ 浮窗淡入，全程零闪。 */
-            var shroudShown = false
-            /* V0.2.75：入口已在 wakeUp 前盖过遮罩时这里跳过（不重复盖、不重复日志）；
-             * 场景原本不存在（launchAndOpen 刚拉起）时入口盖不上，这里兜住预热冒帧。 */
-            if host.viewWithTag(0xAE274) == nil,
-               let shot = AevonQuickAction.captureScreenImage() {
-                let cover = UIImageView(image: shot)
-                cover.frame = UIScreen.main.bounds
-                cover.contentMode = .scaleToFill
-                cover.isUserInteractionEnabled = false
-                cover.tag = 0xAE273
-                host.addSubview(cover)
-                host.bringSubviewToFront(cover)
-                shroudShown = true
-                AevonLog.info("[窗口] 预热遮罩已盖上（全屏快照，罩住推前台冒帧与画布切换）"
-                    + "（AevonWarmShroudV273）")
-            }
-            if shroudShown {
-                // 1.3s 兜底显窗路径也要撤遮罩（防 onCanvasSettled 未触发时遮罩永久盖屏）。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.34) {
-                    if let cover = host.viewWithTag(0xAE273) {
-                        UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
-                                       completion: { _ in cover.removeFromSuperview() })
-                    }
-                }
+                AevonLog.info("[窗口] 无占位帧 → 不铺垫底图、不截图，等画布定稿再淡入"
+                    + "（AevonNoShroudV283）")
             }
             /* V0.2.64（AevonFloatTransitionV264，用户 Aevon(38) #3「动画更流畅真实，
              * 而不是突然出现的」）：开窗补一段入场动画 —— 淡入 + 从 0.965 弹到 1.0。
@@ -1104,17 +985,10 @@ enum AevonWindowManager {
                         AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
                             + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
                             + "（AevonRevealEventV271）")
-                        // V0.2.73（AevonWarmShroudV273）：遮罩淡出与浮窗淡入同步 ——
-                        // 遮罩下面是什么无所谓（浮窗此刻已在终态），0.18s 后摘掉。
-                        // V0.2.75：两代遮罩 tag 都摘（0.2.73 异步盖的 0xAE273 +
-                        // 0.2.75 入口提前盖的 0xAE274，可能同时只有其一）。
-                        for shroudTag in [0xAE273, 0xAE274] {
-                            if let cover = host.viewWithTag(shroudTag) {
-                                UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
-                                               completion: { _ in cover.removeFromSuperview() })
-                            }
-                        }
-                        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
+                        // V0.2.83（AevonNoShroudV283）：遮罩已整体退役 —
+                        // 窗从 addSubview 起 alpha=0，画布抖完全在看不见的时候做完，
+                        // 这里直接显形就是终态（不需要「先盖住再淡出」）。
+                        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")
                         // V0.2.77（AevonRevealOnceV277）：画布定稿 → 垫底图 crossfade 到活画面
                         //（预热档也走同一条，0.2.76 只给非预热档摘过占位）。
                         currentView?.settleReopenPlaceholder()
@@ -1128,12 +1002,11 @@ enum AevonWindowManager {
                     guard currentBundleID == bundleID else { return }
                     AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态）"
                         + "（AevonRevealEventV271 AevonRevealLateV269）")
-                    // V0.2.74（AevonReopenShroudV274）：再开窗遮罩与浮窗淡入同步摘除。
-                    if let cover = host.viewWithTag(0xAE274) {
-                        UIView.animate(withDuration: 0.18, animations: { cover.alpha = 0 },
-                                       completion: { _ in cover.removeFromSuperview() })
-                    }
-                    currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
+                    /* V0.2.83（AevonNoShroudV283）：这是「不闪」与「不用等 2 秒」同时成立的
+                     * 关键一行 —— 窗从 addSubview 起一直 alpha=0，kickRelayout 的两笔
+                     *（-1pt / 写回）和主场景回弹全发生在藏着的时候；定稿回调这一刻直接
+                     * 显形，用户看到的第一个画面就是终态，中间没有任何可跳的帧。 */
+                    currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")
                     // V0.2.76（AevonReopenSwapV276）：画布定稿 → 占位帧 crossfade 到活画面。
                     currentView?.settleReopenPlaceholder()
                     AevonSwitchCoordinator.shared.complete(switchTxn, reason: "画布定稿")

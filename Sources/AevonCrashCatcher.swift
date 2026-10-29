@@ -18,94 +18,24 @@ import Darwin
 
 private let kCrashLogPath = "/var/mobile/Aevon.crash.log"
 private let kOwnerPath = "/var/mobile/Aevon.crash.owner"
-private let kCrashLogPathBytes: [CChar] = Array(kCrashLogPath.utf8CString)
-private let kOwnerPathBytes: [CChar] = Array(kOwnerPath.utf8CString)
-private let kSignalTextBytes: [CChar] = Array("[崩溃] 捕获到致命信号，编号=".utf8CString)
-private let kBacktraceTitleBytes: [CChar] = Array("[崩溃] 调用栈回溯（模块+偏移，供离线符号化；AevonCrashTraceV39）\n".utf8CString)
-private let kSignalTailBytes: [CChar] = Array("（SpringBoard 即将退出）\n".utf8CString)
-private let kAttrExternalBytes: [CChar] = Array("[崩溃] 归因：外部模块引起（回溯无 Aevon 帧，Aevon 不背锅；AevonCrashAttrV40）\n".utf8CString)
-private let kAttrOwnedBytes: [CChar] = Array("[崩溃] 归因：Aevon 参与崩溃（AevonCrashAttrV40）\n".utf8CString)
-private let kOwnerExternal: [CChar] = Array("external".utf8CString)
-private let kOwnerAevon: [CChar] = Array("aevon".utf8CString)
 
-/// 致命信号处理：先落盘（信号编号 + 调用栈回溯），再恢复默认处理并重新抛出。
-///
-/// V0.0.39（AevonCrashTraceV39）：之前只写信号编号，SIGSEGV 完全无法定位
-/// （真机 Aevon(32)：连续自动注销，崩溃记录只有一行「编号=11」）。
-/// 这里在信号处理里调 `backtrace` + `backtrace_symbols_fd` 把当前线程调用栈
-/// （模块 + 偏移）直接写进崩溃文件 —— `backtrace_symbols_fd` 官方保证不走 malloc，
-/// 是信号处理里唯一安全的符号化方式；拿不到符号也有模块偏移可供离线对照。
-private func aevonSignalHandler(_ signalNumber: Int32) {
-    let fd = kCrashLogPathBytes.withUnsafeBufferPointer { buffer -> Int32 in
-        guard let base = buffer.baseAddress else { return -1 }
-        return open(base, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-    }
+/* V0.2.83（AevonCrashPCV283）：老的「一参数 signal + backtrace」处理器整体退休，
+ * 处理器搬去 AevonAssertionShim.m 的 C 实现（sigaction + SA_SIGINFO + ucontext）。
+ *
+ * 退休理由（不是重构癖，是 0.2.82 崩溃日志实打实核对出来的）：
+ * 老 handler 只拿得到信号编号，栈靠 `backtrace()`。而 backtrace 在信号处理器里
+ * 走的是**处理器自己的 fp 链**，0.2.82 那份日志反汇编后是：
+ *     帧0 0xf6fc = `bl AevonBacktrace` 的返回点
+ *     帧1 0xf700 = handler 里 `mov x23,x0`（调用 AevonBacktrace 的那一行）
+ *     帧2        = libsystem_platform（sigtramp）
+ *     帧3..      = 0x43c54 一带反复跳（根本不是调用链）
+ * 于是「归因：Aevon 参与崩溃」这条结论本身也没有依据 —— 它只是在一堆假的帧里
+ * 找到了一条恰好落在自己地址段内的记录。两版都在这上面猜，白烧时间。
+ *
+ * 现在 handler 直接读 ucontext 的 pc（就是触发 SIGSEGV 的那条指令）、lr、sp、fp，
+ * 并自己遍历 fp 链；每帧标 [A]（在 Aevon 内）/ [.]（不在）。归因文件规则不变。
+ * 上面这些常量仅 `write(_:)`（ObjC 异常路径）还在用，保留。 */
 
-    if fd >= 0 {
-        _ = kSignalTextBytes.withUnsafeBufferPointer { buffer in
-            write(fd, buffer.baseAddress, buffer.count - 1)
-        }
-
-        var value = signalNumber
-        if value < 0 { value = 0 }
-        var digits: [CChar] = [0, 0]
-        var length = 1
-        if value >= 10 {
-            digits[0] = CChar(48 + (value / 10) % 10)
-            digits[1] = CChar(48 + value % 10)
-            length = 2
-        } else {
-            digits[0] = CChar(48 + value % 10)
-        }
-        _ = write(fd, digits, length)
-
-        _ = kSignalTailBytes.withUnsafeBufferPointer { buffer in
-            write(fd, buffer.baseAddress, buffer.count - 1)
-        }
-
-        // 调用栈回溯：本线程 64 帧，模块+偏移直接写 fd（不走 malloc）
-        // 经 ObjC 垫片转发（AevonBacktrace / AevonBacktraceSymbolsFD）——
-        // Swift 的 Darwin 模块在部分 SDK 上不暴露 execinfo。
-        var frames = [UnsafeMutableRawPointer?](repeating: nil, count: 64)
-        let count = Int(AevonBacktrace(&frames, 64))
-        // V0.0.40（AevonCrashAttrV40）：归因。回溯帧 0/1 是信号处理器自身、
-        // 帧 2 是 sigtramp 跳板，从帧 3 起才是真正崩溃现场——
-        // 只有现场里出现 Aevon 自己的帧才认账，否则是别的插件崩了（真机定论：
-        // ZZEvoCenterRuntime 崩溃曾把 Aevon 误禁用，用户永远开不起来）。
-        var owned: Int = 0
-        if count > 3 {
-            owned = Int(AevonCrashAttrOwnsFrame(&frames, Int32(count), 3))
-        }
-        if fd >= 0 {
-            _ = (owned == 1 ? kAttrOwnedBytes : kAttrExternalBytes).withUnsafeBufferPointer { buffer in
-                write(fd, buffer.baseAddress, buffer.count - 1)
-            }
-        }
-        if count > 0 {
-            _ = kBacktraceTitleBytes.withUnsafeBufferPointer { buffer in
-                write(fd, buffer.baseAddress, buffer.count - 1)
-            }
-            AevonBacktraceSymbolsFD(&frames, Int32(count), fd)
-        }
-        if fd >= 0 { close(fd) }
-
-        // 归因标记文件：崩溃保护据此决定是否禁用（信号处理里只能 open/write/close）
-        let ofd = kOwnerPathBytes.withUnsafeBufferPointer { buffer -> Int32 in
-            guard let base = buffer.baseAddress else { return -1 }
-            return open(base, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-        }
-        if ofd >= 0 {
-            let payload = owned == 1 ? kOwnerAevon : kOwnerExternal
-            _ = payload.withUnsafeBufferPointer { buffer in
-                write(ofd, buffer.baseAddress, buffer.count - 1)
-            }
-            close(ofd)
-        }
-    }
-
-    signal(signalNumber, SIG_DFL)
-    raise(signalNumber)
-}
 
 /// 未捕获异常处理：此时进程仍可正常调用 Foundation，直接写完整堆栈。
 private func aevonExceptionHandler(_ exception: NSException) {
@@ -130,10 +60,9 @@ enum AevonCrashCatcher {
         installed = true
 
         NSSetUncaughtExceptionHandler(aevonExceptionHandler)
-        let handler: @convention(c) (Int32) -> Void = aevonSignalHandler
-        for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE] {
-            _ = signal(sig, handler)
-        }
+        /* V0.2.83（AevonCrashPCV283）：信号处理器改由 C 侧 `sigaction + SA_SIGINFO`
+         * 安装（读 ucontext 拿崩溃指令 pc / lr / sp / fp）。这里不再装 `signal()`。 */
+        AevonCrashInstall()
         // V0.0.40（AevonCrashAttrV40）：先算好自身地址段，信号处理里做纯指针归因
         AevonCrashAttrPrepare()
     }

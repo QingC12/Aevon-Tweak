@@ -88,3 +88,12 @@ void AevonCrashAttrPrepare(void);
 /// 里有没有落在 Aevon 自身地址段内的帧。返回 1 = Aevon 参与（要负责），
 /// 0 = 外部模块引起（不背锅、不禁用）。纯指针比较，信号处理内安全。
 int AevonCrashAttrOwnsFrame(void **stack, int count, int skip);
+
+/// V0.2.83（AevonCrashPCV283）：用 `sigaction` + `SA_SIGINFO` 装崩溃处理器。
+///
+/// 老的 `signal()` 一参数处理器里调 `backtrace()` 拿不到崩溃现场 —— 0.2.82 的
+/// 崩溃日志反汇编核对过：帧 0/1 是 `AevonBacktrace` 及其调用者，帧 2 是 sigtramp，
+/// 帧 3 起全是同一片代码来回跳（不在现场）。于是改用 ucontext 直接读
+/// pc / lr / sp / fp（纯指针，async-signal-safe），并自己走 fp 链给调用帧。
+/// 安装后 Swift 侧不再自己装 signal 处理器。
+void AevonCrashInstall(void);

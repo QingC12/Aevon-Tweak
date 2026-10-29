@@ -1660,6 +1660,22 @@ static void AevonDockInteractionRefresh(void) {
     }
 }
 
+/* V0.2.83（AevonGripSafeV283，Aevon(56)「会让系统触摸手势失效」）：
+ * 「把手占用」把本进程所有窗口的 userInteractionEnabled 关掉，这本身是设计；
+ * 但旧实现的两条「不该关」判据是**直接 return**：
+ *
+ *     if (AevonAppIsFloatHosted()) { return; }              ← 本 App 进浮窗了
+ *     if (real.height > 200 && tallest < real.height - 60) { return; }
+ *
+ * 于是「已经被关掉交互」的进程一旦走进这两条分支，恢复分支（下面那个
+ * `if (gAevonGripBusy)`）永远到不了 —— 窗口永久 userInteractionEnabled=NO，
+ * 用户看到的就是「这个 App 整个没反应 / 系统手势全失效」，只有杀掉 App 才好。
+ * 而且这条广播是**全局 notify state**，后台进程（日志里 backgroundassets.user、
+ * contacts.donation-agent 都收到了）也会中招。
+ *
+ * 修法：命中这两条判据时先强制恢复再返回。fail-open 永远是安全方向。 */
+static void AevonForceInteractionRestore(const char *reason);
+
 /* V0.2.63（AevonGripBusyV263）：SB 说「手指在把手上」→ 本进程关交互。
  *
  * 为什么不再用坐标判定：0.2.61 / 0.2.62 两版都在 App 侧按落点矩形判，
@@ -1671,6 +1687,17 @@ static void AevonDockInteractionRefresh(void) {
  * 浮窗里的 App 右缘没有把手，关了只会让浮窗内容点不动。
  * fail-open：读不到「占用」态一律恢复交互；0.6 秒硬超时兜底（抬手包丢了也不会卡死）。
  */
+static void AevonForceInteractionRestore(const char *reason) {
+    if (!gAevonGripBusy) { return; }
+    gAevonGripBusy = NO;
+    /* 让挂起的那条 0.6s 兜底作废（generation 不匹配就提前 return），
+     * 否则它会在 0.6 秒后再关 / 再开一次，来回抖。 */
+    gAevonGripBusyGeneration += 1;
+    gAevonGripBusyDirty = YES;
+    AevonDockInteractionRefresh();
+    AevonAppLog(@"[App侧] 把手占用态自愈 → 强制恢复交互（%s）（AevonGripSafeV283）", reason);
+}
+
 static void AevonGripBusyRefresh(BOOL fromNotify) {
     @try {
         if (gAevonGripBusyToken < 0) { return; }
@@ -1680,8 +1707,12 @@ static void AevonGripBusyRefresh(BOOL fromNotify) {
             busy = (state != 0);
         }
         if (busy) {
-            /* 只有全屏 App 才需要关：浮窗承载中（画布尺寸）把手不在这个进程的界面上。 */
-            if (AevonAppIsFloatHosted()) { return; }
+            /* V0.2.83（AevonGripSafeV283）：这两条「不该关」的判据以前是直接 return，
+             * 已经关掉的交互再也没机会打开（见上方说明）→ 改成先恢复再返回。 */
+            if (AevonAppIsFloatHosted()) {
+                AevonForceInteractionRestore("本 App 已进入浮窗承载");
+                return;
+            }
             CGSize real = AevonRealScreenSize();
             CGFloat tallest = 0;
             @try {
@@ -1693,7 +1724,10 @@ static void AevonGripBusyRefresh(BOOL fromNotify) {
                     }
                 }
             } @catch (NSException *e) { tallest = 0; }
-            if (real.height > 200 && tallest < real.height - 60.0) { return; }
+            if (real.height > 200 && tallest < real.height - 60.0) {
+                AevonForceInteractionRestore("窗口不再满屏（键盘/分屏/画布）");
+                return;
+            }
             gAevonGripBusyGeneration += 1;
             uint32_t generation = gAevonGripBusyGeneration;
             if (!gAevonGripBusy) {
@@ -1721,6 +1755,17 @@ static void AevonGripBusyRefresh(BOOL fromNotify) {
             AevonDockInteractionRefresh();
             AevonAppLog(@"[App侧] 把手占用结束 → 交互恢复（%@）（AevonGripBusyV263）",
                         fromNotify ? @"来自 SB 通知" : @"轮询兜底");
+        }
+        /* V0.2.83（AevonGripSafeV283）：不依赖任何「状态变了才刷新」的脏标记 ——
+         * 每 2 秒无条件按真实状态对齐一次窗口交互。这条兜底存在的唯一理由：
+         * 上面所有判据都是「猜」，而 userInteractionEnabled 被关掉是**用户级不可恢复**
+         * 的故障（整个 App 没反应，只能杀进程）。猜错的方向必须是「多开一次」。 */
+        static CFTimeInterval lastForceAlign = 0;
+        CFTimeInterval nowAlign = CACurrentMediaTime();
+        if (nowAlign - lastForceAlign > 2.0) {
+            lastForceAlign = nowAlign;
+            gAevonGripBusyDirty = YES;
+            AevonDockInteractionRefresh();
         }
     } @catch (NSException *exception) {
         gAevonGripBusy = NO;

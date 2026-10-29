@@ -139,10 +139,13 @@ jobs:
           done
           # V0.2.82（Aevon(55) 闪 + 自动注销）：三条修复必须各自带着标记进二进制。
           # 注意 Swift 日志串是 UTF-8，strings 能查到；ObjC 中文串则查不到（0.2.68/0.2.81 教训）。
-          for m in AevonShroudOnTopV282 AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
-                   AevonYieldAlphaV282; do
+          # V0.2.83：AevonShroudOnTopV282 随遮罩整体退役（见 0.2.83 校验块），
+          # 二进制 must 列表改用 AevonNoShroudV283 —— 它证明「不再截图、不再盖遮罩」这一版
+          # 的代码真的被编进去了（而不是只改了注释）。
+          for m in AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
+                   AevonYieldAlphaV282 AevonNoShroudV283; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82/0.2.83 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -2822,8 +2825,9 @@ jobs:
           # V0.2.71 反转（AevonRevealEventV271）：显窗 +0.85s 定时版作废，改事件驱动
           #（Aevon(43) 实测复刻起手漂移 +0.45s，尾排必落显窗后 = 闪好几下）——
           # 显窗挂进 kick 尾笔画布写回回调，旧串「预热隐形复刻完成（画布已切回）」随之退役。
-          grep -q 'revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.71 显窗没挂进画布定稿回调（闪好几下复发）"; exit 1; }
+          # V0.2.83：文案追加 AevonNoShroudV283（遮罩退役后，这条回调成了「不闪」的唯一保证）。
+          grep -q 'revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71/0.2.83 显窗没挂进画布定稿回调（闪好几下复发）"; exit 1; }
           grep -q 'onCanvasSettled' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.71 kick 尾笔没有 onCanvasSettled 回调（事件驱动显窗断链）"; exit 1; }
           # ④ #4 键盘：窗口枚举不能再走废弃的 sharedApplication.windows
@@ -3159,9 +3163,13 @@ jobs:
           # #5a 垫帧黑检测
           grep -q 'AevonLivePadDarkV273' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.73 垫帧缺黑帧检测（回桌面黑屏复发）"; exit 1; }
-          # #3 预热遮罩
-          grep -q 'AevonWarmShroudV273' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.73 缺预热遮罩（开窗闪一下复发）"; exit 1; }
+          # #3 预热遮罩 —— V0.2.83 整体退役（AevonNoShroudV283）。遮罩遮的是我们
+          # 自己制造的画布抖动，代价是用户 0.6~1.3 秒看不到窗（「等 2 秒」的真身）。
+          # 现在改成「显形推迟到画布定稿」，所以这条断言反向：遮罩代码不许回来。
+          if grep -q 'AevonWarmShroudV273' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 预热遮罩又回来了（AevonNoShroudV283 已退役它）"
+            exit 1
+          fi
           # #2 宿主命中审计
           grep -q 'AevonProbeHostHitV273' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.73 失效探针缺宿主命中审计"; exit 1; }
@@ -3177,18 +3185,22 @@ jobs:
           # #1 停靠降级回原侧（左右随机横跳根治）
           grep -q 'AevonDemoteSideFixV274' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.74 缺停靠降级侧定档（切回主窗后左右随机复发）"; exit 1; }
-          # #2 再开窗遮罩（打开过的 App 再开闪一下）
-          grep -q 'AevonReopenShroudV274' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.74 缺再开窗遮罩（再开闪一下复发）"; exit 1; }
+          # #2 再开窗遮罩 —— V0.2.83 退役（同 AevonNoShroudV283），断言反向。
+          if grep -q 'AevonReopenShroudV274' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 再开窗遮罩又回来了（且它会多做一次整屏截图）"
+            exit 1
+          fi
           # #3 花瓣尖角贴花心
           grep -q 'AevonRecFlowerV274' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.74 缺花瓣整形标记"; exit 1; }
           echo "V0.2.74 校验: 停靠降级回原侧 + 再开窗遮罩 + 花瓣尖角贴花心已就位"
 
           # ── V0.2.75 校验（Aevon(47) 四项）──────────────────────────────────────
-          # #3 再开窗遮罩提前到 wakeUp 前（0.2.74 盖晚了 0.18s）
-          grep -q 'AevonReopenShroudEarlyV275' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.75 缺遮罩提前标记（再开窗闪一下复发）"; exit 1; }
+          # #3 再开窗遮罩提前 —— V0.2.83 退役（同 AevonNoShroudV283），断言反向。
+          if grep -q 'AevonReopenShroudEarlyV275' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 入口提前遮罩又回来了（开窗就截一次整屏，用户要等它）"
+            exit 1
+          fi
           # #2 花瓣旋转中心回花心
           grep -q 'AevonPetalCenterV275' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.75 缺花瓣中心修复标记（围角转复发）"; exit 1; }
@@ -3255,8 +3267,14 @@ jobs:
           # #4/#5 直显零动画：revealEntryInstant 必须存在，且直显路径不许再走淡入
           grep -q 'func revealEntryInstant' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.78 缺直显零动画实现（AevonRevealInstantV278）"; exit 1; }
-          grep -q 'revealEntryInstant' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.78 占位直显没走零动画（仍是 alpha=0 淡入 = 黑屏后出现）"; exit 1; }
+          # V0.2.83 反转：0.2.78 要求开窗时用占位帧**零动画直显**。遮罩退役后改为
+          # 「窗一直 alpha=0，画布定稿才显形」，占位帧只当垫底图、不再直显 ——
+          # 直显会把「还没定稿的画面」推到用户眼前（就是 0.2.82 那 467ms 的重排）。
+          # 实现（revealEntryInstant 本体）仍在 AevonWindowView 里，供录屏/兜底复用。
+          if grep -q 'revealEntryInstant' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 开窗路径又直显了（AevonNoShroudV283 改为定稿后显形）"
+            exit 1
+          fi
           # #4 快照黑帧校验：判黑必须发生在裁剪之后、返回之前
           grep -q 'AevonSnapDarkV278' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.78 缺区域快照黑帧校验（AevonSnapDarkV278）"; exit 1; }
@@ -3294,8 +3312,16 @@ jobs:
           grep -q 'AevonSettingsChannel.shared.request' "$GITHUB_WORKSPACE/Sources/AevonSceneHelper.swift" \
             || { echo "::error::0.2.79 setForeground 没走单飞通道"; exit 1; }
           # Hook 层判据必须升级为账本（否则「一刀切 YES」会顶住交还全屏）
-          grep -q 'AevonSceneLedger.shared.wantsForeground' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
-            || { echo "::error::0.2.79 场景拦截没接账本判据"; exit 1; }
+          # V0.2.83 反转：AevonFgGuardRetireV283 把 updateSettings 的改写分支整建制下线
+          #（Aevon(56) 891 行日志里「拦下系统写 foreground=NO」0 条 = 从未命中）。
+          # 账本判据 `wantsForeground` 因此没有调用点 —— 断言反向，防止有人把它接回
+          # 那条「复制一份 FBS settings 塞回去」的高危路径（归档(14) 同类）。
+          if grep -q 'AevonSceneLedger.shared.wantsForeground' "$GITHUB_WORKSPACE/Sources/Hooks.swift"; then
+            echo "::error::0.2.83 场景改写分支又接回 Hooks 了（mutableCopy 交副本给 FrontBoard）"
+            exit 1
+          fi
+          grep -q 'AevonFgGuardRetireV283' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
+            || { echo "::error::0.2.83 缺改写分支下线标记（AevonFgGuardRetireV283）"; exit 1; }
           # 事务：开窗要起、关窗要中止（迟到闭包闸门）
           grep -q 'AevonSwitchCoordinator.shared.begin' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.79 开窗没起事务"; exit 1; }
@@ -3415,11 +3441,24 @@ jobs:
           #      → 00.692 写回 430x737 → 00.694 才摘遮罩 = 中间 467ms 重排两次（闪）。
           #   ③ 触摸链上唯一遍历系统窗口视图树的是「失效瞬间探针」的 hitTest。
 
-          # ① 遮罩必须提到窗口之上（否则 kick 的两笔画布抖动全暴露）
-          grep -q 'AevonShroudOnTopV282' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.82 遮罩没提到窗口之上（画布抖动会在用户眼前跳两次）"; exit 1; }
-          grep -q 'host.bringSubviewToFront(cover)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.82 缺「遮罩重新置顶」的实现"; exit 1; }
+          # ① V0.2.83 反转：0.2.82 在这里要求「遮罩必须提到窗口之上」。0.2.83 把遮罩
+          #    整体摘除（AevonNoShroudV283）—— 遮罩遮的是我们自己造的画布抖动，代价是用户
+          #    0.6~1.3 秒看不见窗（Aevon(56)「选中图标要等 2 秒」的真身）。
+          #    现在改成「显形推迟到画布定稿」，所以这两条断言方向反过来，并加防回退网。
+          if grep -q 'AevonShroudOnTopV282' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 遮罩置顶代码又回来了（AevonNoShroudV283 已整体摘除遮罩）"
+            exit 1
+          fi
+          if grep -q 'host.bringSubviewToFront(cover)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 又出现「把遮罩提到最前」的实现"
+            exit 1
+          fi
+          grep -q 'AevonNoShroudV283' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.83 缺遮罩退役标记（AevonNoShroudV283）"; exit 1; }
+          if grep -q 'AevonQuickAction.captureScreenImage()' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 开窗路径又做整屏截图了（同步、几百 ms，全记在「等 2 秒」账上）"
+            exit 1
+          fi
 
           # ② 触摸热路径上不许再有任何 hitTest 调用（判据只认 `.hitTest(` 调用形态，
           #   注释里提到这个词不算 —— 0.2.81 就被自己的块注释绊过一次）
@@ -3446,15 +3485,116 @@ jobs:
           fi
           grep -q 'AevonYieldAlphaV282' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.82 缺「让位改 alpha」标记"; exit 1; }
-          echo "V0.2.82 校验: 遮罩置顶 + 触摸链零 hitTest + 让位触点闸门 + 让位改 alpha 已就位"
+          echo "V0.2.82 校验: 遮罩退役 + 触摸链零 hitTest + 让位触点闸门 + 让位改 alpha 已就位"
 
+          # ── V0.2.83 校验（Aevon(56)：摘遮罩 / 取证换 SA_SIGINFO / App 侧交互自愈）────────
+          # 依据 Aevon(56) 归档(18) 四件事：
+          #   ① 「选中图标要等 2 秒才出现」= 遮罩盖着 + 每次开窗两次整屏截图（同步）。
+          #   ② 「0.2.81 起系统触摸手势失效」= App 侧 gripBusy 的两条「不该关」判据是直接
+          #      return，已经关掉的 userInteractionEnabled 再也没机会打开。
+          #   ③ 「自动注销多个方面都会触发」= 旧崩溃栈帧 1 就是 AevonBacktrace 的调用者
+          #      （反汇编 0xf700 确认），整条栈没有现场 → 换 ucontext 读 pc。
+          #   ④ `_setLayers` 的 Swift 参数写成非可选 Any，nil 会在桥接 thunk 里 trap。
+
+          # ① 遮罩退役（AevonNoShroudV283）+ 开窗路径不许再截图
+          grep -q 'AevonNoShroudV283' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.83 缺遮罩退役标记"; exit 1; }
+          if grep -q 'AevonQuickAction.captureScreenImage()' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
+            echo "::error::0.2.83 开窗路径还在截整屏（用户要等它，且转场帧必判黑）"
+            exit 1
+          fi
+          # 显形必须留在画布定稿回调里（摘了遮罩还不推迟显形 = 抖动会露在用户眼前）
+          grep -q 'AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283' \
+               "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.83 显形没挂在画布定稿回调上（摘遮罩后会闪）"; exit 1; }
+
+          # ② 崩溃取证：必须用 sigaction + SA_SIGINFO + ucontext 读 pc
+          grep -q 'AevonCrashPCV283' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.83 崩溃取证没换 SA_SIGINFO（旧栈帧 1 是 AevonBacktrace 调用者，无现场）"; exit 1; }
+          grep -q 'sa_sigaction = AevonCrashSignalHandler' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.83 没装 sa_sigaction（拿不到 ucontext）"; exit 1; }
+          grep -q 'SA_SIGINFO' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.83 sigaction 没带 SA_SIGINFO"; exit 1; }
+          grep -q '__ss.__pc' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.83 没读 ucontext 的 pc（拿不到崩溃指令）"; exit 1; }
+          grep -q 'AevonCrashInstall()' "$GITHUB_WORKSPACE/Sources/AevonCrashCatcher.swift" \
+            || { echo "::error::0.2.83 Swift 侧没切到 AevonCrashInstall"; exit 1; }
+          # 老的「一参数 signal() 处理器」不许回来（它是整条假栈的来源）
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonCrashCatcher.swift" \
+               | grep -q 'signal(sig, handler)'; then
+            echo "::error::0.2.83 Swift 侧又自己装 signal() 处理器了（栈会退化成假栈）"
+            exit 1
+          fi
+
+          # ③ App 侧交互自愈（把手占用不许把窗口永久关掉）
+          grep -q 'AevonGripSafeV283' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.83 缺 App 侧交互自愈（系统手势失效复发）"; exit 1; }
+          grep -q 'static void AevonForceInteractionRestore' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.83 缺强制恢复交互的实现"; exit 1; }
+          # 两条「不该关」的判据不许再直接 return（那就是永久关闭的入口）
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+               | grep -q 'if (AevonAppIsFloatHosted()) { return; }'; then
+            echo "::error::0.2.83 「浮窗承载中」又直接 return 了（已关的交互不会再打开）"
+            exit 1
+          fi
+
+          # ④ _setLayers 参数必须可空 + 刷新必须异步
+          grep -q 'AevonLayerNilSafeV283' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
+            || { echo "::error::0.2.83 缺 _setLayers 可空标记"; exit 1; }
+          grep -q 'func sk_fbslm_setLayers(_ layers: Any?)' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
+            || { echo "::error::0.2.83 _setLayers 参数又写成非可选 Any（nil 会在 thunk 里 trap）"; exit 1; }
+
+          # ⑤ updateSettings 改写分支下线（0 次命中 + mutableCopy 交副本给 FrontBoard = 0.1.5 同类风险）
+          grep -q 'AevonFgGuardRetireV283' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
+            || { echo "::error::0.2.83 缺前台拦截下线标记"; exit 1; }
+          if grep -q 'mutableCopy() as? NSObject' "$GITHUB_WORKSPACE/Sources/Hooks.swift"; then
+            echo "::error::0.2.83 又把 FBS settings 复制一份塞回去了（归档(14) 同类路径）"
+            exit 1
+          fi
+          echo "V0.2.83 校验: 遮罩退役 + SA_SIGINFO 取证 + App侧交互自愈 + setLayers可空 + 前台改写下线 已就位"
+
+
+      # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
+      # 为什么要它：真机崩溃日志里只有「模块 + 偏移」，而发布用的 dylib 被 strip 到只剩
+      # 60 个导出符号、0 个本地函数符号 —— 0.2.82 那份崩溃栈就是这么废掉的（连帧 1 都
+      # 是 AevonBacktrace 的调用者，整条栈不是现场）。有了这份带符号的副本，
+      # 下次拿到 pc 就能一条命令对出函数名，不用再靠反汇编猜。
+      # 注意：这些文件**不进 deb**（deb 在打包时就已从 .theos/_ 取好），只随 artifact 上传。
+      - name: 导出符号副本（未 strip dylib + dSYM）
+        run: |
+          mkdir -p packages/_sym
+          for name in Aevon AevonApp; do
+            for cand in ".theos/obj/arm64e/$name.dylib" ".theos/obj/$name.dylib"; do
+              if [ -f "$cand" ]; then
+                cp "$cand" "packages/_sym/$name.debug.dylib"
+                echo "导出 $cand → _sym/$name.debug.dylib ($(wc -c < "$cand") 字节)"
+                break
+              fi
+            done
+            for dsym in ".theos/obj/arm64e/$name.dylib.dSYM" ".theos/obj/$name.dylib.dSYM"; do
+              if [ -d "$dsym" ]; then
+                cp -R "$dsym" "packages/_sym/"
+                echo "导出 $dsym"
+                break
+              fi
+            done
+          done
+          ls -la packages/_sym || true
+          # 自检：导出的副本里本地函数符号必须 > 0（否则等于没导）
+          for f in packages/_sym/*.debug.dylib; do
+            [ -f "$f" ] || continue
+            n=$(nm -a "$f" 2>/dev/null | grep -c ' [tT] ' || true)
+            echo "$(basename "$f") 本地函数符号数 = $n"
+          done
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）
         uses: actions/upload-artifact@v4
         with:
           name: Aevon-deb
-          path: packages/*.deb
+          path: |
+            packages/*.deb
+            packages/_sym/**
           if-no-files-found: error
 
       - name: 输出产物信息到日志
