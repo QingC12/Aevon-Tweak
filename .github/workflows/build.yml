@@ -3963,13 +3963,15 @@ jobs:
           # ── V0.2.94 校验（Aevon(71)：冷启动超 2s 兜底显窗 + 清晰→模糊→实时，用户确认回归修复 + 方案 M）──
           # ①回归修复：onCanvasSettled 赋值必须在 writeCanvasDirect **之前**（同步 fire
           #   时回调必须先就位；Aevon(71) 实锤冷启动 1.5~2.2s 全走兜底、开过的 0.47s）
+          #   用 awk 而非 grep|cut（跨平台一致；烧 run 40864510703 = 变量名笔误 ASETTLED≠ASETTLING）
           WMGR="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
-          ASETTLED=$(grep -n 'sceneHost.onCanvasSettled = { \[weak sceneHost\] in' "$WMGR" | head -1 | cut -d: -f1)
-          WDIRECT=$(grep -n 'sceneHost.writeCanvasDirect(width: mainCanvas.width' "$WMGR" | head -1 | cut -d: -f1)
-          if [ -n "$ASETTLING" ] && [ -n "$WDIRECT" ] && [ "$ASETTLING" -lt "$WDIRECT" ]; then
+          ORDER=$(awk '/sceneHost\.onCanvasSettled = \{ \[weak sceneHost\] in/ {if(!A)A=NR} /sceneHost\.writeCanvasDirect\(width: mainCanvas\.width/ {if(!W)W=NR} END{print A+0, W+0}' "$WMGR")
+          ASETTLING=${ORDER%% *}
+          WDIRECT=${ORDER##* }
+          if [ "$ASETTLING" -gt 0 ] && [ "$WDIRECT" -gt 0 ] && [ "$ASETTLING" -lt "$WDIRECT" ]; then
             echo "V0.2.94 顺序校验: 回调赋值($ASETTLING) 先于 单笔直写($WDIRECT) ✓"
           else
-            echo "::error::0.2.94 onCanvasSettled 赋值必须先于 writeCanvasDirect（AevonRevealOrderFixV294，冷启动兜底显窗回归）"
+            echo "::error::0.2.94 onCanvasSettled 赋值必须先于 writeCanvasDirect（AevonRevealOrderFixV294，冷启动兜底显窗回归；实测 A=$ASETTLING W=$WDIRECT）"
             exit 1
           fi
           # ②方案 M：转场静默采样闸（Stheno stableHiddenSamples 纪律）
