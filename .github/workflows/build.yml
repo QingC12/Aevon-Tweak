@@ -151,7 +151,7 @@ jobs:
                    AevonNoFlashBirthV286 AevonNoPlaceholderV286 AevonScalarKVCV286 \
                    AevonCrashReentryV286 AevonCrashPacMaskV286 AevonCrashFrameGuardV286 \
                    AevonForceWriteV286 AevonRevealInstantOnV287 AevonFreezePassthruV287 \
-                   AevonGripBusyRetireV287; do
+                   AevonGripBusyRetireV287 AevonRingDismissInstantV288 AevonLiveInstantV288; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.2.87 二进制里缺标记 $m"; exit 1; }
           done
@@ -3788,6 +3788,38 @@ jobs:
             exit 1
           fi
           echo "V0.2.87 校验: 显形瞬时化 + 冻结帧穿透 + 占用广播退役 已就位"
+
+      # ── V0.2.88（Aevon(61) 三句反期：闪 / 抖音卡死 / 切 App 虚到实）──────────
+      - name: V0.2.88 校验
+        run: |
+          set -e
+          # ① 选中开窗路径圆盘收起必须瞬时 + 开窗不等 0.18s ——
+          #    弹簧 0.3s + 淡出 0.18s + 延迟 0.18s 就是「先闪一下（圆盘消散），空档
+          #    约 1 秒，然后悬浮窗才出现」的前半段本体
+          grep -q 'AevonRingDismissInstantV288' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::0.2.88 缺「圆盘选中收起瞬时化」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+               | grep -q 'asyncAfter' ; then
+            if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+                 | grep -A2 'asyncAfter' | grep -q 'launchAndOpen'; then
+              echo "::error::0.2.88 选中开窗又走 asyncAfter 延迟了（0.18s 空档=闪的前半段）"
+              exit 1
+            fi
+          fi
+          if ! grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+               | grep -q 'dismiss(instant: true)'; then
+            echo "::error::0.2.88 选中开窗路径没有走瞬时收起（dismiss(instant: true) 缺失）"
+            exit 1
+          fi
+          # ② 藏窗浮现 0.22s + 0.985 缩放退役 —— 内容定稿后的任何渐变/缩放都是「虚到实」
+          grep -q 'AevonLiveInstantV288' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.88 缺「藏窗浮现瞬时化」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+               | grep -q '0.22s 浮现\|CGAffineTransform(scaleX: 0.985'; then
+            echo "::error::0.2.88 藏窗浮现动画回来了（0.22s+缩放=由虚到实本体）"
+            exit 1
+          fi
+          echo "V0.2.88 校验: 圆盘选中收起瞬时化 + 藏窗浮现瞬时化 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

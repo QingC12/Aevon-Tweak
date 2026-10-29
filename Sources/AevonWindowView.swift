@@ -1821,8 +1821,11 @@ final class AevonWindowView: UIView {
             + "（\(sceneHost.stateSummary())）（AevonNoVanishV265）")
     }
 
-    /// V0.2.63（AevonLiveHiddenV263）：藏着等真画面 —— 连续 2 拍在画才淡入，
-    /// 全程只有一次 alpha 变化（0 → 1），中间任何一帧都不会出现在屏幕上。
+    /// V0.2.63（AevonLiveHiddenV263）：藏着等真画面 —— 连续 2 拍在画才淡入。
+    /// V0.2.88（AevonLiveInstantV288，Aevon(61)「悬浮窗的内容依旧存在由虚到实的过渡」）：
+    /// **0.22s 浮现 + 0.985→1.0 缩放整段退役**。此刻实时画面已在位（cs=2 连续 2 拍），
+    /// 内容已是终态 —— 过渡动画纪律（0.2.87 定档）：显形/交接发生在内容定稿之后，
+    /// 任何 alpha 渐变与缩放都是负资产，用户读作「从虚到实」。瞬时 alpha=1 上屏。
     private func checkAwaitingContent() -> Bool {
         guard liveAwaitingContent else { return false }
         if sceneHost.contentLooksRendering == true {
@@ -1830,16 +1833,11 @@ final class AevonWindowView: UIView {
             if renderTicks >= 2 {
                 liveAwaitingContent = false
                 liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
-                alpha = 0
-                transform = CGAffineTransform(scaleX: 0.985, y: 0.985)
-                UIView.animate(withDuration: 0.22, delay: 0,
-                               options: [.curveEaseOut, .allowUserInteraction],
-                               animations: { [weak self] in
-                    self?.alpha = 1
-                    self?.transform = .identity
-                })
-                AevonLog.info("[窗口] 真画面到了（cs=2 连续 2 拍）→ 藏着等的那扇窗 0.22s 浮现"
-                    + "（\(sceneHost.stateSummary())）（AevonLiveHiddenV263 AevonFadeInV264）")
+                alpha = 1
+                transform = .identity
+                AevonLog.info("[窗口] 真画面到了（cs=2 连续 2 拍）→ 藏着等的那扇窗瞬时上屏，"
+                    + "无淡入无缩放（\(sceneHost.stateSummary())）"
+                    + "（AevonLiveHiddenV263 AevonLiveInstantV288）")
             }
         } else {
             renderTicks = 0

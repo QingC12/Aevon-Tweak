@@ -707,7 +707,15 @@ final class AevonRingMenu: UIView {
         }
     }
 
-    private func dismiss() {
+    /// V0.2.88（AevonRingDismissInstantV288）：选中开窗路径必须**瞬时收起**。
+    ///
+    /// Aevon(61)「打开悬浮窗时依旧会先闪一下，然后出现悬浮窗」取证：选中后走的是
+    /// 弹簧收拢 0.3s + 整体淡出 0.18s + **再等 0.18s 才 launchAndOpen** —— 用户看到
+    /// 「圆盘消散（闪一下）→ 约 1 秒空档 → 悬浮窗出现」。显形链 0.2.87 已全部瞬时化
+    /// 之后，圆盘收起动画就是开窗前屏幕上最后一个过渡，它就是把「从虚到实」的观感
+    /// 递给用户的最后一人。选中 = 用户已经做出决定，动画没有信息量，纯负资产。
+    /// 抬手未选中 / 旋转松手等被动收起保留原动画（那里动画有「回到桌面」的连续感）。
+    private func dismiss(instant: Bool = false) {
         guard AevonRingMenu.current === self, !isDismissing else { return }
         isDismissing = true
         // V0.2.66（AevonRingIdleV266）：静默看门狗随圆盘一起停。
@@ -725,6 +733,12 @@ final class AevonRingMenu: UIView {
         AevonRingGrip.setVisible(true)
         // V0.0.24：立刻解除「吞掉那根手指」的接管，把事件通道还给 App
         AevonEdgeEntry.ringDidDismiss()
+        // V0.2.88（AevonRingDismissInstantV288）：瞬时档 —— 零动画直接摘除。
+        if instant {
+            removeFromSuperview()
+            AevonLog.info("[圆盘] 选中收起：瞬时摘除，无弹簧无淡出（AevonRingDismissInstantV288）")
+            return
+        }
         // V0.0.30：图标被圆心「吸」回来（弹簧收拢），比整体淡出更有生命感
         let spring = UISpringTimingParameters(dampingRatio: 0.78, initialVelocity: CGVector(dx: 0.5, dy: 0.5))
         for icon in icons {
@@ -1180,10 +1194,12 @@ final class AevonRingMenu: UIView {
         // V0.2.8（AevonSelectionCoolV208）：选中后 1.5 秒内 global 兜底不呼盘 ——
         // Aevon(94) 21:53:45 实证：选中开窗后 0.65 秒同一根手指的移动又呼了一次盘。
         AevonEdgeEntry.noteSelectionCooldown()
-        dismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            AevonWindowManager.launchAndOpen(bundleID: bundleID)
-        }
+        // V0.2.88（AevonRingDismissInstantV288）：收起瞬时化 + 开窗不再等 0.18s。
+        // 原来「弹簧 0.3s + 淡出 0.18s + 延迟 0.18s 才开窗」= 用户看到的
+        // 「先闪一下（圆盘消散），空档约 1 秒，然后悬浮窗才出现」。防重复呼盘
+        // 由 noteSelectionCooldown 的 1.5s 冷却继续兜底，0.18s 延迟没有第二个职责。
+        dismiss(instant: true)
+        AevonWindowManager.launchAndOpen(bundleID: bundleID)
     }
 
     // MARK: - 几何工具
