@@ -3309,15 +3309,12 @@ jobs:
           grep -q 'AevonSwitcherSenseV280' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.80 缺切换器判据标记"; exit 1; }
           # 反回退网：MainSwitcherWindow 一旦被重新塞回「裸类名名单」就报错
-          python3 - "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" <<'PYEOF'
-import re, sys
-src = open(sys.argv[1], encoding='utf-8').read()
-m = re.search(r'overlayClassHints\s*=\s*\[(.*?)\]', src, re.S)
-if m and 'MainSwitcherWindow' in m.group(1):
-    print("::error::0.2.80 MainSwitcherWindow 又被放回裸类名名单（会误判让位）")
-    sys.exit(1)
-PYEOF
-          [ $? -eq 0 ] || exit 1
+          #（名单只有 2 项 3 行，往后扫 6 行足够覆盖）
+          if grep -A6 'overlayClassHints = \[' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+               | grep -q 'MainSwitcherWindow'; then
+            echo "::error::0.2.80 MainSwitcherWindow 又被放回裸类名名单（会误判让位）"
+            exit 1
+          fi
 
           # ④ 开窗事务闸门：开窗途中不许让位
           grep -q 'AevonYieldGuardV280' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
