@@ -1275,9 +1275,12 @@ enum AevonWindowManager {
         AevonRuntime.sendVoid(application, launchSelector, bundleID as NSString, true)
 
         var attempts = 0
-        let timer = Timer(timeInterval: 0.4, repeats: true) { timer in
+        // V0.2.96（AevonScenePollFastV296）：拍间隔 0.4 → 0.1s。Aevon(73) 实锤微信冷启动
+        // 「等待 2 次」= 场景在 0.4~0.8s 之间出现，0.4s 拍平均白等 0.2~0.3s；0.1s 拍
+        // 把这段等待压到 <0.1s。上限次数 25 → 100（10 秒超时不变）。
+        let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
             attempts += 1
-            if attempts > 25 {
+            if attempts > 100 {
                 AevonLog.warn("[窗口] 等待 \(bundleID) 场景超时（10 秒）")
                 timer.invalidate()
                 completion?(false)

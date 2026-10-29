@@ -809,7 +809,27 @@ enum AevonEntryHost {
         if tickCount <= 60, tickCount % 10 == 0 {
             dumpWindowStack("周期")
         }
+
+        // ── V0.2.96（AevonProbeSceneV296）：常驻「前台场景快照」，抖音概率卡死取证 ──
+        // Aevon(73) 实锤两个取证盲区：①触摸触发探针在未注入 App 全屏时收不到触摸
+        // （触点归 App scene，SB 全局通道只有边缘保留区参与路由）；②周期窗口栈只在
+        // 前 3 分钟打（tickCount≤60）。卡死发生在日常使用期 → 两类探针都抓不到现场。
+        // 这里 3s 拍常驻、15s 限流打一行：前台 bundle + cs（contentState）+ 吞咽/圆盘状态位。
+        // 判读：卡死时刻 cs=2 而画面不动 = App 进程内死锁（只能行为规避）；
+        // cs=0/1 = 场景被误后台化（SB 侧可修）。全 @try 语义由 KVC/垫片内部保证。
+        if CACurrentMediaTime() - lastSceneProbeAt >= 15.0 {
+            lastSceneProbeAt = CACurrentMediaTime()
+            let bid = currentForegroundBundleID
+            var csText = "无前台记录"
+            if !bid.isEmpty, let scene = AevonSceneHelper.scene(for: bid) {
+                csText = "cs=\(AevonSceneContentState(scene))"
+            }
+            AevonLog.info("[诊断] 前台哨：bundle=\(bid.isEmpty ? "-" : bid) \(csText)"
+                + " | \(AevonEdgeEntry.forensicStateText)（AevonProbeSceneV296）")
+        }
     }
+
+    private static var lastSceneProbeAt: CFTimeInterval = 0
 
     /// 窗口栈诊断：把当前所有场景的窗口按层级打出来，外加容器的挂载点。
     ///
