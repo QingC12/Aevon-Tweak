@@ -665,7 +665,7 @@ enum AevonWindowManager {
                             // **下次**开同一个 App 直接走 S2（不再黑第二次）。
                             // 只在本进程生命期内有效，SB 重启自动清空 —— 不落盘、不污染。
                             if delay == 1.5, state.contains("client=nil") {
-                                AevonSelfSceneLearn.markFailed(bundleID)
+                                AevonSelfSceneLearn.shared.markFailed(bundleID)
                                 AevonLog.warn("[场景] 自建场景连接未建立（client=nil）→ "
                                     + "\(bundleID) 下次开窗改走 S2（AevonSelfSceneLearnV280）")
                             }
