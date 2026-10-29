@@ -717,21 +717,17 @@ final class AevonWindowView: UIView {
         // V0.2.50（AevonDarkGuardV250）：看门定时器从「上屏那一刻」就开，
         // 不再等某个事件来布防（第 7 条：事件没来 = 守卫从未上场 = 纯黑）。
         startGuardTimerIfNeeded()
-        /* V0.2.77（AevonRevealOnceV277）：入场显形改由 open() 在 addSubview 之后
-         * 立刻调 revealEntryNow 统一负责（垫底图打底）。这里再插一段
-         * 「alpha 0.35 → 1」就会把刚显形的窗**压暗再亮起来**（用户看到的就是闪一下），
-         * 所以已显过形就不再参与 alpha / transform。 */
-        guard !entryRevealDone else { return }
-        alpha = 0.35
-        transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
-        UIView.animate(withDuration: 0.24, delay: 0,
-                       options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
-            self?.alpha = 1.0
-            self?.transform = .identity
-        } completion: { [weak self] _ in
-            // 兜底：动画被打断（比如手势立刻开始）也必须回到恒等矩阵
-            self?.transform = .identity
-        }
+        /* V0.2.89（AevonNoShellFadeV289，Aevon(62)「打开悬浮窗依旧先闪一下」**本体实锤**）：
+         * 原来这里藏着 0.2.45/0.2.49 的入场淡入「alpha 0.35→1 + 0.96→1 缩放 0.24s」，
+         * 守卫是 `!entryRevealDone` —— 但 0.2.84 起显形已改挂**画布定稿回调**
+         *（日志「内容已定稿 → 显形」，距窗创建 0.5~1.2s），而 didMoveToWindow 在
+         * addSubview 那一刻同步触发、entryRevealDone 还是 false → **空壳窗（内容未定稿）
+         * 先以 0.35→1 淡入上屏**，0.24 秒后 alpha=1 停在屏上，直到 1 秒后内容定稿
+         * 「显形」幂等空转 —— 用户看到的「先闪一下，然后出现悬浮窗」就是这扇空壳窗。
+         * 0.2.86/87/88 三版修的都是别处的动画，这条漏网。
+         * 现在：窗保持出生的 alpha=0，显形只由画布定稿回调瞬时完成（无任何渐变）。 */
+        AevonLog.info("[窗口] 窗挂载：不铺任何入场动画（空壳淡入已退役 AevonNoShellFadeV289），"
+            + "显形只等画布定稿瞬时完成")
     }
 
     private var hasFadedIn = false
@@ -1780,7 +1776,7 @@ final class AevonWindowView: UIView {
     /// 每一版都在调「让位多长 / 淡入多快」，但「窗会消失再出现」这件事本身就是闪的根源。
     ///
     /// 现在改成：窗口**从头到尾 alpha = 1，位置不动**；内容层用最后一张真画面顶住，
-    /// 实时画面回来后 0.22 秒交叉淡出（见 removeDarkFreeze）。屏幕上永远有一块
+    /// 实时画面回来后即时交接（0.2.69 起 removeDarkFreeze 直接摘帧，无交叉淡出）。屏幕上永远有一块
     /// 连续的浮窗，没有"空窗"帧，也就不可能闪。
     private func beginLiveWait(reason: String) {
         let now = CACurrentMediaTime()
@@ -1798,7 +1794,7 @@ final class AevonWindowView: UIView {
             liveWaitFreezeAllowed = false
         }
         AevonLog.info("[窗口] 回桌面：窗口保持可见（整窗 alpha 不动，\(reason)）→ 用最后一帧顶住，"
-            + "实时画面回来再 0.22 秒交叉淡出，上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
+            + "实时画面回来即时交接（无交叉淡出），上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
             + "（AevonLiveFirstV260 AevonLiveFirstFixV261 AevonLiveQuietV262 AevonNoVanishV265）")
     }
 
@@ -2748,8 +2744,7 @@ final class AevonWindowView: UIView {
             alpha = 1
             AevonLog.info("[窗口] 让位期关窗：先撤销让位再抓离场帧（AevonLiveFirstV260）")
         }
-        // V0.2.49：抓离场帧（必须在承载容器 invalidate 之前）
-        let exitFrame = exitFreezeView()
+        // V0.2.89（AevonCloseInstantV289）：离场帧抓取已随关闭动画退役。
         // V0.2.44（AevonScreenAspectV244）：比例监听到此为止
         aspectWatchTimer?.invalidate()
         aspectWatchTimer = nil
@@ -2759,36 +2754,14 @@ final class AevonWindowView: UIView {
         sceneHost.invalidate()
         sceneHost.container.removeFromSuperview()
 
-        guard exitFrame != nil, window != nil else {
-            removeFromSuperview()
-            return
-        }
-        // ②→③ 动画离场：只动 alpha / transform，不动 frame（不触发布局）
-        UIView.animate(withDuration: 0.18, delay: 0,
-                       options: [.curveEaseIn, .allowUserInteraction]) { [weak self] in
-            self?.alpha = 0
-            self?.transform = CGAffineTransform(scaleX: 0.97, y: 0.97)
-        } completion: { [weak self] _ in
-            self?.removeFromSuperview()
-        }
+        /* V0.2.89（AevonCloseInstantV289）：**关闭瞬时化** —— 原离场帧 + 0.18s 淡出缩放
+         * 整段退役（用户 2026-10-29 定档：移除悬浮窗的所有交互动画；圆盘动画不在此列）。
+         * 承载容器已 invalidate、画布已还原，直接摘视图，无任何 alpha/transform 渐变；
+         * exitFreezeView（离场帧抓取，只为给淡出动画供画面）随之整体删除。 */
+        AevonLog.info("[窗口] 浮窗已关：瞬时摘除，无离场帧无淡出（AevonCloseInstantV289）")
+        removeFromSuperview()
     }
 
-    /// 离场帧：把当前内容区画面盖成一张静态图（只为让关闭动画有画面可淡）。
-    /// 优先用空闲预抓的缓存（零渲染），没有才现场抓一帧；都拿不到返回 nil。
-    private func exitFreezeView() -> UIView? {
-        let bounds = contentClip.bounds
-        guard bounds.width > 1, bounds.height > 1 else { return nil }
-        guard let image = cachedSnapshotImage ?? captureSnapshotImage() else { return nil }
-        let view = UIImageView(image: image)
-        view.frame = contentClip.frame
-        view.contentMode = .scaleToFill
-        view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
-        view.layer.masksToBounds = true
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.isUserInteractionEnabled = false
-        addSubview(view)
-        AevonLog.info("[窗口] 关闭动画：已冻结离场帧（\(Int(bounds.width))x\(Int(bounds.height))）"
-            + "（AevonFloatAnimV249）")
-        return view
-    }
+    /* V0.2.89（AevonCloseInstantV289）：exitFreezeView（离场帧）已随关闭动画整体退役。
+     * V0.2.49（AevonFloatAnimV249）的关闭动画 era 至此结束。 */
 }

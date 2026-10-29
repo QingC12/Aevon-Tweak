@@ -404,8 +404,11 @@ enum AevonEdgeEntry {
             }
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: false) { return }
             if touchID == ringExtraTouchID {
-                ringExtraTouchID = 0
-                ringExtraDeadline = 0
+                /* V0.2.89（AevonRingOrphanEndV289）：不清登记直接 return —— 原来清零后
+                 * shouldSwallow 对本帧 return false = 放行一根「有 ended 没 began」的
+                 * 孤儿帧（began 在圆盘展开时被吞）→ 手势簿记污染。保留登记、收窄
+                 * 0.2 秒吞咽窗口：本帧继续吞，之后自然过期（手指已抬）。 */
+                ringExtraDeadline = CACurrentMediaTime() + 0.2
                 return
             }
             // 同 moved —— 未登记的手指在圆盘展开期间抬手，也要收养后送达 remoteEnded。
@@ -447,8 +450,9 @@ enum AevonEdgeEntry {
             }
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: true) { return }
             if touchID == ringExtraTouchID {
-                ringExtraTouchID = 0
-                ringExtraDeadline = 0
+                // V0.2.89（AevonRingOrphanEndV289）：同 ended —— 保留登记防孤儿帧，
+                // 收窄 0.2 秒窗口自然过期。
+                ringExtraDeadline = CACurrentMediaTime() + 0.2
                 return
             }
             guard touchID == globalTouchID else { return }
@@ -877,8 +881,18 @@ enum AevonEdgeEntry {
         globalFired = false
         ownsTouch = false
         globalOwnedAt = 0
-        ringExtraTouchID = 0
-        ringExtraDeadline = 0
+        /* V0.2.89（AevonRingOrphanEndV289）：额外手指（圆盘展开期登记吞掉的那根）
+         * began 已被吞，登记不能跟着圆盘一起清 —— 清了它，剩余 moved/ended 帧立刻
+         * 放行 = App 收到「有 ended 没 began」的孤儿帧，手势簿记被污染（正是
+         * 「孤儿帧污染手势环境」的镜像面，抖音全屏呼盘后手势僵死的头号嫌疑）。
+         * 保留登记、把吞咽窗口收窄到 0.5 秒自然过期：手指此刻最多还在屏上收尾，
+         * 过期后不会再有帧；同槽位 ID 复用最多误吞半秒内的 began（fail 方向 =
+         * 偶发多点失效，可接受）。 */
+        if ringExtraTouchID != 0 {
+            ringExtraDeadline = CACurrentMediaTime() + 0.5
+            AevonLog.info("[圆盘] 收起：额外手指登记保留 0.5s（防孤儿 ended 污染手势簿记"
+                + " AevonRingOrphanEndV289）")
+        }
         gripAdoptedTouchID = 0
         AevonNotifySetRing(0)
         // V0.2.51（AevonGripOnlyV251）：ringopen/ringclose Darwin 广播已随 App 侧
