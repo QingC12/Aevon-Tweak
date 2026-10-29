@@ -800,7 +800,7 @@ enum AevonWindowManager {
                 let stateNow = AevonMainSceneFrameState(scene) ?? ""
                 if warmupCanvas {
                     // 预热：不写小画布（场景此刻本来就是整屏），mainCanvas 仍记小画布
-                    // —— 复查与后续流程都认它；真正的切换在 +0.42s 那一拍做。
+                    // —— 复查与后续流程都认它；真正的切换在 +0.30s 那一拍做（0.2.90）。
                     mainResized = true
                     mainCanvas = size
                     // V0.2.62（AevonWarmupForegroundV262，用户 Aevon(36) #8「抖音刚打开
@@ -813,8 +813,9 @@ enum AevonWindowManager {
                     // 让它真的按整屏渲染一帧，再切画布 —— 这才是用户说的「先全屏开一次」。
                     AevonSceneHelper.setForeground(scene, true)
                     AevonLog.info("[场景] 画布预热：\(bundleID) 先按整屏画布**推前台**渲染一拍"
-                        + "（fg 必须为 1，否则预热等于没做），0.42 秒后切浮窗画布 "
-                        + "\(Int(size.width))x\(Int(size.height))（AevonDouyinWarmupV251 AevonWarmupForegroundV262）")
+                        + "（fg 必须为 1，否则预热等于没做），0.30 秒后切浮窗画布 "
+                        + "\(Int(size.width))x\(Int(size.height))（AevonDouyinWarmupV251"
+                        + " AevonWarmupForegroundV262 AevonWarmupSoloV290）")
                 } else if screenAspectOn && stateNow.contains(expected) {
                     // 屏幕比例档 + 画布本来就是整屏 → 一个字节都不用写
                     // （多余的 updateSettings 会让 App 白重排一次，画面闪一下）
@@ -872,7 +873,7 @@ enum AevonWindowManager {
             guard let sceneHost = AevonSceneHost(scene: hostScene, sceneID: sceneIdentifier,
                                                  bundleID: bundleID, isSelfBuilt: usedSelfScene,
                                                  mainResized: mainResized,
-                                                 canvasWarmupDelay: warmupCanvas ? 0.42 : 0) else {
+                                                 canvasWarmupDelay: warmupCanvas ? 0.30 : 0) else {
                 AevonLog.warn("[窗口] 无法创建场景承载容器，放弃开窗")
                 if mainResized {
                     // V0.2.42（AevonMainSceneResizeV242）：承载不了就把主场景画布还原，
@@ -1022,7 +1023,11 @@ enum AevonWindowManager {
                 // 1~2 秒才打开浮窗」）：预热 1.0→0.42 秒。日志里首帧在拉起后 **8ms**
                 // 就到了（41.545 预热 → 41.553 首帧），1.0 秒纯粹在等空气；再加上
                 // 原来 kickRelayout 的 0.45 秒起手，开窗到内容可用要 1.5 秒以上。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak sceneHost] in
+                // V0.2.90（AevonWarmupSoloV290，用户 Aevon(63) #1「选中图标后需要等待
+                // 2 秒才能出现悬浮窗」）：Aevon(59) 冷开窗时序账（52.328 选中 → 54.112
+                // 显形 = 1.78s）：拉起 0.42 + 预热等待 0.42 + 复刻往返尾排 0.72。首帧
+                // 8ms 就到、0.42 是纯等待 → 压到 0.30（约 18 帧，足够渲染一拍）。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak sceneHost] in
                     // currentBundleID 已变 = 窗口已关 / 已换 App（承载器 invalidate 会随之发生）
                     guard currentBundleID == bundleID else {
                         AevonLog.info("[场景] 画布预热切换作废（窗口已关 / 已换 App）（AevonDouyinWarmupV251）")
@@ -1041,19 +1046,19 @@ enum AevonWindowManager {
                     /* V0.2.67（AevonWarmBounceV267，用户 Aevon(40) #5「抖音真重排速度
                      * 没有上一版快，会显示几秒断层才自动真重排」）：0.2.66 把预热复刻
                      * 往返整建制退役（当时它在窗口显出**之后**跑 = 必闪一下）。现在把
-                     * 往返挪回窗口还藏着的时候做：+0.12s 起手「整屏 0.18s → 画布」，
-                     * 真重排在显窗前完成；+0.48s 才 reveal。用户既拿到上一版的重排
-                     * 速度，又不用付「可见闪」的代价。显窗兜底 1.3s 不变（往返完成
-                     * ≈0.72s，比兜底早）。 */
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                        guard currentBundleID == bundleID else { return }
-                        AevonLog.info("[场景] 预热隐形复刻：趁窗口还藏着做一次「整屏 → 画布」往返"
-                            + "，真重排在显窗前完成（不再有可见闪）"
-                            + "（AevonSeamRepairFixedV262 AevonNoReplayV266 AevonWarmBounceV267）")
-                        sceneHost?.bounceFullscreenThenBack(width: mainCanvas.width,
-                                                            height: mainCanvas.height,
-                                                            tag: "预热隐形复刻 \(bundleID)")
-                    }
+                     * 往返挪回窗口还藏着的时候做。
+                     * V0.2.90（AevonWarmupSoloV290，用户 Aevon(63) #1「圆盘选中图标后
+                     * 需要等待 2 秒才能出现悬浮窗」）：**预热隐形复刻二次往返退役**。
+                     * Aevon(59) 冷开窗时序实锤（52.328 选中 → 54.112 显形 = 1.78s）：
+                     * 预热本体（整屏推前台渲染一拍 → 切画布）已经是那一次「全屏打开
+                     * 一次」的模拟，紧随其后的复刻往返（+0.12 起手 → 写回 → 再踢一条
+                     * kick 链，尾笔 54.106 才落）把定稿回调拖慢 0.24 秒，纯属重复劳动。
+                     * 真重排交给预热切换 kick 链（429x736 微扰）；真断层仍有 2.2s
+                     * 断层自查兜底（WindowView 侧全屏往返保留）。 */
+                    AevonLog.info("[场景] 预热隐形复刻退役：预热本体已含「整屏 → 画布」往返，"
+                        + "不再二次往返、kick 尾笔即定稿即显"
+                        + "（AevonSeamRepairFixedV262 AevonNoReplayV266 AevonWarmBounceV267"
+                        + " AevonWarmupSoloV290）")
                     /* V0.2.71（AevonRevealEventV271，用户 Aevon(43) #5「闪屏，闪好几下」）：
                      * 显窗 +0.85s 定时版作废。时序账（Aevon(43) 18:25:18 实测）：复刻起手
                      * +0.12 计划、实际 +0.57 落地（主线程忙），尾排 = 起手+0.57 → 显窗

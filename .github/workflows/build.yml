@@ -152,9 +152,10 @@ jobs:
                    AevonCrashReentryV286 AevonCrashPacMaskV286 AevonCrashFrameGuardV286 \
                    AevonForceWriteV286 AevonRevealInstantOnV287 AevonFreezePassthruV287 \
                    AevonGripBusyRetireV287 AevonRingDismissInstantV288 AevonLiveInstantV288 \
-                   AevonNoShellFadeV289 AevonCloseInstantV289 AevonRingOrphanEndV289; do
+                   AevonNoShellFadeV289 AevonCloseInstantV289 AevonRingOrphanEndV289 \
+                   AevonWarmupSoloV290 AevonRootFreezeV290; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.89 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.90 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -2597,11 +2598,13 @@ jobs:
               || { echo "::error::0.2.62 App 侧 dylib 缺标记 $s"; exit 1; }
           done
           # ①预热 1.15 → 0.42 秒；kick 起手 0.45 → 0.20 秒（开窗 1~2 秒延迟的两个来源）
-          grep -q 'canvasWarmupDelay: warmupCanvas ? 0.42 : 0' \
+          # （0.2.90 反转：预热 0.42 → 0.30 —— Aevon(59) 时序账实锤首帧 8ms 就到，
+          #   0.42 是纯等待；防回退网见 V0.2.90 校验段，回潮到 0.42 直接断构建）
+          grep -q 'canvasWarmupDelay: warmupCanvas ? 0.30 : 0' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.62 预热时长没压到 0.42 秒（开窗要等 1~2 秒）"; exit 1; }
-          grep -q 'now() + 0.42' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.62 预热切换与预热时长不一致"; exit 1; }
+            || { echo "::error::0.2.90 预热时长不在 0.30 秒（开窗提速回潮）"; exit 1; }
+          grep -q 'now() + 0.30' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.90 预热切换与预热时长不一致（应同为 0.30）"; exit 1; }
           grep -q 'now() + 0.20' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.62 kickRelayout 起手没压到 0.20 秒"; exit 1; }
           # ①预热切换不能再把 (w-1) 传进去（kickRelayout 内部已经 -1，画布会差 1pt）
@@ -3847,6 +3850,27 @@ jobs:
             exit 1
           fi
           echo "V0.2.89 校验: 空壳淡入退役 + 关闭瞬时化 + 圆盘孤儿帧防污染 已就位"
+
+          # ── V0.2.90 校验（Aevon(63) 三句反馈）─────────────────────────────────
+          # ① 冷开窗提速：预热隐形复刻二次往返退役（预热本体已是那次整屏往返）
+          grep -q 'AevonWarmupSoloV290' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.90 缺「预热隐形复刻退役」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+               | grep -q 'tag: "预热隐形复刻'; then
+            echo "::error::0.2.90 预热隐形复刻 bounce 仍在调用（定稿被拖慢 0.24s）"
+            exit 1
+          fi
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+               | grep -qE 'now\(\) \+ 0\.42|0\.42 : 0'; then
+            echo "::error::0.2.90 预热等待仍是 0.42s（应压到 0.30）"
+            exit 1
+          fi
+          # ② 回桌面「消失再弹回」：冻结帧升级窗口根级覆盖
+          grep -q 'AevonRootFreezeV290' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.90 缺「冻结帧根级覆盖」标记"; exit 1; }
+          grep -q 'convert(contentClip.frame, to: win)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.90 冻结帧未挂窗口根（回桌面动画中会跟着消失）"; exit 1; }
+          echo "V0.2.90 校验: 预热复刻退役+预热0.30 + 冻结帧根级覆盖 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

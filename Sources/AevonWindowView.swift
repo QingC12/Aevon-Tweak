@@ -2060,11 +2060,24 @@ final class AevonWindowView: UIView {
         let bounds = contentClip.bounds
         guard bounds.width > 1, bounds.height > 1 else { return }
         let view = UIImageView(image: image)
-        view.frame = contentClip.frame
         view.contentMode = .scaleToFill
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
         view.layer.masksToBounds = true
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        /* V0.2.90（AevonRootFreezeV290，用户 Aevon(63) 视频实锤「回桌面时悬浮窗整体
+         * 消失约 1 秒再弹回 = 由虚到实」）：**冻结帧升级为窗口根级覆盖**。
+         * 视频逐帧取证：回桌面动画中面板跟着 App 卡片一起缩放（内容呈现视图物理上
+         * 在切换器的缩放层级里），场景退场后被系统收走 → 面板连同窗体内的旧盖帧
+         * 一起消失 ~1s 再弹回；同一时刻**窗口根级的右缘把手始终可见** = 根级视图
+         * 能存活整段动画。把冻结帧挂到窗口根（与把手同层），无论窗体在动画里发生
+         * 什么，定格剪影都顶在原地 —— 用户看到的是「画面停住」，不是「消失再出现」。 */
+        if let win = window {
+            view.frame = convert(contentClip.frame, to: win)
+            win.addSubview(view)
+        } else {
+            view.frame = contentClip.frame
+            view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(view)
+        }
         /* V0.2.87（AevonFreezePassthruV287，Aevon(60)「点不动问题还在」）：**冻结帧不再挡触摸**。
          *
          * 0.2.49 起冻结帧收触摸（tap = 手动重申），但 Aevon(60) 实锤切换应用后冻结期
@@ -2073,10 +2086,12 @@ final class AevonWindowView: UIView {
          * 「点一下救活」失去存在价值 —— 让它挡着实时内容的触摸纯亏。
          * 改成不参与事件：触摸穿透到下面的 contentClip（实时恢复的瞬间就能点）。 */
         view.isUserInteractionEnabled = false
-        addSubview(view)
         darkFreezeView = view
-        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，帧不挡触摸，重申由看门自动兜底）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFreezePassthruV287）")
+        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，帧不挡触摸，重申由看门自动兜底；"
+            + "根级覆盖 \(Int(view.frame.width))x\(Int(view.frame.height))，"
+            + "帧 \(Int(image.size.width))x\(Int(image.size.height))，父层=\(view.superview.map { String(describing: type(of: $0)) } ?? "无")）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249"
+            + " AevonFreezePassthruV287 AevonRootFreezeV290）")
     }
 
     private func removeDarkFreeze(reason: String) {
