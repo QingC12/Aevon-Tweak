@@ -314,6 +314,27 @@ enum AevonWindowManager {
         return currentView != nil ? currentBundleID : nil
     }
 
+    /// V0.2.98（AevonStuckRescueV298，用户 Aevon(75) #2「抖音卡屏还在」+ 现场实锤：
+    /// 21:50:12.698 前台哨 cs=1，卡 18 秒到 21:50:30 才恢复；期间全屏兜底 6 笔抖动踢
+    /// 踢完就停，没有任何后续救援）：**cs=1 停滞救援**。cs=1 = 场景 connected 但不在画
+    /// （正常激活 0.3~0.5s 内必回 cs=2）——停在 cs=1 = 场景激活卡死，SB 侧唯一实证
+    /// 有效的手段 = launchApplicationWithIdentifier 真激活（0.2.92 起抖音修复实证，
+    /// 等价用户点图标）。由 AevonEntryHost watchdog（3s 拍）在 cs=1 连续 ≥2 拍时调用，
+    /// 浮窗开着/圆盘展开时不救（避免抢前台）。每次卡滞事件最多救 2 次（计数由
+    /// EntryHost 管理，bundle 离开 cs=1 状态即清零）。
+    static func rescueStuckScene(_ bundleID: String, round: Int) {
+        guard !isWindowed(bundleID) else { return }
+        let launchSel = Selector(("launchApplicationWithIdentifier:suspended:"))
+        guard UIApplication.shared.responds(to: launchSel) else {
+            AevonLog.warn("[窗口] 卡滞救援第 \(round) 轮：launch 通道不可用 → 放弃 \(bundleID)"
+                + "（AevonStuckRescueV298）")
+            return
+        }
+        AevonLog.warn("[窗口] 卡滞救援第 \(round) 轮：\(bundleID) cs=1 停滞 ≥6s → launchApplicationWithIdentifier"
+            + "（suspended:false，等价点图标真激活）（AevonStuckRescueV298）")
+        AevonRuntime.sendVoid(UIApplication.shared, launchSel, bundleID as NSString, false)
+    }
+
     /// 面板里的「已开窗口」列表 —— 单窗模式下最多一个元素。
     static var openBundleIDs: [String] {
         if let identifier = openBundleID { return [identifier] }
@@ -1400,25 +1421,40 @@ enum AevonWindowManager {
             // currentForegroundBundleID 守卫拦住，不会重复打扰）。
             let covered = coveredFullscreenBundleID
             coveredFullscreenBundleID = ""
-            if !covered.isEmpty, covered != bundleID {
+            /* V0.2.98（AevonDeskNoReviveV298，用户 Aevon(75) #3「全屏 app 时开悬浮窗后
+             * 返回桌面后，双击关闭悬浮窗后会自己全屏打开刚才退出的 app」+ 日志铁证
+             * 21:50:08.852 launch mqq / 21:51:03.046 launch Aweme）：**桌面态免唤醒**。
+             * 根因：covered 记录在开窗时落笔（全屏 App 上开浮窗），回桌面时只清了
+             * currentForegroundBundleID 没清 covered → 用户回桌面后双击关浮窗，唤醒链
+             * 判「covered 没恢复（currentForeground 为空 ≠ covered）」→ launch 把
+             * 用户刚刚退出的 App 又全屏拉起。修法：关窗时容器不在任何 App 场景里
+             *（appSceneView == nil = 桌面态）→ 被覆盖关系已随回桌面解除（App 退后台
+             * 是用户自己的操作），清空 covered 不唤醒。全屏 App 上关浮窗的原修复场景
+             *（0.2.91 关窗卡死）不受影响——那时容器正挂在 App 场景视图里。 */
+            if !covered.isEmpty, AevonEntryHost.appSceneView == nil {
+                AevonLog.info("[窗口] 桌面态关窗 → 不唤醒 \(covered)（回桌面已解除覆盖，用户主动关窗）"
+                    + "（AevonDeskNoReviveV298）")
+            }
+            let reviveTarget = (covered.isEmpty || AevonEntryHost.appSceneView == nil) ? "" : covered
+            if !reviveTarget.isEmpty, reviveTarget != bundleID {
                 for (delay, round) in [(0.45, 1), (0.85, 2)] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        guard !isWindowed(covered) else { return }
+                        guard !isWindowed(reviveTarget) else { return }
                         // 已自行回到前台（用户从图标重新全屏拉起 / 第 1 轮已生效）→ 不再补
-                        guard covered != AevonEntryHost.currentForegroundBundleID else { return }
-                        guard let coveredScene = AevonSceneHelper.scene(for: covered) else {
-                            AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(covered) 场景取不到（已不在后台？）跳过"
+                        guard reviveTarget != AevonEntryHost.currentForegroundBundleID else { return }
+                        guard let coveredScene = AevonSceneHelper.scene(for: reviveTarget) else {
+                            AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(reviveTarget) 场景取不到（已不在后台？）跳过"
                                 + "（AevonCloseReviveV291）")
                             return
                         }
                         if round == 1 {
                             let launchSel = Selector(("launchApplicationWithIdentifier:suspended:"))
                             if UIApplication.shared.responds(to: launchSel) {
-                                AevonLog.info("[窗口] 关窗唤醒第 1 轮：\(covered) 走 launchApplicationWithIdentifier"
+                                AevonLog.info("[窗口] 关窗唤醒第 1 轮：\(reviveTarget) 走 launchApplicationWithIdentifier"
                                     + "（suspended:false，等价点图标真激活；settings 裸写已证不生效）"
                                     + "（AevonLaunchReviveV292）")
                                 AevonRuntime.sendVoid(UIApplication.shared, launchSel,
-                                                       covered as NSString, false)
+                                                       reviveTarget as NSString, false)
                                 return
                             }
                             AevonLog.info("[窗口] 关窗唤醒第 1 轮：launch 通道不可用 → 退回 settings 写入"
@@ -1427,7 +1463,7 @@ enum AevonWindowManager {
                         AevonSceneHelper.setForeground(coveredScene, true,
                                                        reason: "关窗唤醒被覆盖 App 第\(round)轮",
                                                        force: true)
-                        AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(covered) 已补前台（force，"
+                        AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(reviveTarget) 已补前台（force，"
                             + "读回 \(AevonMainSceneFrameState(coveredScene) ?? "")）"
                             + "（AevonCloseReviveV291）")
                     }

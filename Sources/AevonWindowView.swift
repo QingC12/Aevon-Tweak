@@ -2204,6 +2204,26 @@ final class AevonWindowView: UIView {
         }
         let bounds = contentClip.bounds
         guard bounds.width > 1, bounds.height > 1 else { return }
+        /* V0.2.98（AevonCacheFreezeV298，用户 Aevon(75)「能否直接取消模糊状态，我记得
+         * stheno 中没有模糊这一步」+ 用户确认方案 S-B）：**盖帧优先垫滚动缓存帧**。
+         * Stheno 逆向实锤（round15/16/17 三份事故档案）：它的垫底快照 = 健康拍每 ≥2s
+         * 刷新的缓存帧，**从不现场抓帧**——所以它没有模糊这一步。0.2.97 的静默重抓
+         * 已把模糊期压到动画本身时长，但盖帧那一下（过渡哨命中瞬间）抓的现场帧仍是
+         * 转场重采样的模糊帧。修法：优先垫 cachedSnapshotImage（空闲预抓的清晰帧，
+         * 内容=浮窗显示画面，最多旧 0.6~3s），现场抓帧仅在缓存不可用时兜底；
+         * 0.2.97 的静默重抓保留——静默后立刻换成最新清晰帧，旧画面最多显示 ~0.4s。
+         * 同时修掉一个污染漏洞：原 lastContentFrame() 现场抓帧成功会把模糊帧写进
+         * cachedSnapshotImage（滚缓存被污染 → 后续垫帧全模糊）。 */
+        let padSource: String
+        let image: UIImage?
+        if let cached = cachedSnapshotImage {
+            image = cached
+            padSource = "缓存帧"
+        } else {
+            image = lastContentFrame()
+            padSource = "现场帧"
+        }
+        guard let image else {
         let view = UIImageView(image: image)
         view.contentMode = .scaleToFill
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
@@ -2233,11 +2253,11 @@ final class AevonWindowView: UIView {
         view.isUserInteractionEnabled = false
         darkFreezeView = view
         darkFreezeImage = image   // V0.2.93（AevonFrameMatchRevealV293）留存供让位期比对
-        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，帧不挡触摸，重申由看门自动兜底；"
+        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，\(padSource)不挡触摸，重申由看门自动兜底；"
             + "根级覆盖 \(Int(view.frame.width))x\(Int(view.frame.height))，"
             + "帧 \(Int(image.size.width))x\(Int(image.size.height))，父层=\(view.superview.map { String(describing: type(of: $0)) } ?? "无")）"
             + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249"
-            + " AevonFreezePassthruV287 AevonRootFreezeV290）")
+            + " AevonFreezePassthruV287 AevonRootFreezeV290 AevonCacheFreezeV298）")
     }
 
     /// V0.2.91（AevonHomeFreezeV291）：回桌面过渡哨命中的**无条件**冻结入口。

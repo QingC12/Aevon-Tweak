@@ -827,9 +827,41 @@ enum AevonEntryHost {
             AevonLog.info("[诊断] 前台哨：bundle=\(bid.isEmpty ? "-" : bid) \(csText)"
                 + " | \(AevonEdgeEntry.forensicStateText)（AevonProbeSceneV296）")
         }
+
+        // ── V0.2.98（AevonStuckRescueV298）：cs=1 停滞救援（每拍检测，3s 拍）────────
+        // Aevon(75) 现场实锤：抖音 21:50:12 进来就 cs=1（激活卡死），卡 18 秒，期间
+        // 全屏兜底抖动踢踢完就停没人救。cs=1 正常只存在 0.3~0.5s（画布写笔已提交、
+        // 还没上屏的中间态）；连续 ≥2 拍（6s）还停在 cs=1 = 场景激活卡死 → launch
+        // 真激活救援（0.2.92 实证有效的唯一手段）。浮窗开着/圆盘展开时不救（避免
+        // 抢前台）；每次卡滞事件最多救 2 次，bundle 离开 cs=1 即清零（fail-open）。
+        let probeBid = currentForegroundBundleID
+        if !probeBid.isEmpty, let probeScene = AevonSceneHelper.scene(for: probeBid),
+           AevonSceneContentState(probeScene) == 1 {
+            if stuckRescueBundle == probeBid {
+                stuckRescueTicks += 1
+            } else {
+                stuckRescueBundle = probeBid
+                stuckRescueTicks = 1
+            }
+            if stuckRescueTicks >= 2, (stuckRescueCount[probeBid] ?? 0) < 2,
+               AevonWindowManager.openBundleID == nil, AevonRingMenu.presented == nil {
+                stuckRescueCount[probeBid, default: 0] += 1
+                AevonWindowManager.rescueStuckScene(probeBid, round: stuckRescueCount[probeBid]!)
+            }
+        } else {
+            if stuckRescueBundle != probeBid {
+                stuckRescueBundle = probeBid
+                stuckRescueTicks = 0
+                stuckRescueCount.removeAll()
+            }
+        }
     }
 
     private static var lastSceneProbeAt: CFTimeInterval = 0
+    /// V0.2.98（AevonStuckRescueV298）：cs=1 停滞救援的状态位（watchdog 3s 拍）
+    private static var stuckRescueBundle = ""
+    private static var stuckRescueTicks = 0
+    private static var stuckRescueCount: [String: Int] = [:]
 
     /// 窗口栈诊断：把当前所有场景的窗口按层级打出来，外加容器的挂载点。
     ///
