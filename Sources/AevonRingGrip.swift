@@ -434,5 +434,14 @@ enum AevonRingGrip {
         if grip.isHidden != !visible { grip.isHidden = !visible }
     }
 
+    /// V0.2.78（AevonOverlayYieldV278，用户 Aevon(50) #1）：系统浮层（控制中心 /
+    /// 通知中心 / 切换器）在屏时把手一起让位 —— 否则把手会浮在控制中心上面，
+    /// 而且是那块区域唯一还会吃触摸的东西。收起重置时按开关状态恢复。
+    static func setOverlayYield(_ on: Bool) {
+        guard let grip = grip else { return }
+        let shouldHide = on ? true : !AevonPrefs.bool("RingGripEnabled", default: true)
+        if grip.isHidden != shouldHide { grip.isHidden = shouldHide }
+    }
+
     static var isInstalled: Bool { return grip?.superview != nil }
 }

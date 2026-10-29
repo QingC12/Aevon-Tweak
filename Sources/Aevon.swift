@@ -98,6 +98,36 @@ private func installExperimentalHooks() {
      *
      * 下面保留的都是只读 / 只影响渲染层的安全 hook。
      */
+    /* V0.2.78（AevonSceneFgGuardV278，用户 Aevon(50) #2/#3）：
+     * 切屏 / 回桌面时浮窗黑屏的老根因（档案 round13）是「系统把 scene 的 foreground
+     * 写回 NO → 进程挂起 → layers=0」。开源 MilkyWayReborn（iOS 17-26）的解法是
+     * **改写系统本来就要写的那一笔**，而不是自己再发一次 updateSettings（那才是
+     * 归档(14) SIGTRAP 炸点）。这里照做：拦 `FBScene -updateSettings:…`，
+     * 只对浮窗承载中的场景把 settings 的 foreground 改 YES 后原样放行。 */
+    let sceneGuardSel = Selector(("updateSettings:withTransitionContext:completion:"))
+    let sceneGuardSafe: Bool = {
+        // 铁律：hook 私有方法前先做类型编码自检，签名不符一律不装（fail-closed）。
+        guard let cls = NSClassFromString("FBScene"),
+              let method = class_getInstanceMethod(cls, sceneGuardSel),
+              let encoding = method_getTypeEncoding(method) else { return false }
+        let text = String(cString: encoding)
+        let args = sceneGuardSel.rawValue.filter { $0 == ":" }.count
+        return text.hasPrefix("v") && args == 3
+    }()
+    if !sceneGuardSafe {
+        AevonLog.warn("[启动] FBScene updateSettings 签名不符（或方法缺失），场景前台拦截不装"
+            + "（fail-closed，AevonSceneFgGuardV278）")
+    }
+    let sceneGuardHooked = sceneGuardSafe && AevonSwizzle.install(
+        targetClassName: "FBScene",
+        original: sceneGuardSel,
+        replacementClass: AevonSceneSettingsGuardHooks.self,
+        replacement: #selector(AevonSceneSettingsGuardHooks.sk_scene_updateSettings(_:withTransitionContext:completion:)))
+    if sceneGuardHooked {
+        AevonLog.info("[启动] 已安装场景前台拦截（改写系统写入的那一笔，不额外发起 updateSettings）"
+            + "（AevonSceneFgGuardV278 AevonNoFBSWriteV105）")
+    }
+
     // ④ 场景宿主激活状态组件：不让系统把窗口化场景的 foreground 拉回 false
     //    （iOS 17.3.1 上该类已不存在，安装会被跳过并记一条日志，保留只为兼容旧系统）
     AevonSwizzle.install(targetClassName: "_UISceneHostingActivationStateHostComponent",

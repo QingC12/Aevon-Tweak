@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 import UIKit
 
 /*
@@ -181,5 +182,57 @@ import UIKit
             }
         }
         return nil
+    }
+}
+
+// MARK: - FBScene updateSettings：改写系统本来要写的那一次（V0.2.78，AevonSceneFgGuardV278）
+//
+// 用户 Aevon(50) #3「全屏 App 中打开浮窗返回桌面时，停靠小窗会黑屏，必须点一下才显示画面」，
+// 以及 #2「切屏时浮窗变化很怪」（多个版本没修好）。
+//
+// 依据（不是猜的）：
+//   · 自家档案 `incident-2026-10-13-missing-foreground-switch-round13.md` 已经把根因钉死：
+//     前台 App 换人时 SpringBoard 会按自己的布局重算目标 scene 的 settings，把
+//     `foreground` 写回 NO，App 进程随即 Suspended，`layerManager.layers` 归 0 ——
+//     presenter 还在（isHosting=1）但没有图层可承载，露出黑色背景 = 用户看到的黑屏。
+//   · 开源实现 MilkyWayReborn（iOS 17-26，GitHub 34306/MilkyWayReborn）在 `%hook FBScene
+//     -updateSettings:withTransitionContext:completion:` 里把传进来的 settings 改成
+//     `foreground=YES` 再交给原实现。**注意这不是我们当年那条炸过的路**：
+//     V0.1.5 删掉的是「我们自己再发一次 updateSettings」（FrontBoard 调进来 → 我们写
+//     foreground → FBS 断言 → SIGTRAP，归档(14)）。这里只改系统**本来就要写的这一笔**，
+//     不额外发起写入、不递归、不碰状态机节奏。
+//   · 只对 AevonForegroundManager 登记中的场景生效（浮窗承载期），转正交接期
+//     （用户点桌面图标全屏拉起同一个 App）`shouldKeepForeground` 会返回 false，自动放行。
+@objc final class AevonSceneSettingsGuardHooks: NSObject {
+    /// 日志节流：同一次承载里 updateSettings 会被频繁调用，改写只打第一条 + 每 3 秒一条。
+    private static var lastLogAt: [String: CFTimeInterval] = [:]
+    private static var rewriteCount = 0
+
+    @objc func sk_scene_updateSettings(_ settings: AnyObject?,
+                                       withTransitionContext context: AnyObject?,
+                                       completion: AnyObject?) {
+        var forwarded = settings
+        if let settings,
+           let identifier = AevonRuntime.send(self, Selector(("identifier"))) as? String,
+           AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
+           let mutable = (settings as? NSObject)?.mutableCopy() as? NSObject,
+           mutable.responds(to: Selector(("setForeground:"))),
+           AevonRuntime.bool(mutable, key: "foreground") == false {
+            if AevonRuntime.setBool(mutable, key: "foreground", true) {
+                forwarded = mutable
+                AevonSceneSettingsGuardHooks.rewriteCount += 1
+                let now = CACurrentMediaTime()
+                let last = AevonSceneSettingsGuardHooks.lastLogAt[identifier] ?? 0
+                if now - last > 3.0 {
+                    AevonSceneSettingsGuardHooks.lastLogAt[identifier] = now
+                    AevonLog.info("[场景] 拦下系统写 foreground=NO（\(identifier)）→ 改写为 YES "
+                        + "再放行，累计 \(AevonSceneSettingsGuardHooks.rewriteCount) 次"
+                        + "（AevonSceneFgGuardV278）")
+                }
+            }
+        }
+        AevonRuntime.sendVoid(self,
+                              Selector(("sk_scene_updateSettings:withTransitionContext:completion:")),
+                              forwarded, context, completion)
     }
 }

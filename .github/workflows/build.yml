@@ -3190,6 +3190,29 @@ jobs:
             || { echo "::error::0.2.77 缺把手区 tap 豁免标记"; exit 1; }
           echo "V0.2.77 校验: 统一显形(alpha 单点) + 窗口区域快照垫底 + 把手占用延迟广播 + 把手区tap豁免 已就位"
 
+          # ── V0.2.78 校验（Aevon(50) 五项；#2/#3/#4/#5 全部先有逆向/开源依据）──────
+          # #1 控制中心让位：浮层巡检必须存在，且让位动作要真的隐藏窗口
+          grep -q 'AevonOverlayYieldV278' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.78 缺系统浮层巡检（AevonOverlayYieldV278）"; exit 1; }
+          grep -q 'ControlCenterWindow' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.78 浮层名单里没有控制中心"; exit 1; }
+          grep -q 'setSystemOverlayYield' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.78 缺浮窗让位实现（setSystemOverlayYield）"; exit 1; }
+          # #4/#5 直显零动画：revealEntryInstant 必须存在，且直显路径不许再走淡入
+          grep -q 'func revealEntryInstant' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.78 缺直显零动画实现（AevonRevealInstantV278）"; exit 1; }
+          grep -q 'revealEntryInstant' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.78 占位直显没走零动画（仍是 alpha=0 淡入 = 黑屏后出现）"; exit 1; }
+          # #4 快照黑帧校验：判黑必须发生在裁剪之后、返回之前
+          grep -q 'AevonSnapDarkV278' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.78 缺区域快照黑帧校验（AevonSnapDarkV278）"; exit 1; }
+          # #2/#3 场景前台拦截：只改写系统写入，不许再出现「自己发起 updateSettings」
+          grep -q 'AevonSceneFgGuardV278' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
+            || { echo "::error::0.2.78 缺场景前台拦截 hook（AevonSceneFgGuardV278）"; exit 1; }
+          [ "$(grep -c 'updateSettings:withTransitionContext:completion:' "$GITHUB_WORKSPACE/Sources/Hooks.swift")" -ge 1 ] \
+            || { echo "::error::0.2.78 场景拦截 hook 没装到 updateSettings 上"; exit 1; }
+          echo "V0.2.78 校验: 系统浮层让位 + 直显零动画 + 快照黑帧校验 + 场景前台拦截(改写系统写入) 已就位"
+
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。
       - name: 上传产物（artifact，不发 Release）

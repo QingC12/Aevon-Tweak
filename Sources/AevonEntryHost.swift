@@ -331,6 +331,8 @@ enum AevonEntryHost {
         container = box
         floatLayer = floatView
         startWatchdog()
+        // V0.2.78（AevonOverlayYieldV278）：系统浮层让位巡检（控制中心/通知中心/切换器）
+        startOverlayWatch()
         // V0.2.50（AevonRingGripV250）：圆盘的可见把手挂到容器最上层 ——
         // 容器会随全屏 App 搬进画面容器，所以桌面 / 全屏 App 里都摸得到。
         AevonRingGrip.installIfNeeded(force: true)
@@ -528,6 +530,68 @@ enum AevonEntryHost {
     /// 整版边缘手势全废。现在**不再搬窗口**，只在必要时把容器顶到最前 / 搬回窗口。
     private static var watchdog: Timer?
     private static var tickCount = 0
+
+    // MARK: - 系统浮层巡检（V0.2.78，AevonOverlayYieldV278）
+    //
+    // 用户 Aevon(50) #1：下拉控制中心时浮窗还在、按钮点不到。
+    // 依据（Aevon(50) 窗口栈实锤）：`1080:SBControlCenterWindow` vs 我们
+    // `10000000:AevonEntryWindow` —— 我们高近一万倍，视觉与触摸都压在控制中心之上。
+    // 开源对照（MilkyWayReborn）：它把宿主窗口放 `UIWindowLevelAlert - 1`，系统浮层自然在上，
+    // 从不跟系统抢层级；我们 level 动不得（牵一发动全身），改为**浮层在屏即让位**。
+    private static var overlayWatch: Timer?
+    private static var overlayHitName = ""
+
+    static func startOverlayWatch() {
+        guard overlayWatch == nil else { return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { _ in overlayWatchTick() }
+        RunLoop.main.add(timer, forMode: .common)
+        overlayWatch = timer
+        AevonLog.info("[窗口] 系统浮层巡检已启动（0.25 秒一拍，只读窗口表；"
+            + "控制中心/通知中心/切换器在屏即让位）（AevonOverlayYieldV278）")
+    }
+
+    /// 哪些窗口算「系统瞬时浮层」——命中类名列表（不做全类表枚举，纯窗口对象判类名）。
+    private static let overlayClassHints = [
+        "ControlCenterWindow",   // 控制中心（1080）
+        "CoverSheetWindow",      // 通知中心 / 锁屏（1050）
+        "MainSwitcherWindow",    // 多任务切换器
+    ]
+
+    private static func overlayWatchTick() {
+        // 没浮窗时不用盯（省电、也避免无意义的日志）
+        guard AevonWindowManager.hasAnyWindow else {
+            if AevonWindowManager.isOverlayYielded { AevonWindowManager.setSystemOverlayYield(false) }
+            return
+        }
+        var hit = ""
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows {
+                // alpha 门槛取 0.5：CoverSheet 这类窗口常年存在，只是收起时 alpha 极低，
+                // 用 0.5 才不会把「常驻但不可见」误判成「在屏」（0.2.70 键盘误报同款教训）。
+                guard !w.isHidden, w.alpha > 0.5 else { continue }
+                let name = String(describing: type(of: w))
+                if overlayClassHints.contains(where: { name.contains($0) }) {
+                    hit = name
+                    break
+                }
+            }
+            if !hit.isEmpty { break }
+        }
+        let present = !hit.isEmpty
+        if present, overlayHitName != hit {
+            overlayHitName = hit
+        }
+        if AevonWindowManager.isOverlayYielded != present {
+            AevonWindowManager.setSystemOverlayYield(present)
+            if present {
+                AevonLog.info("[窗口] 命中系统浮层 \(hit)（在屏）→ 浮窗与把手让位"
+                    + "（AevonOverlayYieldV278）")
+            } else {
+                AevonLog.info("[窗口] 系统浮层已收起 → 浮窗与把手恢复"
+                    + "（AevonOverlayYieldV278）")
+            }
+        }
+    }
 
     static func startWatchdog() {
         guard watchdog == nil else { return }

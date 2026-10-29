@@ -1548,7 +1548,7 @@ final class AevonWindowView: UIView {
             // drawHierarchy 抓出来的可能整幅发黑；黑帧垫上去 = 用户看到的「黑屏 1 秒」。
             // 中心 + 四角采样，全黑（RGB 均 < 8/255）就丢弃，回落滚动缓存帧
             //（refreshRollingSnapshot 每 3 秒保温的那张「离黑屏最近的帧」）。
-            if isMostlyBlack(fresh) {
+            if Self.isMostlyBlack(fresh) {
                 AevonLog.warn("[窗口] 现场抓帧全黑（退场中抓到黑画面）→ 弃用，垫滚动缓存帧"
                     + "（AevonLivePadDarkV273）")
             } else {
@@ -1560,7 +1560,10 @@ final class AevonWindowView: UIView {
     }
 
     /// V0.2.73（AevonLivePadDarkV273）：中心 + 四角五点采样，全部 RGB < 8 视为黑帧。
-    private func isMostlyBlack(_ image: UIImage) -> Bool {
+    ///
+    /// V0.2.78（AevonSnapDarkV278）：从实例方法提成 static —— 再开窗的「窗口区域屏幕快照」
+    /// 垫底图也要用同一套判据（见 `windowRegionSnapshot`）。
+    private static func isMostlyBlack(_ image: UIImage) -> Bool {
         guard let cg = image.cgImage, cg.width > 4, cg.height > 4 else { return false }
         guard let data = cg.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return false }
         let bpr = cg.bytesPerRow, bpp = cg.bitsPerPixel / 8
@@ -2516,6 +2519,23 @@ final class AevonWindowView: UIView {
             + "（AevonFloatTransitionV264 AevonEntryRevealV265）")
     }
 
+    /// V0.2.78（AevonRevealInstantV278，用户 Aevon(50) #4/#5）：
+    /// **直显档零动画上屏**（已有垫底图时唯一的正确做法）。
+    ///
+    /// 为什么不能用 revealEntryNow：它内部先 `alpha = 0` 再 0.34 秒动画到 1。
+    /// 对于「已经铺好垫底图」的再开窗，这个动作本身就是
+    /// 「可见（垫底帧）→ 全透明（黑）→ 淡入（出现画面）」——
+    /// 用户 Aevon(50) 的原话「先黑屏，然后出现画面」正是这三拍。
+    /// 直显档要的语义是「窗从第一帧就在」：不淡入、不缩放，直接终态。
+    func revealEntryInstant(_ reason: String) {
+        guard !entryRevealDone, !isTearingDown else { return }
+        entryRevealDone = true
+        alpha = 1
+        transform = .identity
+        AevonLog.info("[窗口] 开窗直显（\(reason)）：\(bundleID) 零动画上屏，垫底图即终态"
+            + "（AevonRevealInstantV278）")
+    }
+
     // MARK: - 再开窗占位直换（V0.2.76，AevonReopenSwapV276）
     //
     // 用户 Aevon(48)：「悬浮窗打开时依旧会先出现悬浮窗，然后消失，1 秒后再次出现」。
@@ -2542,12 +2562,18 @@ final class AevonWindowView: UIView {
         iv.contentMode = .scaleToFill
         iv.isUserInteractionEnabled = false
         iv.tag = 0xAE276
-        iv.frame = CGRect(origin: .zero, size: contentClip.bounds.size)
+        /* V0.2.78（AevonRevealInstantV278）：垫底图尺寸兜底 —— 面板此刻可能还没走
+         * 第一次 layout（contentClip.bounds 是 0x0），0 尺寸的垫底图铺上去等于没铺，
+         * 直显出来就是一块空窗（这正是 #5「有概率不显示」的另一个面）。
+         * 布局还没发生就用整窗 bounds 兜底，autoresizing 会随后对齐。 */
+        let clipSize = contentClip.bounds.size
+        let size = (clipSize.width > 1 && clipSize.height > 1) ? clipSize : bounds.size
+        iv.frame = CGRect(origin: .zero, size: size)
         iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         contentClip.addSubview(iv)
         contentClip.bringSubviewToFront(iv)
         reopenPlaceholderView = iv
-        AevonLog.info("[窗口] 再开窗垫底图已铺进面板（\(reason)直显）（AevonReopenSwapV276 AevonRevealOnceV277）")
+        AevonLog.info("[窗口] 再开窗垫底图已铺进面板（\(reason)直显）（AevonReopenSwapV276 AevonRevealOnceV277 AevonRevealInstantV278）")
     }
 
     /// V0.2.77（AevonRevealOnceV277）：把整屏快照裁出**窗口所在区域**当垫底图。
@@ -2564,7 +2590,20 @@ final class AevonWindowView: UIView {
         let pixelRect = CGRect(x: rect.minX * scale, y: rect.minY * scale,
                                width: rect.width * scale, height: rect.height * scale)
         guard let cg = shot.cgImage?.cropping(to: pixelRect) else { return shot }
-        return UIImage(cgImage: cg, scale: scale, orientation: shot.imageOrientation)
+        let cropped = UIImage(cgImage: cg, scale: scale, orientation: shot.imageOrientation)
+        /* V0.2.78（AevonSnapDarkV278，用户 Aevon(50) #4「新版本通过圆盘选中图标打开悬浮窗时
+         * 会先黑屏，然后出现画面」）：
+         *
+         * 这块快照是在**开窗转场那一拍**抓的（presenter 正在激活 / 画布正在切），
+         * 抓到的整幅可能就是黑的；把它当垫底图铺上去 = 用户描述的第一个黑屏。
+         * 判黑就直接弃用（返回 nil），调用方退回「不铺、等画布定稿再淡入」——
+         * 少一次直显，但绝不拿黑图骗自己。 */
+        if isMostlyBlack(cropped) {
+            AevonLog.warn("[窗口] 窗口区域快照判黑（转场瞬间抓帧）→ 弃用该垫底图"
+                + "（AevonSnapDarkV278）")
+            return nil
+        }
+        return cropped
     }
 
     /// 画布定稿后摘占位（crossfade 到活画面）。

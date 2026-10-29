@@ -47,6 +47,37 @@ enum AevonWindowManager {
         return list
     }
 
+    // MARK: - 系统浮层让位（V0.2.78，AevonOverlayYieldV278）
+    //
+    // 用户 Aevon(50) #1：「悬浮窗打开时下拉控制中心时，悬浮窗依旧显示，无法操作控制中心的按钮」。
+    // Aevon(50) 窗口栈实锤：`1080:SBControlCenterWindow` 与我们 `10000000:AevonEntryWindow` ——
+    // 入口窗口比控制中心高近一万倍，浮窗那一块必然压在控制中心之上，并且把落在浮窗上的
+    // 触摸吃掉（控制中心按钮点不到）。
+    //
+    // 参考实现（开源 MilkyWayReborn，iOS 17-26）：宿主窗口放 `UIWindowLevelAlert - 1`，
+    // 系统瞬时浮层自然覆盖在窗口之上 —— 它**不跟系统抢层级**。
+    // 我们不能再降 level（1e7 是历次为压住状态栏/横幅调出来的，动它要重验一整条触摸链），
+    // 所以采用**让位**：控制中心 / 通知中心 / 多任务切换器在屏时，浮窗外壳与把手整体藏起来，
+    // 系统浮层收起后原样恢复。视觉与触摸两条都干净。
+    private static var overlayYielded = false
+
+    /// 系统浮层（控制中心 / 通知中心 / 切换器）在屏 → 浮窗让位。
+    static func setSystemOverlayYield(_ yielding: Bool) {
+        guard overlayYielded != yielding else { return }
+        overlayYielded = yielding
+        let windows = allWindows
+        for view in windows {
+            if view.isHidden != yielding { view.isHidden = yielding }
+        }
+        AevonRingGrip.setOverlayYield(yielding)
+        AevonLog.info("[窗口] 系统浮层让位 \(yielding ? "开" : "关")："
+            + "\(windows.count) 扇浮窗\(yielding ? "隐藏（控制中心/通知中心/切换器在屏，让出触摸与画面）" : "恢复显示")"
+            + "（AevonOverlayYieldV278）")
+    }
+
+    /// 当前是否处于让位态（给入口巡检做去重）。
+    static var isOverlayYielded: Bool { overlayYielded }
+
     /// 最近一次成功开窗的时间（`CACurrentMediaTime`）。
     ///
     /// V0.1.6（AevonFullscreenCloseV106）：开浮窗这个动作本身也会让 SpringBoard
@@ -803,17 +834,24 @@ enum AevonWindowManager {
              * 没有「出现 → 消失 → 再现」的中间态。 */
             windowView.alpha = 0
             windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
-            if let placeholder = reopenPlaceholder
-                ?? AevonWindowView.windowRegionSnapshot(for: windowView.frame) {
+            /* V0.2.78（AevonRevealInstantV278 AevonSnapDarkV278）：有垫底图 → **零动画直显**
+             * （不再走 revealEntryNow 的 alpha=0 + 0.34s 淡入，那正是「先黑屏再出现画面」）；
+             * 垫底图拿不到（无缓存 + 快照判黑）→ 干脆藏着，等画布定稿回调淡入。 */
+            let placeholderImage = reopenPlaceholder
+                ?? AevonWindowView.windowRegionSnapshot(for: windowView.frame)
+            if let placeholder = placeholderImage {
                 windowView.installReopenPlaceholder(
                     placeholder,
                     reason: reopenPlaceholder != nil ? "上一关最后一帧" : "窗口区域屏幕快照")
-            }
-            windowView.revealEntryNow(reopenPlaceholder != nil
-                ? "占位直显（AevonReopenSwapV276 AevonRevealOnceV277）"
-                : "区域快照直显（AevonRevealOnceV277）")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
-                windowView?.settleReopenPlaceholder()
+                windowView.revealEntryInstant(reopenPlaceholder != nil
+                    ? "占位直显（AevonReopenSwapV276 AevonRevealInstantV278）"
+                    : "区域快照直显（AevonSnapDarkV278 AevonRevealInstantV278）")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
+                    windowView?.settleReopenPlaceholder()
+                }
+            } else {
+                AevonLog.info("[窗口] 垫底图不可用（无缓存且快照判黑）→ 保持藏着，"
+                    + "等画布定稿回调再淡入（AevonSnapDarkV278）")
             }
             /* V0.2.73（AevonWarmShroudV273，用户 Aevon(45) #3「圆盘选中图标打开悬浮窗
              * 会先闪一下，0.5 秒后才淡入出现」）：预热遮罩。
