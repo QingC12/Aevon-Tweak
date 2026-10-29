@@ -352,7 +352,7 @@ enum AevonWindowManager {
     private static func revealWhenContentSettled(sceneHost: AevonSceneHost,
                                                  canvas: CGSize,
                                                  bundleID: String,
-                                                 switchTxn: Int,
+                                                 switchTxn: AevonSwitchSession,
                                                  completeReason: String,
                                                  attempt: Int = 0) {
         guard currentBundleID == bundleID else { return }
