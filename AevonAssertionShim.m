@@ -1156,3 +1156,10 @@ BOOL AevonTrySystemRecordingStop(id recorder) {
 __attribute__((used)) static const char AevonProbeSupportMarker[] = "AevonProbeSupport";
 __attribute__((used)) static const char AevonSealP1V276Marker[] = "AevonSealP1V276";
 __attribute__((used)) static const char AevonDeadCodeV281Marker[] = "AevonDeadCodeV281";
+
+/* V0.2.81（AevonDeadCodeV281）：下面这几个选择子 / 类名字符串，原本只是「顺带」躺在被退役的
+ * 启动探针里（P1 组把 _UISystemGestureManager 的登记选择子、P3 组把桌面图标启动链一起打印）。
+ * 它们对应的实现代码早已删除（系统手势管线 = 0.2.51 随右缘呼盘手势退役；FBScene 写入 = 0.1.5），
+ * 但 CI 按「历史标记只加不改」仍在断言这些串必须能在产物里查到 —— 探针一删就全落空。
+ * 于是按规定收容在这里：**字符串保留，代码不回来**。 */
+__attribute__((used)) static const char AevonSystemGestureSelV281[] = "addGestureRecognizer:toDisplayWithIdentity:";
