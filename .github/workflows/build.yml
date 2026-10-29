@@ -1087,12 +1087,15 @@ jobs:
           #    （用户 Aevon(32) 要求可临时屏蔽把手做 A/B 定位）→ 下限改 5。
           ROOT_SW="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(sum(1 for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.81（AevonDeadCodeV281）：ProbeV107 随探针退役 → 5 个改 4 个。
-          [ "$ROOT_SW" -eq 4 ] || { echo "::error::一级页开关数不是 4（实际 $ROOT_SW）—— 0.2.81 清单：Enabled/RingGripEnabled/LogEnabled/CrashGuard（ProbeV107 已随探针退役）"; exit 1; }
+          # V0.2.99（AevonGripProbeV299）：方案 A 灰度新增 GripHookProbe（SBGrabberTongue 探测，
+          # 默认关）→ 4 个改 5 个。
+          [ "$ROOT_SW" -eq 5 ] || { echo "::error::一级页开关数不是 5（实际 $ROOT_SW）—— 0.2.99 清单：Enabled/RingGripEnabled/GripHookProbe/LogEnabled/CrashGuard"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
           # V0.2.58（AevonGripToggleV258）反转：+RingGripEnabled（隔离实验开关）
           # V0.2.81（AevonDeadCodeV281）：去掉 ProbeV107（探针已退役，开关是死配置）
-          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,LogEnabled,CrashGuard" ] \
+          # V0.2.99（AevonGripProbeV299）：+GripHookProbe（方案 A 灰度探测开关，默认关）
+          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHookProbe,LogEnabled,CrashGuard" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
           grep -q 'AevonPrefs.bool("Enabled", default: true)' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
