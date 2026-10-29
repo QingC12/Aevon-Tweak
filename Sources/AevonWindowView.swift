@@ -1738,7 +1738,10 @@ final class AevonWindowView: UIView {
     /// Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入会「亮一下又黑」。
     private var liveWaitTicks = 0
     /// V0.2.65（AevonNoVanishV265）：让位期**不再现场抓帧**，次数计数器随之退休。
-    private static let liveWaitLimit: TimeInterval = 1.0
+    /// V0.2.94（AevonQuietRevealV294，用户确认方案 M）：加「转场静默」闸后多占拍数
+    /// （连续 2 拍静止才放行），fail-open 上限 1.0 → 1.5s —— 冻结帧全程在盖，
+    /// 最坏也只是定格多 0.5s，绝不回到黑窗。
+    private static let liveWaitLimit: TimeInterval = 1.5
     /// V0.2.93（AevonFrameMatchRevealV293，用户 Aevon(62)「从虚变实的淡入还在」+ 用户
     /// 确认按 Stheno 方案 A）：**撤帧判据升级为「冻结帧与实时画面比对一致」**。
     /// Stheno 揭幕纪律 = 封面与目标内容连续采样**一致**才揭幕（startupCoverReadySamples）
@@ -1747,6 +1750,21 @@ final class AevonWindowView: UIView {
     private var darkFreezeImage: UIImage?
     /// 让位期比对只做一次（0.2.65 教训：drawHierarchy 强迫重绘 = 闪，绝不逐拍抓）。
     private var frameMatchTried = false
+    /* V0.2.94（AevonQuietRevealV294，用户 Aevon(71) #2「清晰→模糊→实时」+ 用户确认
+     * 按 Stheno 方案 M）：**撤帧再加一道「转场静默」闸**。Aevon(71) 实锤：0.2.93 链路
+     * 全正常（比对一致 0.68s 撤帧、alpha 全程 1），但撤帧落在回桌面动画结束**之前**
+     * → 露出的活表面还被系统缩放重采样（模糊）→ 动画彻底结束才清晰。Stheno 对应
+     * 设计（逆向报告 §4.5 CONFIRMED）：sc_pollForMainSwitcherDismissal…stableHidden
+     * Samples —— 连续 N 次采样确认切换器真的静下来才开始展示实时。现在撤帧前必须
+     * 「场景视图几何连续 2 拍静止」（frame 尺寸差 >2pt 或 transform 非恒等 = 还在动）；
+     * 场景已被收走（appSceneView==nil / 出窗）= 转场已结束 = 视作静默（fail-open）。
+     * 冻结帧全程在盖，多等无感。 */
+    /// 场景视图几何连续静止的拍数（0.2s 一拍，≥2 才放行撤帧）
+    private var revealQuietTicks = 0
+    /// 上一拍场景视图几何（frame 尺寸，用于 tick-to-tick 比较）
+    private var revealPrevGeo: CGSize = .zero
+    /// 「转场未静默压住撤帧」只记一次日志，避免让位期逐拍刷屏
+    private var quietHoldLogged = false
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
     /// 回桌面那一下 cs 会 2→0→2 来回抖（Aevon(35)：让位 0.22s 淡入，随后系统还在
@@ -1828,6 +1846,9 @@ final class AevonWindowView: UIView {
         liveWaitTicks = 0
         liveAwaitingContent = false
         frameMatchTried = false   // V0.2.93（AevonFrameMatchRevealV293）每次让位重置比对额度
+        revealQuietTicks = 0      // V0.2.94（AevonQuietRevealV294）静默拍数与几何基线重置
+        revealPrevGeo = .zero
+        quietHoldLogged = false
         alpha = 1
         liveSettleUntil = 0
         /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
@@ -1954,6 +1975,29 @@ final class AevonWindowView: UIView {
              * 判定只看场景的 contentState（cs=2 = 在画），足够了。 */
             let live = (sceneHost.contentLooksRendering == true)
             liveWaitTicks = live ? liveWaitTicks + 1 : 0
+            /* V0.2.94（AevonQuietRevealV294，用户 Aevon(71) #2「清晰 → 模糊 → 继续变成
+             * 实时画面」+ 用户确认按 Stheno 方案 M）：**转场静默采样**（Stheno 纪律
+             * sc_pollForMainSwitcherDismissal…stableHiddenSamples）。每拍比较场景视图
+             * 几何（frame 尺寸 tick-to-tick + transform 恒等性）：连续 2 拍静止才放行
+             * 撤帧。回桌面动画期间撤帧 → 露出的活表面被系统缩放重采样 = 模糊，动画
+             * 结束才清晰 —— 撤帧必须等转场真的静下来。场景已收走（appSceneView==nil
+             * / 出窗）= 转场已结束 = 视作静默（fail-open，绝不卡死揭幕）。 */
+            if let sv = AevonEntryHost.appSceneView, sv.window != nil {
+                let sz = sv.frame.size
+                let transformed = !sv.transform.isIdentity
+                if revealPrevGeo.width > 0,
+                   (abs(sz.width - revealPrevGeo.width) > 2
+                    || abs(sz.height - revealPrevGeo.height) > 2 || transformed) {
+                    revealQuietTicks = 0
+                } else {
+                    revealQuietTicks += 1
+                }
+                revealPrevGeo = sz
+            } else {
+                revealQuietTicks += 1
+                revealPrevGeo = .zero
+            }
+            let transitionQuiet = revealQuietTicks >= 2
             /* V0.2.93（AevonFrameMatchRevealV293，用户 Aevon(62)「从虚变实的淡入还在」
              * + 用户确认按 Stheno 方案 A）：Stheno 揭幕纪律 = 封面与目标内容**一致**才揭幕。
              * 0.2.92 的 2 拍稳定撤帧里，撤帧瞬间「定格→实时」的画面差异 = 用户看到的
@@ -1967,11 +2011,21 @@ final class AevonWindowView: UIView {
                 if let freeze = darkFreezeImage, let liveImg = captureSnapshotImage() {
                     matched = freezeMatchesLive(freeze, liveImg)
                 }
-                AevonLog.info("[窗口] 让位期帧比对：\(matched ? "一致 → 提前交接" : "不一致 → 退回 2 拍稳定")"
-                    + "（AevonFrameMatchRevealV293）")
+                AevonLog.info("[窗口] 让位期帧比对：\(matched ? "一致" : "不一致 → 退回 2 拍稳定")"
+                    + "，转场\(transitionQuiet ? "已静默(\(revealQuietTicks) 拍)" : "未静默(\(revealQuietTicks) 拍)")"
+                    + "（AevonFrameMatchRevealV293 AevonQuietRevealV294）")
                 if matched {
-                    finishLiveWait(reason: "实时画面与冻结帧比对一致，零跳变交接（AevonFrameMatchRevealV293）")
-                    return
+                    if transitionQuiet {
+                        finishLiveWait(reason: "实时画面与冻结帧比对一致且转场静默，零跳变交接"
+                            + "（AevonFrameMatchRevealV293 AevonQuietRevealV294）")
+                        return
+                    }
+                    // 比对一致但转场还在动：压住不撤（撤了就是模糊期），只记一次日志
+                    if !quietHoldLogged {
+                        quietHoldLogged = true
+                        AevonLog.info("[窗口] 帧比对一致但转场未静默 → 压住撤帧等静默"
+                            + "（AevonQuietRevealV294）")
+                    }
                 }
             }
             // V0.2.60（AevonLiveFirstV260）：要求稳定才淡入。
@@ -1984,8 +2038,8 @@ final class AevonWindowView: UIView {
             // 0.2.62 放宽的前提（窗口消失感）在 0.2.87 瞬时显形 + 冻结帧全程在盖之后
             // 已经不成立 —— 现在撤帧前画面一直是冻结帧，多等 1 拍（0.1s）无感；
             // 而撤早了 = cs 先报 2、远程表面还没真画上 → 用户看到黑一瞬。收回 2 拍。
-            if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12 {
-                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍）")
+            if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12, transitionQuiet {
+                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍，转场静默 \(revealQuietTicks) 拍）")
             } else if now > liveWaitDeadline {
                 finishLiveWait(reason: "上限到达")
             }

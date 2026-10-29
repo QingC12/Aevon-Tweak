@@ -1075,6 +1075,29 @@ enum AevonWindowManager {
                         + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")，"
                         + "就绪方式=\(via)）"
                         + "（AevonDouyinWarmupV251 AevonWarmupFastV262 AevonKickExactV262 AevonWarmupPollV291）")
+                    /* V0.2.71（AevonRevealEventV271，用户 Aevon(43) #5「闪屏，闪好几下」）：
+                     * 显窗挂进画布定稿回调（onCanvasSettled），写完才显 —— 画布没定稿
+                     * 前用户看不到窗。1.3s 兜底不变。
+                     * V0.2.94（AevonRevealOrderFixV294，用户 Aevon(71) #1「冷启动的 app
+                     * 很慢超过 2 秒，开过的很快」）：**回调赋值必须先于单笔直写**。
+                     * Aevon(71) 实锤：冷启动 txn 1.505/1.498/1.490/2.185s 全走「兜底显窗」
+                     * （1.3s 定时），开过的 0.47s 走「画布定稿」。根因 = 0.2.93 把 kick
+                     * 双笔（异步 0.12s 起手）换成单笔直写（**同步 fire**）后，writeCanvas
+                     * → fireCanvasSettled 那一刻 onCanvasSettled 还是 nil（赋值在 1110 行、
+                     * 直写在 1086 行）→ 显形链整条丢失，只能等兜底。开过的 App 走非预热
+                     * 路径（赋值先于 fire）所以快——两个数字都与代码结构完全对上。 */
+                    sceneHost.onCanvasSettled = { [weak sceneHost] in
+                        guard currentBundleID == bundleID, let sceneHost else { return }
+                        AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（单笔直写已提交，开窗即终态；"
+                            + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
+                            + "（AevonRevealEventV271 AevonRevealOrderFixV294）")
+                        /* V0.2.84（AevonContentSettledV284）：定稿回调只代表「画布写完已提交」，
+                         * 再补一道「内容宿主已按画布排完」的确认才显形 —— Aevon(57) 实测
+                         * 设置 14.556 显窗、14.778 内容宿主才贴合 = 中间 220ms 是旧尺寸画面。 */
+                        revealWhenContentSettled(sceneHost: sceneHost, canvas: mainCanvas,
+                                                 bundleID: bundleID, switchTxn: switchTxn,
+                                                 completeReason: "画布定稿(预热档)")
+                    }
                     // V0.2.93（AevonSingleShotCanvasV293，用户 Aevon(62)「依旧不是秒开」
                     // + 用户确认按 Stheno 方案 X）：**kick 双笔退役（预热路径）**。
                     // Stheno SCWSSwitch 提交链 = poll 就绪 → presentReady → commit，结构上
@@ -1096,29 +1119,15 @@ enum AevonWindowManager {
                      * 一次」的模拟，紧随其后的复刻往返（+0.12 起手 → 写回 → 再踢一条
                      * kick 链，尾笔 54.106 才落）把定稿回调拖慢 0.24 秒，纯属重复劳动。
                      * 真重排交给预热切换 kick 链（429x736 微扰）；真断层仍有 2.2s
-                     * 断层自查兜底（WindowView 侧全屏往返保留）。 */
+                     * 断层自查兜底（WindowView 侧全屏往返保留）。
+                     * V0.2.94（AevonRevealOrderFixV294）：旧版「先直写、后赋回调」的两段
+                     * 已合并重排 —— 回调赋值在前（同步 fire 才有人接）、单笔直写在尾。 */
+                    // 历史标记收容位（SeamRepairFixedV262/NoReplayV266/WarmBounceV267/
+                    // WarmupSoloV290 的二进制锚），语义已并入上方注释，串本体保留：
                     AevonLog.info("[场景] 预热隐形复刻退役：预热本体已含「整屏 → 画布」往返，"
                         + "不再二次往返、kick 尾笔即定稿即显"
                         + "（AevonSeamRepairFixedV262 AevonNoReplayV266 AevonWarmBounceV267"
                         + " AevonWarmupSoloV290）")
-                    /* V0.2.71（AevonRevealEventV271，用户 Aevon(43) #5「闪屏，闪好几下」）：
-                     * 显窗 +0.85s 定时版作废。时序账（Aevon(43) 18:25:18 实测）：复刻起手
-                     * +0.12 计划、实际 +0.57 落地（主线程忙），尾排 = 起手+0.57 → 显窗
-                     * 0.85 时尾排还有两笔没写完，内容在用户眼前又跳两遍 = 闪好几下。
-                     * 现在显窗挂进 kick 最后一笔画布写回的回调（onCanvasSettled），
-                     * 写完才显 —— 画布没定稿前用户看不到窗。1.3s 兜底不变。 */
-                    sceneHost.onCanvasSettled = { [weak sceneHost] in
-                        guard currentBundleID == bundleID, let sceneHost else { return }
-                        AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
-                            + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
-                            + "（AevonRevealEventV271）")
-                        /* V0.2.84（AevonContentSettledV284）：定稿回调只代表「画布写完已提交」，
-                         * 再补一道「内容宿主已按画布排完」的确认才显形 —— Aevon(57) 实测
-                         * 设置 14.556 显窗、14.778 内容宿主才贴合 = 中间 220ms 是旧尺寸画面。 */
-                        revealWhenContentSettled(sceneHost: sceneHost, canvas: mainCanvas,
-                                                 bundleID: bundleID, switchTxn: switchTxn,
-                                                 completeReason: "画布定稿(预热档)")
-                    }
                 }
                 func warmupPoll() {
                     warmupPolls += 1
