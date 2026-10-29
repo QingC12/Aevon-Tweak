@@ -21,6 +21,105 @@ final class AevonEntryRootController: UIViewController {
     }
 }
 
+/// V0.2.91（AevonHomeFreezeV291）：**回桌面过渡哨** —— 抓「缩放动画的第一帧」。
+///
+/// Aevon(60) 视频逐帧实锤「回桌面时浮窗由虚到实 / 消失约 1s 再弹回」的真时序：
+/// 容器（含浮窗面板）在 App 全屏时物理上挂在 App 场景视图里（V0.0.22 压屏需要），
+/// 上滑回桌面的缩放动画里**面板跟着 App 卡片一起缩**，而「场景消失」布防事件
+/// （appSceneDisappeared → noteForegroundSceneLost）要等场景真被收走才来 ——
+/// 动画都跑完了。0.2.90 的根级冻结帧在布防那拍是装上了（17:08:24.191 日志实锤），
+/// 但用户看到的「缩小消失 → 弹回」发生在布防**之前**。
+///
+/// 修法 = Stheno 式「过渡是一等公民」：用 CADisplayLink 盯住 App 场景视图的
+/// 窗口几何（tick-to-tick 比较，不用绝对基线 —— S2 改画布后场景视图可能恒为
+/// 画布尺寸，绝对基线会永久误报），几何一变（连续两拍偏离 >2pt）判定过渡开始：
+/// **第一帧**就把容器拉回窗口根 + 对浮窗装根级冻结帧。面板从此不再跟着缩放，
+/// 用户看到的是「画面停住原地」，动画结束布防照旧（幂等）。
+///
+/// 纪律：
+///  · 只在浮窗开着且容器挂在场景视图里时运行（每帧只做一次 rect 换算，无树遍历、
+///    无 hitTest）；
+///  · 开窗后 1.0s 内不触发（开窗自身的画布布局抖动不是过渡）；
+///  · 触发一次即停（布防链接管后续），场景重新出现（appSceneAppeared）时再布哨。
+final class AevonTransitionSentry: NSObject {
+    static let shared = AevonTransitionSentry()
+    private var link: CADisplayLink?
+    private var lastRect: CGRect = .zero
+    private var deviationTicks = 0
+    private var armedAt: CFTimeInterval = 0
+    /// 开窗时刻（开窗自身抖动的豁免窗）。由 WindowManager 在 open 成功后刷新。
+    var lastOpenAt: CFTimeInterval = 0
+
+    func arm() {
+        guard link == nil else { return }
+        lastRect = .zero
+        deviationTicks = 0
+        armedAt = CACurrentMediaTime()
+        let l = CADisplayLink(target: self, selector: #selector(tick))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    func disarm() {
+        link?.invalidate()
+        link = nil
+    }
+
+    @objc private func tick() {
+        guard let sceneView = AevonEntryHost.appSceneView,
+              sceneView.window != nil,
+              AevonEntryHost.container?.superview === sceneView else {
+            disarm()
+            return
+        }
+        // 开窗豁免窗：1.0s 内的几何变化是开窗自身的画布布局，不是过渡
+        if CACurrentMediaTime() - lastOpenAt < 1.0 { return }
+        let rect = sceneView.convert(sceneView.bounds, to: nil)
+        defer { lastRect = rect }
+        if lastRect.isEmpty { return }   // 首拍只记基线
+        let dx = max(abs(rect.minX - lastRect.minX), abs(rect.minY - lastRect.minY))
+        let dw = max(abs(rect.width - lastRect.width), abs(rect.height - lastRect.height))
+        let moved = dx > 2 || dw > 2
+        let transformed = !sceneView.transform.isIdentity
+        guard moved || transformed else {
+            deviationTicks = 0
+            return
+        }
+        deviationTicks += 1
+        guard deviationTicks >= 2 else { return }   // 连续两拍才认（防单帧毛刺）
+        disarm()
+        AevonLog.warn("[入口] 回桌面过渡哨命中：场景视图几何连续 \(deviationTicks) 拍变化"
+            + "（\(Int(lastRect.width))x\(Int(lastRect.height)) → \(Int(rect.width))x\(Int(rect.height))，"
+            + "transform=\(transformed ? "非恒等" : "恒等")）→ 容器立即归位 + 根级冻结帧"
+            + "（AevonHomeFreezeV291）")
+        AevonEntryHost.attachToWindowRoot(reason: "回桌面过渡哨（缩放动画第一帧）")
+        AevonWindowManager.noteTransitionFreeze()
+        // 误报还原网：+1.5s 后场景还在屏、几何已稳、容器仍在窗口根 → 判误报
+        //（如控制中心半拉时 App 视图轻微位移），把容器搬回场景视图恢复常态。
+        // 真回桌面的场景此刻已被收走（appSceneView == nil），还原网自然不命中；
+        // 误报期间装的冻结帧由看门在 cs=2 时自撤（removeDarkFreeze）。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard let sv = AevonEntryHost.appSceneView, sv.window != nil else { return }
+            let r = sv.convert(sv.bounds, to: nil)
+            let screen = UIScreen.main.bounds
+            let settled = abs(r.width - screen.width) < 2 && abs(r.height - screen.height) < 2
+                && sv.transform.isIdentity
+            guard settled, let box = AevonEntryHost.container, box.superview !== sv else { return }
+            AevonEntryHost.reattachToSceneView()
+            AevonLog.info("[入口] 回桌面过渡哨误报还原：场景仍在屏且几何稳定 → 容器搬回场景视图"
+                + "（AevonHomeFreezeV291）")
+        }
+    }
+}
+
+extension AevonEntryHost {
+    /// V0.2.91（AevonHomeFreezeV291）：过渡哨误报还原专用 —— 把容器搬回场景视图。
+    static func reattachToSceneView() {
+        guard let sv = appSceneView, isUsableHost(sv) else { return }
+        attach(to: sv, reason: "过渡哨误报还原")
+    }
+}
+
 /// 入口窗口（全局唯一）。
 ///
 /// V0.0.18 的结构性调整，依据是 V0.0.17 的真机日志：
@@ -83,11 +182,13 @@ final class AevonEntryContainerView: UIView {
 /// 入口宿主：创建唯一窗口 + 唯一容器，并负责把容器搬到「当前最高的画面容器」上。
 enum AevonEntryHost {
     private static var window: AevonEntryWindow?
-    private static var container: AevonEntryContainerView?
+    // V0.2.91（AevonHomeFreezeV291）：internal 化 —— 回桌面过渡哨要读这两个引用。
+    static var container: AevonEntryContainerView?
     /// 浮窗层（V0.0.36）：容器内专门承载浮窗外壳的子视图，永远在入口控件之下。
     private static var floatLayer: AevonWindowLayerView?
     /// 当前 App 场景的容器视图（弱引用；App 关掉后自动失效）
-    private static weak var appSceneView: UIView?
+    // V0.2.91（AevonHomeFreezeV291）：internal 化 —— 回桌面过渡哨要读这个引用。
+    static weak var appSceneView: UIView?
 
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
@@ -406,6 +507,9 @@ enum AevonEntryHost {
         }
         appSceneView = view
         attach(to: view, reason: reason)
+        // V0.2.91（AevonHomeFreezeV291）：App 场景在场 = 容器挂在场景视图里 =
+        // 回桌面缩放动画会把面板一起缩 → 布过渡哨（浮窗没开时哨兵 tick 首拍自撤）。
+        AevonTransitionSentry.shared.arm()
         // 场景出现后系统会继续往这个 view 里塞内容，延后再顶一次
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard appSceneView === view, coversScreen(view) else { return }
@@ -465,6 +569,7 @@ enum AevonEntryHost {
         guard appSceneView === view else { return }
         appSceneView = nil
         currentForegroundBundleID = ""   // V0.2.7（AevonAppBlindDiagV207）：回桌面即清
+        AevonTransitionSentry.shared.disarm()   // V0.2.91（AevonHomeFreezeV291）：过渡已由布防链接管
         attachToWindowRoot(reason: "App 场景消失")
         // V0.2.47（AevonDarkGuardV247）：全屏 App 画面离场 = 回桌面 / 切 App。
         //

@@ -295,6 +295,14 @@ enum AevonWindowManager {
         view.armBackgroundGuard(reason: "全屏 App 画面离场")
     }
 
+    /// V0.2.91（AevonHomeFreezeV291）：回桌面过渡哨命中 → 对当前浮窗**无条件**装
+    /// 根级冻结帧。此时容器已被哨兵拉回窗口根，冻结帧 convert 到窗口坐标后与把手
+    /// 同层，存活整段回桌面动画（AevonRootFreezeV290 已验证的挂载方式）。
+    static func noteTransitionFreeze() {
+        guard let view = currentView else { return }
+        view.installTransitionFreeze(reason: "回桌面过渡哨")
+    }
+
     /// 这个 App 是否正装在我们某个浮窗里（主窗或停靠小窗）。
     static func isWindowed(_ bundleID: String) -> Bool {
         if currentView != nil, currentBundleID == bundleID { return true }
@@ -430,6 +438,21 @@ enum AevonWindowManager {
             AevonLog.warn("[窗口] 插件未启用，忽略开窗请求")
             completion?(false)
             return
+        }
+        // V0.2.91（AevonCloseReviveV291）：记录「被这次开窗覆盖的全屏 App」。
+        // Aevon(60) 视频逐帧 + 日志对齐实锤：抖音全屏 → 圆盘开浮窗 → 关浮窗 →
+        // 抖音 100% 卡死（17:09:05 关窗 → 17:09:18 杀进程，13 秒画面静止 + 手势全灭）。
+        // 机制 = presenter 销毁后，被覆盖 App 的场景**没有人重新激活**（渲染停 + 场景
+        // 失活）；「全屏出现兜底」只认「场景出现」事件，关窗时不触发 → 必须关窗时
+        // 主动唤醒。这里在开窗第 0 拍记录前台全屏 App（此刻 B 的场景还没出现，
+        // currentForegroundBundleID 仍指向被覆盖者），关窗时对它补两轮前台唤醒。
+        let coveredNow = AevonEntryHost.currentForegroundBundleID
+        if coveredNow.isEmpty || coveredNow == bundleID {
+            coveredFullscreenBundleID = ""
+        } else {
+            coveredFullscreenBundleID = coveredNow
+            AevonLog.info("[窗口] 记录被覆盖 App：\(coveredNow)（本窗承载 \(bundleID)，"
+                + "关窗时唤醒）（AevonCloseReviveV291）")
         }
         // V0.2.66（AevonCleanSlateV266，用户 Aevon(39) #3「多次开关主悬浮窗后有概率黑屏」）：
         // 开窗前把「还没收干净的上一扇窗」扫一遍 —— 上一次 teardown 若被开窗打断
@@ -1015,6 +1038,10 @@ enum AevonWindowManager {
                 AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
             }
             AevonLog.info("[窗口] \(bundleID) 窗口化成功（单窗模式）（AevonSingleWindowV105）")
+            // V0.2.91（AevonHomeFreezeV291）：开窗成功 → 刷新过渡哨的开窗豁免窗
+            // （1.0s 内的几何变化是画布布局抖动，不是回桌面过渡）并布哨。
+            AevonTransitionSentry.shared.lastOpenAt = CACurrentMediaTime()
+            AevonTransitionSentry.shared.arm()
             // V0.2.51（AevonDouyinWarmupV251）：预热切换 —— App 已按整屏画布渲染一拍，
             // 现在把画布切到浮窗尺寸并踢一次重排。只在「还是这同一个开窗会话」时执行。
             if warmupCanvas {
@@ -1027,7 +1054,17 @@ enum AevonWindowManager {
                 // 2 秒才能出现悬浮窗」）：Aevon(59) 冷开窗时序账（52.328 选中 → 54.112
                 // 显形 = 1.78s）：拉起 0.42 + 预热等待 0.42 + 复刻往返尾排 0.72。首帧
                 // 8ms 就到、0.42 是纯等待 → 压到 0.30（约 18 帧，足够渲染一拍）。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak sceneHost] in
+                // V0.2.91（AevonWarmupPollV291，用户定档「按 Stheno 的步骤重新设置
+                // 开窗等待时间」）：**固定 0.30s → 就绪 poll（Stheno 事务纪律）**。
+                // SCWSSwitch 的结构 = deadline + poll 就绪 + presentReady，从不固定
+                // 延迟；显形闸（AevonContentSettledV284）已经是 poll，只剩预热这一段
+                // 还在死等。0.2.90 已实锤 0.30 是纯等空气（首帧 8ms 就到）→ 推前台后
+                // 每 30ms 查一次 contentState（cs=2 = 已就绪在画），就绪立即进预热
+                // 切换；0.6s（20 拍）deadline fail-open，到点也继续（等价旧固定档，
+                // 最坏不变慢）。canvasWarmupDeadline 仍按 0.30 计，防回弹复查在预热
+                // 期不补写的保护不变。
+                var warmupPolls = 0
+                func warmupProceed(via: String) {
                     // currentBundleID 已变 = 窗口已关 / 已换 App（承载器 invalidate 会随之发生）
                     guard currentBundleID == bundleID else {
                         AevonLog.info("[场景] 画布预热切换作废（窗口已关 / 已换 App）（AevonDouyinWarmupV251）")
@@ -1035,14 +1072,15 @@ enum AevonWindowManager {
                     }
                     let ok = AevonMainSceneSetFrame(warmupScene, Double(mainCanvas.width), Double(mainCanvas.height))
                     AevonLog.info("[场景] 画布预热完成：\(bundleID) 已切到浮窗画布 \(Int(mainCanvas.width))x\(Int(mainCanvas.height))"
-                        + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")）"
-                        + "（AevonDouyinWarmupV251 AevonWarmupFastV262 AevonKickExactV262）")
+                        + "（\(ok ? "已提交" : "失败")，读回 \(AevonMainSceneFrameState(warmupScene) ?? "")，"
+                        + "就绪方式=\(via)）"
+                        + "（AevonDouyinWarmupV251 AevonWarmupFastV262 AevonKickExactV262 AevonWarmupPollV291）")
                     // V0.2.62（AevonKickExactV262）：这里原来传的是 (width-1, height-1)，
                     // 而 kickRelayout 内部还要再 -1 一次 → 日志里「先写 428x735 / 写回
                     // 429x736」，最终画布比目标少 1pt（Aevon(36) 实锤 44.112 那次复查
                     // 把 429x736 当成「被回弹」又补写一遍）。现在传原值。
-                    sceneHost?.kickRelayout(width: mainCanvas.width, height: mainCanvas.height,
-                                            tag: "预热切换 \(bundleID)")
+                    sceneHost.kickRelayout(width: mainCanvas.width, height: mainCanvas.height,
+                                           tag: "预热切换 \(bundleID)")
                     /* V0.2.67（AevonWarmBounceV267，用户 Aevon(40) #5「抖音真重排速度
                      * 没有上一版快，会显示几秒断层才自动真重排」）：0.2.66 把预热复刻
                      * 往返整建制退役（当时它在窗口显出**之后**跑 = 必闪一下）。现在把
@@ -1065,7 +1103,7 @@ enum AevonWindowManager {
                      * 0.85 时尾排还有两笔没写完，内容在用户眼前又跳两遍 = 闪好几下。
                      * 现在显窗挂进 kick 最后一笔画布写回的回调（onCanvasSettled），
                      * 写完才显 —— 画布没定稿前用户看不到窗。1.3s 兜底不变。 */
-                    sceneHost?.onCanvasSettled = { [weak sceneHost] in
+                    sceneHost.onCanvasSettled = { [weak sceneHost] in
                         guard currentBundleID == bundleID, let sceneHost else { return }
                         AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
                             + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
@@ -1078,6 +1116,27 @@ enum AevonWindowManager {
                                                  completeReason: "画布定稿(预热档)")
                     }
                 }
+                func warmupPoll() {
+                    warmupPolls += 1
+                    guard currentBundleID == bundleID else {
+                        AevonLog.info("[场景] 画布预热切换作废（窗口已关 / 已换 App）（AevonDouyinWarmupV251）")
+                        return
+                    }
+                    let cs = Int(AevonSceneContentState(warmupScene))
+                    if cs == 2 {
+                        AevonLog.info("[场景] 预热就绪 poll：第 \(warmupPolls) 拍 cs=2（整屏已在画）"
+                            + " → 立即切画布（AevonWarmupPollV291）")
+                        warmupProceed(via: "poll第\(warmupPolls)拍就绪")
+                    } else if warmupPolls >= 20 {
+                        // 20 拍 × 30ms = 0.6s deadline：fail-open，等价旧固定档
+                        AevonLog.warn("[场景] 预热就绪 poll 到 deadline（\(warmupPolls) 拍，cs=\(cs)）"
+                            + " → fail-open 继续（等价旧固定档）（AevonWarmupPollV291）")
+                        warmupProceed(via: "deadline fail-open")
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { warmupPoll() }
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { warmupPoll() }
             } else {
                 // 非预热档：画布在开窗前就已经写好了，但 kick 微扰还有两笔
                 //（+0.20 / +0.45）——同样等定稿回调，不再固定 +0.25。
@@ -1203,6 +1262,11 @@ enum AevonWindowManager {
     // SB 进程内存缓存：关窗抓、再开窗用；SB 重启后自然为空 → 回退 0.2.75 遮罩档。
     private static var reopenPlaceholders: [String: UIImage] = [:]
 
+    /// V0.2.91（AevonCloseReviveV291）：本次开窗覆盖的全屏 App（空串 = 无，桌面开窗）。
+    /// 开窗第 0 拍记录、关窗消费；用户在浮窗开着时又全屏拉起了别的 App 的话，
+    /// appSceneAppeared 会自动关浮窗走 releaseOnly，不进唤醒分支。
+    private static var coveredFullscreenBundleID = ""
+
     static func close(bundleID: String, releaseOnly: Bool = false) {
         // V0.2.50（AevonDockColumnV250）：停靠小窗有自己的关闭路径（主窗变量不指向它）
         if currentBundleID != bundleID, dockedViews.contains(where: { $0.bundleID == bundleID }) {
@@ -1272,6 +1336,34 @@ enum AevonWindowManager {
             // 的状态里，全屏打开就是黑的，只有杀进程重来才重建。
             // 所以 0.75s（App 侧信号已清）再写一次整屏画布 —— 有界、只一次、只在关窗时。
             scheduleSleep(bundleID: bundleID, after: 1.05)
+            // V0.2.91（AevonCloseReviveV291）：关窗唤醒被覆盖的全屏 App —— 两轮
+            // setForeground(force)（+0.45s / +0.85s）。等 0.45s 是让 teardown 的
+            // 画布还原抖动（0.15/0.40s）先走完，别跟我们的唤醒写入挤在同一拍；
+            // force = 绕过记账账本（这是补救路径，0.2.79 的 force 语义）。被覆盖
+            // App 的画布我们从未动过（它一直整屏），不需要抖动踢，只要前台。
+            // 守卫：用户已又开了别的窗（covered 正被承载）→ 不抢前台。
+            let covered = coveredFullscreenBundleID
+            coveredFullscreenBundleID = ""
+            if !covered.isEmpty, covered != bundleID {
+                for (delay, round) in [(0.45, 1), (0.85, 2)] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        guard !isWindowed(covered) else { return }
+                        // 已自行回到前台（用户从图标重新全屏拉起）→ 不再补写
+                        guard covered != AevonEntryHost.currentForegroundBundleID else { return }
+                        guard let coveredScene = AevonSceneHelper.scene(for: covered) else {
+                            AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(covered) 场景取不到（已不在后台？）跳过"
+                                + "（AevonCloseReviveV291）")
+                            return
+                        }
+                        AevonSceneHelper.setForeground(coveredScene, true,
+                                                       reason: "关窗唤醒被覆盖 App 第\(round)轮",
+                                                       force: true)
+                        AevonLog.info("[窗口] 关窗唤醒第 \(round) 轮：\(covered) 已补前台（force，"
+                            + "读回 \(AevonMainSceneFrameState(coveredScene) ?? "")）"
+                            + "（AevonCloseReviveV291）")
+                    }
+                }
+            }
             if let scene = mainScene, !wasSelfBuilt {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
                     guard !isWindowed(bundleID) else { return }

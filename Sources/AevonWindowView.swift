@@ -2094,6 +2094,24 @@ final class AevonWindowView: UIView {
             + " AevonFreezePassthruV287 AevonRootFreezeV290）")
     }
 
+    /// V0.2.91（AevonHomeFreezeV291）：回桌面过渡哨命中的**无条件**冻结入口。
+    ///
+    /// 与布防链（armBackgroundGuard → beginLiveWait）的区别：布防在场景消失时才来
+    /// （缩放动画已跑完），过渡哨在动画第一帧就到 —— 这里绕过「让位期判断」直接
+    /// 放行垫帧（liveWaitFreezeAllowed 短暂置真），挂载方式与 AevonRootFreezeV290
+    /// 相同（窗口根级，与把手同层）。快照取不到时 fail-open（只跳过，不重试）。
+    /// 后续布防链到达时 darkFreezeView 已在位，幂等不重装；cs=2 后照旧即时交接。
+    func installTransitionFreeze(reason: String) {
+        guard window != nil, !isTearingDown, darkFreezeView == nil else {
+            AevonLog.info("[窗口] 过渡哨冻结未装（窗不在/销毁中/已有冻结）（AevonHomeFreezeV291）")
+            return
+        }
+        AevonLog.info("[窗口] 过渡哨冻结入口放行：\(reason)（AevonHomeFreezeV291）")
+        liveWaitFreezeAllowed = true
+        installDarkFreeze(reason: reason)
+        liveWaitFreezeAllowed = false
+    }
+
     private func removeDarkFreeze(reason: String) {
         guard let view = darkFreezeView else { return }
         darkFreezeView = nil
