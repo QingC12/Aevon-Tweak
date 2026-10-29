@@ -786,15 +786,34 @@ enum AevonWindowManager {
             let windowView = AevonWindowView(sceneHost: sceneHost, bundleID: bundleID, title: title)
             host.addSubview(windowView)
             host.bringSubviewToFront(windowView)
-            // V0.2.76（AevonReopenSwapV276）：有占位帧 → 面板立刻显形（占位帧垫底），
-            // 不再「藏着等画布定稿」。1.3s 兜底 / 画布定稿回调里的 revealEntryNow
-            // 幂等（entryRevealDone 只生效一次，重复调用是空操作）。
-            if reopenPlaceholder != nil {
-                windowView.installReopenPlaceholder(reopenPlaceholder!)
-                windowView.revealEntryNow("占位直显（AevonReopenSwapV276）")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
-                    windowView?.settleReopenPlaceholder()
-                }
+            /* V0.2.77（AevonRevealOnceV277，用户 Aevon(49) #1「第二次开启悬浮窗时有概率
+             * 不显示悬浮窗」+ #3「依旧先出现 → 消失 → 1 秒后再现」）：
+             * 0.2.76 的占位直显撞上了**下面那段**「先藏着」的入场复位 ——
+             * 占位路径在这里已经 revealEntryNow（entryRevealDone 置位、alpha 动到 1），
+             * 紧接着 60 行后的「入场复位」又把整窗硬压回 0；而 revealEntryNow
+             * 幂等（再来一次是空操作），画布定稿 / 1.3s 兜底都救不回来 →
+             * 「面板闪一下（占位帧）→ 消失 → 1 秒后（新的开窗路径或兜底）才又出现」，
+             * 运气不好就一直是隐形窗（= 有概率不显示）。
+             *
+             * 现在定序：① 先把 alpha/transform 复位成入场初态（只此处一处）
+             * ② 铺垫底图（优先关窗缓存的最后一帧；没有就现场裁一块**窗口区域的屏幕快照**
+             * —— 新开 App 时那块是桌面，等于「什么都没发生」）
+             * ③ 立刻显形 ④ 画布定稿后 crossfade 到活画面。
+             * 用户视角：窗一直都在（先显示上一关最后一帧 / 桌面），内容自己换过去，
+             * 没有「出现 → 消失 → 再现」的中间态。 */
+            windowView.alpha = 0
+            windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
+            if let placeholder = reopenPlaceholder
+                ?? AevonWindowView.windowRegionSnapshot(for: windowView.frame) {
+                windowView.installReopenPlaceholder(
+                    placeholder,
+                    reason: reopenPlaceholder != nil ? "上一关最后一帧" : "窗口区域屏幕快照")
+            }
+            windowView.revealEntryNow(reopenPlaceholder != nil
+                ? "占位直显（AevonReopenSwapV276 AevonRevealOnceV277）"
+                : "区域快照直显（AevonRevealOnceV277）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
+                windowView?.settleReopenPlaceholder()
             }
             /* V0.2.73（AevonWarmShroudV273，用户 Aevon(45) #3「圆盘选中图标打开悬浮窗
              * 会先闪一下，0.5 秒后才淡入出现」）：预热遮罩。
@@ -835,22 +854,15 @@ enum AevonWindowManager {
             }
             /* V0.2.64（AevonFloatTransitionV264，用户 Aevon(38) #3「动画更流畅真实，
              * 而不是突然出现的」）：开窗补一段入场动画 —— 淡入 + 从 0.965 弹到 1.0。
-             * 之前是 addSubview 之后 alpha 直接就是 1，视觉上「啪」地出现一块窗。 */
-            windowView.alpha = 0
-            windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
-            /* V0.2.65（AevonEntryRevealV265，用户 Aevon(38) #3「浮窗打开 App 时第一时间
-             * 会出现底栏黑屏」）：
+             * 之前是 addSubview 之后 alpha 直接就是 1，视觉上「啪」地出现一块窗。
              *
-             * 0.2.64 是 addSubview 之后立刻淡入 —— 而这一刻画布**还是整屏 932**
-             * （画布要 0.42 秒后才切到 737，见下面的预热块）。App 按 932 排版，它的
-             * 底栏 / TabBar 在 y≈880 的位置，落在 737 画布之外 → 浮窗底部那条就是空的
-             * （黑）。等画布切过去、App 重排完，底栏才「跳」回来。
-             *
-             * 现在改成：先 alpha 0 藏着，等画布真的切到浮窗尺寸并且踢过一次重排之后
-             * 再淡入。用户看到的第一帧就是「排好版的样子」。上限 1.3 秒兜底，
-             * 任何路径卡住都不会留下一个看不见的窗。 */
-            AevonLog.info("[窗口] 开窗入场：\(bundleID) 先藏着等画布切到浮窗尺寸，"
-                + "切完再淡入 + 0.965→1.0 弹簧 0.34s（AevonFloatTransitionV264 AevonEntryRevealV265）")
+             * **V0.2.77（AevonRevealOnceV277）**：这段「先藏着」的 alpha 复位已经
+             * 上移到 addSubview 之后紧邻的位置（必须早于占位显形，否则会把刚显形的
+             * 面板又压回 0 —— 0.2.76 的「出现 → 消失 → 1 秒后再现」就是这么来的）。
+             * 这里只剩日志与兜底，不再动 alpha。 */
+            AevonLog.info("[窗口] 开窗入场：\(bundleID) 立刻显形（垫底图打底），画布定稿后"
+                + "crossfade 到活画面 + 0.965→1.0 弹簧 0.34s"
+                + "（AevonFloatTransitionV264 AevonEntryRevealV265 AevonRevealOnceV277）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak windowView] in
                 windowView?.revealEntryNow("兜底上限到达")
             }
@@ -954,6 +966,9 @@ enum AevonWindowManager {
                             }
                         }
                         currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
+                        // V0.2.77（AevonRevealOnceV277）：画布定稿 → 垫底图 crossfade 到活画面
+                        //（预热档也走同一条，0.2.76 只给非预热档摘过占位）。
+                        currentView?.settleReopenPlaceholder()
                     }
                 }
             } else {

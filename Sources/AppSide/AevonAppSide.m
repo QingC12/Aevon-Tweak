@@ -1380,6 +1380,8 @@ __attribute__((used)) static const char AevonSwallowOneV267Marker[] = "AevonSwal
 __attribute__((used)) static const char AevonCanvasBandV268Marker[] = "AevonCanvasBandV268";
 /* V0.2.75（AevonBandTapV275）：边缘带 tap 豁免（可点击控件放行）—— 同上老雷区。 */
 __attribute__((used)) static const char AevonBandTapV275Marker[] = "AevonBandTapV275";
+/* V0.2.77（AevonBandTap2V277）：把手区 tap 豁免（抖音右栏评论按钮）—— 同上老雷区。 */
+__attribute__((used)) static const char AevonBandTap2V277Marker[] = "AevonBandTap2V277";
 
 static void AevonKeyFitInstall(void) {
     @try {
@@ -2064,6 +2066,43 @@ static BOOL AevonPointInCanvasBand(UIWindow *win, CGPoint p) {
         || (p.y >= cs.height - bottomBand);
 }
 
+/* V0.2.77（AevonBandTap2V277，用户 Aevon(49) #2「抖音全屏打开时右侧评论按钮无法点击，
+ * 卸载 Aevon 后正常」）：
+ *
+ * 把手命中区（右缘 45 × 92pt，心点 y≈652）与抖音右栏「评论/收藏」竖排**几何重叠**。
+ * 0.2.75 只给「画布边缘带」加了 tap 豁免，把手区那条分支还是无条件整根吞 →
+ * 全屏 App 里落在把手带内的按钮永远收不到 touchUp。这里把豁免判据抽成公共函数，
+ * 把手分支也用它。
+ *
+ * 判据（宁可漏放，不可误放 —— 放错的代价是「滑把手带动 App 滚动」）：
+ *   ① UIControl / 挂了 UITapGestureRecognizer 的视图 → 可点击；
+ *   ② 抖音右栏是自绘 view（没有控件类、也不一定挂手势）→ 追加「小尺寸可交互视图」
+ *      （≤ 120x120pt）当第三条；
+ *   ③ 任一祖先链上有 UIScrollView（列表 / feed / 网页）→ 一律不豁免，
+ *      「从内容上起手滑把手」照旧整根吞，不把 AevonCanvasBandV268 的初衷破掉。 */
+static BOOL AevonPointHitsTapTarget(UIWindow *win, CGPoint p, UIEvent *event) {
+    UIView *hit = nil;
+    @try { hit = [win hitTest:p withEvent:event]; } @catch (NSException *e) { hit = nil; }
+    if (hit == nil) { return NO; }
+    BOOL hasScroll = NO, hasControl = NO, hasTap = NO;
+    int depth = 0;
+    for (UIView *v = hit; v != nil && depth < 12; v = v.superview, depth++) {
+        if ([v isKindOfClass:[UIScrollView class]]) { hasScroll = YES; }
+        if ([v isKindOfClass:[UIControl class]]) { hasControl = YES; }
+        for (UIGestureRecognizer *g in v.gestureRecognizers) {
+            if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
+        }
+    }
+    if (hasScroll) { return hasControl; }
+    if (hasControl || hasTap) { return YES; }
+    CGSize s = hit.bounds.size;
+    if (s.width > 0 && s.height > 0 && s.width <= 120 && s.height <= 120
+        && hit.userInteractionEnabled) {
+        return YES;
+    }
+    return NO;
+}
+
 static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
     /* V0.2.63（AevonGripSwallowFixV263）：不再要求 `touch.window != nil`。
      * UIApplication 这一层 touch.window 恒为 nil（0.2.61 实测），但
@@ -2292,10 +2331,21 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                         @"（AevonCanvasBandV268）", NSStringFromCGPoint(p));
                         }
                     } else if (inRect && fullScreen && !AevonKeyboardVisible()) {
-                        [gAevonSwallowedTouches addObject:key];
-                        AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（窗口层，"
-                                    @"不再带着 App 内滑动）（AevonGripSwallowV261 "
-                                    @"AevonGripSwallowWinV262）", NSStringFromCGPoint(p));
+                        /* V0.2.77（AevonBandTap2V277）：把手区也做 tap 豁免 ——
+                         * 落在可点击控件（抖音右栏评论按钮 / Filza 编辑按钮…）上就整根放行，
+                         * 抬手即 fire；从控件上拖走时 UIControl 不会触发，滑动仍归把手。 */
+                        if (AevonPointHitsTapTarget(win, p, event)) {
+                            AevonAppLog(@"[App侧] 把手区落点 %@ 命中可点击控件（%@）→ 放行"
+                                        @"（把手 tap 豁免：左滑起手仍归圆盘）"
+                                        @"（AevonGripSwallowWinV262 AevonBandTap2V277）",
+                                        NSStringFromCGPoint(p),
+                                        [([win hitTest:p withEvent:event]) class]);
+                        } else {
+                            [gAevonSwallowedTouches addObject:key];
+                            AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（窗口层，"
+                                        @"不再带着 App 内滑动）（AevonGripSwallowV261 "
+                                        @"AevonGripSwallowWinV262）", NSStringFromCGPoint(p));
+                        }
                     } else if (fullScreen && !AevonKeyboardVisible()) {
                         /* V0.2.69（AevonFloatBandV269）：全屏 + 有浮窗矩形时的漏判诊断
                          * —— #10 复发时这条直接给出「落点 vs 矩形」的差值，

@@ -698,11 +698,16 @@ final class AevonWindowView: UIView {
         super.didMoveToWindow()
         guard window != nil, !hasFadedIn else { return }
         hasFadedIn = true
-        alpha = 0.35
-        transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
         // V0.2.50（AevonDarkGuardV250）：看门定时器从「上屏那一刻」就开，
         // 不再等某个事件来布防（第 7 条：事件没来 = 守卫从未上场 = 纯黑）。
         startGuardTimerIfNeeded()
+        /* V0.2.77（AevonRevealOnceV277）：入场显形改由 open() 在 addSubview 之后
+         * 立刻调 revealEntryNow 统一负责（垫底图打底）。这里再插一段
+         * 「alpha 0.35 → 1」就会把刚显形的窗**压暗再亮起来**（用户看到的就是闪一下），
+         * 所以已显过形就不再参与 alpha / transform。 */
+        guard !entryRevealDone else { return }
+        alpha = 0.35
+        transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
         UIView.animate(withDuration: 0.24, delay: 0,
                        options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
             self?.alpha = 1.0
@@ -2491,7 +2496,11 @@ final class AevonWindowView: UIView {
     /// 开窗时窗口先以 alpha 0 藏着，等画布真的切到浮窗尺寸、App 重排过一拍之后再显。
     /// 幂等：重复调用只生效一次。
     func revealEntryNow(_ reason: String) {
-        guard !entryRevealDone, !isTearingDown, window != nil else { return }
+        /* V0.2.77（AevonRevealOnceV277）：不再要求 `window != nil` —— 新定序是
+         * 「addSubview 之后立刻显形」，此刻窗口可能还没挂进 window（入口容器搬家瞬间），
+         * 旧判据会直接 return 且不置 entryRevealDone（留下一个隐形窗 = 用户 Aevon(49) #1）。
+         * 现在挂了就显：动画在离屏也能跑完，挂上后第一帧就是终态。 */
+        guard !entryRevealDone, !isTearingDown else { return }
         entryRevealDone = true
         alpha = 0
         transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
@@ -2524,8 +2533,10 @@ final class AevonWindowView: UIView {
 
     private var reopenPlaceholderView: UIImageView?
 
-    /// 开窗时把占位帧铺进内容区（场景内容之上）。
-    func installReopenPlaceholder(_ image: UIImage) {
+    /// 开窗时把垫底图铺进内容区（场景内容之上）。
+    /// V0.2.77（AevonRevealOnceV277）：两路来源 —— 关窗缓存的最后一帧（再开窗）/
+    /// 现场裁的窗口区域屏幕快照（新开 App 时那块是桌面）。日志里区分来源，便于验收。
+    func installReopenPlaceholder(_ image: UIImage, reason: String = "上一关最后一帧") {
         guard reopenPlaceholderView == nil else { return }
         let iv = UIImageView(image: image)
         iv.contentMode = .scaleToFill
@@ -2536,7 +2547,24 @@ final class AevonWindowView: UIView {
         contentClip.addSubview(iv)
         contentClip.bringSubviewToFront(iv)
         reopenPlaceholderView = iv
-        AevonLog.info("[窗口] 再开窗占位帧已铺进面板（上一关最后一帧直显）（AevonReopenSwapV276）")
+        AevonLog.info("[窗口] 再开窗垫底图已铺进面板（\(reason)直显）（AevonReopenSwapV276 AevonRevealOnceV277）")
+    }
+
+    /// V0.2.77（AevonRevealOnceV277）：把整屏快照裁出**窗口所在区域**当垫底图。
+    /// 新开 App（没有关窗缓存）用 —— 那块区域本来就该显示下面的画面（桌面 / 前一个 App），
+    /// 盖上它之后「窗在哪、窗多大」从第一帧就是确定且平滑的，不会有空面板 / 黑块。
+    static func windowRegionSnapshot(for frame: CGRect) -> UIImage? {
+        guard frame.width > 8, frame.height > 8 else { return nil }
+        guard let shot = AevonQuickAction.captureScreenImage() else { return nil }
+        let scale = shot.scale > 0 ? shot.scale : 1
+        let bounds = CGRect(origin: .zero, size: shot.size)
+        let rect = CGRect(x: frame.minX, y: frame.minY,
+                          width: frame.width, height: frame.height).intersection(bounds)
+        guard rect.width > 8, rect.height > 8 else { return shot }
+        let pixelRect = CGRect(x: rect.minX * scale, y: rect.minY * scale,
+                               width: rect.width * scale, height: rect.height * scale)
+        guard let cg = shot.cgImage?.cropping(to: pixelRect) else { return shot }
+        return UIImage(cgImage: cg, scale: scale, orientation: shot.imageOrientation)
     }
 
     /// 画布定稿后摘占位（crossfade 到活画面）。
@@ -2605,6 +2633,9 @@ final class AevonWindowView: UIView {
     func teardown() {
         guard !isTearingDown else { return }
         isTearingDown = true
+        // V0.2.77（AevonRevealOnceV277）：垫底图别跟着面板一起被强引用住（每窗一份）
+        reopenPlaceholderView?.removeFromSuperview()
+        reopenPlaceholderView = nil
         // 关窗前把最终位置记下来
         persistFrame()
         // V0.2.48（AevonNoAutoLockV248）：浮窗没了 → 空闲锁屏还原

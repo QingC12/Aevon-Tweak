@@ -242,14 +242,18 @@ enum AevonEdgeEntry {
                 // 顺带把指针位置记准：呼盘时圆盘从这个点接手指（全屏 App 里
                 // 视图层那条路收不到触摸，这里是唯一能记到真实落点的通道）。
                 lastTouchPoint = point
-                // V0.2.63（AevonGripBusyV263，用户 Aevon(37) #7）：一落指就广播「把手占用」，
-                // 让被覆盖的全屏 App 立刻把自己的窗口交互关掉 —— UIKit 会把这根手指整根取消，
-                // App 内的左滑 / 长按根本没机会开始。这条通道与坐标无关，
-                // 不再像 0.2.61/0.2.62 那样「判定矩形没命中就一根都没吞」。
-                AevonNotifySetGripBusy(true)
-                gripBusyActive = true
-                AevonLog.info("[圆盘] 手指落在把手上 (\(Int(point.x)),\(Int(point.y))) → 广播「把手占用」，"
-                    + "被覆盖的 App 立刻停收触摸（AevonGripBusyV263）")
+                /* V0.2.77（AevonGripBusyLateV277，用户 Aevon(49) #2「抖音全屏打开时右侧
+                 * 评论按钮无法点击，卸载 Aevon 后就正常」）：0.2.63 起「一落指就广播
+                 * 把手占用」——广播的代价是让被覆盖的 App 把这根手指整根 cancel。
+                 * 而把手命中区是右缘 45×92pt（GripY 默认 30% → 心点 y≈652），正好压在
+                 * 抖音右栏「评论/收藏」那一竖排上：每次点按钮都先被 cancel，按钮永远
+                 * 收不到 touchUp = 「必须精准点到边上才有概率触发」。
+                 * 现在改成**延迟广播**：落指只登记候选，确认是呼盘手势（左滑 ≥6pt）
+                 * 才广播占用并 cancel App —— 点击（位移 < 6pt 就抬手）全程不受影响。
+                 * 代价：左滑起手那 6pt 里 App 可能已开始跟手，随后被 cancel（几 pt 抖动），
+                 * 相比「右栏按钮整体失灵」低两个量级。 */
+                AevonLog.info("[圆盘] 手指落在把手上 (\(Int(point.x)),\(Int(point.y))) → 只登记候选，"
+                    + "左滑 ≥6pt 才广播占用（点击放行）（AevonGripBusyV263 AevonGripBusyLateV277）")
                 return
             }
             // V0.2.9（AevonFloatPassV209）：落在浮窗上的触摸整个交回浮窗。
@@ -273,6 +277,14 @@ enum AevonEdgeEntry {
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
                 let dx = point.x - gripSwipeStart.x
                 let dy = point.y - gripSwipeStart.y
+                /* V0.2.77（AevonGripBusyLateV277）：确认是呼盘手势（左滑 ≥6pt）才广播
+                 * 把手占用 —— 落指就广播会把 App 里的右栏按钮一起打死（见 began 段注释）。 */
+                if !gripBusyActive, dx < -6, abs(dy) < 40 {
+                    gripBusyActive = true
+                    AevonNotifySetGripBusy(true)
+                    AevonLog.info("[圆盘] 把手左滑已起手 \(Int(dx))pt → 广播「把手占用」，"
+                        + "被覆盖的 App 从这一帧起停收触摸（AevonGripBusyV263 AevonGripBusyLateV277）")
+                }
                 if dx < -14, abs(dy) < 40 {
                     gripSwipeTouchID = 0
                     if AevonRingMenu.presented == nil {
