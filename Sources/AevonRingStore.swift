@@ -95,10 +95,6 @@ enum AevonRingStore {
     /// V0.0.27：设置页改完圆盘列表后会广播 com.aevon.prefschanged。
     /// V0.0.31：改为 `refreshFromSettings()`（带快照与防漂移），只在真正改列表时刷新 ——
     /// 旧版 0.2 秒轮询里盲目清缓存是排序漂移的元凶，禁止改回。
-    static func invalidateCache() {
-        refreshFromSettings()
-    }
-
     static func contains(_ bundleID: String) -> Bool {
         return bundleIDs().contains(bundleID)
     }

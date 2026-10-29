@@ -369,11 +369,10 @@ static NSArray *AevonBuildFallback(id target) {
     if (s3 != nil) [result addObject:s3];
     id s4 = AevonNewSwitch(@"写日志文件（/var/mobile/Aevon.log）", target, @"LogEnabled", @YES);
     if (s4 != nil) [result addObject:s4];
-    /* V0.1.7（AevonProbeV107）：六组运行时探针。每次 SpringBoard 启动跑一轮，
-       全部从 ObjC @try 里过 —— 探针只会「没结果」，不会再把 SpringBoard 带崩。
-       V0.2.17（AevonProbeDefaultOffV217）：圆盘手势定档，日常不再需要这几十行日志，默认关。*/
-    id s5 = AevonNewSwitch(@"运行时探针（排错用，每次启动跑一轮六组）", target, @"ProbeV107", @NO);
-    if (s5 != nil) [result addObject:s5];
+    /* V0.2.81（AevonDeadCodeV281）：这里原本有一个「运行时探针」开关（ProbeV107）。
+     * V0.1.7 的六组探针本版整体退役（主干类表扫描自 0.2.72 被封印后只剩空跑），
+     * 开关再怎么拨也不会有任何一行日志 —— 死配置，连同 Root.plist 那一项一起删掉。
+     * 历史标记 AevonProbeV107 / AevonProbeDefaultOffV217 仍收容在 AevonAssertionShim.m。 */
 
     id groupDetail = AevonNewGroup(@"圆盘把手",
                                    @"把手的位置 / 长短在独立页里调（AevonGripPageV261）。");

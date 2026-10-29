@@ -99,7 +99,4 @@ enum AevonDock {
     }
 
     /// 主窗从停靠态还原时的目标几何（沿用主窗的几何记忆，夹屏后返回）。
-    static func restoredMainFrame() -> CGRect {
-        return AevonWindowView.mainFrameForRestore()
-    }
 }

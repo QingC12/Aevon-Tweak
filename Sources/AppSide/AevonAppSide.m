@@ -743,16 +743,29 @@ static void AevonAppSceneCapRegistry(void) {
             return;
         }
         SEL sel = NSSelectorFromString(@"application:configurationForConnectingSceneSession:options:");
-        BOOL cap = [delegate respondsToSelector:sel];
+        BOOL delegateReady = [delegate respondsToSelector:sel];
+        /* V0.2.81（AevonMultiSceneCapV281）：0.2.80 的判据只看了 delegate 有没有实现
+         * configurationForConnecting —— 那只是「能给出配置」，不等于「UIKit 允许第二个场景」。
+         * Aevon(54) 实锤：设置（cap=1）11:51:14 / 32 / 39 / 43 / 50 / 59 六次自建场景，
+         * 全部 `clientPort=nil`，App 侧同时报「8 秒内自建场景未连上 App 端 = 连接被
+         * App 端 UIKit 拒绝」。真正决定「允不允许第二场景」的是
+         * `UIApplication.supportsMultipleScenes`（= Info.plist 的
+         * UIApplicationSceneManifest.UIApplicationSupportsMultipleScenes），
+         * 单场景 App 这里恒为 NO —— 场景建得出来、App 端永远不接。
+         * 所以能力表改成**两个条件同时成立**才记 1，这样 SB 侧不会再把单场景 App
+         * 送进必黑的自建路径。 */
+        BOOL multiScene = [[UIApplication sharedApplication] supportsMultipleScenes];
+        BOOL cap = delegateReady && multiScene;
         NSString *bid = gAevonAppBundleID;
         if (bid.length == 0) { return; }
         /* V0.2.65（AevonNoCapsFileV265）当年的判断「S2 常开、判据不再被读」是错的：
          * SB 侧一直在读，只是永远读到 -1。标记保留（历史标记只加不改），行为由
          * AevonCapsPersistV280 反转回来。 */
         NSString *wrote = AevonAppCapsWriteLine(bid, cap);
-        AevonAppLog(@"场景能力登记：cap=%d（delegate=%@）→ 落盘%@ %@"
-                    @"（AevonAppSceneCapV241 AevonCapsPersistV280）",
+        AevonAppLog(@"场景能力登记：cap=%d（delegate=%@ 实现配置=%d 支持多场景=%d）→ 落盘%@ %@"
+                    @"（AevonAppSceneCapV241 AevonCapsPersistV280 AevonMultiSceneCapV281）",
                     cap ? 1 : 0, NSStringFromClass([delegate class]),
+                    delegateReady ? 1 : 0, multiScene ? 1 : 0,
                     wrote != nil ? @"成功" : @"失败",
                     wrote != nil ? wrote : @"（两条路径都不可写，SB 侧将回退 S2）");
     } @catch (NSException *exception) {

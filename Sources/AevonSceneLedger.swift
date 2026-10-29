@@ -146,11 +146,6 @@ final class AevonSceneLedger {
     }
 
     /// 完整注销（App 被关掉、不再关心它）。
-    func forget(bundleID: String) {
-        lock.lock(); defer { lock.unlock() }
-        books.removeValue(forKey: bundleID)
-    }
-
     // MARK: - 期望登记
 
     /// 登记「我希望这个 App 是前台」。

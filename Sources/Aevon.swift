@@ -182,14 +182,20 @@ private func installExperimentalHooks() {
      */
 
     /*
-     * ⑧ V0.1.7（AevonProbeV107）：运行时探针。六组一次装齐，8 秒后开始、组间隔 0.8 秒：
-     *    P1 系统手势管线 / P2 识别器宿主 / P3 桌面图标启动链 /
-     *    P4 事件路由延迟层 / P5 场景与浮窗 / P6 配置快照。
+     * ⑧ V0.2.81 移除（AevonDeadCodeV281）：V0.1.7 的六组启动探针（AevonProbeV107）与
+     *    V0.1.14 的宿主审计五组（AevonProbeP7V114）整体退役。
      *
-     * V0.1.6 的探针自己把 SpringBoard 打死了（归档(13)：崩溃栈落在
-     * swift_dynamicCast → _CF_forwarding_prep_0，位置就在「遍历全进程类表」那一步）。
-     * 这一版把类表扫描整块搬进 ObjC，并且每组都从 ObjC 的 @try 里过 ——
-     * 探针再出问题最多是「这一组没结果」，绝不再是「手机自动注销」。
+     *    理由（三条，缺一条都不该删）：
+     *      ① 它们的主干「全进程类表扫描」自 0.2.72 起被永久封印
+     *         （AevonSealP1V276：SB 进程 objc_copyClassList → 全类 +initialize →
+     *         swift_dynamicCast SIGTRAP = 手机自动注销，Aevon(44)/Aevon(38) 两次实锤），
+     *         封印后 AevonAllClassNames 恒返回 nil，P1~P5 组退化成了空跑；
+     *      ② 剩下还能出结果的定向探测（宿主链 / 识别器宿主 / ivar 摘要）结论已经
+     *         全部落进逆向报告与历史日志，不再需要每次启动重采一遍；
+     *      ③ Aevon(54) 日志实测：每次启动 [探针P7-3] 40 行、[诊断] 97 行，
+     *         占总日志量约 30%，纯噪声。
+     *    历史标记 AevonProbeV107 / AevonProbeP7V114 / AevonGestureProbeV2V256 /
+     *    AevonProbeSupport / AevonSealP1V276 全部收容在 AevonAssertionShim.m 的
+     *    used 常量里（「历史标记只加不改，删日志串前先收容标记」）。
      */
-    AevonProbeV107.runAll()
 }

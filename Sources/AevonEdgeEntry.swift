@@ -839,10 +839,6 @@ enum AevonEdgeEntry {
     static func noteSelectionCooldown() {
         selectionCoolUntil = CACurrentMediaTime() + 1.5
     }
-    static func isSelectionCoolingDown() -> Bool {
-        return CACurrentMediaTime() < selectionCoolUntil
-    }
-
     // MARK: - 应用面板
 
     /// 打开完整应用面板（V0.0.30 起只有单窗模式）。
@@ -866,9 +862,6 @@ enum AevonEdgeEntry {
     }
 
     /// 供其它入口复用同一套面板。
-    static func hostRootView() -> UIView? {
-        return AevonEntryHost.activeRoot
-    }
 }
 
 // MARK: - C 入口（供 AevonTouchHook.m 调用）

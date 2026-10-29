@@ -126,8 +126,9 @@ jobs:
           done
           # V0.2.80（路线 B 复活 + 让位判据 + 事务闸门）：这四个标记必须编进主库。
           # 缺任何一个都等于「改了源码但那条路径没被任何调用者引用」= 被整体消除。
-          for m in AevonSceneCapWaitV280 AevonSwitcherSenseV280 AevonYieldGuardV280 \
-                   AevonSelfSceneLearnV280; do
+          for m in AevonSceneCapWaitV280 AevonNoSwitcherYieldV281 AevonYieldGuardV280 \
+                   AevonSelfSceneLearnV280 AevonSelfSceneOffV281 AevonLearnFixV281 \
+                   AevonDeadCodeV281; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.80 二进制里缺标记 $m"; exit 1; }
           done
@@ -234,9 +235,12 @@ jobs:
           done
           # ObjC 安全带必须真的进构建：@try 兜底 + 类表扫描都在这个文件里。
           # 注意这里查源码而不是查二进制 —— C 函数名会被 strip 掉，strings 查不到会误判。
-          for s in AevonShieldRun AevonAllClassNames AevonMethodNamesForClass AevonObjectResponds AevonClassFactoryObject; do
+          # V0.2.81（AevonDeadCodeV281）：支撑库精简为「仍被业务使用」的 5 个只读函数。
+          # AevonAllClassNames / AevonIvarNamesForClass / AevonClassFactoryObject /
+          # AevonDescribeRecognizersOfObject / AevonObjectIvarSummary 随两套启动探针退役。
+          for s in AevonShieldRun AevonMethodNamesForClass AevonObjectResponds AevonViewHostChain AevonSafeClassName; do
             grep -q "$s" "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
-              || { echo "::error::探针安全带函数 $s 被删（探针会再次裸跑）"; exit 1; }
+              || { echo "::error::支撑库保留函数 $s 被删（有业务调用者）"; exit 1; }
           done
           grep -q 'Sources/AevonProbeSupport.m' "$GITHUB_WORKSPACE/Makefile" \
             || { echo "::error::探针安全带文件没进 Makefile（等于没编进去）"; exit 1; }
@@ -253,9 +257,22 @@ jobs:
             echo "::error::ivar 又用裸 load 取对象了 —— 野指针会让动态转换直接崩"
             exit 1
           fi
-          # 探针文件必须存在且确实在做六组调度（每组的独立延迟调度是关键隔离手段）。
-          grep -q 'groupPipeline' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
-            || { echo "::error::探针 P1 组被删（系统手势管线取证断了）"; exit 1; }
+          # V0.2.81（AevonDeadCodeV281）：两套启动探针已整体退役 ——
+          # 主干「全类表扫描」自 0.2.72 起被封印（AevonSealP1V276），P1~P5 退化成空跑；
+          # 剩下的定向探测结论早已落进日志与逆向报告。文件必须不存在，防止回退。
+          for f in AevonProbeV107 AevonProbeP7V114; do
+            test ! -f "$GITHUB_WORKSPACE/Sources/$f.swift" \
+              || { echo "::error::0.2.81 退役探针 $f.swift 又回来了（每次启动多背 30% 噪声）"; exit 1; }
+            if grep -q "Sources/$f.swift" "$GITHUB_WORKSPACE/Makefile"; then
+              echo "::error::0.2.81 $f.swift 仍在 Makefile（会被重新编进去）"
+              exit 1
+            fi
+          done
+          # 标记必须收容：探针能删，历史标记不能丢（历史标记只加不改）
+          for m in AevonProbeSupport AevonSealP1V276 AevonDeadCodeV281; do
+            grep -q "$m" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+              || { echo "::error::0.2.81 退役标记 $m 没在断言垫片里收容"; exit 1; }
+          done
           echo "V0.1.7 校验: 探针六组 + ObjC @try 兜底 + 类表扫描在 ObjC + ivar 安全读取"
           # V0.1.8（Aevon(75) 日志给出的答案）：
           # P1 探针把三个手势管理器一次列清，能力位一目了然：
@@ -334,26 +351,22 @@ jobs:
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::V0.1.14 标记 $s 未编入"; exit 1; }
           done
-          # 探针文件必须真的进构建（不在 Makefile 里等于没编进去）
-          grep -q 'Sources/AevonProbeP7V114.swift' "$GITHUB_WORKSPACE/Makefile" \
-            || { echo "::error::P7 探针文件没进 Makefile"; exit 1; }
-          # 五组必须真的被调度（没挂到 runAll 里，装了也白装）
-          grep -q 'AevonProbeP7V114.groups()' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
-            || { echo "::error::P7 五组没挂进探针调度"; exit 1; }
+          # V0.2.81（AevonDeadCodeV281）：P7 五组已退役（标记仍在二进制里，见上面的循环）。
+          # 只留一条反回退：文件不许回来，否则「每次开屏都扫一遍全部窗口视图树」会重演。
+          test ! -f "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift" \
+            || { echo "::error::0.2.81 P7 探针文件又回来了"; exit 1; }
           # 只读纪律：探针里不许出现任何「改状态」的调用（加了识别器/改了 delegate/swizzle 都算）
           if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift" \
                | grep -qE 'addGestureRecognizer|removeGestureRecognizer|\.delegate *=|swizzle|addSubview'; then
             echo "::error::P7 探针里出现了改状态的调用 —— 探针必须只读"
             exit 1
           fi
-          # 每组都必须从 ObjC @try 里过（Swift 的 do/catch 捕不到 doesNotRecognizeSelector:）
-          test "$(grep -c 'AevonShieldRun' "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift")" -ge 1 \
-            || { echo "::error::P7 探针没有走 AevonShieldRun 兜底"; exit 1; }
-          # 宿主审计三件套必须在 ObjC 侧（沿 ivar 挖对象只能在 ObjC 做）
-          for f in AevonDescribeRecognizersOfObject AevonObjectIvarSummary AevonViewHostChain; do
-            grep -q "$f" "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
-              || { echo "::error::宿主审计函数 $f 不在 ObjC 安全带里"; exit 1; }
-          done
+          # 宿主链函数仍在 ObjC 侧（沿 superview 走链只能在 ObjC 做，Swift 侧会走动态转换）
+          grep -q 'AevonViewHostChain' "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
+            || { echo "::error::宿主链函数 AevonViewHostChain 不在 ObjC 安全带里"; exit 1; }
+          # AevonShieldRun 必须还在（其余业务也用它的 @try 兜底）
+          grep -q 'AevonShieldRun' "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
+            || { echo "::error::ObjC @try 兜底 AevonShieldRun 被删"; exit 1; }
           echo "V0.1.14 校验: 宿主审计五组 + 只读纪律 + ObjC @try 兜底（行为与 0.1.13 一致）"
           # V0.1.15（Aevon(82) 的 P7 结论 → 右缘做成「第二个热区」）：
           # P7 四条实测把所有旧假设推翻：
@@ -763,7 +776,7 @@ jobs:
           echo "app dylib 大小: $APP_SIZE 字节"
           [ "$APP_SIZE" -lt 204800 ] || { echo "::error::AevonApp.dylib 超过 200KB（$APP_SIZE）—— App 侧必须极小，主插件逻辑混进来了"; exit 1; }
           for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200 \
-                   AevonAppSceneCapV241 AevonCapsPersistV280; do
+                   AevonAppSceneCapV241 AevonCapsPersistV280 AevonMultiSceneCapV281; do
             strings "$APP_DYLIB" | grep -q "$s" \
               || { echo "::error::AevonApp.dylib 缺少标记 $s"; exit 1; }
           done
@@ -1038,17 +1051,22 @@ jobs:
           #    V0.2.58（AevonGripToggleV258）反转：新增隔离实验开关 RingGripEnabled
           #    （用户 Aevon(32) 要求可临时屏蔽把手做 A/B 定位）→ 下限改 5。
           ROOT_SW="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(sum(1 for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
-          [ "$ROOT_SW" -eq 5 ] || { echo "::error::一级页开关数不是 5（实际 $ROOT_SW）—— 0.2.58 清单：Enabled/LogEnabled/CrashGuard/ProbeV107/RingGripEnabled"; exit 1; }
+          # V0.2.81（AevonDeadCodeV281）：ProbeV107 随探针退役 → 5 个改 4 个。
+          [ "$ROOT_SW" -eq 4 ] || { echo "::error::一级页开关数不是 4（实际 $ROOT_SW）—— 0.2.81 清单：Enabled/RingGripEnabled/LogEnabled/CrashGuard（ProbeV107 已随探针退役）"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
           # V0.2.58（AevonGripToggleV258）反转：+RingGripEnabled（隔离实验开关）
-          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,LogEnabled,CrashGuard,ProbeV107" ] \
+          # V0.2.81（AevonDeadCodeV281）：去掉 ProbeV107（探针已退役，开关是死配置）
+          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,LogEnabled,CrashGuard" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
           grep -q 'AevonPrefs.bool("Enabled", default: true)' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
             || { echo "::error::总开关不是默认开（0.2.17 起装上即生效）"; exit 1; }
-          grep -q 'AevonPrefs.bool("ProbeV107", default: false)' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
-            || { echo "::error::运行时探针不是默认关（定档后不该每次启动写 70 行）"; exit 1; }
+          # V0.2.81：运行时探针整体退役，ProbeV107 这个开关已成死配置 —— 断言它不再被读
+          if grep -rq 'AevonPrefs.bool("ProbeV107"' "$GITHUB_WORKSPACE/Sources"; then
+            echo "::error::0.2.81 ProbeV107 开关又接回了代码（探针已退役）"
+            exit 1
+          fi
           # 浮窗可触摸恒开
           grep -q 'AevonFloatTouchAlwaysV217' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::浮窗可触摸没有改成恒开"; exit 1; }
@@ -2198,9 +2216,15 @@ jobs:
           # 把手 hitTest 命中时返回 handle 而非宿主自身
           grep -q 'return handle' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.55 把手 hitTest 命中必须返回 handle（touch.view 不再落在全屏宿主上）"; exit 1; }
-          # 手势探针：窗口栈打印必须带识别器扫描
-          grep -q 'dumpGestureRecognizerProbe' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
-            || { echo "::error::0.2.55 缺手势诊断探针（pan 失效取证依赖它）"; exit 1; }
+          # V0.2.81（AevonDeadCodeV281）反转 0.2.55：手势识别器探针已退役。
+          # 它当初为「pan 突然失效」取证，0.2.73 已定档（失效不在 Aevon 吞咽层）；
+          # Aevon(54) 实测它每根手指遍历所有窗口视图树，日志里两行识别器噪声（112+93 行）
+          # 全出自它。反回退网：不许再挂回来。
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+               | grep -q 'dumpGestureRecognizerProbe'; then
+            echo "::error::0.2.81 手势识别器探针又接回来了（每根手指扫全窗口）"
+            exit 1
+          fi
           # 拖拽状态残留自愈：2 秒无 moved 强制清场
           grep -q 'now - lastFloatMovedAt > 2.0' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::0.2.55 缺浮窗拖拽状态残留自愈（UITouch 槽位地址复用会让新手指被误吞）"; exit 1; }
@@ -2247,11 +2271,10 @@ jobs:
           # ④关窗 / 关停靠小窗必须强制解除拖拽吞咽状态
           grep -c 'forceDisarmFloatGesture' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" | grep -q '[2-9]' \
             || { echo "::error::0.2.56 关窗与关停靠路径都要挂 forceDisarmFloatGesture"; exit 1; }
-          # ⑤探针 V2：非 possible 全量 + 全屏宿主 pan 单列（旧 prefix(12) 已废）
-          grep -q '手势探针·卡住识别器' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
-            || { echo "::error::0.2.56 探针缺卡住识别器全量输出"; exit 1; }
-          grep -q '手势探针·全屏宿主 pan' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
-            || { echo "::error::0.2.56 探针缺全屏宿主 pan 输出"; exit 1; }
+          # ⑤V0.2.81（AevonDeadCodeV281）反转 0.2.56：探针 V2 的两路输出随探针一起退役。
+          # 保留「失效瞬间探针」的轻量摘要（4 次 hitTest + 状态位），它才是行凶现场证据。
+          grep -q '失效瞬间探针' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.81 失效瞬间探针被误删（轻量现场证据必须留）"; exit 1; }
           ! grep -q 'lines.prefix(12)' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.56 旧探针 prefix(12) 截断必须移除（取证失败根源）"; exit 1; }
           echo "V0.2.56 校验: 重投began静默 + 残留盾 + 双击自愈锚点 + 关窗强制解除 + 探针V2 已就位"
@@ -3182,8 +3205,8 @@ jobs:
           grep -q 'AevonRecPetal6V276' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.76 缺六瓣标记"; exit 1; }
           # #1c 0.2.72 封印令补漏：全类表枚举已在源封死
-          grep -q 'AevonSealP1V276' "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
-            || { echo "::error::0.2.76 缺全类枚举封印标记（AevonProbeSupport 未封）"; exit 1; }
+          grep -q 'AevonSealP1V276' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.76 缺全类枚举封印标记（AevonSealP1V276 未收容）"; exit 1; }
           # #2 再开窗占位直换
           grep -q 'AevonReopenSwapV276' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.76 缺占位直换标记（WM 侧）"; exit 1; }
@@ -3303,11 +3326,18 @@ jobs:
           grep -q 'AevonSelfSceneAppCapWait' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.80 分流处没调用等表"; exit 1; }
 
-          # ③ 叠层让位：MainSwitcherWindow 不许再走「在屏即命中」，必须过二级判据
-          grep -q 'switcherReallyPresent' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
-            || { echo "::error::0.2.80 切换器没有二级判据（全屏 App 里会误判让位）"; exit 1; }
-          grep -q 'AevonSwitcherSenseV280' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
-            || { echo "::error::0.2.80 缺切换器判据标记"; exit 1; }
+          # ③ 叠层让位（V0.2.81 反转 0.2.80）：切换器**彻底退出让位**。
+          # 0.2.80 的「二级判据」被 Aevon(54) 证伪：11:51:15.294 显形 → 15.329 命中
+          # SBMainSwitcherWindow 让位 → 19.832 恢复，窗只露 35 毫秒、暗 4.48 秒。
+          # iOS 17 前台 App 的 SBDeviceApplicationSceneView 就挂在该窗口下，
+          # 任何「看这个窗口判切换器」的写法都会在开窗瞬间误伤。判据退回控制中心/通知中心。
+          grep -q 'AevonNoSwitcherYieldV281' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.81 缺「切换器不再让位」标记"; exit 1; }
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+               | grep -q 'switcherReallyPresent'; then
+            echo "::error::0.2.81 切换器子树判据又接回来了（全屏 App 里必误判让位）"
+            exit 1
+          fi
           # 反回退网：MainSwitcherWindow 一旦被重新塞回「裸类名名单」就报错
           #（名单只有 2 项 3 行，往后扫 6 行足够覆盖）
           if grep -A6 'overlayClassHints = \[' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
@@ -3327,7 +3357,43 @@ jobs:
             || { echo "::error::0.2.80 缺自建场景学习式降级"; exit 1; }
           grep -q 'AevonSelfSceneLearn.shared.hasFailed' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.80 分流没接降级名单"; exit 1; }
-          echo "V0.2.80 校验: 能力表落盘(路线B复活) + 切换器二级判据 + 开窗事务闸门 + 学习式降级 已就位"
+          echo "V0.2.80 校验: 能力表落盘(路线B复活) + 切换器二级判据(0.2.81已反转) + 开窗事务闸门 + 学习式降级 已就位"
+
+          # ── V0.2.81 校验（修闪：让位误判下线 / 自建场景默认关 / 死代码清理）──────────
+          # 依据 Aevon(54) 三条实锤：
+          #   ① 11:51:15.294 显形 → 15.329 命中 SBMainSwitcherWindow 让位 → 19.832 恢复
+          #      = 窗只露 35ms、暗 4.48s —— 用户说的「闪」；判据已退回控制中心/通知中心。
+          #   ② 设置自建场景 6 次全部 clientPort=nil（App 端 UIKit 拒绝第二场景）
+          #      → 自建默认关，先保画面（回 S2）。
+          #   ③ 日志 30% 是探针噪声（[探针P7-3] 40 行 / [诊断] 97 行 / 识别器枚举两行）。
+
+          # ① 自建场景默认关（代码默认值，不靠偏好域）
+          grep -q 'AevonPrefs.bool("SelfBuiltScene", default: false)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.81 自建场景不是默认关（设置那 6 次 clientPort=nil 会重演成黑窗）"; exit 1; }
+          grep -q 'AevonSelfSceneOffV281' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.81 缺「自建默认关」标记"; exit 1; }
+
+          # ② 学习式降级判据必须是 clientPort（0.2.80 写成 client= 永远不命中）
+          grep -q 'state.contains("clientPort=nil")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.81 学习式降级判据串又写错了（必须 clientPort=nil）"; exit 1; }
+          grep -q 'AevonLearnFixV281' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.81 缺学习式降级修复标记"; exit 1; }
+
+          # ③ App 侧能力表判据：必须同时要求「delegate 实现配置」+「支持多场景」
+          grep -q 'supportsMultipleScenes' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.81 能力表只看 delegate（单场景 App 会被判成可自建）"; exit 1; }
+          grep -q 'AevonMultiSceneCapV281' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.81 缺多场景判据标记"; exit 1; }
+
+          # ④ 死代码清理：手势识别器探针不许回来（每根手指扫全部窗口视图树）
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+               | grep -q 'dumpGestureRecognizerProbe'; then
+            echo "::error::0.2.81 手势识别器探针又接回来了（每根手指扫全窗口，日志噪声 30%）"
+            exit 1
+          fi
+          grep -q 'AevonDeadCodeV281' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.81 缺死代码清理标记（AevonDeadCodeV281）"; exit 1; }
+          echo "V0.2.81 校验: 切换器让位下线 + 自建默认关 + 学习降级修正 + 多场景判据 + 探针退役 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

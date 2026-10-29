@@ -555,7 +555,23 @@ enum AevonWindowManager {
             // 五版静态判据（manifest 有无 / supportsMultipleScenes / delegate 类名 /
             // SBApplication.sceneSpecification / 二进制扫描）全被真机证伪，统一收敛到
             // AevonSelfSceneAppCapVerdict 读进程内登记表。
-            let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: true)
+            // V0.2.81（AevonSelfSceneOffV281）：**自建场景默认关闭**。
+            //
+            // 0.2.80 把路线 B 重新接通后，Aevon(54) 给出六次完整反证：
+            //   11:51:14.789 分流 → 自建场景（设置 cap=1）
+            //   11:51:14.794 自建场景已创建 画布=430x737
+            //   11:51:16.367 连接取证 +1.5s：client=FBWorkspace clientPort=nil
+            //   11:51:18.465 连接取证 +3.5s：client=FBWorkspace clientPort=nil
+            //   11:51:22.693 App 侧：8 秒内自建场景未连上 App 端 = 连接被 App 端 UIKit 拒绝
+            // 六次尝试（设置 ×6）全部同一结果。也就是说：场景**建得出来**，App 端**永远不接**
+            // —— 呈现层拿到的只有一个 `_UISceneLayerHostContainerView` 空壳，用户看到的就是
+            // 「窗在那儿、里面什么都没有」。cap 判据只看 delegate 有没有实现配置方法，
+            // 而真正决定许不许第二场景的是 `UIApplication.supportsMultipleScenes`
+            //（单场景 App 恒 NO）。本版 App 侧已把判据收紧成「两个条件都成立」，
+            // 同时这里把默认档关掉：**先把画面显示对（回 S2），再谈自建** ——
+            // 用户 Aevon(54) 的诉求顺序就是「先修闪和黑屏」。
+            // 试验入口仍在：偏好域 SelfBuiltScene=YES 或 SceneRouteForceSelf=YES 都能开。
+            let selfSceneOn = AevonPrefs.bool("SelfBuiltScene", default: false)
             let forceSelf = AevonPrefs.bool("SceneRouteForceSelf", default: false)
             // V0.2.48（AevonMainSceneFixedV248）：Aevon(23)「设置中的主场景改画布开关也
             // 默认写入代码中，并且移除开关项」→ 从偏好读取降级为常量 true。
@@ -578,9 +594,10 @@ enum AevonWindowManager {
                 : (screenAspectOn ? "整屏等比缩放（屏幕比例档）" : (routeMain ? "主场景改画布(S2)" : "全屏接管旧路径"))
             AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)"
                 + (selfSceneLearnedBad ? "（该 App 上次自建连接未建立，已降级）" : "")
+                + (selfSceneOn ? "" : "（自建场景默认关：Aevon(54) 六次 clientPort=nil 实锤，先保画面）")
                 + "（S2 主场景改画布已定档常开，设置页开关已移除）"
                 + "（AevonSceneRouteV242 AevonScreenAspectV244 AevonMainSceneFixedV248"
-                + " AevonCapsPersistV280 AevonSelfSceneLearnV280）")
+                + " AevonCapsPersistV280 AevonSelfSceneLearnV280 AevonSelfSceneOffV281）")
             if !routeSelf {
                 AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
             }
@@ -660,14 +677,19 @@ enum AevonWindowManager {
                             let state = AevonSelfSceneConnectionState(hs) ?? ""
                             AevonLog.info("[场景] 连接取证（+\(delay)s）：\(state)（AevonSceneRouteV235）")
                             // ── V0.2.80（AevonSelfSceneLearnV280）：学习式降级 ──────────
-                            // cap=1 是历史 100% 对齐的判据，但真机仍有极小概率被 App 端拒
+                            // cap=1 是历史对齐的判据，但真机仍会被 App 端拒
                             //（连接永远不建立 = 画面黑）。这里把「连不上」记进内存黑名单，
                             // **下次**开同一个 App 直接走 S2（不再黑第二次）。
                             // 只在本进程生命期内有效，SB 重启自动清空 —— 不落盘、不污染。
-                            if delay == 1.5, state.contains("client=nil") {
+                            //
+                            // V0.2.81（AevonLearnFixV281）：判据串写错过一次 ——
+                            // 实际输出是 `client=FBWorkspace clientPort=nil`，
+                            // 0.2.80 判的是 `client=nil`（永远不命中），于是设置的六次
+                            // 自建失败一次都没被记进黑名单、每次都重试。改判 clientPort。
+                            if delay == 1.5, state.contains("clientPort=nil") {
                                 AevonSelfSceneLearn.shared.markFailed(bundleID)
-                                AevonLog.warn("[场景] 自建场景连接未建立（client=nil）→ "
-                                    + "\(bundleID) 下次开窗改走 S2（AevonSelfSceneLearnV280）")
+                                AevonLog.warn("[场景] 自建场景连接未建立（clientPort=nil）→ "
+                                    + "\(bundleID) 下次开窗改走 S2（AevonSelfSceneLearnV280 AevonLearnFixV281）")
                             }
                         }
                     }

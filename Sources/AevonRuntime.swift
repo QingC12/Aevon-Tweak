@@ -64,14 +64,6 @@ enum AevonRuntime {
 
     /// 对类对象发送 alloc，返回 +1 持有的新实例。
     /// 注意：不能用 `NSClassFromString(...) as? NSObject`——元类型到 NSObject 的条件转换恒失败。
-    static func allocate(_ className: String) -> AnyObject? {
-        guard let cls = NSClassFromString(className),
-              let method = class_getClassMethod(cls, Selector(("alloc"))) else { return nil }
-        typealias Fn = @convention(c) (AnyObject, Selector) -> Unmanaged<AnyObject>
-        let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
-        return fn(cls, Selector(("alloc"))).takeRetainedValue()
-    }
-
     // MARK: - 类方法调用（+方法，接收者为类对象本身）
 
     /// 调用无参类方法（+方法），返回 +0 对象。
@@ -209,12 +201,6 @@ enum AevonRuntime {
     }
 
     /// 调用 void 方法（一个 UInt64 参数，如 setDeactivationReasons:）。
-    static func sendVoidUInt64(_ target: AnyObject, _ selector: Selector, _ value: UInt64) {
-        guard let imp = implementation(target, selector) else { return }
-        typealias Fn = @convention(c) (AnyObject, Selector, UInt64) -> Void
-        unsafeBitCast(imp, to: Fn.self)(target, selector, value)
-    }
-
     /// 调用返回 +1 对象的 CGRect 入参方法（如 initWithFrame:）。
     static func sendInitFrame(_ target: AnyObject, _ selector: Selector, _ frame: CGRect) -> AnyObject? {
         guard let imp = implementation(target, selector) else { return nil }
@@ -223,9 +209,4 @@ enum AevonRuntime {
     }
 
     /// 调用返回 +0 对象的无参方法（getter）。
-    static func sendObject(_ target: AnyObject, _ selector: Selector) -> AnyObject? {
-        guard let imp = implementation(target, selector) else { return nil }
-        typealias Fn = @convention(c) (AnyObject, Selector) -> AnyObject?
-        return unsafeBitCast(imp, to: Fn.self)(target, selector)
-    }
 }

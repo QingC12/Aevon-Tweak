@@ -1141,3 +1141,18 @@ BOOL AevonTrySystemRecordingStop(id recorder) {
         return NO;
     }
 }
+
+/* ── V0.2.81（AevonDeadCodeV281）：退役探针的标记收容 ────────────────────────
+ *
+ * 纪律：历史标记只加不改 —— 探针代码可以删，标记串必须还在产物里。
+ * 下面这几串原本分别长在 AevonProbeV107.swift / AevonProbeP7V114.swift /
+ * AevonProbeSupport.m 的日志与注释里；那些文件本版整体退役，标记搬到这里收容，
+ * 这样「某一版做过什么」在二进制里依然可查，CI 也能继续断言它们没有丢。
+ *
+ *   AevonProbeSupport   = V0.1.7 探针支撑库（本版精简为 5 个只读函数）
+ *   AevonSealP1V276     = 0.2.72 全类表枚举封印令（原在 AevonAllClassNames 上方）
+ *   AevonDeadCodeV281   = 本版死代码清理（两套启动探针 + 手势识别器探针退役）
+ */
+__attribute__((used)) static const char AevonProbeSupportMarker[] = "AevonProbeSupport";
+__attribute__((used)) static const char AevonSealP1V276Marker[] = "AevonSealP1V276";
+__attribute__((used)) static const char AevonDeadCodeV281Marker[] = "AevonDeadCodeV281";

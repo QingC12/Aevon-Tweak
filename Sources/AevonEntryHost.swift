@@ -548,61 +548,42 @@ enum AevonEntryHost {
         RunLoop.main.add(timer, forMode: .common)
         overlayWatch = timer
         AevonLog.info("[窗口] 系统浮层巡检已启动（0.25 秒一拍，只读窗口表；"
-            + "控制中心/通知中心在屏即让位；切换器须子树里真有切换器视图才算在屏；"
+            + "只对控制中心/通知中心让位，切换器不再参与；"
             + "开窗事务进行中不新开让位）"
-            + "（AevonOverlayYieldV278 AevonSwitcherSenseV280 AevonYieldGuardV280）")
+            + "（AevonOverlayYieldV278 AevonNoSwitcherYieldV281 AevonYieldGuardV280）")
     }
 
-    /// 哪些窗口算「系统瞬时浮层」——命中类名列表（不做全类表枚举，纯窗口对象判类名）。
+    /// V0.2.81（AevonNoSwitcherYieldV281）：**切换器不再参与让位**。
+    ///
+    /// 0.2.78 把 `SBMainSwitcherWindow` 放进「在屏即让位」之后，Aevon(52)/(54) 两轮日志
+    /// 都拍到同一幕（这就是用户说的「闪一下 / 打开不显示」）：
+    ///     11:51:15.292  显窗时机 = 画布定稿回调（窗刚显形）
+    ///     11:51:15.294  开窗入场：淡入
+    ///     11:51:15.329  命中系统浮层 SBMainSwitcherWindow（在屏）→ 浮窗与把手让位
+    ///     11:51:15.351……19.832   窗不可见（4.48 秒）
+    ///     11:51:19.832  系统浮层让位 关：1 扇浮窗恢复显示
+    /// 窗口只露了 35 毫秒就消失、4.5 秒后又回来 —— 一次完整的「闪」。
+    ///
+    /// 根因是 iOS 17 的窗口结构：**前台 App 的场景视图 `SBDeviceApplicationSceneView`
+    /// 就挂在 `SBMainSwitcherWindow` 下面**，所以「该窗口在屏」等于「有 App 在前台」，
+    /// 与「切换器被呼出」完全是两件事。0.2.80 加过一层「子树里必须真有切换器视图」的
+    /// 二级判据，但 Aevon(54) 证明它依旧命中（切换器窗口的常驻子视图里就有匹配到
+    /// 关键字的容器），也就是说这个信号在 iOS 17 上不可靠。
+    ///
+    /// 结论：**只让位给 0.2.78 用户真正要求的那两个**（控制中心 / 通知中心）。
+    /// 切换器打开时浮窗保持在最上层 —— 这是 0.2.77 及之前的行为，用户从未因此报过问题，
+    /// 而「打开浮窗后被藏 4.5 秒」是每轮都报。两害相权，取不藏。
     private static let overlayClassHints = [
         "ControlCenterWindow",   // 控制中心（1080）
         "CoverSheetWindow",      // 通知中心 / 锁屏（1050）
     ]
-
-    /// V0.2.80（AevonSwitcherSenseV280）：切换器必须过二级判据。
-    ///
-    /// Aevon(52) 日志 11:08:41.691 实锤 —— 开窗途中被让位：
-    ///     [窗口] 系统浮层让位 开：1 扇浮窗隐藏
-    ///     [窗口] 命中系统浮层 SBMainSwitcherWindow（在屏）→ 浮窗与把手让位
-    /// 同一刻探针 P7-1 给出真相（11:08:41.200）：
-    ///     SBMainSwitcherWindow level=5 hidden=0 alpha=1.00
-    ///     命中=UIView 链=UIView ↑ SBDeviceApplicationSceneView ↑ _BSUIOrientationTransformedContentView
-    /// **iOS 17 把前台 App 的场景视图 `SBDeviceApplicationSceneView` 直接挂在了
-    /// `SBMainSwitcherWindow` 下面** —— 所以「SBMainSwitcherWindow 在屏」等于「有 App 在前台」，
-    /// 与「切换器被呼出」完全是两件事。0.2.78 只看窗口在屏就判切换器，于是**每次在全屏 App 里
-    /// 开窗都会立刻把浮窗藏起来**，直到 0.25s 巡检某一拍不再命中才恢复（日志 45.192 恢复，
-    /// 中间 3.5 秒窗不可见）—— 这正是用户说的「全屏 App 时悬浮窗能打开但不显示，桌面正常」
-    ///（桌面上 SBMainSwitcherWindow 里没有 App 场景视图，所以不误判）。
-    ///
-    /// 判据：子树里必须真的出现「切换器专属视图」才算在屏；只有 App 场景视图 = 不是切换器。
-    /// 只读 subviews + 类名（不做全类表枚举、不发任何消息），上限 240 节点 / 深度 8。
-    private static func switcherReallyPresent(_ window: UIView) -> Bool {
-        var found = false
-        var visited = 0
-        func walk(_ view: UIView, _ depth: Int) {
-            guard !found, visited < 240, depth <= 8 else { return }
-            visited += 1
-            let name = String(describing: type(of: view))
-            if name.contains("FluidSwitcher") || name.contains("AppSwitcher")
-                || name.contains("ContinuousExpose") || name.contains("SwitcherPage") {
-                found = true
-                return
-            }
-            for sub in view.subviews { walk(sub, depth + 1) }
-        }
-        walk(window, 0)
-        return found
-    }
 
     /// 单个窗口是否算「系统浮层在屏」。
     private static func overlayWindowPresent(_ window: UIWindow) -> Bool {
         guard !window.isHidden, window.alpha > 0.5 else { return false }
         let name = String(describing: type(of: window))
         // 控制中心 / 通知中心：窗口出现即算（它们收起时 alpha 极低，已被上面挡掉）
-        if overlayClassHints.contains(where: { name.contains($0) }) { return true }
-        // 切换器：窗口是常驻的，必须看子树里有没有真的切换器视图
-        if name.contains("MainSwitcherWindow") { return switcherReallyPresent(window) }
-        return false
+        return overlayClassHints.contains(where: { name.contains($0) })
     }
 
     private static func overlayWatchTick() {
@@ -720,91 +701,6 @@ enum AevonEntryHost {
         let mount = container?.superview.map { AevonRuntime.className($0) ?? "\(type(of: $0))" } ?? "无"
         let size = container?.bounds.size ?? .zero
         AevonLog.info("[诊断] 窗口栈（\(tag)）：\(hostState) | 容器挂载=\(mount) \(Int(size.width))x\(Int(size.height)) | \(parts.joined(separator: " | "))")
-        dumpGestureRecognizerProbe(tag: tag)
-    }
-
-    // MARK: - 手势诊断探针（V0.2.55，AevonGestureProbeV255）
-
-    /// Aevon(29) 主诉「开一次浮窗后全系统 pan 失效、tap 正常」—— 静态审计全部窗口 /
-    /// 视图 / hitTest / 识别器路径都没找到必现机制，所以把**取证**做进产物：
-    /// 每次窗口栈打印时顺带扫一遍 SB 所有窗口视图树里的 UIGestureRecognizer，
-    /// 重点报「非 possible 状态」「cancelsTouchesInView=YES」「挂在异常宿主上」的识别器。
-    /// 下次日志一复现，谁在抢 pan 一目了然。
-    private static func dumpGestureRecognizerProbe(tag: String) {
-        guard AevonPrefs.bool("GestureProbe", default: true) else { return }
-        // V0.2.56（AevonGestureProbeV2V256）：0.2.55 探针的「可疑」= cancels=YES（几乎所有
-        // 识别器的默认值）→ 182 条全量命中再 prefix(12) 截断 = 取证失败。V2 改三路输出：
-        //   ① 卡住识别器（state ≠ possible）全量 —— pan 杀手头号嫌疑人，一条不落；
-        //   ② 全屏宿主（≥80% 屏宽 × 60% 屏高）上的 pan / swipe —— 结构性抢触摸者
-        //     （Aevon(30) 采样已见 KayokoMainView 的 pan/edge pan 挂在状态栏窗口）；
-        //   ③ 每窗口识别器计数 —— 数量突变一眼可见。
-        let screenW = UIScreen.main.bounds.width
-        let screenH = UIScreen.main.bounds.height
-        var stuckAll = 0
-        var stuck: [String] = []
-        var fullPanAll = 0
-        var fullPan: [String] = []
-        var perWindow: [String: Int] = [:]
-        func stateText(_ s: UIGestureRecognizer.State) -> String {
-            switch s {
-            case .possible: return "可能"
-            case .began: return "已开始"
-            case .changed: return "进行中"
-            case .ended: return "已结束"
-            case .cancelled: return "已取消"
-            case .failed: return "已失败"
-            @unknown default: return "?"
-            }
-        }
-        func walk(_ view: UIView, _ windowName: String, depth: Int) {
-            guard depth <= 8 else { return }
-            let vw = view.frame.width
-            let vh = view.frame.height
-            let isBigHost = vw >= screenW * 0.8 && vh >= screenH * 0.6
-            for gesture in view.gestureRecognizers ?? [] {
-                perWindow[windowName, default: 0] += 1
-                let gcls = AevonSafeClassName(gesture) ?? "?"
-                let host = AevonSafeClassName(view) ?? "?"
-                if gesture.state != .possible {
-                    stuckAll += 1
-                    if stuck.count < 24 {
-                        stuck.append("\(windowName)/\(gcls)[\(host)] state=\(stateText(gesture.state))"
-                            + " cancels=\(gesture.cancelsTouchesInView ? 1 : 0) host=\(Int(vw))x\(Int(vh))")
-                    }
-                }
-                let panKind = gcls.contains("Pan") || gcls.contains("Swipe")
-                if panKind, isBigHost {
-                    fullPanAll += 1
-                    if fullPan.count < 16 {
-                        fullPan.append("\(windowName)/\(gcls)[\(host)] host=\(Int(vw))x\(Int(vh))"
-                            + " state=\(stateText(gesture.state))")
-                    }
-                }
-            }
-            for sub in view.subviews { walk(sub, windowName, depth: depth + 1) }
-        }
-        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
-            for w in scene.windows where !w.isHidden {
-                let name = String(format: "L%d:%@", w.windowLevel.rawValue,
-                                  AevonSafeClassName(w) ?? "?")
-                walk(w, name, depth: 0)
-            }
-        }
-        if stuckAll > 0 {
-            let more = stuckAll > stuck.count ? "（另 \(stuckAll - stuck.count) 条截断）" : ""
-            AevonLog.warn("[诊断] 手势探针·卡住识别器（\(tag)）：\(stuckAll) 个非 possible → "
-                + stuck.joined(separator: " | ") + more + "（AevonGestureProbeV2V256）")
-        }
-        if fullPanAll > 0 {
-            let more = fullPanAll > fullPan.count ? "（另 \(fullPanAll - fullPan.count) 条截断）" : ""
-            AevonLog.info("[诊断] 手势探针·全屏宿主 pan（\(tag)）：\(fullPanAll) 个 → "
-                + fullPan.joined(separator: " | ") + more + "（AevonGestureProbeV2V256）")
-        }
-        if !perWindow.isEmpty {
-            let parts = perWindow.sorted { $0.value > $1.value }.map { "\($0.key)=\($0.value)" }
-            AevonLog.info("[诊断] 手势探针·窗口识别器计数（\(tag)）：\(parts.joined(separator: " "))"
-                + "（AevonGestureProbeV2V256）")
-        }
     }
 
     // MARK: - 失效瞬间探针（V0.2.57，AevonTouchProbeV257）
@@ -854,7 +750,11 @@ enum AevonEntryHost {
         AevonLog.info("[诊断] 失效瞬间探针：\(AevonEdgeEntry.forensicStateText) | 入口命中 "
             + parts.joined(separator: " ") + " | 浮窗层子视图=\(layerCount) 容器挂载=\(mount)"
             + " | 宿主命中 \(hostHits.joined(separator: " | "))（AevonTouchProbeV257 AevonProbeHostHitV273）")
-        dumpGestureRecognizerProbe(tag: "began触发")
+        // V0.2.81（AevonDeadCodeV281）：此处原本还会调 dumpGestureRecognizerProbe ——
+        // Aevon(54) 实测它每根手指都遍历 SB 所有窗口的整棵视图树列举 UIGestureRecognizer
+        //（日志里 [SBFluidSwitcherTouchPassThroughScrollView]=112 / [SBIconScrollView]=93
+        //  两行噪声都出自它），而它当初要查的「pan 突然失效」已在 0.2.73 定档
+        //（不在 Aevon 吞咽层）→ 整段移除。上面这一行是 4 次 hitTest 的轻量摘要，保留。
     }
 }
 

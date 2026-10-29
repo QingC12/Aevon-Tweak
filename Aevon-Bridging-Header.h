@@ -22,27 +22,25 @@ NSString *AevonSceneIdentifierOfViewController(UIViewController *vc);
 /// 返回 nil = 正常；非 nil = 异常描述（调用方写日志即可，SpringBoard 不受影响）。
 NSString *AevonShieldRun(void (^block)(void));
 
-/// 以下四个是「全进程类表 / 方法名 / ivar 名 / 安全类名」的 ObjC 实现。
-/// 为什么不用 Swift 写：Swift 取 `AnyClass` 元类型会走 swift_dynamicCast，
-/// 而那正是 V0.1.6 两次自动注销的崩溃点。
-NSArray<NSString *> *AevonAllClassNames(void);
-NSArray<NSString *> *AevonMethodNamesForClass(NSString *className);
-NSArray<NSString *> *AevonIvarNamesForClass(NSString *className);
+/// 安全类名：直接用 object_getClass + class_getName，不走 Swift 的 AnyClass 转换
+///（Swift 取 `AnyClass` 元类型会走 swift_dynamicCast，而那正是 V0.1.6 两次自动注销的崩溃点）。
 NSString *AevonSafeClassName(id object);
 
 /// 用 class_respondsToSelector 判断（不向对象发消息），野对象也安全。
 BOOL AevonObjectResponds(id object, NSString *selectorName);
 
-/// 给类发无参工厂消息（先验方法存在再发），取不到返回 nil。
-id AevonClassFactoryObject(NSString *className, NSString *selectorName);
-
-/// ── V0.1.14（AevonRecognizerHostV114）：宿主审计三件套（全部只读）──
-///
-/// P7 探针要回答的是「系统手势识别器挂在哪、覆盖哪里、我们的视图为什么排不上队」。
-/// 沿 ivar 往下挖的每一跳都是来路不明的对象，一律留在 ObjC 做，Swift 只拿拼好的字符串。
-NSArray<NSString *> *AevonDescribeRecognizersOfObject(id owner);
-NSString *AevonObjectIvarSummary(id object);
+/// 视图宿主链（只读）：`本视图(x,y) ↑ 父视图(x,y) ↑ …`，最多 depth 级。
 NSString *AevonViewHostChain(id view, NSInteger depth);
+
+/// 定向名单的类方法名清单（**只查传入的类，不遍历全类表**）。
+/// 调用者：AevonWindowView 的开窗路线探测。
+NSArray<NSString *> *AevonMethodNamesForClass(NSString *className);
+
+/// V0.2.81（AevonDeadCodeV281）：`AevonAllClassNames` / `AevonIvarNamesForClass` /
+/// `AevonClassFactoryObject` / `AevonDescribeRecognizersOfObject` /
+/// `AevonObjectIvarSummary` 五个声明随两套启动探针（V0.1.7 / V0.1.14）一并删除。
+/// 类表枚举自 0.2.72 起被永久封印（SB 进程全类表 +initialize → swift_dynamicCast SIGTRAP），
+/// 定向探测的结论也早已落进日志与逆向报告，留着只是给每次启动多背几百毫秒。
 
 /// 全局触摸通道（V0.0.23）：hook `UIApplication -sendEvent:`，
 /// 把每个触摸的相位 / 身份 / 坐标交给 Swift 侧做边缘判定。

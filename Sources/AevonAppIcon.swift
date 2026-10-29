@@ -24,10 +24,6 @@ enum AevonAppIcon {
     }
 
     /// 坐标系重置（App 列表强刷时调用，允许重新尝试之前失败的图标）
-    static func resetFailures() {
-        failed.removeAll()
-    }
-
     private static func resize(_ image: UIImage, size: CGFloat) -> UIImage {
         let target = CGSize(width: size, height: size)
         let format = UIGraphicsImageRendererFormat.default()
