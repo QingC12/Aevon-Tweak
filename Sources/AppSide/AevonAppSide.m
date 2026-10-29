@@ -1674,6 +1674,12 @@ static void AevonDockInteractionRefresh(void) {
  * contacts.donation-agent 都收到了）也会中招。
  *
  * 修法：命中这两条判据时先强制恢复再返回。fail-open 永远是安全方向。 */
+/* V0.2.83（AevonGripSafeV283）：标记必须是**纯 ASCII 的 used 常量**。
+ * 本文件的标记都写在中文日志串里，而 ObjC 的非 ASCII 字面量会被编成 UTF-16 塞进
+ * __TEXT,__ustring —— `strings` 一个字节都查不到，CI 的「必须编入」断言直接失败
+ *（0.2.68 / 0.2.81 / 0.2.83 三次同坑）。 */
+__attribute__((used)) static const char AevonGripSafeV283Marker[] = "AevonGripSafeV283";
+
 static void AevonForceInteractionRestore(const char *reason);
 
 /* V0.2.63（AevonGripBusyV263）：SB 说「手指在把手上」→ 本进程关交互。

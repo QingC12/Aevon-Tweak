@@ -119,7 +119,11 @@ import UIKit
      *（_unexpectedlyFoundNil），是「多个方面都会触发自动注销」的一个现成候选面。
      * 改成 `Any?` 之后 nil 原样透传，行为与不装 hook 完全一致。 */
     @objc func sk_fbslm_setLayers(_ layers: Any?) {
-        AevonTrace.once("layer.setLayers", "FBSceneLayerManager _setLayers 首次调用")
+        /* 标记必须落在**日志串**里才进二进制（注释永远不进二进制，0.2.83 第一次构建
+         * 就因为 AevonLayerNilSafeV283 只写在注释里而缺失 —— CI 的二进制断言会拦）。
+         * 这里挂着 AevonTrace.once，只打一次，不刷屏。 */
+        AevonTrace.once("layer.setLayers",
+                        "FBSceneLayerManager _setLayers 首次调用（AevonLayerNilSafeV283）")
         AevonRuntime.sendVoid(self, Selector(("sk_fbslm_setLayers:")), layers)
         /* V0.2.83：刷新推到下一个 runloop。
          * `_setLayers` 是在渲染帧中间被调用的，同步调 `setNeedsLayout` 会在别人的
@@ -237,6 +241,11 @@ import UIKit
          * 所以保留 hook（透传 + 记账所需的观察点都在别处），把「造一份新 settings
          * 塞回去」这一步彻底删掉。将来若真需要改写，先用账本证明系统确实在写 NO。 */
         AevonSceneSettingsGuardHooks.forwardCount += 1
+        if AevonSceneSettingsGuardHooks.forwardCount == 1 {
+            /* 标记进二进制必须在**日志串**里（注释不算）。同 AevonLayerNilSafeV283 的教训。 */
+            AevonLog.info("[场景] updateSettings 改为纯透传（改写分支已下线，只记这一次）"
+                + "（AevonFgGuardRetireV283）")
+        }
         AevonRuntime.sendVoid(self,
                               Selector(("sk_scene_updateSettings:withTransitionContext:completion:")),
                               settings, context, completion)
