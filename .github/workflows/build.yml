@@ -144,9 +144,10 @@ jobs:
           # 的代码真的被编进去了（而不是只改了注释）。
           for m in AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
                    AevonYieldAlphaV282 AevonNoShroudV283 AevonCrashPCV283 \
-                   AevonLayerNilSafeV283 AevonFgGuardRetireV283; do
+                   AevonLayerNilSafeV283 AevonFgGuardRetireV283 \
+                   AevonKickDrainV284 AevonContentSettledV284 AevonStaleRectGateV284; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82/0.2.83 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82/0.2.83/0.2.84 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -792,7 +793,7 @@ jobs:
           # 因为中文日志串会编成 UTF-16，strings 查不到）。
           for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200 \
                    AevonAppSceneCapV241 AevonCapsPersistV280 AevonMultiSceneCapV281 \
-                   AevonGripSafeV283; do
+                   AevonGripSafeV283 AevonStaleRectGateV284; do
             strings "$APP_DYLIB" | grep -q "$s" \
               || { echo "::error::AevonApp.dylib 缺少标记 $s"; exit 1; }
           done
@@ -2971,8 +2972,12 @@ jobs:
           grep -q 'if isTearingDown || isClosing { return }' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.67 persistFrame 没把关窗期挡掉（残留矩形误吞）"; exit 1; }
           # ⑧ 浮窗手势区吞噬必须带全屏闸门（承载模式下坐标系错配 = 误吞内容）
-          grep -q 'fullScreen && (AevonPointInFloatEdge(p)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.67 浮窗手势区吞噬缺全屏闸门（承载内容被误吞）"; exit 1; }
+          #    V0.2.84 反转：0.2.67 这条要求「全屏闸门 + 只看矩形」。Aevon(57) 证明只看矩形
+          #    不够 —— 矩形跨 respring 残留会让全屏 App 出现点击死区（设置里 44 次点击被
+          #    吞、0 次合法吞），闸门升级为「全屏 + **浮窗真的活着** + 边带」
+          #    （AevonStaleRectGateV284），旧的裸矩形写法必须消失。
+          grep -q 'fullScreen && AevonFloatAlive()' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.67/0.2.84 浮窗手势区吞噬缺「全屏 + 存活」双闸门"; exit 1; }
           echo "V0.2.67 校验: 贴边侧屏蔽 + 缩放方向修复 + 键盘屏蔽把手 + 截图runtime加固 + 录屏8fps降分辨率 + 预热隐形复刻 + 残留矩形治理 + 吞咽收敛窗口层 已就位"
 
           # ── V0.2.68 校验（Aevon(40) 五项）──────────────────────────────────────
@@ -3563,6 +3568,61 @@ jobs:
             exit 1
           fi
           echo "V0.2.83 校验: 遮罩退役 + SA_SIGINFO 取证 + App侧交互自愈 + setLayers可空 + 前台改写下线 已就位"
+
+          # ── V0.2.84 校验（Aevon(57)：闪回来 / 全屏 App 触摸死区）────────────────
+          # 依据 Aevon(57) 日志（1042 行，0.2.83 版）：
+          #   ① 「悬浮窗打开时又出现闪一下」= 一次开窗**并发两条 kick 链**（预热切换 /
+          #      断层修复尾排），0.2.83 的定稿回调只等第一条链的尾笔就 fire，第二条链的
+          #      尾笔在显窗后 234~249ms 才落 —— 那一下重排露在用户眼前就是「闪一下」。
+          #      四连实锤（显窗 → 第二条链尾笔）：设置 14.556→14.796 / 电池 29.112→29.361
+          #      / Sileo 33.755→33.989 / 抖音 45.698→45.941。
+          #   ② 「全屏 App 触摸失效」= 浮窗矩形**跨 respring 残留**（notify state 活在
+          #      notifyd、floatframe.txt 在磁盘上），13:25:01~13:25:40 设置 App 里 44 次
+          #      点击被整根丢弃、**0 次合法吞**，而首次开窗是 13:26:13。
+
+          # ① 重排在途计数（AevonKickDrainV284）
+          grep -q 'AevonKickDrainV284' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.84 缺重排在途计数（定稿回调会被第一条链提前放行 = 闪）"; exit 1; }
+          grep -q 'pendingKicks' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.84 缺 pendingKicks"; exit 1; }
+          grep -q 'if self.pendingKicks > 0' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.84 尾笔没查在途计数就 fire 定稿回调"; exit 1; }
+
+          # ② 内容定稿闸门（AevonContentSettledV284）
+          grep -q 'AevonContentSettledV284' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.84 缺内容定稿闸门标记"; exit 1; }
+          grep -q 'func contentLayoutSettled' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.84 缺「内容宿主已按画布排完」判据"; exit 1; }
+          n_gate=$(grep -c 'revealWhenContentSettled(sceneHost:' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" || true)
+          [ "${n_gate:-0}" -ge 2 ] \
+            || { echo "::error::0.2.84 两条定稿回调没都走显形闸门（实际 ${n_gate:-0} 处）"; exit 1; }
+          # 闸门必须有 fail-open 上限 —— 宁可闪一下，也绝不能把窗永远藏着
+          grep -q 'attempt < 6' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.84 显形闸门没有 fail-open 上限（窗可能永远不出现）"; exit 1; }
+
+          # ③ 浮窗存活心跳 + 启动清残留（AevonStaleRectGateV284）
+          grep -q 'com.aevon.float.alive' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.84 缺浮窗存活心跳 token"; exit 1; }
+          grep -q 'AevonFloatAlivePublish' "$GITHUB_WORKSPACE/AevonAssertionShim.h" \
+            || { echo "::error::0.2.84 心跳没有对外声明"; exit 1; }
+          grep -q 'resetStaleFloatGateOnBoot' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
+            || { echo "::error::0.2.84 启动没清残留矩形（respring 后全屏 App 有死区）"; exit 1; }
+          grep -q 'startFloatHeartbeat' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.84 心跳没启动"; exit 1; }
+          grep -q 'static BOOL AevonFloatAlive(void)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.84 App 侧缺存活判据"; exit 1; }
+          # 旧的「只看矩形就吞」写法不许回来（判据函数 / 窗口层两处，三态注释过滤）
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+               | grep -q 'if (AevonFloatFrameRect().size.width > 40) {'; then
+            echo "::error::0.2.84 又只按残留矩形吞了（全屏 App 死区复发）"
+            exit 1
+          fi
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+               | grep -q 'if (fullScreen && (AevonPointInFloatEdge'; then
+            echo "::error::0.2.84 窗口层又没加存活闸门"
+            exit 1
+          fi
+          echo "V0.2.84 校验: kick在途计数 + 内容定稿闸门 + 浮窗心跳 + 启动清残留 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

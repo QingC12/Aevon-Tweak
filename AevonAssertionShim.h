@@ -39,6 +39,21 @@ void AevonFloatRectPublish(float l, float t, float w, float h);
 /// 读回浮窗矩形（SB 侧诊断用；App 侧在 AevonAppSide.m 内置同款实现）。
 /// 返回 1 = 读到有效矩形（范围校验通过），0 = 无效/未发布。
 int AevonFloatRectRead(float *l, float *t, float *w, float *h);
+/// V0.2.84（AevonStaleRectGateV284，Aevon(57) 死区实锤）：浮窗「还在」心跳。
+///
+/// 为什么必须有它：矩形通道只有「最后已知几何」，**没有任何存活性信号**。
+/// Aevon(57) 日志铁证 —— respring 之后浮窗从未打开，矩形 {{63,160},{336,577}}
+/// 却是上一轮残留（notify state 在 notifyd 里跨 respring 存活，文件也在磁盘上），
+/// 于是 13:25:01~13:25:40 设置 App 里 **44 次点击被整根丢弃**、零次合法吞：
+///   右上角开关 x∈[355,399] y∈[148,180] 撞「右边带 44pt + 顶带 20pt」
+///   左侧列表 x∈[63,107] 撞「左边带 44pt」
+/// 用户看到的就是「全屏 App 触摸失效 / 开关点很多次才生效」。
+///
+/// 心跳口径：SB 侧 0.5 秒一次 `seq++`（窗在）或写 0（窗不在）；
+/// App 侧要求 seq 非零且 2.5 秒内变过，否则判「浮窗不存在」→ **不吞**。
+void AevonFloatAlivePublish(uint64_t seq);
+/// 读回心跳序号（0 = 浮窗不存在 / 未发布）。返回 1 = 读到。
+int AevonFloatAliveSeq(uint64_t *out);
 /// V0.2.49（AevonAppScreenFitV249）：把「浮窗里装的是哪个 App」发到共享内存。
 /// 单开一个 notify 名字 `com.aevon.floatstage`，state = bundleID 的 FNV-1a 32 位散列
 /// （0 = 没有浮窗）。App 侧据此决定要不要把 `UIScreen.bounds` 报成画布尺寸 ——

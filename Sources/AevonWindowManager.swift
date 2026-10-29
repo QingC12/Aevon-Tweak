@@ -325,6 +325,61 @@ enum AevonWindowManager {
         // 的 token state 全进程可达，无沙盒、无路径依赖，零矩形过不了范围校验。
         AevonFloatRectPublish(Float(rect.minX), Float(rect.minY),
                               Float(rect.width), Float(rect.height))
+        /* V0.2.84（AevonStaleRectGateV284）：矩形一变就把存活心跳也顶一拍 ——
+         * 只靠 0.5 秒定时器的话，开窗后最初的半秒里 App 侧还没看到心跳，
+         * 那半秒滑把手会漏给 App。零矩形 = 窗没了 = 心跳归零。 */
+        if rect.width < 40 || rect.height < 40 {
+            floatAliveSeq = 0
+            AevonFloatAlivePublish(0)
+        } else {
+            floatAliveSeq &+= 1
+            AevonFloatAlivePublish(floatAliveSeq)
+        }
+    }
+
+    /// V0.2.84（AevonContentSettledV284，Aevon(57)「悬浮窗打开时又出现闪一下」）：
+    /// 定稿回调之后再补一道「内容真的排完了」的确认，然后才显形。
+    ///
+    /// 为什么 0.2.83 的「等定稿回调」还不够：那条回调只代表**画布写完已提交**，
+    /// 而 App 进程下一次布局要再过一到两帧。Aevon(57) 时序账（设置）：
+    ///   14.554 kick 尾笔写回 430x737 → 14.556 就显窗 → 14.778 自查才读到
+    ///   「内容宿主 430x737 已贴合」 —— 中间那 220ms 展示的是按旧尺寸排好的画面，
+    ///   这就是用户看到的那一下闪。四条 App 全部复现（+234~+249ms）。
+    ///
+    /// 判据直接用 0.2.60 断层自查的同一条（内容宿主尺寸不再大于画布），不新造口径。
+    /// 纪律：**最多等 6 拍（≈360ms）就 fail-open 显形** —— 宁可闪一下，
+    /// 也绝不能让窗永远藏着（那是 0.2.76 的「出现→消失→1 秒后再现」）。
+    private static func revealWhenContentSettled(sceneHost: AevonSceneHost,
+                                                 canvas: CGSize,
+                                                 bundleID: String,
+                                                 switchTxn: Int,
+                                                 completeReason: String,
+                                                 attempt: Int = 0) {
+        guard currentBundleID == bundleID else { return }
+        guard AevonSwitchCoordinator.shared.isAlive(switchTxn) else {
+            AevonLog.info("[窗口] 显形延后中窗已关 → 放弃（\(bundleID)）（AevonContentSettledV284）")
+            return
+        }
+        let host = sceneHost.contentHostSize
+        let settled = sceneHost.contentLayoutSettled(width: canvas.width, height: canvas.height)
+        if !settled && attempt < 6 {
+            if attempt == 0 {
+                AevonLog.info("[窗口] 内容宿主还没按画布排完（宿主 \(Int(host.width))x\(Int(host.height))"
+                    + " vs 画布 \(Int(canvas.width))x\(Int(canvas.height))）→ 显形延后，每 60ms 复查一次"
+                    + "（最多 6 拍后 fail-open）（AevonContentSettledV284）")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                revealWhenContentSettled(sceneHost: sceneHost, canvas: canvas, bundleID: bundleID,
+                                         switchTxn: switchTxn, completeReason: completeReason,
+                                         attempt: attempt + 1)
+            }
+            return
+        }
+        AevonLog.info("[窗口] 内容已定稿（宿主 \(Int(host.width))x\(Int(host.height))，"
+            + "第 \(attempt) 次复查）→ 显形（AevonContentSettledV284）")
+        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")
+        currentView?.settleReopenPlaceholder()
+        AevonSwitchCoordinator.shared.complete(switchTxn, reason: completeReason)
     }
 
     static func title(for bundleID: String) -> String {
@@ -917,8 +972,7 @@ enum AevonWindowManager {
             // V0.2.66（AevonNoReplayV266）：非预热档的 2.2s 定时往返同样退役 ——
             // Aevon(39) 里它对设置等 App 只制造一次可见闪（画布 932→737→932→737），
             // 几何自查（healStaleLayoutIfNeeded）继续兜底真断层。
-            AevonLog.info("[场景] 开窗定时往返已退役：几何自查继续兜底（AevonNoReplayV266）")
-            // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
+            AevonLog.info("[场景] 开窗定时往返已退役：几何自查继续兜底（AevonNoReplayV266）")            // V0.2.9（AevonFloatStandDownV209）：把「浮窗里装的是谁」写到偏好域。
             // App 侧识别器读它 —— 等于自己的 bundleID 就整体退让（不扣 began、不建失败要求），
             // 浮窗内的滑动才不会被右缘判向延迟到抬手。
             // V0.2.49：已经在进入开窗流程时提前写过一次（App 侧 UIScreen 覆盖要用），
@@ -980,36 +1034,29 @@ enum AevonWindowManager {
                      * 0.85 时尾排还有两笔没写完，内容在用户眼前又跳两遍 = 闪好几下。
                      * 现在显窗挂进 kick 最后一笔画布写回的回调（onCanvasSettled），
                      * 写完才显 —— 画布没定稿前用户看不到窗。1.3s 兜底不变。 */
-                    sceneHost?.onCanvasSettled = {
-                        guard currentBundleID == bundleID else { return }
+                    sceneHost?.onCanvasSettled = { [weak sceneHost] in
+                        guard currentBundleID == bundleID, let sceneHost else { return }
                         AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态；"
                             + "历史链 AevonRevealLateV269 显窗+0.85 定时版被本回调取代）"
                             + "（AevonRevealEventV271）")
-                        // V0.2.83（AevonNoShroudV283）：遮罩已整体退役 —
-                        // 窗从 addSubview 起 alpha=0，画布抖完全在看不见的时候做完，
-                        // 这里直接显形就是终态（不需要「先盖住再淡出」）。
-                        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")
-                        // V0.2.77（AevonRevealOnceV277）：画布定稿 → 垫底图 crossfade 到活画面
-                        //（预热档也走同一条，0.2.76 只给非预热档摘过占位）。
-                        currentView?.settleReopenPlaceholder()
-                        AevonSwitchCoordinator.shared.complete(switchTxn, reason: "画布定稿(预热档)")
+                        /* V0.2.84（AevonContentSettledV284）：定稿回调只代表「画布写完已提交」，
+                         * 再补一道「内容宿主已按画布排完」的确认才显形 —— Aevon(57) 实测
+                         * 设置 14.556 显窗、14.778 内容宿主才贴合 = 中间 220ms 是旧尺寸画面。 */
+                        revealWhenContentSettled(sceneHost: sceneHost, canvas: mainCanvas,
+                                                 bundleID: bundleID, switchTxn: switchTxn,
+                                                 completeReason: "画布定稿(预热档)")
                     }
                 }
             } else {
                 // 非预热档：画布在开窗前就已经写好了，但 kick 微扰还有两笔
                 //（+0.20 / +0.45）——同样等定稿回调，不再固定 +0.25。
-                sceneHost.onCanvasSettled = {
-                    guard currentBundleID == bundleID else { return }
+                sceneHost.onCanvasSettled = { [weak sceneHost] in
+                    guard currentBundleID == bundleID, let sceneHost else { return }
                     AevonLog.info("[窗口] 显窗时机 = 画布定稿回调（kick 尾笔已写回，开窗即终态）"
                         + "（AevonRevealEventV271 AevonRevealLateV269）")
-                    /* V0.2.83（AevonNoShroudV283）：这是「不闪」与「不用等 2 秒」同时成立的
-                     * 关键一行 —— 窗从 addSubview 起一直 alpha=0，kickRelayout 的两笔
-                     *（-1pt / 写回）和主场景回弹全发生在藏着的时候；定稿回调这一刻直接
-                     * 显形，用户看到的第一个画面就是终态，中间没有任何可跳的帧。 */
-                    currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")
-                    // V0.2.76（AevonReopenSwapV276）：画布定稿 → 占位帧 crossfade 到活画面。
-                    currentView?.settleReopenPlaceholder()
-                    AevonSwitchCoordinator.shared.complete(switchTxn, reason: "画布定稿")
+                    revealWhenContentSettled(sceneHost: sceneHost, canvas: mainCanvas,
+                                             bundleID: bundleID, switchTxn: switchTxn,
+                                             completeReason: "画布定稿")
                 }
             }
             // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
@@ -1419,6 +1466,58 @@ enum AevonWindowManager {
     static func clearDockStagesOnBoot() {
         AevonNotifyPublishDockStages([String]())
         AevonLog.info("[停靠] 启动清场：停靠集合广播已复位（AevonDockStageV259）")
+    }
+
+    // MARK: - 浮窗存活性心跳（V0.2.84，AevonStaleRectGateV284）
+    //
+    // 病根（Aevon(57) 日志铁证）：浮窗矩形通道只有「最后已知几何」，**没有存活信号**。
+    // notify state 活在 notifyd 里、跨 respring 不消失，floatframe.txt 也在磁盘上 ——
+    // 于是 respring 之后浮窗从来没打开过，App 侧照样拿到上一轮的 {{63,160},{336,577}}
+    // 去判「这是浮窗手势区」→ 整根丢弃。设置 App 里 13:25:01~13:25:40 共 **44 次点击
+    // 被吞、0 次合法吞**（第一次开窗是 13:26:13）：右上角开关 x≈355~399 / y≈148~180
+    // 撞「右边带 44pt + 顶带 20pt」，左侧列表 x≈63~107 撞「左边带 44pt」。
+    // 用户看到的就是「全屏 App 触摸失效 / 开关点很多次才生效」。
+    //
+    // 药方两层，缺一不可：
+    //   ①**启动即清零**（下面这个函数）—— 把上一轮残留的矩形置 0，App 侧看到
+    //     宽度 <40 就整段跳过；
+    //   ②**心跳闸门**（startFloatHeartbeat）—— 光清零不够：万一某次关窗路径被打断
+    //      （崩溃 / 强杀 / 中途 respring），矩形还会残留。心跳只由 SB 写，App 侧要求
+    //     「seq≠0 且 2.5 秒内变过」，拿不到就当作浮窗不存在 → 不吞。
+    //     方向永远 fail-open：漏吞的代价是「滑把手带动 App 滚动」，
+    //     误吞的代价是「全屏 App 点不动」，后者严重得多。
+    private static var floatAliveSeq: UInt64 = 0
+    private static var floatHeartbeatTimer: Timer?
+
+    /// 启动清场：把上一轮残留的矩形与心跳一起清零，然后开心跳。
+    static func resetStaleFloatGateOnBoot() {
+        publishFloatFrame(.zero)
+        AevonFloatAlivePublish(0)
+        AevonLog.info("[窗口] 启动清场：浮窗矩形已置零、存活心跳已清零"
+            + "（上一轮残留的矩形会让全屏 App 出现点击死区）（AevonStaleRectGateV284）")
+        startFloatHeartbeat()
+    }
+
+    /// 0.5 秒一拍：有窗 → seq++；无窗 → 写 0。
+    /// 只写 notify state（不 notify_post、不写文件），每拍成本可忽略。
+    private static func startFloatHeartbeat() {
+        floatHeartbeatTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { _ in
+            if hasAnyWindow {
+                floatAliveSeq &+= 1
+                AevonFloatAlivePublish(floatAliveSeq)
+            } else if floatAliveSeq != 0 {
+                floatAliveSeq = 0
+                AevonFloatAlivePublish(0)
+                AevonLog.info("[窗口] 浮窗已全部关闭 → 存活心跳归零"
+                    + "（App 侧从下一拍起不再按浮窗边带吞触摸）（AevonStaleRectGateV284）")
+            }
+        }
+        // .common 模式：滚动 / 转场期间也要跑，否则用户一滑列表心跳就断。
+        RunLoop.main.add(timer, forMode: .common)
+        floatHeartbeatTimer = timer
+        AevonLog.info("[窗口] 浮窗存活心跳已启动（0.5 秒一拍；无窗时写 0；"
+            + "App 侧 2.5 秒未见跳动即判浮窗不存在）（AevonStaleRectGateV284）")
     }
 
     /// 重排某一侧：按加入顺序重新分配 0..n 号槽位（顶部起依次向下）。

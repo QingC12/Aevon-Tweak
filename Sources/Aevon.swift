@@ -57,6 +57,12 @@ private func initializeAevon() {
     //      重启清零，上次注销前的停靠 App 会被活着残留的进程误认为「还在停靠」）。
     AevonWindowManager.clearDockStagesOnBoot()
 
+    // 3.6) V0.2.84（AevonStaleRectGateV284，Aevon(57) 死区实锤）：浮窗矩形与存活心跳
+    //      的启动清场。notify state 活在 notifyd 里跨 respring 不消失、floatframe.txt
+    //      也在磁盘上 —— 上一轮残留的矩形会让全屏 App 出现「点不动」的死区
+    //      （Aevon(57) 设置里 44 次点击被吞、0 次合法吞）。这里先清零，再开心跳。
+    AevonWindowManager.resetStaleFloatGateOnBoot()
+
     /*
      * V0.2.0（AevonAppSideBridgeV200）：App 侧探针日志桥。
      * 路 B（把吞摸点搬进 App 进程）的第一版，只读、不改任何触摸行为。

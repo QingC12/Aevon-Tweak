@@ -2215,6 +2215,56 @@ static BOOL AevonPointHitsTapTarget(UIWindow *win, CGPoint p, UIEvent *event) {
     return NO;
 }
 
+/* V0.2.84（AevonStaleRectGateV284，Aevon(57)「全屏 App 触摸失效」死区实锤）：
+ *
+ * 病根：`AevonFloatFrameRect()` 只有「最后已知几何」，**没有任何存活性信号**。
+ * notify state 活在 notifyd 里、跨 respring 不消失；floatframe.txt 也在磁盘上。
+ * 于是 respring 之后浮窗一次都没打开过，App 侧照样拿上一轮的
+ * {{63,160},{336,577}} 判「这是浮窗手势区」→ 整根丢弃。
+ *
+ * Aevon(57) 日志铁证：13:25:01~13:25:40（首次开窗是 13:26:13）设置 App 里
+ * **44 次点击被整根丢弃、0 次合法吞**：
+ *   · 右上角「启用插件」开关 x≈355~399 / y≈148~180 → 撞右边带 44pt + 顶带 20pt
+ *   · 左侧列表 x≈63~107 → 撞左边带 44pt
+ * 用户原话「装完插件注销后设置中的启动插件开关按钮点击了很多次才正常开启」
+ * 就是这么来的 —— 落点偶尔飘出带外才生效。
+ *
+ * 药方：SB 侧 0.5 秒一拍写心跳序号（有窗 seq++ / 无窗写 0），这里要求
+ * 「seq≠0 且 2.5 秒内变过」，否则判浮窗不存在 → 不吞。
+ * **方向永远 fail-open**：漏吞的代价是「滑把手带动 App 滚动」，误吞的代价是
+ * 「全屏 App 点不动」—— 后者严重得多（0.2.69 键盘闸门定过同款纪律）。
+ */
+static int AevonAliveToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.float.alive", &token);
+    });
+    return token;
+}
+
+/* 标记必须进二进制：下面那些日志串是 ObjC 中文串（编成 UTF-16，strings 查不到），
+ * 所以另补一个纯 ASCII used 常量做锚（0.2.68 / 0.2.81 / 0.2.83 三次血训）。 */
+__attribute__((used)) static const char AevonStaleRectGateV284AppMarker[] = "AevonStaleRectGateV284";
+
+static BOOL AevonFloatAlive(void) {
+    static uint64_t lastSeq = 0;
+    static CFTimeInterval lastChangedAt = 0;
+    int token = AevonAliveToken();
+    if (token < 0) { return NO; }                 /* 拿不到 token = 不可判 → 不吞 */
+    uint64_t seq = 0;
+    if (notify_get_state(token, &seq) != NOTIFY_STATUS_OK) { return NO; }
+    if (seq == 0) { lastSeq = 0; lastChangedAt = 0; return NO; }   /* 0 = 浮窗不存在 */
+    CFTimeInterval now = CACurrentMediaTime();
+    if (seq != lastSeq) {
+        lastSeq = seq;
+        lastChangedAt = now;
+        return YES;
+    }
+    if (lastChangedAt == 0) { lastChangedAt = now; return YES; }   /* 首读：先信一次 */
+    return (now - lastChangedAt) < 2.5;           /* 2.5 秒没跳动 = 心跳停了 */
+}
+
 static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
     /* V0.2.63（AevonGripSwallowFixV263）：不再要求 `touch.window != nil`。
      * UIApplication 这一层 touch.window 恒为 nil（0.2.61 实测），但
@@ -2225,7 +2275,9 @@ static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
     CGSize real = AevonRealScreenSize();
     if (real.height < 200) { return NO; }
     if (AevonKeyboardVisible()) { return NO; }
-    if (AevonFloatFrameRect().size.width > 40) {
+    /* V0.2.84（AevonStaleRectGateV284）：矩形有效 **且浮窗真的活着** 才按浮窗边带判。
+     * 只有矩形没有心跳 = 上一轮残留（跨 respring），照它吞就是全屏 App 的点击死区。 */
+    if (AevonFloatFrameRect().size.width > 40 && AevonFloatAlive()) {
         /* 浮窗内的触摸：手势区（边条/底条/顶条）吞，内容区不吞（浮窗里的 App 要能点）。 */
         if (CGRectContainsPoint(AevonFloatFrameRect(), p)) {
             return AevonPointInFloatEdge(p);
@@ -2399,8 +2451,13 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                      * V0.2.68（AevonCanvasBandV268，用户 Aevon(40) #5）：承载模式
                      * **不再一刀切放行** —— 那等于把「点浮窗边条带动浮窗里的 App」
                      * 合法化。承载模式下改按**画布自身边缘带**判定（坐标系自洽）。 */
-                    if (fullScreen && (AevonPointInFloatEdge(p)
-                                       || AevonPointInFloatEdgeInflated(p))) {
+                    /* V0.2.84（AevonStaleRectGateV284）：加**存活性**闸门 —— 这是本轮
+                     * 「全屏 App 触摸失效」的真凶。Aevon(57) 13:25:01~13:25:40 四十多根
+                     * 手指全部在这里被整根丢弃，而那时浮窗**根本没打开**（第一次开窗是
+                     * 13:26:13），矩形是上一轮 respring 前的残留。 */
+                    if (fullScreen && AevonFloatAlive()
+                        && (AevonPointInFloatEdge(p)
+                            || AevonPointInFloatEdgeInflated(p))) {
                         [gAevonSwallowedTouches addObject:key];
                         AevonAppLog(@"[App侧] 浮窗手势区落点 %@（浮窗矩形 %@）→ 整根丢弃（窗边归浮窗，"
                                     @"App 内的双击/滑动不许被带着走）（AevonEdgeShieldV265 "
@@ -2471,9 +2528,14 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                             CFTimeInterval nowB = CACurrentMediaTime();
                             if (nowB - gAevonGripMissLoggedAt > 2.0) {
                                 gAevonGripMissLoggedAt = nowB;
+                                /* V0.2.84（AevonStaleRectGateV284）：落点在矩形里却没吞，
+                                 * 首要原因是「矩形残留但浮窗早关了」—— 日志直接写明心跳状态，
+                                 * 下一份日志不用再反推。 */
                                 AevonAppLog(@"[App侧] 浮窗外沿落点 %@ 未吞（矩形 %@，压边判否，"
-                                            @"疑矩形过期/带宽不够）（AevonFloatBandV269）",
-                                            NSStringFromCGPoint(p), NSStringFromCGRect(r));
+                                            @"浮窗存活心跳=%@，疑矩形过期/带宽不够）"
+                                            @"（AevonFloatBandV269 AevonStaleRectGateV284）",
+                                            NSStringFromCGPoint(p), NSStringFromCGRect(r),
+                                            AevonFloatAlive() ? @"在" : @"已停");
                             }
                         }
                     } else if (inRect) {

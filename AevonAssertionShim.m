@@ -250,6 +250,48 @@ int AevonFloatRectRead(float *l, float *t, float *w, float *h) {
     return 1;
 }
 
+/* ── V0.2.84（AevonStaleRectGateV284，Aevon(57) 死区实锤）── 浮窗存活性心跳
+ *
+ * 病根：矩形通道是「最后已知几何」，没有存活性信号。notify state 在 notifyd 里
+ * **跨 respring 存活**、floatframe.txt 也在磁盘上 → respring 后浮窗根本没开，
+ * App 侧照样拿上一轮的矩形判「这是浮窗手势区」→ 整根丢弃。
+ * Aevon(57) 实测：13:25:01~13:25:40（第一次开窗是 13:26:13）设置 App 里
+ * **44 次点击被吞、0 次合法吞**；右上角开关（x≈355~399, y≈148~180）撞右边带
+ * 44pt + 顶带 20pt，左侧列表（x≈63~107）撞左边带 44pt。
+ *
+ * 药方 = 一个只有 SB 能写的心跳序号：SB 侧 0.5 秒一次 seq++（有窗）/ 写 0（无窗），
+ * App 侧要求 seq≠0 且 2.5 秒内变过 —— 拿不到就当作「浮窗不存在」→ 不吞。
+ * 方向永远是 fail-open（宁可漏吞，不可误吞），因为误吞的代价是全屏 App 点不动。
+ */
+static int AevonAliveToken(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        notify_register_check("com.aevon.float.alive", &token);
+    });
+    return token;
+}
+
+__attribute__((used)) static const char AevonStaleRectGateV284Marker[] = "AevonStaleRectGateV284";
+
+void AevonFloatAlivePublish(uint64_t seq) {
+    @try {
+        int t = AevonAliveToken();
+        if (t < 0) { return; }
+        notify_set_state(t, seq);
+    } @catch (NSException *exception) {
+    }
+}
+
+int AevonFloatAliveSeq(uint64_t *out) {
+    int t = AevonAliveToken();
+    if (t < 0) { return 0; }
+    uint64_t v = 0;
+    if (notify_get_state(t, &v) != NOTIFY_STATUS_OK) { return 0; }
+    if (out) { *out = v; }
+    return 1;
+}
+
 
 void AevonPrefSetBool(NSString *key, BOOL value) {
     @try {

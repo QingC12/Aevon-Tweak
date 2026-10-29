@@ -369,6 +369,28 @@ final class AevonSceneHost {
             + "（\(tag)）（AevonCenterPresentV265）")
     }
 
+    /// V0.2.84（AevonContentSettledV284，Aevon(57)「又闪一下」）：内容宿主是否已经
+    /// **按当前画布排完**。判据与 0.2.60 的断层自查完全同一条（呈现视图第一层
+    /// `_UISceneLayerHostContainerView` 的尺寸不再大于画布）—— 这条判据在
+    /// 「下半截整块黑」上已经跑了几十版，不是新发明的口径。
+    ///
+    /// 为什么画布写完还不够：`AevonMainSceneSetFrame` 返回成功只代表**已提交**，
+    /// App 进程下一次布局要过一到两帧。Aevon(57) 实测：设置 14.554 写回 →
+    /// 14.556 就显窗了，而 14.778 的自查才读到宿主 430x737 —— 中间这 220ms
+    /// 展示的是「旧尺寸排好的画面」，这就是用户看到的那一下。
+    func contentLayoutSettled(width: CGFloat, height: CGFloat) -> Bool {
+        guard !invalidated, width > 2, height > 2 else { return false }
+        let host = presentationView.subviews.first?.frame.size ?? .zero
+        guard host.width > 2, host.height > 2 else { return false }
+        return host.height <= height + 8 && host.width <= width + 8
+    }
+
+    /// 内容宿主当前尺寸（只进日志，用来给下一份日志留证）。
+    var contentHostSize: CGSize {
+        guard !invalidated else { return .zero }
+        return presentationView.subviews.first?.frame.size ?? .zero
+    }
+
     /// V0.2.60（AevonDouyinHealV260）：断层自愈（只读判定 + 一次补踢）。
     ///
     /// 判据：呈现视图里第一层宿主视图（`_UISceneLayerHostContainerView`）的实际尺寸
@@ -455,8 +477,20 @@ final class AevonSceneHost {
     /// 报成画布尺寸，见 AevonAppScreenFitV249）→ 真重排在开窗后 ~0.6 秒内完成。
     ///
     /// 纪律：**总共 2 次写入，只在开窗时一次**。绝不循环、绝不在关窗后写。
+    ///
+    /// V0.2.84（AevonKickDrainV284，Aevon(57)「悬浮窗打开时又出现闪一下」）：
+    /// 一次开窗会**并发**起两条 kick 链 —— 预热切换（+0.42s 起手）和预热隐形复刻
+    /// 的「断层修复」尾排（+0.54s 起手）。0.2.83 的定稿回调是**第一条链**写完就
+    /// fire，第二条链的尾笔还在路上 → 显窗之后 0.23~0.25 秒内容又重排一遍 = 闪。
+    /// Aevon(57) 四连实锤（显窗 → 第二条链尾笔的间隔）：
+    ///   设置 14.556 → 14.796（+240ms）· 电池 29.112 → 29.361（+249ms）
+    ///   Sileo 33.755 → 33.989（+234ms）· 抖音 45.698 → 45.941（+243ms）
+    /// 修法 = **在途计数**：kick 起手 +1、尾笔 -1，只有归零才 fireCanvasSettled。
+    private var pendingKicks = 0
+
     func kickRelayout(width: CGFloat, height: CGFloat, tag: String) {
         guard !invalidated, width > 2, height > 2 else { return }
+        pendingKicks += 1
         // V0.2.62（AevonKickFastV262，用户 Aevon(36) #1「要等 1~2 秒才打开」）：
         // 起手 0.45 → 0.20 秒。0.45 是为了让过 0.35s 那一拍防回弹复查，但那一拍只
         // 认「读回值 ≠ 目标」才补写，微扰窗口和它错开 0.15s 已足够；0.45 等于让用户
@@ -467,11 +501,20 @@ final class AevonSceneHost {
             AevonLog.info("[场景] 强制重排：先写 \((Int(width - 1)))x\((Int(height - 1)))"
                 + "（\(tag)，让 App 收到一次尺寸变化）（AevonRelayoutKickV249 AevonKickFastV262）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                guard let self, !self.invalidated else { return }
+                guard let self else { return }
+                guard !self.invalidated else { return }
                 _ = self.writeCanvas(width, height)
                 AevonLog.info("[场景] 强制重排：写回 \(Int(width))x\(Int(height))"
                     + "（\(tag)，App 这一遍布局用的就是最终画布）（AevonRelayoutKickV249）")
                 // V0.2.71（AevonRevealEventV271）：最后一笔画布定稿 → 显窗回调。
+                // V0.2.84（AevonKickDrainV284）：**只在没有第二条链在途时**才 fire。
+                self.pendingKicks = max(0, self.pendingKicks - 1)
+                if self.pendingKicks > 0 {
+                    AevonLog.info("[场景] 重排在途计数：还有 \(self.pendingKicks) 条 kick 链没落尾"
+                        + " → 定稿回调延后（\(tag)）（AevonKickDrainV284）")
+                    return
+                }
+                AevonLog.info("[场景] 重排在途计数归零 → 定稿回调放行（\(tag)）（AevonKickDrainV284）")
                 self.fireCanvasSettled()
             }
         }
