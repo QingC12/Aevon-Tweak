@@ -101,12 +101,32 @@ final class AevonSceneLedger {
         return snap
     }
 
-    /// UInt64 字段读取：deactivationReasons 是 unsigned long long
+    /// UInt64 字段读取：deactivationReasons 是 unsigned long long。
+    ///
+    /* V0.2.86（AevonScalarKVCV286）—— **这条是「开悬浮窗就注销」的真凶**。
+     *
+     * 原来这里走 `AevonRuntime.send(target, sel)`，而那个函数内部是
+     *     object.perform(selector)?.takeUnretainedValue()
+     * `perform(_:)` 按 **id（对象指针）** 解释返回值。可是 `deactivationReasons`
+     * 的返回类型是 `unsigned long long` —— 一个纯标量。
+     *   · 值为 0 → X0 = 0，被当成 nil，安全（所以平时不崩，只有「有停用原因」时才崩）
+     *   · 值 ≠ 0（如熄屏断言的 mask=5）→ X0 = 5，被当成**对象指针**，Swift 的强引用
+     *     会对 0x5 发 retain，读 isa 时落在 0x4 附近 → SIGSEGV code=2 addr=0x4
+     *
+     * 归档(20) `Aevon.crash.log` 第 1 块正好是这个签名：
+     *     致命信号=11 code=2 addr=0x0000000000000004
+     *     lr 掩掉 PAC 高位 = 0x1054416ac → `AevonSceneLedger.uint64` + 188
+     * 而 0.2.85 及以前「归因：不在 Aevon」全是假的 —— pc/lr 带着 arm64e 的 PAC
+     * 签名（bit 47~63），不掩掉就永远算不到 text 段里（见 AevonCrashPacMaskV286）。
+     *
+     * 修法与隔壁 `bool()` 对齐：走 **KVC**。KVC 会把标量自动装箱成 NSNumber，
+     * 既不碰指针语义，也不依赖返回类型，和 bool 走同一条已验证安全的路。 */
     private static func uint64(_ target: AnyObject, key: String) -> UInt64? {
-        let sel = NSSelectorFromString(key)
-        guard target.responds(to: sel) else { return nil }
-        guard let value = AevonRuntime.send(target, sel) else { return nil }
-        if let number = value as? NSNumber { return number.uint64Value }
+        guard let object = target as? NSObject else { return nil }
+        guard object.responds(to: Selector(key)) else { return nil }
+        if let number = object.value(forKey: key) as? NSNumber {
+            return number.uint64Value
+        }
         return nil
     }
 
@@ -129,7 +149,7 @@ final class AevonSceneLedger {
             book.reason = reason
             books[bundleID] = book
         }
-        AevonLog.info("[账本] 开账 \(bundleID) scene=\(sceneID.isEmpty ? "-" : sceneID) 原因=\(reason)（AevonSceneLedgerV279）")
+        AevonLog.info("[账本] 开账 \(bundleID) scene=\(sceneID.isEmpty ? "-" : sceneID) 原因=\(reason)（AevonSceneLedgerV279 AevonScalarKVCV286）")
         return book
     }
 

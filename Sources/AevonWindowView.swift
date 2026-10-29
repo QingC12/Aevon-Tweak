@@ -305,6 +305,22 @@ final class AevonWindowView: UIView {
         self.sceneHost = sceneHost
         super.init(frame: CGRect.zero)
 
+        /* V0.2.86（AevonNoFlashBirthV286）—— **出生即隐形**，这一行就是「闪一下」的根治。
+         *
+         * 0.2.83 摘掉遮罩后，显形只留一个点（onCanvasSettled → revealEntryNow）。但那次
+         * 漏了出生瞬间：本类 `super.init` 出来的 alpha 默认是 **1**，而外层是
+         *     host.addSubview(windowView)      ← 第 913 行，此刻 alpha = 1，已上屏
+         *     host.bringSubviewToFront(...)
+         *     windowView.alpha = 0             ← 第 932 行，才藏起来
+         * 中间还要装垫底图、铺两个 timer —— 窗以**空面板**（或上一关旧帧）露出一帧，
+         * 随后被藏 1.1 秒，再淡入。Aevon(59) 原话「打开悬浮窗时依旧会闪一下悬浮窗，
+         * 然后在出现最终悬浮窗和内容」，那「闪一下」与「最终悬浮窗」就是同一个窗的
+         * 两次上屏，中间隔着那段 alpha 复位。
+         *
+         * 修法：构造完立刻 alpha = 0 —— 窗从「存在」的第一纳秒起就不可见，显形点
+         * 仍然只有 onCanvasSettled 一个，中途没有任何可见帧。 */
+        alpha = 0
+
         // V0.1.5（AevonNoSnapV105）：左右吸附与左右分屏一起移除 ——
         // 单窗模式下不存在并排，吸附只会让窗在松手瞬间突然变形。
         // 几何一律走 Stheno 式全局记忆（medusaFrameLast 方案）。

@@ -389,9 +389,12 @@ enum AevonWindowManager {
             return
         }
         AevonLog.info("[窗口] 内容已定稿（宿主 \(Int(host.width))x\(Int(host.height))，"
-            + "第 \(attempt) 次复查）→ 显形（AevonContentSettledV284）")
-        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")
-        currentView?.settleReopenPlaceholder()
+            + "第 \(attempt) 次复查）→ 显形（AevonContentSettledV284 AevonNoPlaceholderV286）")
+        /* V0.2.86（AevonNoPlaceholderV286）：这里原本紧跟一句 settleReopenPlaceholder()
+         * —— 把上一关的旧帧 crossfade 掉。窗从出生起就 alpha=0（AevonNoFlashBirthV286），
+         * 淡入时看到的**已经是活画面**，旧帧从头到尾没露过面，再 crossfade 只是让画面
+         * 从「活」变成「旧再变活」= 新的闪。整条占位图链一起退役。 */
+        currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283 AevonNoPlaceholderV286）")
         AevonSwitchCoordinator.shared.complete(switchTxn, reason: completeReason)
     }
 
@@ -929,23 +932,29 @@ enum AevonWindowManager {
              * **不再现场抓 windowRegionSnapshot** —— 那也是一次同步快照，而且抓到转场
              * 瞬间必判黑（Aevon(56) 12:55:41.744「窗口区域快照判黑（转场瞬间抓帧）」），
              * 抓了也白抓。没有缓存就干脆不铺，等定稿。 */
+            /* V0.2.86（AevonNoPlaceholderV286）—— **垫底图整条链退役**（0.2.76/0.2.77/0.2.78 三版）。
+             *
+             * 它要解决的是「窗已经 alpha=1，但画布还没定稿 → 面板里是空的或旧内容」。
+             * 现在窗从出生就 alpha=0（AevonNoFlashBirthV286），根本不存在「可见的空窗」，
+             * 垫底图失去意义 —— 留着反而有害：定稿后 0.12s 淡入的是**活画面**，
+             * 紧接着 crossfade 把旧帧压上来再淡出，用户看到的就是「先新的、又旧一下、再新」
+             *（Aevon(59) 说的「闪一下悬浮窗，然后再出现最终悬浮窗和内容」）。
+             * 顺带省掉关窗时那一次同步整屏截图（placeholderSnapshot）。
+             *
+             * 变量 reopenPlaceholder 与缓存字典保留但不再写入 —— 便于日后回滚时对照。 */
             windowView.alpha = 0
             /* V0.2.85（AevonRevealPlainV285）：**不再预置 0.965 缩放**。
              * 原来这里压一个缩放，等显形时再弹回 1.0 —— 摘掉遮罩以后，这段缩放
              * 就是用户看到的「闪一下悬浮窗」（Aevon(58)：窗先小一号出现、再变大、
              * 内容才到位）。藏着的窗不需要任何视觉参数，位置与尺寸从第一帧就是终态。 */
             windowView.transform = .identity
-            if let placeholder = reopenPlaceholder {
-                windowView.installReopenPlaceholder(placeholder, reason: "上一关最后一帧")
-                _ = AevonSwitchCoordinator.shared.mark(switchTxn, "铺垫底图", phase: .revealing)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
-                    // 定稿回调没触发时的兜底交叉淡入（关窗之后不再跑，AevonSwitchTxnV279）
-                    guard AevonSwitchCoordinator.shared.isAlive(switchTxn) else { return }
-                    windowView?.settleReopenPlaceholder()
-                }
+            if reopenPlaceholder != nil {
+                _ = AevonSwitchCoordinator.shared.mark(switchTxn, "铺垫底图已退役", phase: .revealing)
+                AevonLog.info("[窗口] 有旧帧缓存但不再铺（窗出生即隐形，垫底图已退役）"
+                    + "（AevonNoPlaceholderV286）")
             } else {
-                AevonLog.info("[窗口] 无占位帧 → 不铺垫底图、不截图，等画布定稿再淡入"
-                    + "（AevonNoShroudV283）")
+                AevonLog.info("[窗口] 无占位帧 → 不铺垫底图、不截图，窗出生即隐形，等画布定稿再淡入"
+                    + "（AevonNoShroudV283 AevonNoPlaceholderV286 AevonNoFlashBirthV286）")
             }
             /* V0.2.64（AevonFloatTransitionV264，用户 Aevon(38) #3「动画更流畅真实，
              * 而不是突然出现的」）：开窗补一段入场动画 —— 淡入 + 从 0.965 弹到 1.0。
@@ -1214,12 +1223,10 @@ enum AevonWindowManager {
         // V0.2.65（AevonEdgeShieldV265）：窗没了 → 让 App 侧的边条吞噬判定立刻失效
         // （留一个 0x0 矩形，App 侧看到宽度 <40 就整段跳过）。
         publishFloatFrame(.zero)
-        // V0.2.76（AevonReopenSwapV276）：关窗前抓「最后一帧」当占位图 ——
-        // 再开窗面板立刻显形铺这张图，画布切换/回弹的过渡全程不再可见。
-        if let snap = windowView.placeholderSnapshot() {
-            reopenPlaceholders[bundleID] = snap
-            AevonLog.info("[窗口] 已缓存 \(bundleID) 最后一帧占位图（再开窗直显用）（AevonReopenSwapV276）")
-        }
+        /* V0.2.86（AevonNoPlaceholderV286）：**关窗不再抓「最后一帧」**。
+         * 这里是 `_UICreateScreenUIImageWithRotation` 的一次**同步**整屏截图（几百 ms，
+         * 全在主线程）。垫底图链路退役之后没人再读它，留着纯粹是白付这笔钱 ——
+         * 而且关窗瞬间正在转场，抓到的经常是过渡帧（0.2.56 日志就有「窗口区域快照判黑」）。 */
         windowView.teardown()
         // V0.2.56（AevonCloseDisarmV256）：窗没了 → 拖拽吞咽状态必须一并解除，
         // 残留 floatTouchID 只会误吞同槽位的新触摸（pan 死、点按活）。

@@ -147,9 +147,11 @@ jobs:
                    AevonLayerNilSafeV283 AevonFgGuardRetireV283 \
                    AevonKickDrainV284 AevonContentSettledV284 AevonStaleRectGateV284 \
                    AevonCrashDumpV285 AevonCrashPCFixV285 AevonYieldPureAlphaV285 \
-                   AevonRevealPlainV285 AevonIdleRewakeV285 AevonYieldCrumbV285; do
+                   AevonRevealPlainV285 AevonIdleRewakeV285 AevonYieldCrumbV285 \
+                   AevonNoFlashBirthV286 AevonNoPlaceholderV286 AevonScalarKVCV286 \
+                   AevonCrashReentryV286 AevonCrashPacMaskV286 AevonCrashFrameGuardV286; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82/0.2.83/0.2.84/0.2.85 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.86 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -795,7 +797,8 @@ jobs:
           # 因为中文日志串会编成 UTF-16，strings 查不到）。
           for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200 \
                    AevonAppSceneCapV241 AevonCapsPersistV280 AevonMultiSceneCapV281 \
-                   AevonGripSafeV283 AevonStaleRectGateV284 AevonGripHoldV285; do
+                   AevonGripSafeV283 AevonStaleRectGateV284 AevonGripHoldV285 \
+                   AevonGripRetireV286; do
             strings "$APP_DYLIB" | grep -q "$s" \
               || { echo "::error::AevonApp.dylib 缺少标记 $s"; exit 1; }
           done
@@ -2839,8 +2842,9 @@ jobs:
           #（Aevon(43) 实测复刻起手漂移 +0.45s，尾排必落显窗后 = 闪好几下）——
           # 显窗挂进 kick 尾笔画布写回回调，旧串「预热隐形复刻完成（画布已切回）」随之退役。
           # V0.2.83：文案追加 AevonNoShroudV283（遮罩退役后，这条回调成了「不闪」的唯一保证）。
-          grep -q 'revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.71/0.2.83 显窗没挂进画布定稿回调（闪好几下复发）"; exit 1; }
+          # V0.2.86：文案再追加 AevonNoPlaceholderV286（垫底图链路退役）。
+          grep -q 'revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269 AevonNoShroudV283 AevonNoPlaceholderV286）")' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.71/0.2.83/0.2.86 显窗没挂进画布定稿回调（闪好几下复发）"; exit 1; }
           grep -q 'onCanvasSettled' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.71 kick 尾笔没有 onCanvasSettled 回调（事件驱动显窗断链）"; exit 1; }
           # ④ #4 键盘：窗口枚举不能再走废弃的 sharedApplication.windows
@@ -3555,10 +3559,18 @@ jobs:
           fi
 
           # ③ App 侧交互自愈（把手占用不许把窗口永久关掉）
+          # V0.2.86 反转：AevonForceInteractionRestore 只是「关了就恢复」，治标不治本 ——
+          # 归档(20) 实测 99 次「仍被占用 → 续排」对 3 次真解除，等于每次碰把手都让
+          # 全屏 App 卡 2.5 秒。整条「关交互」链退役（AevonGripRetireV286）。
           grep -q 'AevonGripSafeV283' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.83 缺 App 侧交互自愈（系统手势失效复发）"; exit 1; }
-          grep -q 'static void AevonForceInteractionRestore' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.83 缺强制恢复交互的实现"; exit 1; }
+            || { echo "::error::0.2.83 缺 App 侧交互自愈标记（历史标记只加不能改）"; exit 1; }
+          grep -q 'AevonGripRetireV286' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.86 缺「把手占用关交互已退役」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+               | grep -q 'gAevonGripBusy = YES'; then
+            echo "::error::0.2.86 还在关本进程交互（全屏 App 点不动会复发）"
+            exit 1
+          fi
           # 两条「不该关」的判据不许再直接 return（那就是永久关闭的入口）
           if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
                | grep -q 'if (AevonAppIsFloatHosted()) { return; }'; then
@@ -3687,6 +3699,59 @@ jobs:
             exit 1
           fi
           echo "V0.2.85 校验: 零假设崩溃转储 + 让位纯 alpha + 入场无缩放 + 定格自愈 + 抖音续排复查 已就位"
+
+          echo "── V0.2.86（归档(20) 561 条崩溃 + 开窗注销 + 闪 + 全屏点不动）──"
+          # ① 出生即隐形：AevonWindowView 构造器里必须先 alpha=0，
+          #    否则 host.addSubview 那一帧就以 alpha=1 上屏（= Aevon(59)「闪一下悬浮窗」）
+          grep -q 'super.init(frame: CGRect.zero)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.86 AevonWindowView 构造器结构变了"; exit 1; }
+          if ! awk '/super\.init\(frame: CGRect\.zero\)/,/leftEye|init\(coder/' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+                 | grep -q '^        alpha = 0'; then
+            echo "::error::0.2.86 构造器没有立刻 alpha=0（窗会以空面板闪一下）"
+            exit 1
+          fi
+          # ② 垫底图链路退役（窗从出生就不可见，旧帧永远不该露面）
+          grep -q 'AevonNoPlaceholderV286' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.86 缺「垫底图已退役」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+               | grep -q 'currentView?.settleReopenPlaceholder\|windowView.installReopenPlaceholder\|windowView.placeholderSnapshot'; then
+            echo "::error::0.2.86 垫底图还在跑（旧帧 crossfade = 新的闪，且多一次同步截图）"
+            exit 1
+          fi
+          # ③ 标量字段必须走 KVC，不能走 perform（perform 按 id 解释返回值）
+          grep -q 'AevonScalarKVCV286' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+            || { echo "::error::0.2.86 缺「标量走 KVC」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+               | grep -q 'guard let value = AevonRuntime.send(target, sel)'; then
+            echo "::error::0.2.86 uint64 还在用 perform 取标量（值≠0 时被当指针 retain → addr=0x4 SIGSEGV）"
+            exit 1
+          fi
+          grep -q 'object.value(forKey: key) as? NSNumber' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+            || { echo "::error::0.2.86 uint64 没改走 KVC"; exit 1; }
+          # ④ 崩溃处理器：不许 SA_NODEFER（处理器自身崩一次 = 560 次嵌套）
+          grep -q 'AevonCrashReentryV286' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.86 缺「崩溃处理器防重入」标记"; exit 1; }
+          grep -q 'gAevonCrashInHandler' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.86 崩溃处理器没有重入闸门"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+               | grep -q 'SA_NODEFER'; then
+            echo "::error::0.2.86 SA_NODEFER 又回来了（处理器内崩一次 → 无限嵌套 → 561 条垃圾日志）"
+            exit 1
+          fi
+          # ⑤ 崩溃地址必须掩 PAC，否则永远归因到「不在 Aevon」
+          grep -q 'AevonCrashPacMaskV286' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.86 缺「PAC 掩码」标记"; exit 1; }
+          grep -q '0x00007FFFFFFFFFFFULL' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.86 缺 PAC 掩码常量（pc 掩 47 位）"; exit 1; }
+          grep -q 'AevonCrashFrameGuardV286' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.86 缺「帧链栈窗口校验」标记（野 fp 会二次崩）"; exit 1; }
+          # ⑥ 把手占用关交互退役
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+               | grep -q 'gAevonGripBusy = YES'; then
+            echo "::error::0.2.86 把手占用还在关交互（全屏 App 卡 2.5 秒会复发）"
+            exit 1
+          fi
+          echo "V0.2.86 校验: 出生即隐形 + 垫底图退役 + 标量KVC + 崩溃防重入 + PAC掩码 + 把手占用退役 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

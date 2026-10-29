@@ -1682,137 +1682,55 @@ __attribute__((used)) static const char AevonGripSafeV283Marker[] = "AevonGripSa
 /* V0.2.85（AevonGripHoldV285）：同一条铁律第三次记账 —— 中文 `@"…"` 会被编成
  * UTF-16，`strings` 查不到，CI 的二进制断言会拦（0.2.68 / 0.2.81 / 0.2.83 三次同坑）。 */
 __attribute__((used)) static const char AevonGripHoldV285Marker[] = "AevonGripHoldV285";
+/* V0.2.86（AevonGripRetireV286）：第四次记账，别再往注释里写新标记了。 */
+__attribute__((used)) static const char AevonGripRetireV286Marker[] = "AevonGripRetireV286";
 
-static void AevonForceInteractionRestore(const char *reason);
-
-/* V0.2.85（AevonGripHoldV285，Aevon(58)「抖音中滑动圆盘时会让视频暂停播放，并且会滑动到
- * 视频博主主页卡住，然后抖音中所有手势失效，只能关闭后台卡片重新开启」）：
+/* V0.2.85（AevonGripHoldV285）与 V0.2.83（AevonGripSafeV283）两个函数体在
+ * V0.2.86 里随「把手占用关交互」整条链一起退役（见 AevonGripBusyRefresh 里的说明）。
+ * **标记本身不能删**：历史标记只加不能改，二进制的 must 断言还认它们 ——
+ * 上面两个 `__attribute__((used))` 常量就是它们的收容位。
  *
- * 0.2.63 起的「0.6 秒硬超时兜底」是这条链里唯一一处**主动把交互开回去**的地方，
- * 而它和用户的手势时长正面冲突：滑出圆盘 → 手指横向移动 → 选中一个图标，
- * 熟练用户 1.5~3 秒，随便一晃就超过 0.6 秒。0.6 秒一到，我们把
- * `userInteractionEnabled` 开回去，**同一根还在屏上的手指**立刻被抖音收到，
- * 于是：横滑被当成「左滑进主页」、触摸落下被当成「暂停/播放」，
- * 而抖音内部手势状态机刚经历过一次 cancel → 再收到残留 touch → 直接卡死。
- *
- * 修法不是把超时延长，而是把它改成**复查**：到点先问一次 `notify` 的真实状态，
- * SB 还压在把手上就续排（最多 5 拍 = 2.5 秒），只有真读到「已松开」才恢复交互。
- * 这样「手指在把手上滑 3 秒」期间本进程一次触摸都收不到，抖音不会进错状态；
- * 而 SB 侧万一卡住不发归零，2.5 秒后仍然强制恢复（fail-open 方向不变）。 */
-static void AevonGripBusyScheduleFailOpen(uint32_t generation, int attempt);
+ * 0.2.85 的「续排复查」反而是压垮用户的那一笔：76 次「第 1 次复查仍占用」+
+ * 18 次第 2 次 + 5 次第 3 次，对 3 次真解除 —— 等于把 0.6 秒的卡顿放大到 2.5 秒。 */
 
-static void AevonGripBusyFailOpenStep(uint32_t generation, int attempt) {
-    if (generation != gAevonGripBusyGeneration) { return; }
-    if (!gAevonGripBusy) { return; }
-    uint64_t state = 0;
-    BOOL stillBusy = NO;
-    if (gAevonGripBusyToken >= 0 &&
-        notify_get_state(gAevonGripBusyToken, &state) == NOTIFY_STATUS_OK) {
-        stillBusy = (state != 0);
-    }
-    if (stillBusy && attempt < 5) {
-        AevonAppLog(@"[App侧] 把手仍被占用（第 %d 次复查）→ 继续关交互，不中途放行"
-                    @"（AevonGripHoldV285）", attempt);
-        AevonGripBusyScheduleFailOpen(generation, attempt + 1);
-        return;
-    }
-    gAevonGripBusy = NO;
-    gAevonGripBusyDirty = YES;
-    AevonDockInteractionRefresh();
-    AevonAppLog(@"[App侧] 把手占用解除（第 %d 次复查，SB 状态=%llu）→ 交互恢复"
-                @"（AevonGripHoldV285 AevonGripBusyV263）",
-                attempt, (unsigned long long)state);
-}
-
-static void AevonGripBusyScheduleFailOpen(uint32_t generation, int attempt) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        AevonGripBusyFailOpenStep(generation, attempt);
-    });
-}
-
-/* V0.2.63（AevonGripBusyV263）：SB 说「手指在把手上」→ 本进程关交互。
- *
- * 为什么不再用坐标判定：0.2.61 / 0.2.62 两版都在 App 侧按落点矩形判，
- * Aevon(36) / Aevon(37) 两篇日志里「把手区落点」都是 **0 条** —— 说明那条路
- * 在真机上根本命中不了（App 拿到的点、窗口坐标系、被接管的 UIScreen，任何
- * 一环偏一点就永远判不中）。改成「SB 说压住了 → 我整体不接触摸」，与几何无关。
- *
- * 闸门（防误伤）：只在本 App 占满整屏、且没有被浮窗承载时才关交互 ——
- * 浮窗里的 App 右缘没有把手，关了只会让浮窗内容点不动。
- * fail-open：读不到「占用」态一律恢复交互；0.6 秒硬超时兜底（抬手包丢了也不会卡死）。
- */
-static void AevonForceInteractionRestore(const char *reason) {
-    if (!gAevonGripBusy) { return; }
-    gAevonGripBusy = NO;
-    /* 让挂起的那条 0.6s 兜底作废（generation 不匹配就提前 return），
-     * 否则它会在 0.6 秒后再关 / 再开一次，来回抖。 */
-    gAevonGripBusyGeneration += 1;
-    gAevonGripBusyDirty = YES;
-    AevonDockInteractionRefresh();
-    AevonAppLog(@"[App侧] 把手占用态自愈 → 强制恢复交互（%s）（AevonGripSafeV283）", reason);
-}
+/* V0.2.63 的 AevonForceInteractionRestore 一并退役 —— 它唯一的调用者就是下面这段。
+ * 「曾经关过就一定要恢复」这条口径已合并进 AevonGripBusyRefresh 的恢复分支。 */
 
 static void AevonGripBusyRefresh(BOOL fromNotify) {
     @try {
-        if (gAevonGripBusyToken < 0) { return; }
-        uint64_t state = 0;
-        BOOL busy = NO;
-        if (notify_get_state(gAevonGripBusyToken, &state) == NOTIFY_STATUS_OK) {
-            busy = (state != 0);
-        }
-        if (busy) {
-            /* V0.2.83（AevonGripSafeV283）：这两条「不该关」的判据以前是直接 return，
-             * 已经关掉的交互再也没机会打开（见上方说明）→ 改成先恢复再返回。 */
-            if (AevonAppIsFloatHosted()) {
-                AevonForceInteractionRestore("本 App 已进入浮窗承载");
-                return;
-            }
-            CGSize real = AevonRealScreenSize();
-            CGFloat tallest = 0;
-            @try {
-                for (UIScene *scene in [[UIApplication sharedApplication] connectedScenes]) {
-                    if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
-                    for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                        if (AevonIsKeyboardWindow(w)) { continue; }
-                        tallest = MAX(tallest, w.bounds.size.height);
-                    }
-                }
-            } @catch (NSException *e) { tallest = 0; }
-            if (real.height > 200 && tallest < real.height - 60.0) {
-                AevonForceInteractionRestore("窗口不再满屏（键盘/分屏/画布）");
-                return;
-            }
-            gAevonGripBusyGeneration += 1;
-            uint32_t generation = gAevonGripBusyGeneration;
-            if (!gAevonGripBusy) {
-                gAevonGripBusy = YES;
-                gAevonGripBusyDirty = YES;
-                AevonDockInteractionRefresh();
-                AevonAppLog(@"[App侧] 把手占用 → 本进程窗口交互临时关闭（UIKit 会取消这根手指，"
-                            @"App 内的左滑 / 长按不会开始）（AevonGripBusyV263）");
-            }
-            AevonGripBusyScheduleFailOpen(generation, 1);
-            return;
-        }
+        /* V0.2.86（AevonGripRetireV286）—— **「把手占用 → 关本进程交互」整条链退役**。
+         *
+         * 为什么退役（Aevon(59)「全屏 app 的触摸失效问题依旧存在」，归档(20) 实测）：
+         *   「把手仍被占用（第 1 次复查）」76 条 / 第 2 次 18 条 / 第 3 次 5 条
+         *   「把手占用解除」         只有 3 条
+         * 也就是 SB 侧那个 notify state 几乎**永远读成「占用」**（抬手包丢失 / 语义对不上），
+         * 于是每次手指碰到把手，本进程交互就被关到 2.5 秒上限才 fail-open。
+         * 用户看到的就是「整个 App 没反应 / 只能杀进程」。
+         *
+         * 这条链的历史与遮罩一模一样：0.2.63 引入，0.2.83 给它加自愈，0.2.85 给它加
+         * 续排复查 —— **三代补丁都在治同一个副作用（关掉的 userInteractionEnabled
+         * 开不回来），却没人问「当初为什么要关」**。
+         *
+         * 为什么要关（0.2.63 的原意）：手指压在把手上滑时，UIKit 会把这一串触摸也送给
+         * 底下的 App，App 内左滑 / 长按就跑起来了。但 0.2.72 起 `SBSwallow` 已经在
+         * **SB 侧吞层**焊死（`default:false` 白名单），App 根本收不到那根手指 —— 前提
+         * 不成立了。而抖音这类没被注入的进程靠这条广播本来就防不住（广播对它为空）。
+         *
+         * 代价对比：留着 → 每次碰把手，全屏 App 卡 0.6~2.5 秒（**用户级不可恢复**，
+         * 只能杀进程）；退役 → 极端情况下滑把手时 App 内也跟着滚一下（**可见、可恢复**）。
+         * 后者轻一个量级，且与 0.2.83 定下的「猜错的方向必须是多开一次」一致。
+         *
+         * 保留的部分：曾经关过的一定恢复（老版本遗留态 / 万一还有别的写入点）。 */
         if (gAevonGripBusy) {
             gAevonGripBusy = NO;
+            gAevonGripBusyGeneration += 1;
             gAevonGripBusyDirty = YES;
             AevonDockInteractionRefresh();
-            AevonAppLog(@"[App侧] 把手占用结束 → 交互恢复（%@）（AevonGripBusyV263）",
+            AevonAppLog(@"[App侧] 把手占用 → 关交互已退役，改为无条件恢复（%@）"
+                        @"（AevonGripRetireV286 AevonGripBusyV263）",
                         fromNotify ? @"来自 SB 通知" : @"轮询兜底");
         }
-        /* V0.2.83（AevonGripSafeV283）：不依赖任何「状态变了才刷新」的脏标记 ——
-         * 每 2 秒无条件按真实状态对齐一次窗口交互。这条兜底存在的唯一理由：
-         * 上面所有判据都是「猜」，而 userInteractionEnabled 被关掉是**用户级不可恢复**
-         * 的故障（整个 App 没反应，只能杀进程）。猜错的方向必须是「多开一次」。 */
-        static CFTimeInterval lastForceAlign = 0;
-        CFTimeInterval nowAlign = CACurrentMediaTime();
-        if (nowAlign - lastForceAlign > 2.0) {
-            lastForceAlign = nowAlign;
-            gAevonGripBusyDirty = YES;
-            AevonDockInteractionRefresh();
-        }
+        return;
     } @catch (NSException *exception) {
         gAevonGripBusy = NO;
         gAevonGripBusyDirty = YES;

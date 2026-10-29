@@ -1246,6 +1246,27 @@ __attribute__((used)) static const char AevonGestureProbeV2V256Marker[] = "Aevon
 static const char kAevonCrashLogPath[] = "/var/mobile/Aevon.crash.log";
 static const char kAevonCrashOwnerPath[] = "/var/mobile/Aevon.crash.owner";
 
+/* V0.2.86（AevonCrashReentryV286）：处理器重入标志。1 = 已经在写崩溃现场，
+ * 此时再来一次信号说明是处理器自身崩了 —— 只保第一份，剩下的一律直接终止。
+ * `sig_atomic_t` + 不做任何复合操作，async-signal-safe。 */
+static volatile sig_atomic_t gAevonCrashInHandler = 0;
+
+/* V0.2.86（AevonCrashPacMaskV286）—— **arm64e 的指针带 PAC 签名，不掩掉就永远认不出 Aevon**。
+ *
+ * 归档(20) 561 块日志里，原始 `pc=0x0138800105405f1c`、`lr=0x5063000105405edc`：
+ *   bit 0~47  = 真实地址（0x105405f1c / 0x105405edc，都在 Aevon text 段内）
+ *   bit 48~63 = PAC（diversity / key 签名，每次调用都不一样）
+ * 0.2.83 / 0.2.85 两次归因都拿原始值直接比 text 段范围，高位带着签名必然不命中 →
+ * 于是每一份日志都写「归因：不在 Aevon」，**是掩码写错，不是崩溃不在 Aevon**。
+ * 用户态地址只有 47 位有效（arm64e 用户空间 0x0 ~ 0x7FFF_FFFF_FFFF），故：
+ *   addr & 0x00007FFFFFFFFFFF = 真地址
+ * 掩码之后 560/561 个 pc 全部落进 text 段 —— 这就是证据。 */
+#define AEVON_CRASH_PAC_MASK 0x00007FFFFFFFFFFFULL
+
+static uint64_t AevonCrashStripPac(uint64_t value) {
+    return value & AEVON_CRASH_PAC_MASK;
+}
+
 static void AevonCW(int fd, const char *text) {
     if (fd < 0 || text == NULL) { return; }
     size_t len = strlen(text);
@@ -1285,6 +1306,34 @@ static void AevonCrashWriteOwner(int owned) {
 }
 
 static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
+    /* V0.2.86（AevonCrashReentryV286）—— **防重入**，这一行是 561 条垃圾日志的止血点。
+     *
+     * 归档(20) `Aevon.crash.log` 一共 561 个崩溃块，其中 **560 个块的 pc 完全相同**：
+     *   pc 掩掉 PAC 高位 = 0x105405f1c → `AevonCrashSignalHandler + 788`
+     *   lr 掩掉 PAC 高位 = 0x105405edc → `AevonCrashSignalHandler + 724`
+     * 也就是**处理器自己崩了自己 560 次**，真正的现场（只有第 1 块）被彻底埋掉。
+     *
+     * 两个原因叠在一起：
+     *   ① `sa_flags` 里带了 `SA_NODEFER` —— 处理器执行期间**不屏蔽同一信号**，
+     *      所以处理器内再崩一次，立刻又进一次处理器，无限嵌套；
+     *   ② 下面那段 fp 链遍历直接解引用 `fp`，栈一旦是坏的（信号里常见），
+     *      这一读必崩 → 触发 ①。
+     * 每层嵌套吃 0x500 字节栈（日志里 addr 依次 0x16b231b70 / 0x16b2316d0 /
+     * 0x16b2311d0 … 正好每块降 0x500 = 嵌套在用栈），最后 altstack 耗尽。
+     *
+     * 修法三件：
+     *   ① 去掉 `SA_NODEFER`（改完由内核在处理器期间自动屏蔽同信号）；
+     *   ② 这个标志 —— 重入一律不再写日志，直接恢复默认动作退出；
+     *   ③ fp 链遍历加**栈窗口**校验（见下），越界立即停。 */
+    if (gAevonCrashInHandler) {
+        /* 已经在一个处理器里了：这次一定是处理器自身再崩。不再写日志（否则就是
+         * 又一次「561 条」），直接按默认动作终止，把第一次的那份现场保住。 */
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
+    gAevonCrashInHandler = 1;
+
     int fd = open(kAevonCrashLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     uint64_t pc = 0, lr = 0, sp = 0, fp = 0;
 
@@ -1315,6 +1364,11 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
             lr = *(uint64_t *)(mcontext + 16 + 240);
             sp = *(uint64_t *)(mcontext + 16 + 248);
             pc = *(uint64_t *)(mcontext + 16 + 256);
+            /* V0.2.86（AevonCrashPacMaskV286）：AC 签名必须掩掉才能比区间。 */
+            pc = AevonCrashStripPac(pc);
+            lr = AevonCrashStripPac(lr);
+            sp = AevonCrashStripPac(sp);
+            fp = AevonCrashStripPac(fp);
         }
     }
 #else
@@ -1339,8 +1393,10 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
     AevonCHex(fd, fp);
     AevonCW(fd, "\n");
 
-    AevonCW(fd, owned ? "[崩溃] 归因：崩溃指令在 Aevon 内（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283）\n"
-                      : "[崩溃] 归因：崩溃指令不在 Aevon（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283）\n");
+    AevonCW(fd, owned ? "[崩溃] 归因：崩溃指令在 Aevon 内（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283 AevonCrashPacMaskV286）\n"
+                      : "[崩溃] 归因：崩溃指令不在 Aevon（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283 AevonCrashPacMaskV286）\n");
+    AevonCW(fd, "[崩溃] 上面的 pc/lr/sp/fp 已掩掉 arm64e PAC 签名（& 0x00007FFFFFFFFFFF），"
+                "可直接用于符号化（AevonCrashPacMaskV286）\n");
 
     /* V0.2.85（AevonCrashDumpV285）：**不依赖任何结构体布局**的原始转储。
      *
@@ -1378,15 +1434,33 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
                 "以本转储为准）\n");
 
     /* 自己走 fp 链：arm64 的帧记录是 {prev_fp, lr}，fp 指向它。
-     * 边界校验只做「对齐 + 单调递增 + 幅度合理」，不碰任何锁 / malloc。 */
-    AevonCW(fd, "[崩溃] 帧链（fp 回溯 AevonCrashPCV283）：\n");
-    uint64_t cursor = fp;
+     *
+     * V0.2.86（AevonCrashFrameGuardV286）—— **这里以前会崩**，而且是 561 条日志的源头：
+     * 原实现只校验「8 字节对齐 + 单调递增 + 单步 ≤ 16MB」，但信号里的 fp 经常是
+     * 野值（寄存器被覆盖、栈已损坏），一解引用就二次 SIGSEGV，配合 SA_NODEFER
+     * 立刻重入处理器 —— 每层吃 0x500 字节栈，直到 altstack 耗尽。
+     *
+     * 现在只信任一个窗口：fp 必须落在 [sp, sp + 1MB) 之内，且每往前一步仍在这个
+     * 窗口里。sp/fp 任一为 0 或明显反向就整段跳过 —— 没有帧链好过崩在帧链里。 */
+    AevonCW(fd, "[崩溃] 帧链（fp 回溯 AevonCrashPCV283 AevonCrashFrameGuardV286）：\n");
+    const uint64_t stackLo = sp;
+    const uint64_t stackHi = (sp != 0) ? (sp + 0x100000ULL) : 0;
+    int framesOK = (sp != 0 && fp >= stackLo && fp < stackHi && (fp & 0x7) == 0);
+    if (!framesOK) {
+        AevonCW(fd, "  （sp/fp 不成栈窗口，跳过帧链：sp=");
+        AevonCHex(fd, sp);
+        AevonCW(fd, " fp=");
+        AevonCHex(fd, fp);
+        AevonCW(fd, "）\n");
+    }
+    uint64_t cursor = framesOK ? fp : 0;
     int written = 0;
     while (cursor != 0 && written < 16) {
         if ((cursor & 0x7) != 0) { break; }
+        if (cursor < stackLo || cursor >= stackHi) { break; }
         uint64_t *record = (uint64_t *)cursor;
-        uint64_t callerLR = record[1];
-        uint64_t nextFP = record[0];
+        uint64_t callerLR = AevonCrashStripPac(record[1]);
+        uint64_t nextFP = AevonCrashStripPac(record[0]);
         AevonCW(fd, "  #");
         AevonCInt(fd, written);
         AevonCW(fd, " lr=");
@@ -1394,13 +1468,19 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
         AevonCW(fd, (callerLR >= aevonTextStart && callerLR < aevonTextEnd) ? " [A]\n" : " [.]\n");
         written += 1;
         if (nextFP <= cursor) { break; }
-        if (nextFP - cursor > 0x1000000ULL) { break; }
+        if (nextFP < stackLo || nextFP >= stackHi) { break; }
         cursor = nextFP;
+    }
+    if (written == 0) {
+        AevonCW(fd, "  （无可用帧）\n");
     }
 
     AevonCrashWriteOwner(owned);
     if (fd >= 0) { close(fd); }
 
+    /* 恢复默认动作并重抛。注意 gAevonCrashInHandler 故意**不复位**：这一份现场已经
+     * 写完了，接下来进程无论如何都会死；留着标志可以挡住「raise 又回到处理器」这种
+     * 意外（0.2.85 及以前正是靠 SA_NODEFER 在这里来回重入）。 */
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -1409,8 +1489,14 @@ void AevonCrashInstall(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = AevonCrashSignalHandler;
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    /* V0.2.86（AevonCrashReentryV286）：**去掉 SA_NODEFER**。
+     * 它在的意思是「处理器执行期间不屏蔽同一信号」—— 正是它让处理器自身一次崩溃
+     * 变成 560 次嵌套（归档(20) 561 块日志）。保留 SA_SIGINFO（要 ucontext）
+     * 与 SA_ONSTACK（栈坏了也有栈可用）。 */
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
+    /* 顺带把六个信号互相也屏蔽掉 —— 一个信号崩着处理的时候，别再被另一个打断。 */
     int signals[6] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE};
+    for (int i = 0; i < 6; i++) { sigaddset(&sa.sa_mask, signals[i]); }
     for (int i = 0; i < 6; i++) { sigaction(signals[i], &sa, NULL); }
 }
