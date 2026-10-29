@@ -81,8 +81,21 @@ enum AevonWindowManager {
              * 新触摸天然穿透；但它**不会 cancel 已经在屏上的手指**，钩子手里的指针
              * 始终有效。而 `pointHitsFloatingWindow` / `grabFloatingWindow` 本来就以
              * `alpha > 0.01` 过滤，让位态下这一整套判定自动失效，不需要额外分支。 */
+            /* V0.2.85（AevonYieldPureAlphaV285）：**不再碰 `isUserInteractionEnabled`**。
+             *
+             * 0.2.82 只把 `isHidden` 换成了 alpha，把「UIKit 当场 cancel 手指」这条堵了
+             * 一半 —— 但 `isUserInteractionEnabled = false` 是**同一个后果**：UIKit 一样
+             * 会立刻 cancel 该窗口上的所有触摸，并把 UITouch 从事件簿记里摘掉，而
+             * `AevonTouchHook` 的 sendEvent 钩子还握着那个指针。
+             *
+             * Aevon(57) 崩溃点 2 的时序正好是这条：20.370 让位（手指刚下拉完通知中心）
+             * → 20.902 SpringBoard 没了（0.53 秒）。0.2.82 那条「手指在屏不让位」闸门
+             * 靠 `AevonEdgeEntry.hasActiveTouches`，而它对**落在系统浮层上的手指**是
+             * 计不到的（那根手指根本不到我们的 sendEvent）→ 闸门形同虚设。
+             *
+             * alpha ≤ 0.01 的视图本来就不参与 hitTest：画面让出去了，新触摸天然穿透，
+             * 而已经在屏的手指不会被 cancel。要的语义一个不少，风险归零。 */
             view.alpha = yielding ? 0 : 1
-            view.isUserInteractionEnabled = !yielding
         }
         AevonRingGrip.setOverlayYield(yielding)
         AevonLog.info("[窗口] 系统浮层让位 \(yielding ? "开" : "关")："
@@ -917,7 +930,11 @@ enum AevonWindowManager {
              * 瞬间必判黑（Aevon(56) 12:55:41.744「窗口区域快照判黑（转场瞬间抓帧）」），
              * 抓了也白抓。没有缓存就干脆不铺，等定稿。 */
             windowView.alpha = 0
-            windowView.transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
+            /* V0.2.85（AevonRevealPlainV285）：**不再预置 0.965 缩放**。
+             * 原来这里压一个缩放，等显形时再弹回 1.0 —— 摘掉遮罩以后，这段缩放
+             * 就是用户看到的「闪一下悬浮窗」（Aevon(58)：窗先小一号出现、再变大、
+             * 内容才到位）。藏着的窗不需要任何视觉参数，位置与尺寸从第一帧就是终态。 */
+            windowView.transform = .identity
             if let placeholder = reopenPlaceholder {
                 windowView.installReopenPlaceholder(placeholder, reason: "上一关最后一帧")
                 _ = AevonSwitchCoordinator.shared.mark(switchTxn, "铺垫底图", phase: .revealing)

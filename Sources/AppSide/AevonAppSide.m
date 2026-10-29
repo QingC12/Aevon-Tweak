@@ -1679,8 +1679,57 @@ static void AevonDockInteractionRefresh(void) {
  * __TEXT,__ustring —— `strings` 一个字节都查不到，CI 的「必须编入」断言直接失败
  *（0.2.68 / 0.2.81 / 0.2.83 三次同坑）。 */
 __attribute__((used)) static const char AevonGripSafeV283Marker[] = "AevonGripSafeV283";
+/* V0.2.85（AevonGripHoldV285）：同一条铁律第三次记账 —— 中文 `@"…"` 会被编成
+ * UTF-16，`strings` 查不到，CI 的二进制断言会拦（0.2.68 / 0.2.81 / 0.2.83 三次同坑）。 */
+__attribute__((used)) static const char AevonGripHoldV285Marker[] = "AevonGripHoldV285";
 
 static void AevonForceInteractionRestore(const char *reason);
+
+/* V0.2.85（AevonGripHoldV285，Aevon(58)「抖音中滑动圆盘时会让视频暂停播放，并且会滑动到
+ * 视频博主主页卡住，然后抖音中所有手势失效，只能关闭后台卡片重新开启」）：
+ *
+ * 0.2.63 起的「0.6 秒硬超时兜底」是这条链里唯一一处**主动把交互开回去**的地方，
+ * 而它和用户的手势时长正面冲突：滑出圆盘 → 手指横向移动 → 选中一个图标，
+ * 熟练用户 1.5~3 秒，随便一晃就超过 0.6 秒。0.6 秒一到，我们把
+ * `userInteractionEnabled` 开回去，**同一根还在屏上的手指**立刻被抖音收到，
+ * 于是：横滑被当成「左滑进主页」、触摸落下被当成「暂停/播放」，
+ * 而抖音内部手势状态机刚经历过一次 cancel → 再收到残留 touch → 直接卡死。
+ *
+ * 修法不是把超时延长，而是把它改成**复查**：到点先问一次 `notify` 的真实状态，
+ * SB 还压在把手上就续排（最多 5 拍 = 2.5 秒），只有真读到「已松开」才恢复交互。
+ * 这样「手指在把手上滑 3 秒」期间本进程一次触摸都收不到，抖音不会进错状态；
+ * 而 SB 侧万一卡住不发归零，2.5 秒后仍然强制恢复（fail-open 方向不变）。 */
+static void AevonGripBusyScheduleFailOpen(uint32_t generation, int attempt);
+
+static void AevonGripBusyFailOpenStep(uint32_t generation, int attempt) {
+    if (generation != gAevonGripBusyGeneration) { return; }
+    if (!gAevonGripBusy) { return; }
+    uint64_t state = 0;
+    BOOL stillBusy = NO;
+    if (gAevonGripBusyToken >= 0 &&
+        notify_get_state(gAevonGripBusyToken, &state) == NOTIFY_STATUS_OK) {
+        stillBusy = (state != 0);
+    }
+    if (stillBusy && attempt < 5) {
+        AevonAppLog(@"[App侧] 把手仍被占用（第 %d 次复查）→ 继续关交互，不中途放行"
+                    @"（AevonGripHoldV285）", attempt);
+        AevonGripBusyScheduleFailOpen(generation, attempt + 1);
+        return;
+    }
+    gAevonGripBusy = NO;
+    gAevonGripBusyDirty = YES;
+    AevonDockInteractionRefresh();
+    AevonAppLog(@"[App侧] 把手占用解除（第 %d 次复查，SB 状态=%llu）→ 交互恢复"
+                @"（AevonGripHoldV285 AevonGripBusyV263）",
+                attempt, (unsigned long long)state);
+}
+
+static void AevonGripBusyScheduleFailOpen(uint32_t generation, int attempt) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonGripBusyFailOpenStep(generation, attempt);
+    });
+}
 
 /* V0.2.63（AevonGripBusyV263）：SB 说「手指在把手上」→ 本进程关交互。
  *
@@ -1743,16 +1792,7 @@ static void AevonGripBusyRefresh(BOOL fromNotify) {
                 AevonAppLog(@"[App侧] 把手占用 → 本进程窗口交互临时关闭（UIKit 会取消这根手指，"
                             @"App 内的左滑 / 长按不会开始）（AevonGripBusyV263）");
             }
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                if (generation != gAevonGripBusyGeneration) { return; }
-                if (!gAevonGripBusy) { return; }
-                gAevonGripBusy = NO;
-                gAevonGripBusyDirty = YES;
-                AevonDockInteractionRefresh();
-                AevonAppLog(@"[App侧] 把手占用满 0.6s 未见抬手 → 自行恢复交互（fail-open）"
-                            @"（AevonGripBusyV263）");
-            });
+            AevonGripBusyScheduleFailOpen(generation, 1);
             return;
         }
         if (gAevonGripBusy) {

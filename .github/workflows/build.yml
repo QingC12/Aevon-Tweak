@@ -145,9 +145,11 @@ jobs:
           for m in AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
                    AevonYieldAlphaV282 AevonNoShroudV283 AevonCrashPCV283 \
                    AevonLayerNilSafeV283 AevonFgGuardRetireV283 \
-                   AevonKickDrainV284 AevonContentSettledV284 AevonStaleRectGateV284; do
+                   AevonKickDrainV284 AevonContentSettledV284 AevonStaleRectGateV284 \
+                   AevonCrashDumpV285 AevonCrashPCFixV285 AevonYieldPureAlphaV285 \
+                   AevonRevealPlainV285 AevonIdleRewakeV285 AevonYieldCrumbV285; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82/0.2.83/0.2.84 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82/0.2.83/0.2.84/0.2.85 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -793,7 +795,7 @@ jobs:
           # 因为中文日志串会编成 UTF-16，strings 查不到）。
           for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200 \
                    AevonAppSceneCapV241 AevonCapsPersistV280 AevonMultiSceneCapV281 \
-                   AevonGripSafeV283 AevonStaleRectGateV284; do
+                   AevonGripSafeV283 AevonStaleRectGateV284 AevonGripHoldV285; do
             strings "$APP_DYLIB" | grep -q "$s" \
               || { echo "::error::AevonApp.dylib 缺少标记 $s"; exit 1; }
           done
@@ -2778,9 +2780,14 @@ jobs:
             || { echo "::error::0.2.64 缺主窗避让停靠栏"; exit 1; }
           grep -q 'nudgeForDockAvoidance' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.64 避让没有平滑位移（会硬跳）"; exit 1; }
-          # ③出入场动画
-          grep -q 'scaleX: 0.965' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.64 开窗还是「突然出现」（缺入场缩放）"; exit 1; }
+          # ③出入场动画（V0.2.85 反转：Aevon(58) 摘掉遮罩后，缩放弹簧本身成了「闪」）
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+               | grep -q 'scaleX: 0.965'; then
+            echo "::error::0.2.85 开窗又预置 0.965 缩放了（摘遮罩后这段缩放就是用户看到的「闪一下」）"
+            exit 1
+          fi
+          grep -q 'AevonRevealPlainV285' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.85 缺「入场只淡入不缩放」标记"; exit 1; }
           # ⑤抖音居中口径 + 承载去抖
           grep -q 'AevonAppIsFloatHostedScreenHeight()' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.64 画面居中没用画布高做口径"; exit 1; }
@@ -3525,10 +3532,15 @@ jobs:
             || { echo "::error::0.2.83 没装 sa_sigaction（拿不到 ucontext）"; exit 1; }
           grep -q 'SA_SIGINFO' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::0.2.83 sigaction 没带 SA_SIGINFO"; exit 1; }
-          # 读 pc 用的是 ABI 固定偏移（mcontext + 24 + 256），不是成员名 ——
+          # 读 pc 用的是 ABI 固定偏移，不是成员名 ——
           # iOS SDK 的 ucontext.h 是 macOS 的，字段名对不上（0.2.83 第一次构建实锤）。
-          grep -q 'mcontext + 24 + 256' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
-            || { echo "::error::0.2.83 没按 ABI 偏移读 pc（拿不到崩溃指令）"; exit 1; }
+          # V0.2.85：`__es` 是 16 字节不是 24（0.2.83 按 24 算，pc 读成 cpsr+pad 的假值）。
+          grep -q 'mcontext + 16 + 256' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.85 没按修正后的 ABI 偏移读 pc（__es=16，不是 24）"; exit 1; }
+          if grep -q 'mcontext + 24 + 2' "$GITHUB_WORKSPACE/AevonAssertionShim.m"; then
+            echo "::error::0.2.85 __es 又按 24 字节算了（多算 8 会把 pc 读成 cpsr+pad 拼出来的假地址）"
+            exit 1
+          fi
           if grep -q '#include <ucontext.h>' "$GITHUB_WORKSPACE/AevonAssertionShim.m"; then
             echo "::error::0.2.83 又把 macOS 的 ucontext.h 引回来了（编译必死）"
             exit 1
@@ -3623,6 +3635,58 @@ jobs:
             exit 1
           fi
           echo "V0.2.84 校验: kick在途计数 + 内容定稿闸门 + 浮窗心跳 + 启动清残留 已就位"
+
+          # ── V0.2.85 校验（Aevon(58)：闪 / 桌面点图标与下拉控制中心必崩 / 画面定格 / 抖音手势）──
+          # 依据 Aevon(58) 归档(19) 1565 行日志 + 4 份崩溃摘录：
+          #   ① 「打开悬浮窗时依旧会闪一下悬浮窗，然后出现最终悬浮窗和内容」→ 摘掉遮罩以后，
+          #      0.2.64 的入场编排（0.34s 弹簧淡入 + 0.965→1.0 缩放）本身成了那个「闪」。
+          #   ② 「浮窗开设置时桌面点设置图标 100% 注销」「浮窗开启后下拉控制中心/通知中心
+          #      100% 注销」→ 让位链是唯一在这两个动作上都会跑的东西，而它里面还留着
+          #      两处会 cancel 已在屏手指的开关（浮窗 isUserInteractionEnabled / 把手 isHidden）。
+          #   ③ 「浮窗开启期间切全屏应用，画面定格不自动恢复」→ reassertContentForeground 的
+          #      guardArmedUntil 4 秒后归零，常驻看门的重申一次都发不出去。
+          #   ④ 「抖音滑动圆盘 → 视频暂停 + 跳主页 + 手势卡死」→ 0.6 秒硬超时兜底在长手势中途
+          #      把 userInteractionEnabled 开回去，同一根手指被抖音收到。
+          #
+          # ① 让位链不许再出现「会 cancel 触摸」的开关
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+               | grep -q 'isUserInteractionEnabled = !yielding'; then
+            echo "::error::0.2.85 让位又去关 userInteractionEnabled 了（UIKit 会 cancel 已在屏的手指 → 野指针）"
+            exit 1
+          fi
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+               | grep -q 'grip.isHidden ='; then
+            echo "::error::0.2.85 把手又用 isHidden 了（呼出圆盘那一刻 cancel 手指 = Aevon(57) 崩溃点 2 同款）"
+            exit 1
+          fi
+          grep -q 'AevonYieldPureAlphaV285' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::0.2.85 缺「把手让位改 alpha」标记"; exit 1; }
+          grep -q 'AevonYieldCrumbV285' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.85 缺让位前后面包屑（下一份崩溃日志没法定位到哪一侧）"; exit 1; }
+          # ② 崩溃取证必须带零假设转储（偏移读错过两次，不能再只信结构体布局）
+          grep -q 'AevonCrashDumpV285' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.85 缺 ucontext 原始转储（pc 读错时无法自证）"; exit 1; }
+          grep -q 'uctx 原始转储 320 字节' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.85 转储日志串缺失（标记只在注释里不进二进制）"; exit 1; }
+          grep -q 'mcontext + 16 + 232' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
+            || { echo "::error::0.2.85 __es 偏移没修正（24 → 16，多算 8 会把 pc 读成 cpsr+pad）"; exit 1; }
+          # ③ 入场不许再带缩放
+          grep -q 'AevonRevealPlainV285' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.85 缺「入场只淡入不缩放」标记"; exit 1; }
+          # ④ 定格自愈
+          grep -q 'AevonIdleRewakeV285' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.85 缺「定格自愈」标记"; exit 1; }
+          grep -q 'guardArmedUntil = nowR + 0.9' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.85 定格自愈没真的重新布防（重申会被 guard 挡掉）"; exit 1; }
+          # ⑤ 抖音：0.6 秒硬超时兜底必须改成「先复查 SB 真实状态」
+          grep -q 'AevonGripHoldV285' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.85 缺「把手占用续排复查」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+               | grep -q '把手占用满 0.6s 未见抬手'; then
+            echo "::error::0.2.85 0.6 秒硬超时中途放行还在（抖音滑动圆盘会漏摸 → 暂停 + 跳主页 + 手势卡死）"
+            exit 1
+          fi
+          echo "V0.2.85 校验: 零假设崩溃转储 + 让位纯 alpha + 入场无缩放 + 定格自愈 + 抖音续排复查 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

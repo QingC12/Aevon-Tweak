@@ -636,10 +636,19 @@ enum AevonEntryHost {
             overlayHitName = hit
         }
         if AevonWindowManager.isOverlayYielded != present {
+            /* V0.2.85（AevonYieldCrumbV285）：**让位前先落一条面包屑**。
+             * Aevon(57) 崩溃点 2 的最后一条日志是「系统浮层让位 开」，而那条是在
+             * `setSystemOverlayYield` **之后**才打的 —— 也就是说崩在让位内部时，
+             * 日志里只剩「命中 … 但手指还在屏上」，根本分不清是让位崩的还是让位后崩的。
+             * 现在拆成「开始 → 完成」两条，下一份日志能直接定位到哪一侧。 */
+            if present {
+                AevonLog.info("[窗口] 让位开始（命中 \(hit)，浮窗 \(AevonWindowManager.allWindows.count) 扇）"
+                    + "（AevonYieldCrumbV285）")
+            }
             AevonWindowManager.setSystemOverlayYield(present)
             if present {
-                AevonLog.info("[窗口] 命中系统浮层 \(hit)（在屏）→ 浮窗与把手让位"
-                    + "（AevonOverlayYieldV278）")
+                AevonLog.info("[窗口] 命中系统浮层 \(hit)（在屏）→ 浮窗与把手让位完成"
+                    + "（AevonOverlayYieldV278 AevonYieldCrumbV285）")
             } else {
                 AevonLog.info("[窗口] 系统浮层已收起 → 浮窗与把手恢复"
                     + "（AevonOverlayYieldV278）")

@@ -1670,6 +1670,11 @@ final class AevonWindowView: UIView {
     /// 本次布防里已经重申过几次前台 / 上一次重申的时刻
     private var reassertCount = 0
     private var lastReassertAt: TimeInterval = 0
+    /// V0.2.85（AevonIdleRewakeV285）：定格自愈 —— 上一次「重新布防 + 重申」的时刻
+    /// 与累计次数。低频（每 3 秒最多一次）是为了不在全屏 App 前台时把场景设置写爆。
+    private var lastIdleRewakeAt: TimeInterval = 0
+    private var lastIdleRewakeStartedAt: TimeInterval = 0
+    private var idleRewakeCount = 0
     /// 滚动快照的最后刷新时刻
     private var lastSnapshotRefreshAt: TimeInterval = 0
     /// 连续抓不到快照的次数（≥3 就把滚动刷新退避到 30 秒）
@@ -1987,6 +1992,35 @@ final class AevonWindowView: UIView {
                 installDarkFreeze(reason: "巡查发现不出画（布防期第一拍即垫）")
             }
             reassertContentForeground(tag: "发现不出画")
+            /* V0.2.85（AevonIdleRewakeV285，Aevon(58)「浮窗开启期间切换全屏应用时，
+             * 浮窗内画面会定格，并且不会自动恢复，只能关掉浮窗再打开」）：
+             *
+             * 定格不是「画面不刷新」这么简单 —— 是**我们主动放弃了恢复**。
+             * `reassertContentForeground` 头两条 guard 就决定了上限：
+             *   `guard guardArmedUntil > 0` / `guard reassertCount < 4`
+             * 布防期只有 4 秒、最多 4 次重申；4 秒后 `guardArmedUntil` 归零，
+             * 常驻看门的重在这里**一次都发不出去**（第一条 guard 直接 return）。
+             * 而浮窗场景被别的全屏 App 压在后台时，系统**永远**不会自己把它拉回来 ——
+             * 于是「盖一张最后一帧 + 再也没人叫醒」= 用户看到的定格。
+             *
+             * 修法：不取消布防，改成**低频自愈** —— 内容连续掉出画时，每 3 秒重新
+             * 布防 0.9 秒、放行 1 次重申。代价是每个 3 秒窗口最多 1 次场景设置写入
+             *（全屏 App 在前台时这次重申本来也无效，但它是我们唯一能做的动作，
+             * 而切回浮窗 App 的那一刻它正好能把画面叫回来）。 */
+            let nowR = CACurrentMediaTime()
+            if nowR - lastIdleRewakeAt > 3.0 {
+                let gap = lastIdleRewakeStartedAt > 0 ? nowR - lastIdleRewakeStartedAt : 0
+                lastIdleRewakeAt = nowR
+                lastIdleRewakeStartedAt = nowR
+                idleRewakeCount += 1
+                guardArmedUntil = nowR + 0.9
+                reassertCount = 3            // 只放行 1 次（闸门是 < 4）
+                lastReassertAt = 0
+                AevonLog.info("[窗口] 定格自愈：内容连续掉出画 → 重新布防并重申一次"
+                    + "（第 \(idleRewakeCount) 次，距上次 " + String(format: "%.1f", gap) + "s）"
+                    + "（AevonIdleRewakeV285）")
+                reassertContentForeground(tag: "定格自愈")
+            }
         case .none:
             break
         }
@@ -2505,18 +2539,29 @@ final class AevonWindowView: UIView {
          * 现在挂了就显：动画在离屏也能跑完，挂上后第一帧就是终态。 */
         guard !entryRevealDone, !isTearingDown else { return }
         entryRevealDone = true
+        /* V0.2.85（AevonRevealPlainV285，Aevon(58)「打开悬浮窗时依旧会闪一下悬浮窗，
+         * 然后在出现最终悬浮窗和内容」）：
+         *
+         * 0.2.83 摘掉遮罩之后，**入场动画本身就成了那个「闪」**。原来的三拍是
+         *   alpha 0 → 0.34 秒弹簧淡入（transform 0.965 → 1.0）
+         * 缩放会让窗口在 0.34 秒里一直变大小，淡入会让内容半透明 —— 在已经"全程
+         * alpha=0 到定稿才显"的新时序下，用户看到的第一个东西就是「窗从小变大 +
+         * 渐渐透出来」，然后内容才清晰。他描述成「先闪一下悬浮窗，再出现最终悬浮窗
+         * 和内容」，与这三拍完全一致（Aevon(58) 13:48:18.988 显形 → 18.991 淡入
+         * 0.34s + 弹簧 → 19.73 复查）。
+         *
+         * 显形这件事的语义已经变成「画布定稿后一次性揭开」，不需要再补任何入场
+         * 编排：缩放去掉（transform 恒 identity），淡入压到 0.12 秒（人眼读作「直接
+         * 出现」，但避免单帧硬切在 OLED 上的那一下跳）。 */
         alpha = 0
-        transform = CGAffineTransform(scaleX: 0.965, y: 0.965)
-        UIView.animate(withDuration: 0.34, delay: 0,
-                       usingSpringWithDamping: 0.86,
-                       initialSpringVelocity: 0.3,
-                       options: [.allowUserInteraction, .beginFromCurrentState],
+        transform = .identity
+        UIView.animate(withDuration: 0.12, delay: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut],
                        animations: { [weak self] in
             self?.alpha = 1
-            self?.transform = .identity
         }, completion: nil)
-        AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 淡入 + 0.965→1.0 弹簧 0.34s"
-            + "（AevonFloatTransitionV264 AevonEntryRevealV265）")
+        AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 0.12 秒直接淡入，"
+            + "无缩放（入场编排只保留最少的可读性，AevonRevealPlainV285）")
     }
 
     /// V0.2.78（AevonRevealInstantV278，用户 Aevon(50) #4/#5）：

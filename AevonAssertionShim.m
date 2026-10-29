@@ -1293,18 +1293,28 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
         /* arm64 / Darwin 的 ucontext ABI 布局（固定，不随头文件变）：
          *   ucontext_t                    → uc_mcontext 在 +48
          *     (int uc_onstack 4 + sigset 4 + sigaltstack 24 + uc_link 8 + uc_mcsize 8)
-         *   __darwin_mcontext64           → __ss 在 +24（前面是 __es：3 × uint64）
+         *   __darwin_mcontext64           → __ss 在 **+16**
+         *     （__es = __far 8 + __esr 4 + __exception 4；0.2.83 把它当成 24 字节，
+         *       于是后面每个字段都多读 8 字节 —— 见下方 AevonCrashPCFixV285 的说明）
          *   __darwin_arm_thread_state64   → x[29] 232 字节，随后 fp / lr / sp / pc 各 8
-         * 于是 pc = mcontext + 24 + 232 + 24 = mcontext + 280，其余依次 +8。
+         * 于是 pc = 16 + 232 + 24 = mcontext + 272，其余依次 +8。
          * 为什么不用成员名：iOS SDK 那份 ucontext.h 是 macOS 的，成员名对不上
          *（0.2.83 第一次构建就死在 "no member named '__pc'"）。 */
         uintptr_t ucAddress = (uintptr_t)uctx;
         uintptr_t mcontext = *(uintptr_t *)(ucAddress + 48);
         if (mcontext != 0) {
-            fp = *(uint64_t *)(mcontext + 24 + 232);
-            lr = *(uint64_t *)(mcontext + 24 + 240);
-            sp = *(uint64_t *)(mcontext + 24 + 248);
-            pc = *(uint64_t *)(mcontext + 24 + 256);
+            /* V0.2.85（AevonCrashPCFixV285）：0.2.83 把 `__es` 当成 24 字节，
+             * 实际 `__darwin_arm_exception_state64` 是 8( __far ) + 4( __esr )
+             * + 4( __exception ) = **16** 字节 → `__ss` 在 mcontext+16，不是 +24。
+             * 偏移多算 8 的后果 Aevon(57) 四份日志可见：pc 读成了 `__cpsr`+`__pad`
+             * 拼出来的 0x3f4f000e20001000 这种值（两个 32 位拼一起，
+             * 所以四次的低 32 位全是 xxxx1000），sp 四次完全相同 0xea510001a059fd64
+             *（同一次崩溃不可能跨进程重启栈地址不变）→ 整组读数都是废的。
+             * 下面是按 ABI 修正后的值，**但归属判定仍以下方原始转储为准**（见 dump）。 */
+            fp = *(uint64_t *)(mcontext + 16 + 232);
+            lr = *(uint64_t *)(mcontext + 16 + 240);
+            sp = *(uint64_t *)(mcontext + 16 + 248);
+            pc = *(uint64_t *)(mcontext + 16 + 256);
         }
     }
 #else
@@ -1331,6 +1341,41 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
 
     AevonCW(fd, owned ? "[崩溃] 归因：崩溃指令在 Aevon 内（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283）\n"
                       : "[崩溃] 归因：崩溃指令不在 Aevon（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283）\n");
+
+    /* V0.2.85（AevonCrashDumpV285）：**不依赖任何结构体布局**的原始转储。
+     *
+     * 为什么非加不可：偏移读取已经错过两次 —— 0.2.83 第一次编译失败（`<ucontext.h>`
+     * 在 iOS SDK 里是 macOS 的 XNU 头），第二次按手算偏移读出来的是「两个 32 位
+     * 拼在一起」的假地址（Aevon(57) 四份日志：pc 全形如 0x……001000，sp 四次完全
+     * 相同 0xea510001a059fd64 —— 同一次信号跨进程重启栈地址不可能不变）。
+     * 继续按记忆里的 ABI 手算偏移，上限就是「不确定」。
+     *
+     * 这份转储是**零假设**的：把 ucontext 起手 320 字节按 qword 原样打出来。
+     * arm64 上代码地址形如 0x0000000102xxxxxx / 0x00000001xxxxxxxx，真 pc、lr
+     * 一定在里面，拿到日志一眼就能指认，顺带反推出这台机器上真实的字段偏移。
+     * 纯指针读 + 定长循环，async-signal-safe，不 malloc、不加锁。 */
+    AevonCW(fd, "[崩溃] uctx 原始转储 320 字节（AevonCrashDumpV285）：\n");
+    if (uctx != NULL) {
+        const uint64_t *words = (const uint64_t *)uctx;
+        for (int row = 0; row < 10; row++) {
+            AevonCW(fd, "  +");
+            AevonCInt(fd, (long)(row * 32));
+            AevonCW(fd, ":");
+            for (int col = 0; col < 4; col++) {
+                AevonCW(fd, " ");
+                AevonCHex(fd, words[row * 4 + col]);
+            }
+            AevonCW(fd, "\n");
+        }
+    } else {
+        AevonCW(fd, "  （uctx 为空）\n");
+    }
+    AevonCW(fd, "[崩溃] Aevon text 段 = ");
+    AevonCHex(fd, aevonTextStart);
+    AevonCW(fd, " .. ");
+    AevonCHex(fd, aevonTextEnd);
+    AevonCW(fd, "（AevonCrashDumpV285 AevonCrashPCFixV285：偏移按 __es=16 字节修正，"
+                "以本转储为准）\n");
 
     /* 自己走 fp 链：arm64 的帧记录是 {prev_fp, lr}，fp 指向它。
      * 边界校验只做「对齐 + 单调递增 + 幅度合理」，不碰任何锁 / malloc。 */

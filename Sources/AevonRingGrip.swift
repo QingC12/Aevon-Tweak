@@ -233,10 +233,14 @@ enum AevonRingGrip {
         guard keyboardSuppressed != on else { return }
         keyboardSuppressed = on
         guard let grip = grip, grip.superview != nil else { return }
-        grip.isHidden = on ? true : (AevonRingMenu.presented != nil)
-        grip.isUserInteractionEnabled = !on
+        /* V0.2.85（AevonYieldPureAlphaV285）：键盘这条也在「手指刚点完输入框」的瞬间触发，
+         * 原来的 `isHidden` + `isUserInteractionEnabled = false` 同样是两个 cancel 面。
+         * 统一走 alpha：键盘在屏或圆盘正展开 → 全透明；否则按开关恢复。 */
+        let shouldShow = !on && AevonRingMenu.presented == nil
+            && AevonPrefs.bool("RingGripEnabled", default: true)
+        grip.alpha = shouldShow ? gripShownAlpha : gripHiddenAlpha
         AevonLog.info("[圆盘] 键盘\((on ? "在屏" : "收起")) → 把手触发条\((on ? "临时屏蔽（防压键盘右列）" : "恢复"))"
-            + "（AevonKbSenseV268 AevonKbHideV267）")
+            + "（AevonKbSenseV268 AevonKbHideV267 AevonYieldPureAlphaV285）")
     }
 
     /// V0.2.68（AevonKbSenseV268）：现场检测键盘窗口是否在屏（0.5s 缓存）。
@@ -425,13 +429,33 @@ enum AevonRingGrip {
         guard !keyboardSuppressed else { return false }   // V0.2.67 AevonKbHideV267
         guard AevonPrefs.bool("RingGripEnabled", default: true) else { return false }
         guard let grip = grip, grip.superview != nil else { return false }
+        // V0.2.85（AevonYieldPureAlphaV285）：藏起来（alpha 0）时不再拦触摸 ——
+        // 以前靠 isHidden 天然跳过，现在得显式判，否则让位态下把手还在吃这根手指。
+        guard !gripIsEffectivelyHidden(grip) else { return false }
         return grip.containsScreenPoint(point)
+    }
+
+    /// V0.2.85（AevonYieldPureAlphaV285）：把手的「藏」全部改成 alpha，**不再用 isHidden**。
+    ///
+    /// 两条路径都会在「手指还按着把手」的瞬间执行：
+    ///   · `setVisible(false)` —— 手指左滑呼出圆盘，把手当场要藏；
+    ///   · `setOverlayYield(true)` —— 手指刚下拉控制中心 / 通知中心。
+    /// `isHidden = true` 让 UIKit **立刻 cancel 这根手指**并把 UITouch 从事件簿记里摘掉，
+    /// 而 `AevonTouchHook` 的 sendEvent 钩子手里还握着同一个指针（0.2.82 注释里写的就是
+    /// 这个 use-after-free，当时只修了浮窗那一半，把手这两处漏了）。
+    /// alpha < 0.02 的视图不参与 hitTest，视觉与触摸语义等价，但**不 cancel 已在屏的手指**。
+    private static let gripHiddenAlpha: CGFloat = 0
+    private static let gripShownAlpha: CGFloat = 0.85
+
+    /// 当前是否「对外不见」（隐藏或全透明）。命中判定统一走这个。
+    private static func gripIsEffectivelyHidden(_ view: UIView) -> Bool {
+        return view.isHidden || view.alpha < 0.02
     }
 
     /// 圆盘展开时藏起来（避免它压在圆盘上），收起后再出来。
     static func setVisible(_ visible: Bool) {
         guard let grip = grip else { return }
-        if grip.isHidden != !visible { grip.isHidden = !visible }
+        grip.alpha = visible ? gripShownAlpha : gripHiddenAlpha
     }
 
     /// V0.2.78（AevonOverlayYieldV278，用户 Aevon(50) #1）：系统浮层（控制中心 /
@@ -439,8 +463,9 @@ enum AevonRingGrip {
     /// 而且是那块区域唯一还会吃触摸的东西。收起重置时按开关状态恢复。
     static func setOverlayYield(_ on: Bool) {
         guard let grip = grip else { return }
-        let shouldHide = on ? true : !AevonPrefs.bool("RingGripEnabled", default: true)
-        if grip.isHidden != shouldHide { grip.isHidden = shouldHide }
+        // 收起时要回「按开关状态」：开关关着就是本来就不该有把手。
+        let shouldShow = on ? false : AevonPrefs.bool("RingGripEnabled", default: true)
+        grip.alpha = shouldShow ? gripShownAlpha : gripHiddenAlpha
     }
 
     static var isInstalled: Bool { return grip?.superview != nil }
