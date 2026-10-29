@@ -155,7 +155,10 @@ enum AevonSceneHelper {
     /// 每写一笔都让远程表面重建一次 = 用户看到的一次闪。现在：
     ///   · 账本说「账面已经是这个值」→ 根本不写；
     ///   · 同一场景上一笔还没回来 → 合并成一笔 pending，不并发写。
-    static func setForeground(_ scene: AnyObject, _ foreground: Bool, reason: String = "场景前台") {
+    /// force = 绕过账本强制写一笔。只有「补救路径」（看门重申 / 定格自愈）该用 true；
+    /// 平时一律 false，否则账本省下的重提交白省（0.2.79 的收益会全丢）。
+    static func setForeground(_ scene: AnyObject, _ foreground: Bool, reason: String = "场景前台",
+                              force: Bool = false) {
         guard scene.responds(to: Selector(("settings"))) else { return }
 
         // 拿 sceneIdentifier 反查账页；查不到（没开账）就按 identifier 单独记一页
@@ -169,7 +172,7 @@ enum AevonSceneHelper {
             return
         }
         AevonSettingsChannel.shared.request(bundleID: bundleID, scene: scene,
-                                            foreground: foreground, reason: reason)
+                                            foreground: foreground, reason: reason, force: force)
     }
 
     /// 老路直写：只在拿不到场景标识时兜底用（不能因为记账出问题就完全不写）。

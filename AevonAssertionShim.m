@@ -1393,8 +1393,8 @@ static void AevonCrashSignalHandler(int sig, siginfo_t *info, void *uctx) {
     AevonCHex(fd, fp);
     AevonCW(fd, "\n");
 
-    AevonCW(fd, owned ? "[崩溃] 归因：崩溃指令在 Aevon 内（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283 AevonCrashPacMaskV286）\n"
-                      : "[崩溃] 归因：崩溃指令不在 Aevon（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283 AevonCrashPacMaskV286）\n");
+    AevonCW(fd, owned ? "[崩溃] 归因：崩溃指令在 Aevon 内（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283 AevonCrashPacMaskV286 AevonCrashReentryV286）\n"
+                      : "[崩溃] 归因：崩溃指令不在 Aevon（AevonCrashTraceV39 AevonCrashAttrV40 AevonCrashPCV283 AevonCrashPacMaskV286 AevonCrashReentryV286）\n");
     AevonCW(fd, "[崩溃] 上面的 pc/lr/sp/fp 已掩掉 arm64e PAC 签名（& 0x00007FFFFFFFFFFF），"
                 "可直接用于符号化（AevonCrashPacMaskV286）\n");
 

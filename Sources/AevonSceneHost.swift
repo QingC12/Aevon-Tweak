@@ -607,7 +607,9 @@ final class AevonSceneHost {
         if isSelfBuilt {
             return AevonSelfSceneReassertForeground(scene)
         }
-        AevonSceneHelper.setForeground(scene, true)
+        // V0.2.86（AevonForceWriteV286）：补救路径必须强制写 —— 账本说「已一致」
+        // 但场景实际在后台时，不 force 就等于永久定格。
+        AevonSceneHelper.setForeground(scene, true, reason: "看门重申", force: true)
         return true
     }
 

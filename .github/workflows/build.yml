@@ -149,7 +149,8 @@ jobs:
                    AevonCrashDumpV285 AevonCrashPCFixV285 AevonYieldPureAlphaV285 \
                    AevonRevealPlainV285 AevonIdleRewakeV285 AevonYieldCrumbV285 \
                    AevonNoFlashBirthV286 AevonNoPlaceholderV286 AevonScalarKVCV286 \
-                   AevonCrashReentryV286 AevonCrashPacMaskV286 AevonCrashFrameGuardV286; do
+                   AevonCrashReentryV286 AevonCrashPacMaskV286 AevonCrashFrameGuardV286 \
+                   AevonForceWriteV286; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.2.86 二进制里缺标记 $m"; exit 1; }
           done
@@ -3751,7 +3752,14 @@ jobs:
             echo "::error::0.2.86 把手占用还在关交互（全屏 App 卡 2.5 秒会复发）"
             exit 1
           fi
-          echo "V0.2.86 校验: 出生即隐形 + 垫底图退役 + 标量KVC + 崩溃防重入 + PAC掩码 + 把手占用退役 已就位"
+          # ⑦ 补救路径必须能穿透账本（否则「读不到」= 永久定格）
+          grep -q 'AevonForceWriteV286' "$GITHUB_WORKSPACE/Sources/AevonSettingsChannel.swift" \
+            || { echo "::error::0.2.86 缺「强制写穿透账本」标记"; exit 1; }
+          grep -q 'if !decision.shouldWrite && !force' "$GITHUB_WORKSPACE/Sources/AevonSettingsChannel.swift" \
+            || { echo "::error::0.2.86 force 没能穿透账本（定格时重申一次都发不出去）"; exit 1; }
+          grep -q 'reason: \"看门重申\", force: true' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.86 看门重申没走 force"; exit 1; }
+          echo "V0.2.86 校验: 出生即隐形 + 垫底图退役 + 标量KVC + 崩溃防重入 + PAC掩码 + 把手占用退役 + 强制写 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

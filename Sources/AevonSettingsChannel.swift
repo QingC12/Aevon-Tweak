@@ -78,7 +78,7 @@ final class AevonSettingsChannel {
         slots[bundleID] = slot
         lock.unlock()
 
-        sendNow(bundleID: bundleID, scene: scene, foreground: foreground, reason: reason)
+        sendNow(bundleID: bundleID, scene: scene, foreground: foreground, reason: reason, force: force)
     }
 
     /// 收尾：关窗时若还有 pending，直接丢弃（App 已经不要了）
@@ -97,7 +97,8 @@ final class AevonSettingsChannel {
 
     // MARK: - 内部
 
-    private func sendNow(bundleID: String, scene: AnyObject?, foreground: Bool, reason: String) {
+    private func sendNow(bundleID: String, scene: AnyObject?, foreground: Bool, reason: String,
+                         force: Bool = false) {
         guard let scene else {
             finish(bundleID: bundleID, sent: false)
             return
@@ -106,7 +107,23 @@ final class AevonSettingsChannel {
         // 写前先问账本：账面一致就根本不写（省一次重提交 = 少闪一次）
         let decision = AevonSceneLedger.shared.decide(bundleID: bundleID, scene: scene,
                                                      wantForeground: foreground, reason: reason)
-        if !decision.shouldWrite {
+        /* V0.2.86（AevonForceWriteV286）—— **force 必须能穿透账本**，这是「定格」的根治点。
+         *
+         * 账本记的是「我上次写下去的值」。系统事后把场景压回后台、而**实时读又读不到**时
+         *（`snapshot(of:)` 返回 nil → 退回 lastKnown=YES），decide 就判「账面已一致」
+         * → 通道永远跳过 → 看门每 0.5 秒喊一次「重申」，一次都发不出去。
+         * 归档(20) 抖音那段正是这个形态：`重申浮窗场景前台` 连发两次，前后
+         * `fg=? cs=0 layers=-1` 一模一样 —— 因为压根没写进去。
+         * 补救路径（看门 / 定格自愈）必须能强制写一笔，否则「读不到」就等于「永久定格」。 */
+        if force && !decision.shouldWrite {
+            /* 这条日志有两个用途：① 让「强制写」在真机上可观察（否则只能看「跳过」条数变少）；
+             * ② 让标记 AevonForceWriteV286 真的进二进制 —— 只写在注释里的标记永远查不到
+             *（0.2.68 / 0.2.81 / 0.2.83 / 0.2.85 四次同坑，第五次不能再犯）。 */
+            logThrottled("[通道] 强制写 \(bundleID)（账面说已一致，补救路径不许跳过）"
+                + " 面[\(decision.snapshot.description)] 原因=\(reason)（AevonForceWriteV286）",
+                key: "force-\(bundleID)")
+        }
+        if !decision.shouldWrite && !force {
             AevonSceneLedger.shared.noteSkipped(bundleID: bundleID, reason: reason)
             lock.lock(); totalSkips += 1; lock.unlock()
             logThrottled("[通道] 跳过 \(bundleID) \(decision.kind.rawValue) 面[\(decision.snapshot.description)]"
