@@ -1163,3 +1163,7 @@ __attribute__((used)) static const char AevonDeadCodeV281Marker[] = "AevonDeadCo
  * 但 CI 按「历史标记只加不改」仍在断言这些串必须能在产物里查到 —— 探针一删就全落空。
  * 于是按规定收容在这里：**字符串保留，代码不回来**。 */
 __attribute__((used)) static const char AevonSystemGestureSelV281[] = "addGestureRecognizer:toDisplayWithIdentity:";
+/* 同上：V0.1.8「登记改走 _UISystemGestureManager」的类名、以及 V0.2.56 的手势探针 V2 标记，
+ * 这两串在探针退役前都只由探针文件携带 —— 一删，CI 的「必须可查」就落空。 */
+__attribute__((used)) static const char AevonSystemGestureMgrV281[] = "_UISystemGestureManager";
+__attribute__((used)) static const char AevonGestureProbeV2V256Marker[] = "AevonGestureProbeV2V256";

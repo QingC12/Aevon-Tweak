@@ -250,7 +250,8 @@ jobs:
             || { echo "::error::探针安全带文件没进 Makefile（等于没编进去）"; exit 1; }
           # 反回退：Swift 侧不许再出现全进程类表扫描（那条路要经过 Swift 动态转换，
           # 正是崩溃点）。注释里说明这件事是允许的，所以先滤掉行首注释。
-          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonProbeV107.swift" \
+          # V0.2.81：扫全部 Swift 源码（原探针文件已删，判据从「那个文件」升级为「任何文件」）
+          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE"/Sources/*.swift \
                | grep -q 'objc_copyClassList'; then
             echo "::error::类表扫描又回到 Swift 侧了 —— 会重演 swift_dynamicCast 崩溃"
             exit 1
@@ -359,12 +360,7 @@ jobs:
           # 只留一条反回退：文件不许回来，否则「每次开屏都扫一遍全部窗口视图树」会重演。
           test ! -f "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift" \
             || { echo "::error::0.2.81 P7 探针文件又回来了"; exit 1; }
-          # 只读纪律：探针里不许出现任何「改状态」的调用（加了识别器/改了 delegate/swizzle 都算）
-          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonProbeP7V114.swift" \
-               | grep -qE 'addGestureRecognizer|removeGestureRecognizer|\.delegate *=|swizzle|addSubview'; then
-            echo "::error::P7 探针里出现了改状态的调用 —— 探针必须只读"
-            exit 1
-          fi
+          # V0.2.81：P7 的「只读纪律」随文件一起退役（文件已不存在，再 grep 只会报错）
           # 宿主链函数仍在 ObjC 侧（沿 superview 走链只能在 ObjC 做，Swift 侧会走动态转换）
           grep -q 'AevonViewHostChain' "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
             || { echo "::error::宿主链函数 AevonViewHostChain 不在 ObjC 安全带里"; exit 1; }
