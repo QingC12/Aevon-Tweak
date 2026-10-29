@@ -251,7 +251,7 @@ jobs:
           # 反回退：Swift 侧不许再出现全进程类表扫描（那条路要经过 Swift 动态转换，
           # 正是崩溃点）。注释里说明这件事是允许的，所以先滤掉行首注释。
           # V0.2.81：扫全部 Swift 源码（原探针文件已删，判据从「那个文件」升级为「任何文件」）
-          if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE"/Sources/*.swift \
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE"/Sources/*.swift \
                | grep -q 'objc_copyClassList'; then
             echo "::error::类表扫描又回到 Swift 侧了 —— 会重演 swift_dynamicCast 崩溃"
             exit 1
