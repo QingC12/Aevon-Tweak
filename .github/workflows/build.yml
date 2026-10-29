@@ -2060,8 +2060,12 @@ jobs:
           if sed -n '/override func didMoveToWindow/,/^    }/p' "$W/Sources/AevonWindowView.swift" | grep -q 'startGuardTimerIfNeeded'; then :; else
             echo "::error::0.2.50 守卫不是上屏即起（事件没来时完全没有守卫 = 黑屏 >1 秒）"; exit 1
           fi
-          grep -q 'if renderTicks >= 2 { removeDarkFreeze' "$W/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.50 撤冻结没有 2 拍确认（cs 先报 2、表面还没画 → 露出黑窗）"; exit 1; }
+          # V0.2.99 反转（AevonFullFreezeV299）：原检查 0.2.50 单行形态
+          # 「if renderTicks >= 2 { removeDarkFreeze」—— 0.2.99 给该撤帧装了更强的
+          # 转场静默闸（几何 2 拍静止 + 2.0s fail-open），2 拍确认语义保留且升级；
+          # 形态断言随之升级为「撤帧必须过 guardTransitionQuiet」。
+          grep -q 'renderTicks >= 2, guardTransitionQuiet' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.99 撤冻结 2 拍确认被拆（renderTicks+静默闸必须同条件）"; exit 1; }
           grep -q 'AevonDarkGuardV250' "$W/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.50 缺常驻守卫标记"; exit 1; }
           # ⑥ 熄屏：必须真拦锁屏（日志已证 isIdleTimerDisabled 在本机 12 次全无效，位掩码恒 4）
