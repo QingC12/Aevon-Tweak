@@ -118,6 +118,12 @@ jobs:
             || { echo "::error::缺少 uiPresentationManager 调用（App 不会被要求渲染）"; exit 1; }
           strings "$DYLIB" | grep -q 'createPresenterWithIdentifier:' \
             || { echo "::error::缺少 createPresenterWithIdentifier: 调用"; exit 1; }
+          # V0.2.79（路线 C 三件套必须编进二进制 —— 只有调用者的字符串才会留下，
+          # 标记缺失 = 该组件被整体消除或没接上，等于没做）
+          for m in AevonSceneLedgerV279 AevonSettingsChannelV279 AevonSwitchTxnV279; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::0.2.79 二进制里缺路线C标记 $m"; exit 1; }
+          done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
           if strings "$DYLIB" | grep -q '_UISceneLayerHostContainerView'; then
@@ -3212,6 +3218,51 @@ jobs:
           [ "$(grep -c 'updateSettings:withTransitionContext:completion:' "$GITHUB_WORKSPACE/Sources/Hooks.swift")" -ge 1 ] \
             || { echo "::error::0.2.78 场景拦截 hook 没装到 updateSettings 上"; exit 1; }
           echo "V0.2.78 校验: 系统浮层让位 + 直显零动画 + 快照黑帧校验 + 场景前台拦截(改写系统写入) 已就位"
+
+          # ── V0.2.79 校验（路线 C「抄记账体系」：账本 + 单飞通道 + 切换事务）──────
+          # 依据：交付/逆向报告-浮窗生命周期-2026-10-29（SCSystemSceneContext 前后值记账 /
+          # sc_enqueueSettingsMutation 单飞 / SCWSSwitch 会话化）。三件套必须同时在场。
+          for f in AevonSceneLedger AevonSettingsChannel AevonSwitchTransaction; do
+            test -f "$GITHUB_WORKSPACE/Sources/$f.swift" \
+              || { echo "::error::0.2.79 缺路线C组件 $f.swift"; exit 1; }
+          done
+          grep -q 'Sources/AevonSceneLedger.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::0.2.79 AevonSceneLedger.swift 未登记进 Makefile"; exit 1; }
+          grep -q 'Sources/AevonSettingsChannel.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::0.2.79 AevonSettingsChannel.swift 未登记进 Makefile"; exit 1; }
+          grep -q 'Sources/AevonSwitchTransaction.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::0.2.79 AevonSwitchTransaction.swift 未登记进 Makefile"; exit 1; }
+          # 账本：写前必须比对账面（skipSame 是「省一次重提交」的唯一实现）
+          grep -q 'skipSame' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+            || { echo "::error::0.2.79 账本缺「账面一致则跳过」判定"; exit 1; }
+          grep -q 'AevonSceneLedgerV279' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+            || { echo "::error::0.2.79 缺账本标记（AevonSceneLedgerV279）"; exit 1; }
+          # 单飞通道：同一场景同时只允许一笔在飞
+          grep -q 'inFlight' "$GITHUB_WORKSPACE/Sources/AevonSettingsChannel.swift" \
+            || { echo "::error::0.2.79 通道缺 in-flight 单飞控制"; exit 1; }
+          grep -q 'AevonSettingsChannelV279' "$GITHUB_WORKSPACE/Sources/AevonSettingsChannel.swift" \
+            || { echo "::error::0.2.79 缺通道标记（AevonSettingsChannelV279）"; exit 1; }
+          # 收口：所有前台写入必须经过通道，不许再有裸直写散落在调用点
+          grep -q 'AevonSettingsChannel.shared.request' "$GITHUB_WORKSPACE/Sources/AevonSceneHelper.swift" \
+            || { echo "::error::0.2.79 setForeground 没走单飞通道"; exit 1; }
+          # Hook 层判据必须升级为账本（否则「一刀切 YES」会顶住交还全屏）
+          grep -q 'AevonSceneLedger.shared.wantsForeground' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
+            || { echo "::error::0.2.79 场景拦截没接账本判据"; exit 1; }
+          # 事务：开窗要起、关窗要中止（迟到闭包闸门）
+          grep -q 'AevonSwitchCoordinator.shared.begin' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.79 开窗没起事务"; exit 1; }
+          grep -q 'AevonSwitchCoordinator.shared.abort' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.79 关窗没中止事务（迟到闭包会写脏状态）"; exit 1; }
+          grep -q 'AevonSwitchTxnV279' "$GITHUB_WORKSPACE/Sources/AevonSwitchTransaction.swift" \
+            || { echo "::error::0.2.79 缺事务标记（AevonSwitchTxnV279）"; exit 1; }
+          # 防回退网：新组件里绝不允许出现类表枚举（0.2.72 SB 注销事故的根因）
+          grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+            && { echo "::error::0.2.79 账本里出现类表枚举（SB 进程注销风险）"; exit 1; }
+          grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonSettingsChannel.swift" \
+            && { echo "::error::0.2.79 通道里出现类表枚举（SB 进程注销风险）"; exit 1; }
+          grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonSwitchTransaction.swift" \
+            && { echo "::error::0.2.79 事务里出现类表枚举（SB 进程注销风险）"; exit 1; }
+          echo "V0.2.79 校验: 账本(比对后写) + 单飞通道(同拍不并发写) + 切换事务(关窗即失效) 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

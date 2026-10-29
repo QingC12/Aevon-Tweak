@@ -409,6 +409,16 @@ enum AevonWindowManager {
         // 而它正是最需要「UIScreen = 画布」的那个 App。
         AevonNotifySetFloatStage(bundleID)
         AevonForegroundManager.shared.add(bundleID: bundleID, sceneID: sceneID)
+        /* V0.2.79（AevonSwitchTxnV279 + AevonSceneLedgerV279，路线 C「抄记账体系」）：
+         * 开窗从这里起变成一笔**显式事务**：
+         *   · 账本开账（记下这个 App 的账面：fg/bg/停用原因）；
+         *   · 登记期望「我要它前台」—— Hook 层拦不拦系统写 NO，就看这条期望；
+         *   · 事务对象串起整条链（唤醒→遮罩→改画布→显窗），并给所有延迟闭包
+         *     一个统一失效闸门：关窗即 isCurrent=false，迟到的复查/挂起闭包写不回来。
+         * 依据：ScreenCore `SCWSSwitch` 的会话化 + `SCSystemSceneContext` 的前后值记账。 */
+        let switchTxn = AevonSwitchCoordinator.shared.begin(bundleID: bundleID, reason: "开窗")
+        AevonSceneLedger.shared.open(bundleID: bundleID, sceneID: sceneID ?? "", reason: "开窗")
+        AevonSceneLedger.shared.wishForeground(bundleID, reason: "开窗")
         /* V0.2.75（AevonReopenShroudEarlyV275，用户 Aevon(47) #3「打开过的 App 再开悬浮窗
          * 依旧先闪一下才淡入」）：遮罩再提前 —— Aevon(47) 时序账（21:30:43 设置）：
          * 43.357「已有场景，直接开窗」→ 43.537 遮罩盖上（+0.18s）→ 43.539 presenter
@@ -846,7 +856,10 @@ enum AevonWindowManager {
                 windowView.revealEntryInstant(reopenPlaceholder != nil
                     ? "占位直显（AevonReopenSwapV276 AevonRevealInstantV278）"
                     : "区域快照直显（AevonSnapDarkV278 AevonRevealInstantV278）")
+                _ = AevonSwitchCoordinator.shared.mark(switchTxn, "显窗(占位直显)", phase: .revealing)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak windowView] in
+                    // V0.2.79：关窗之后这条收尾不该再跑（否则会给已释放的窗做 crossfade）
+                    guard AevonSwitchCoordinator.shared.isAlive(switchTxn) else { return }
                     windowView?.settleReopenPlaceholder()
                 }
             } else {
@@ -902,7 +915,14 @@ enum AevonWindowManager {
                 + "crossfade 到活画面 + 0.965→1.0 弹簧 0.34s"
                 + "（AevonFloatTransitionV264 AevonEntryRevealV265 AevonRevealOnceV277）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak windowView] in
+                // V0.2.79（AevonSwitchTxnV279）：兜底显窗也要过事务闸门 ——
+                // 用户在 1.3 秒内把窗关掉的话，这条闭包以前会把**已经关掉的窗**又显出来。
+                guard AevonSwitchCoordinator.shared.isAlive(switchTxn) else {
+                    AevonLog.info("[事务] 兜底显窗跳过（\(bundleID) 已关窗）（AevonSwitchTxnV279）")
+                    return
+                }
                 windowView?.revealEntryNow("兜底上限到达")
+                AevonSwitchCoordinator.shared.complete(switchTxn, reason: "兜底显窗")
             }
             currentView = windowView
             currentBundleID = bundleID
@@ -1007,6 +1027,7 @@ enum AevonWindowManager {
                         // V0.2.77（AevonRevealOnceV277）：画布定稿 → 垫底图 crossfade 到活画面
                         //（预热档也走同一条，0.2.76 只给非预热档摘过占位）。
                         currentView?.settleReopenPlaceholder()
+                        AevonSwitchCoordinator.shared.complete(switchTxn, reason: "画布定稿(预热档)")
                     }
                 }
             } else {
@@ -1024,6 +1045,7 @@ enum AevonWindowManager {
                     currentView?.revealEntryNow("画布定稿回调（AevonRevealEventV271 AevonRevealLateV269）")
                     // V0.2.76（AevonReopenSwapV276）：画布定稿 → 占位帧 crossfade 到活画面。
                     currentView?.settleReopenPlaceholder()
+                    AevonSwitchCoordinator.shared.complete(switchTxn, reason: "画布定稿")
                 }
             }
             // V0.2.60（AevonDouyinHealV260，用户 Aevon(34) #4）：断层自愈。
@@ -1175,6 +1197,17 @@ enum AevonWindowManager {
         // 残留 floatTouchID 只会误吞同槽位的新触摸（pan 死、点按活）。
         AevonEdgeEntry.forceDisarmFloatGesture(reason: "关窗 \(bundleID)")
         AevonSceneHelper.stopKeepAlive(bundleID)
+        /* V0.2.79（AevonSwitchTxnV279 + AevonSceneLedgerV279，路线 C）：
+         * 关窗 = 事务立刻中止 + 账本释放期望。中止是「迟到闭包写脏状态」的根治法 ——
+         * 0.2.43 那次「关窗后 +2.5s 的复查闭包又把画布写回小尺寸，导致 App 之后
+         * 全屏打开只剩一小块」就是少了这层闸门。释放期望之后，Hook 层不再拦
+         * 系统写 foreground=NO（该交还的转场要让它走）。 */
+        AevonSwitchCoordinator.shared.abort(bundleID: bundleID,
+                                            reason: releaseOnly ? "释放窗口" : "关窗")
+        if !releaseOnly {
+            AevonSettingsChannel.shared.cancel(bundleID: bundleID)
+            AevonSceneLedger.shared.release(bundleID: bundleID, reason: "关窗")
+        }
         // V0.2.32（AevonSelfSceneFGV232）：自建场景已随 teardown 销毁，登记必须同步
         // 注销（保活定时器若还查到悬空场景对象会写进已销毁场景）。
         AevonSceneHelper.unregisterSelfScene(bundleID)

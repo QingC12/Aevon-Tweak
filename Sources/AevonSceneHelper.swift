@@ -147,8 +147,33 @@ enum AevonSceneHelper {
 
     // MARK: - 场景前台控制
 
-    static func setForeground(_ scene: AnyObject, _ foreground: Bool) {
+    /// 写场景前台标记。
+    ///
+    /// V0.2.79（AevonSettingsChannelV279 / AevonSceneLedgerV279，路线 C「抄记账体系」）：
+    /// **所有 foreground 写入统一收口到这里 → 单飞通道 → 账本判定**。
+    /// 以前每个调用点各写各的（开窗、切屏、保活、回桌面），同一拍可能连写 2~3 笔；
+    /// 每写一笔都让远程表面重建一次 = 用户看到的一次闪。现在：
+    ///   · 账本说「账面已经是这个值」→ 根本不写；
+    ///   · 同一场景上一笔还没回来 → 合并成一笔 pending，不并发写。
+    static func setForeground(_ scene: AnyObject, _ foreground: Bool, reason: String = "场景前台") {
         guard scene.responds(to: Selector(("settings"))) else { return }
+
+        // 拿 sceneIdentifier 反查账页；查不到（没开账）就按 identifier 单独记一页
+        var bundleID = ""
+        if let identifier = AevonRuntime.send(scene, Selector(("identifier"))) as? String,
+           !identifier.isEmpty {
+            bundleID = AevonSceneLedger.shared.bookID(matching: identifier) ?? identifier
+        }
+        if bundleID.isEmpty {
+            directWrite(scene, foreground)
+            return
+        }
+        AevonSettingsChannel.shared.request(bundleID: bundleID, scene: scene,
+                                            foreground: foreground, reason: reason)
+    }
+
+    /// 老路直写：只在拿不到场景标识时兜底用（不能因为记账出问题就完全不写）。
+    private static func directWrite(_ scene: AnyObject, _ foreground: Bool) {
         guard let settings = AevonRuntime.send(scene, Selector(("settings"))),
               settings.responds(to: Selector(("mutableCopy"))) else { return }
         guard let mutable = AevonRuntime.sendOwned(settings, Selector(("mutableCopy"))) else { return }
@@ -165,12 +190,12 @@ enum AevonSceneHelper {
 
     static func wakeUp(_ bundleID: String) {
         guard let scene = scene(for: bundleID) else { return }
-        setForeground(scene, true)
+        setForeground(scene, true, reason: "唤醒 \(bundleID)")
     }
 
     static func sleep(_ bundleID: String) {
         guard let scene = scene(for: bundleID) else { return }
-        setForeground(scene, false)
+        setForeground(scene, false, reason: "挂起 \(bundleID)")
     }
 
     // MARK: - 保活定时器（V0.1.5：有限次，只补开窗后的头几秒）
@@ -194,30 +219,29 @@ enum AevonSceneHelper {
         var remaining = 8
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.8)
-        timer.setEventHandler {
-            guard remaining > 0 else {
-                self.stopKeepAlive(bundleID)
-                AevonLog.info("[保活] \(bundleID) 前台补偿结束（共 8 次，之后不再写场景设置）（AevonSoftKeepAliveV105）")
-                return
-            }
-            remaining -= 1
-            // 自建场景优先；没有自建场景（0.2.27 全屏接管形态）保持主场景原逻辑
-            if let selfScene = self.selfScene(for: bundleID) {
-                let ok = AevonSelfSceneReassertForeground(selfScene)
-                if !ok {
-                    AevonLog.warn("[保活] 自建场景重申前台失败（\(bundleID)）（AevonSelfSceneFGV232）")
+            timer.setEventHandler {
+                guard remaining > 0 else {
+                    self.stopKeepAlive(bundleID)
+                    let ledger = AevonSceneLedger.shared.summaryIfDue(force: true) ?? "-"
+                    AevonLog.info("[保活] \(bundleID) 前台补偿结束（共 8 次，之后不再写场景设置）"
+                        + " 账本[\(ledger)] 通道[\(AevonSettingsChannel.shared.summary())]"
+                        + "（AevonSoftKeepAliveV105 AevonSettingsChannelV279）")
+                    return
                 }
-                return
+                remaining -= 1
+                // 自建场景优先；没有自建场景（0.2.27 全屏接管形态）保持主场景原逻辑
+                if let selfScene = self.selfScene(for: bundleID) {
+                    let ok = AevonSelfSceneReassertForeground(selfScene)
+                    if !ok {
+                        AevonLog.warn("[保活] 自建场景重申前台失败（\(bundleID)）（AevonSelfSceneFGV232）")
+                    }
+                    return
+                }
+                guard let scene = self.scene(for: bundleID) else { return }
+                // V0.2.79：不再自己判断「已经是前台就跳过」—— 这层判断已经下沉到账本，
+                // 而且账本比它多知道「系统把值改回去了」这件事（读实时值 + 上一笔账面双路）。
+                self.setForeground(scene, true, reason: "保活补前台")
             }
-            guard let scene = self.scene(for: bundleID) else { return }
-            // 先看场景当前的前台标记：已经是前台就什么都不做。
-            let settings = AevonRuntime.send(scene, Selector(("settings")))
-            if let foreground = settings.flatMap({ AevonRuntime.bool($0, key: "foreground") }),
-               foreground {
-                return
-            }
-            self.setForeground(scene, true)
-        }
         timer.resume()
         keepAliveTimers[bundleID] = timer
         AevonLog.info("[保活] 已为 \(bundleID) 启动前台补偿定时器（最多 8 次）（AevonSoftKeepAliveV105）")

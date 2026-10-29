@@ -214,20 +214,27 @@ import UIKit
         var forwarded = settings
         if let settings,
            let identifier = AevonRuntime.send(self, Selector(("identifier"))) as? String,
-           AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
+           AevonSceneLedger.shared.wantsForeground(identifier: identifier)
+               || AevonForegroundManager.shared.shouldKeepForeground(identifier: identifier),
            let mutable = (settings as? NSObject)?.mutableCopy() as? NSObject,
            mutable.responds(to: Selector(("setForeground:"))),
            AevonRuntime.bool(mutable, key: "foreground") == false {
             if AevonRuntime.setBool(mutable, key: "foreground", true) {
                 forwarded = mutable
                 AevonSceneSettingsGuardHooks.rewriteCount += 1
+                // V0.2.79（AevonSceneLedgerV279）：把「系统想把我们写的前台改回 NO」记进账本。
+                // 这个计数就是「到底被改了几次」的判据 —— 以前只能靠日志肉眼数。
+                if let bid = AevonSceneLedger.shared.bookID(matching: identifier) {
+                    AevonSceneLedger.shared.noteOverridden(bundleID: bid, identifier: identifier)
+                }
                 let now = CACurrentMediaTime()
                 let last = AevonSceneSettingsGuardHooks.lastLogAt[identifier] ?? 0
                 if now - last > 3.0 {
                     AevonSceneSettingsGuardHooks.lastLogAt[identifier] = now
+                    let ledger = AevonSceneLedger.shared.summaryIfDue() ?? "-"
                     AevonLog.info("[场景] 拦下系统写 foreground=NO（\(identifier)）→ 改写为 YES "
                         + "再放行，累计 \(AevonSceneSettingsGuardHooks.rewriteCount) 次"
-                        + "（AevonSceneFgGuardV278）")
+                        + " 账本[\(ledger)]（AevonSceneFgGuardV278 AevonSceneLedgerV279）")
                 }
             }
         }
