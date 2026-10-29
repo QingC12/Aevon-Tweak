@@ -1765,6 +1765,9 @@ final class AevonWindowView: UIView {
     private var revealPrevGeo: CGSize = .zero
     /// 「转场未静默压住撤帧」只记一次日志，避免让位期逐拍刷屏
     private var quietHoldLogged = false
+    /// V0.2.97（AevonQuietRefreezeV297）：静默重抓替换——转场静默后重抓一帧清晰画面
+    /// 替换模糊冻结帧，让位期最多 1 次（抓帧=重绘纪律，绝不逐拍抓）。
+    private var revealRefreezeDone = false
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
     /// 回桌面那一下 cs 会 2→0→2 来回抖（Aevon(35)：让位 0.22s 淡入，随后系统还在
@@ -1849,6 +1852,7 @@ final class AevonWindowView: UIView {
         revealQuietTicks = 0      // V0.2.94（AevonQuietRevealV294）静默拍数与几何基线重置
         revealPrevGeo = .zero
         quietHoldLogged = false
+        revealRefreezeDone = false  // V0.2.97（AevonQuietRefreezeV297）重抓额度重置
         alpha = 1
         liveSettleUntil = 0
         /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
@@ -1998,6 +2002,24 @@ final class AevonWindowView: UIView {
                 revealPrevGeo = .zero
             }
             let transitionQuiet = revealQuietTicks >= 2
+            /* V0.2.97（AevonQuietRefreezeV297，用户 Aevon(74)「悬浮窗中的内容已经会从
+             * 模糊到清晰」+ 用户确认方案 S-A）：**静默重抓替换模糊冻结帧**。
+             * 0.2.94 的静默闸解决了「撤帧落在动画中」——但盖帧本身发生在过渡哨命中
+             * 瞬间，那时 App 表面正在转场里被重采样，抓下来的位图就是模糊的；帧比对
+             * 是灰度结构比对、对模糊不敏感 → 模糊帧一直盖到撤帧（0.5~0.7s），用户
+             * 看到的「从模糊到清晰」本体就是这张模糊冻结帧。修法：转场静默（几何
+             * 连续 2 拍静止）后表面已清晰稳定，重抓一帧**替换**冻结帧——替换后窗口
+             * 显示的是清晰定格，随后的撤帧/比对全部基于清晰帧。额度 1 次（0.2.65
+             * 抓帧=重绘纪律）；抓不到（全黑/空壳）fail-open 保持原帧。 */
+            if transitionQuiet, darkFreezeView != nil, !revealRefreezeDone, liveWaitTicks >= 1,
+               let fresh = captureSnapshotImage() {
+                revealRefreezeDone = true
+                frameMatchTried = true   // 新帧=刚抓的实时，比对恒真，额度并入重抓
+                darkFreezeView?.image = fresh
+                darkFreezeImage = fresh
+                AevonLog.info("[窗口] 转场静默(\(revealQuietTicks) 拍) → 重抓清晰帧替换模糊冻结帧"
+                    + "（帧 \(Int(fresh.size.width))x\(Int(fresh.size.height))，AevonQuietRefreezeV297）")
+            }
             /* V0.2.93（AevonFrameMatchRevealV293，用户 Aevon(62)「从虚变实的淡入还在」
              * + 用户确认按 Stheno 方案 A）：Stheno 揭幕纪律 = 封面与目标内容**一致**才揭幕。
              * 0.2.92 的 2 拍稳定撤帧里，撤帧瞬间「定格→实时」的画面差异 = 用户看到的

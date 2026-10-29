@@ -159,9 +159,10 @@ jobs:
                    AevonSingleShotCanvasV293 AevonFrameMatchRevealV293 \
                    AevonRevealOrderFixV294 AevonQuietRevealV294 \
                    AevonCapSkipV295 AevonSceneFastGateV295 \
-                   AevonProbeSceneV296 AevonScenePollFastV296; do
+                   AevonProbeSceneV296 AevonScenePollFastV296 \
+                   AevonGripIntentV297 AevonQuietRefreezeV297; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.96 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.97 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -4027,6 +4028,27 @@ jobs:
             && grep -q 'lastSceneProbeAt >= 15.0' "$WEHOST" \
             || { echo "::error::0.2.96 缺前台场景快照哨（AevonProbeSceneV296，15s 限流常驻）"; exit 1; }
           echo "V0.2.96 校验: 场景就绪 poll 0.1s 拍(冷启动再省 0.2~0.3s) + 前台场景快照哨(抖音卡死取证) 已就位"
+
+          # ── V0.2.97 校验（Aevon(74)：T1 意图吞咽 + S-A 静默重抓）──
+          EE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
+          WV="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
+          # ①意图吞咽登记：moved 分支 dx<-6 未达阈值登记吞咽
+          grep -q 'gripIntentSwallowID = touchID' "$EE" \
+            && grep -q 'AevonGripIntentV297' "$EE" \
+            || { echo "::error::0.2.97 缺把手左滑意图吞咽（AevonGripIntentV297）"; exit 1; }
+          # ②吞层分支：登记的指纹 moved/ended 全吞，deadline 过期 fail-open 清零
+          SW=$(awk '/if gripIntentSwallowID != 0, touchID == gripIntentSwallowID \{/,/^\        \}/' "$EE" | grep -c 'return true' || true)
+          if [ "${SW:-0}" -ge 1 ]; then
+            echo "V0.2.97 校验①: 意图吞咽登记+吞层分支在位(区间命中=$SW) ✓"
+          else
+            echo "::error::0.2.97 吞层分支缺 return true（吞层不生效，实测命中=$SW）"; exit 1
+          fi
+          # ③静默重抓：transitionQuiet 后重抓替换，额度 1 次 + 布防重置
+          grep -q 'revealRefreezeDone' "$WV" \
+            && grep -q 'AevonQuietRefreezeV297' "$WV" \
+            && grep -q 'darkFreezeView?.image = fresh' "$WV" \
+            || { echo "::error::0.2.97 缺静默重抓替换（AevonQuietRefreezeV297）"; exit 1; }
+          echo "V0.2.97 校验: 把手意图吞咽(防半截左滑泄漏) + 静默重抓替换模糊冻结帧 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
