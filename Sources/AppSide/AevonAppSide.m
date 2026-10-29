@@ -90,6 +90,12 @@ static const char *AevonAppLogPath = "/var/mobile/Aevon.log";
 
 /* CI 校验标记（本文件编进 AevonApp.dylib，不进主插件）。
  * V200 四条是 0.2.0 只读探针的历史标记，只加不能改（历史校验串纪律）。 */
+/* V0.2.81（AevonMultiSceneCapV281）：能力表判据加「支持多场景」这一条。
+ * ⚠ 标记必须是**纯 ASCII 的 used 常量**：本文件里的标记都写在中文日志串里，而 ObjC 的
+ * 非 ASCII 字符串字面量会被编成 UTF-16 塞进 __TEXT,__ustring —— `strings`（只认 ASCII 连续段）
+ * 一个字节都查不到，CI 的「必须编入」断言会直接失败（0.2.68 / 0.2.81 各踩一次）。 */
+__attribute__((used)) static const char AevonMultiSceneCapV281Marker[] = "AevonMultiSceneCapV281";
+
 __attribute__((used)) static const char AevonAppSideV200Marker[] = "AevonAppSideV200";
 /* V0.2.72（AevonFloatBandWideV272，用户 Aevon(44) #1）：浮窗手势带加宽
  * （带 30→44 / 底 44→64 / 顶 8→20 / 外扩 10→22pt）。 */
