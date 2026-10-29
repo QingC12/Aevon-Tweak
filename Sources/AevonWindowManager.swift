@@ -1288,7 +1288,7 @@ enum AevonWindowManager {
             }
             if AevonSceneHelper.scene(for: bundleID) != nil {
                 timer.invalidate()
-                AevonLog.info("[窗口] \(bundleID) 场景已就绪（等待 \(attempts) 次）")
+                AevonLog.info("[窗口] \(bundleID) 场景已就绪（等待 \(attempts) 次，0.1s 拍）（AevonScenePollFastV296）")
                 // V0.2.51（AevonDouyinWarmupV251）：这个场景是刚拉起的「生」场景，
                 // App 还没以整屏画布排版过 → 先预热（等价用户先全屏开一次）再切浮窗画布。
                 open(bundleID: bundleID, sceneID: nil,
