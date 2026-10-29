@@ -2071,14 +2071,18 @@ final class AevonWindowView: UIView {
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
         view.layer.masksToBounds = true
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        // 点一下 = 手动再要一次画面（等同「关掉重开」那次重申，但不用真关）
-        view.isUserInteractionEnabled = true
-        let tap = UITapGestureRecognizer(target: self, action: #selector(darkFreezeTapped))
-        view.addGestureRecognizer(tap)
+        /* V0.2.87（AevonFreezePassthruV287，Aevon(60)「点不动问题还在」）：**冻结帧不再挡触摸**。
+         *
+         * 0.2.49 起冻结帧收触摸（tap = 手动重申），但 Aevon(60) 实锤切换应用后冻结期
+         * 0.69s 里用户点浮窗 = 点在冻结帧上 = 点不动；而手动重申这件事 0.2.85 的
+         * IdleRewake 已经自动兜底（每 3 秒放行一次重申，画面死了最多 3 秒自动救），
+         * 「点一下救活」失去存在价值 —— 让它挡着实时内容的触摸纯亏。
+         * 改成不参与事件：触摸穿透到下面的 contentClip（实时恢复的瞬间就能点）。 */
+        view.isUserInteractionEnabled = false
         addSubview(view)
         darkFreezeView = view
-        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，点一下可手动重申）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249）")
+        AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，帧不挡触摸，重申由看门自动兜底）"
+            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonFreezePassthruV287）")
     }
 
     private func removeDarkFreeze(reason: String) {
@@ -2102,22 +2106,8 @@ final class AevonWindowView: UIView {
     }
 
     /// 点冻结图：用户主动要画面。
-    @objc private func darkFreezeTapped() {
-        AevonLog.info("[窗口] 用户点了冻结画面 → 手动重申前台（等同关掉重开的那一下）"
-            + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247）")
-        guardArmedUntil = CACurrentMediaTime() + 4.0
-        darkTicks = 0
-        reassertCount = 0
-        lastReassertAt = 0
-        startGuardTimerIfNeeded()
-        // 点一下之后继续盖着：巡查看到 cs=2 会立刻撤（0.2.49 起不再等两拍）
-        reassertContentForeground(tag: "手动点击")
-        for delay in [0.6, 1.6] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.reassertContentForeground(tag: "手动点击 +\(delay)s")
-            }
-        }
-    }
+    /// V0.2.87（AevonFreezePassthruV287）：手动重申由 IdleRewake 自动兜底（每 3 秒放行
+    /// 1 次重申），冻结帧退役「点一下手动重申」，本函数随之删除（无调用者 = 整体消除）。
 
     /// 滚动刷新最后一帧（默认每 3 秒一次，只在空闲且画面正常时）：
     /// 冻结层要「离黑屏最近的那一帧」，而不是开窗那一帧。顺手把缩放快照也保温。
@@ -2567,17 +2557,18 @@ final class AevonWindowView: UIView {
          * 0.34s + 弹簧 → 19.73 复查）。
          *
          * 显形这件事的语义已经变成「画布定稿后一次性揭开」，不需要再补任何入场
-         * 编排：缩放去掉（transform 恒 identity），淡入压到 0.12 秒（人眼读作「直接
-         * 出现」，但避免单帧硬切在 OLED 上的那一下跳）。 */
+         * 编排：缩放去掉（transform 恒 identity）。
+         *
+         * V0.2.87（AevonRevealInstantOnV287，Aevon(60)「悬浮窗内容会从虚到实的过渡，
+         * 看着很别扭」）：**0.12 秒淡入也退役** —— Aevon(60) 日志实锤显形发生在
+         * 「内容已定稿（第 0 次复查）」之后，此刻内容就是终态，任何 alpha 渐变
+         * 都只是把终态画面盖上一层半透明再揭掉 = 用户读作「从虚到实」。显形只有
+         * 一个正确姿势：定稿了就 alpha=1，零动画、零过渡、零渐变。 */
         alpha = 0
         transform = .identity
-        UIView.animate(withDuration: 0.12, delay: 0,
-                       options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut],
-                       animations: { [weak self] in
-            self?.alpha = 1
-        }, completion: nil)
-        AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 0.12 秒直接淡入，"
-            + "无缩放（入场编排只保留最少的可读性，AevonRevealPlainV285）")
+        alpha = 1
+        AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 瞬时上屏，无淡入无缩放"
+            + "（AevonRevealPlainV285 AevonRevealInstantOnV287）")
     }
 
     /// V0.2.78（AevonRevealInstantV278，用户 Aevon(50) #4/#5）：

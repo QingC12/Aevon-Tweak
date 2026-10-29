@@ -150,9 +150,10 @@ jobs:
                    AevonRevealPlainV285 AevonIdleRewakeV285 AevonYieldCrumbV285 \
                    AevonNoFlashBirthV286 AevonNoPlaceholderV286 AevonScalarKVCV286 \
                    AevonCrashReentryV286 AevonCrashPacMaskV286 AevonCrashFrameGuardV286 \
-                   AevonForceWriteV286; do
+                   AevonForceWriteV286 AevonRevealInstantOnV287 AevonFreezePassthruV287 \
+                   AevonGripBusyRetireV287; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.86 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.87 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -3760,6 +3761,33 @@ jobs:
           grep -q 'reason: \"看门重申\", force: true' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.86 看门重申没走 force"; exit 1; }
           echo "V0.2.86 校验: 出生即隐形 + 垫底图退役 + 标量KVC + 崩溃防重入 + PAC掩码 + 把手占用退役 + 强制写 已就位"
+
+          # ── V0.2.87（Aevon(60)：闪/虚到实 = 0.12s 淡入本体；点不动 = 冻结帧挡触摸；占用广播废发）──
+          # ① 显形瞬时化：0.12s 淡入就是「从虚到实」本体（内容已定稿后才显形，任何渐变都是多余的）
+          grep -q 'AevonRevealInstantOnV287' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.87 缺「显形瞬时化」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+               | grep -q 'UIView.animate(withDuration: 0.12'; then
+            echo "::error::0.2.87 显形又走 0.12s 淡入了（Aevon(60)「从虚到实看着别扭」会复发）"
+            exit 1
+          fi
+          # ② 冻结帧不挡触摸：切回浮窗的冻结期点浮窗 = 点在冻结帧上 = 点不动
+          grep -q 'AevonFreezePassthruV287' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.87 缺「冻结帧不挡触摸」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+               | grep -q 'darkFreezeTapped\|darkFreezeView.isUserInteractionEnabled = true'; then
+            echo "::error::0.2.87 冻结帧又收触摸了（冻结期点不动会复发；手动重申已由 IdleRewake 兜底）"
+            exit 1
+          fi
+          # ③ SB 侧占用广播退役：0.2.86 App 侧已不消费，广播=废发+折腾旧库进程
+          grep -q 'AevonGripBusyRetireV287' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::0.2.87 缺「占用广播退役」标记"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+               | grep -q 'AevonNotifySetGripBusy\|gripBusyActive'; then
+            echo "::error::0.2.87 SB 侧占用广播没删干净（废发还唤醒旧库进程关交互）"
+            exit 1
+          fi
+          echo "V0.2.87 校验: 显形瞬时化 + 冻结帧穿透 + 占用广播退役 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

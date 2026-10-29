@@ -121,8 +121,11 @@ enum AevonEdgeEntry {
     // 所以把手滑动必须在 sendEvent 这条总入口上也判一次 —— 和浮窗边条同一条通路。
     // 纪律：只观察、不吞（铁律：不在别人的触摸上做吞咽），呼盘后由圆盘自己接管。
     private static var gripSwipeTouchID: UInt = 0
-    /// V0.2.63（AevonGripBusyV263）：当前是否已广播「把手占用」（抬手 / 取消时撤销）
-    private static var gripBusyActive = false
+    /// V0.2.63（AevonGripBusyV263）→ **V0.2.87（AevonGripBusyRetireV287）整条退役**：
+    /// 「把手占用」广播（AevonNotifySetGripBusy）让被覆盖进程关交互 —— 0.2.86 已把
+    /// App 侧接收链退役（AevonGripRetireV286：0.6→2.5s 续排 99 次占 3 次真解除=纯亏），
+    /// SB 侧广播成了没人消费的废发，还唤醒一串旧库常驻进程白关一轮交互。
+    /// 圆盘覆盖 App 的机制不变：bit39 共享内存状态位（AevonRingSwallow 通道）。
     private static var gripSwipeStart: CGPoint = .zero
     private static var lastGripSwipeLogAt: CFTimeInterval = 0
 
@@ -289,7 +292,8 @@ enum AevonEdgeEntry {
                  * 代价：左滑起手那 6pt 里 App 可能已开始跟手，随后被 cancel（几 pt 抖动），
                  * 相比「右栏按钮整体失灵」低两个量级。 */
                 AevonLog.info("[圆盘] 手指落在把手上 (\(Int(point.x)),\(Int(point.y))) → 只登记候选，"
-                    + "左滑 ≥6pt 才广播占用（点击放行）（AevonGripBusyV263 AevonGripBusyLateV277）")
+                    + "左滑 ≥6pt 呼盘（点击放行）；占用广播已退役（AevonGripBusyV263 AevonGripBusyLateV277"
+                    + " AevonGripRetireV286 AevonGripBusyRetireV287）")
                 return
             }
             // V0.2.9（AevonFloatPassV209）：落在浮窗上的触摸整个交回浮窗。
@@ -313,14 +317,8 @@ enum AevonEdgeEntry {
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
                 let dx = point.x - gripSwipeStart.x
                 let dy = point.y - gripSwipeStart.y
-                /* V0.2.77（AevonGripBusyLateV277）：确认是呼盘手势（左滑 ≥6pt）才广播
-                 * 把手占用 —— 落指就广播会把 App 里的右栏按钮一起打死（见 began 段注释）。 */
-                if !gripBusyActive, dx < -6, abs(dy) < 40 {
-                    gripBusyActive = true
-                    AevonNotifySetGripBusy(true)
-                    AevonLog.info("[圆盘] 把手左滑已起手 \(Int(dx))pt → 广播「把手占用」，"
-                        + "被覆盖的 App 从这一帧起停收触摸（AevonGripBusyV263 AevonGripBusyLateV277）")
-                }
+                /* V0.2.87（AevonGripBusyRetireV287）：原「左滑 ≥6pt 才广播占用」整段删除
+                 *（AevonNotifySetGripBusy(true)），理由见 124 行注释。 */
                 if dx < -14, abs(dy) < 40 {
                     gripSwipeTouchID = 0
                     if AevonRingMenu.presented == nil {
@@ -376,11 +374,7 @@ enum AevonEdgeEntry {
         case .ended:
             // V0.2.60（AevonGripSwipeGlobalV260）：抬手即清把手观察态
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
-            // V0.2.63（AevonGripBusyV263）：抬手 → 撤销「把手占用」，App 侧恢复交互。
-            if gripBusyActive {
-                gripBusyActive = false
-                AevonNotifySetGripBusy(false)
-            }
+            // V0.2.87（AevonGripBusyRetireV287）：原「抬手撤销占用广播」整段删除。
             // V0.2.60（AevonDockTapOnlyV260）：停靠小窗「点一下装回」的全局兜底。
             // 没移动就抬手 = 装回（UIKit 的 dockTap 是主路，这条只是全屏 App 的保险；
             // restoreDocked 自己幂等，晚到的那一次会因「已不在停靠列」直接返回）。
@@ -435,11 +429,7 @@ enum AevonEdgeEntry {
 
         case .cancelled:
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
-            // V0.2.63（AevonGripBusyV263）：取消同样撤销「把手占用」（fail-open）。
-            if gripBusyActive {
-                gripBusyActive = false
-                AevonNotifySetGripBusy(false)
-            }
+            // V0.2.87（AevonGripBusyRetireV287）：原「取消撤销占用广播」整段删除。
             if dockTapCandidateID != 0, touchID == dockTapCandidateID {
                 dockTapCandidateID = 0
                 dockTapCandidateWindow = nil
