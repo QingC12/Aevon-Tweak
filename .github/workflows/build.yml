@@ -161,9 +161,10 @@ jobs:
                    AevonCapSkipV295 AevonSceneFastGateV295 \
                    AevonProbeSceneV296 AevonScenePollFastV296 \
                    AevonGripIntentV297 AevonQuietRefreezeV297 \
-                   AevonCacheFreezeV298 AevonDeskNoReviveV298 AevonStuckRescueV298; do
+                   AevonCacheFreezeV298 AevonDeskNoReviveV298 AevonStuckRescueV298 \
+                   AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.98 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.99 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -4071,6 +4072,35 @@ jobs:
             && grep -q 'AevonWindowManager.openBundleID == nil' "$EH98" \
             || { echo "::error::0.2.98 缺 cs=1 停滞救援（AevonStuckRescueV298）"; exit 1; }
           echo "V0.2.98 校验: 缓存帧盖底(消模糊) + 桌面态免唤醒 + cs=1 停滞救援 已就位"
+          # ── V0.2.99 校验（Aevon(76)：阈值 14→8pt + SBGrabberTongue 探测骨架 + 全程盖帧）──
+          WV="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
+          EE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
+          RG="$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"
+          MF="$GITHUB_WORKSPACE/Makefile"
+          BH="$GITHUB_WORKSPACE/Aevon-Bridging-Header.h"
+          # ① 阈值：两处呼出判据都必须是 -8，且不再有 -14
+          if grep -q 'dx < -8, abs(dy) < 40' "$EE" && grep -q 'delta.x < -8, abs(delta.y) < 30' "$RG" \
+             && ! grep -qE 'dx < -14|delta\.x < -14' "$EE" "$RG"; then
+            echo "V0.2.99 校验①: 呼出阈值 14→8pt 两处同步 ✓"
+          else
+            echo "::error::0.2.99 阈值不同步（EE/应有 dx < -8，RG 应有 delta.x < -8，且无 -14 残留）"; exit 1
+          fi
+          # ② 探测骨架：垫片源在 Makefile、桥接头有声明、bootstrap 有安装调用、Prefs 有开关
+          grep -q 'Sources/AevonGripHook.m' "$MF" \
+            && grep -q 'AevonGripHookProbeInstall' "$BH" \
+            && grep -q 'installGripProbeIfNeeded' "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
+            && grep -q 'GripHookProbe' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::0.2.99 探测骨架接线不完整"; exit 1; }
+          echo "V0.2.99 校验②: SBGrabberTongue 探测骨架（默认关灰度）已接线 ✓"
+          # ③ 全程盖帧：三条撤帧路径都过 guardTransitionQuiet，installDarkFreeze 设 fail-open 上限
+          QT=$(grep -c 'guardTransitionQuiet(now: CACurrentMediaTime())' "$WV")
+          if [ "$QT" -ge 3 ] \
+             && grep -q 'guardFreezeHoldDeadline = CACurrentMediaTime() + 2.0' "$WV" \
+             && grep -q 'AevonFullFreezeV299' "$WV"; then
+            echo "V0.2.99 校验③: 全程盖帧（撤帧静默闸 ×$QT 处 + 2.0s fail-open）✓"
+          else
+            echo "::error::0.2.99 撤帧静默闸不完整（QT=$QT，应 ≥3）"; exit 1
+          fi
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

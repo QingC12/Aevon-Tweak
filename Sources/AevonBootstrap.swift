@@ -116,6 +116,16 @@ enum AevonBootstrap {
             AevonLog.warn("[引导] 场景钩子安装抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
         }
 
+        // V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测骨架（默认关，@try 包裹 fail-open）。
+        exName = nil
+        exReason = nil
+        AevonTryExecute({
+            installGripProbeIfNeeded()
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] GripHook 探测安装抛异常（\(name): \(exReason ?? "无")），已拦截（AevonGripProbeV299）")
+        }
+
         // V0.0.23：全局触摸通道 —— 浮窗窗外手势与圆盘指针喂料的唯一基础设施。
         exName = nil
         exReason = nil
@@ -140,5 +150,16 @@ enum AevonBootstrap {
         }
         AevonSceneHookInstall()
         AevonLog.info("[入口] App 画面容器钩子已安装（viewDidAppear / viewDidDisappear，包装全屏 App 用）（AevonSceneVCHookV22）")
+    }
+
+    /// V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测骨架（方案 A 灰度）。
+    /// 默认关（Prefs GripHookProbe）——用户在设置里显式打开才装。只观察不接管，
+    /// 失败 fail-open（呼出走既有把手通道），为下一版呼出主通道切换取真机数据。
+    private static var gripProbeInstalled = false
+    static func installGripProbeIfNeeded() {
+        guard !gripProbeInstalled else { return }
+        gripProbeInstalled = true
+        guard AevonPrefs.bool("GripHookProbe", default: false) else { return }
+        _ = AevonGripHookProbeInstall()
     }
 }

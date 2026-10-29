@@ -10,6 +10,10 @@
 BOOL AevonSceneHookAvailable(void);
 void AevonSceneHookInstall(void);
 
+/// V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测骨架（方案 A 灰度，默认关）。
+/// 类不存在或安装异常返回 NO，调用方只记日志。
+BOOL AevonGripHookProbeInstall(void);
+
 /// V0.1.6（AevonFullscreenCloseV106）：从「全屏 App 画面容器」反查它承载的是哪个 App。
 /// 返回形如 `com.apple.Preferences-default` 的场景标识，或直接是 bundleIdentifier；
 /// 全部路径都取不到时返回 nil —— 调用方必须把 nil 当作「未知」而不是「不是同一个 App」。

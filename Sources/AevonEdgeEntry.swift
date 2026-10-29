@@ -316,19 +316,22 @@ enum AevonEdgeEntry {
             break
 
         case .moved:
-            // V0.2.60（AevonGripSwipeGlobalV260）：把手左滑 ≥14pt（纵向抖动 ≤40pt）→ 呼盘。
-            // 与视图层 pan 同一条判据；两边都命中时圆盘已展开，第二次调用直接跳过。
+            // V0.2.99（AevonGripThreshV299，用户 Aevon(76)「无法呼出圆盘」）：呼盘阈值
+            // -14→-8pt。Aevon(76) 日志实锤：39 次候选仅 9 次呼出（23%），21 次被意图
+            // 吞咽拦下——用户滑动幅度集中在 -6~-13pt，-14pt 阈值之外全没收。降阈值后
+            // 主力滑动区间全部可呼出，意图吞咽带收窄到 -6~-8（2pt，泄漏面同步变小）。
+            // 纵向抖动容忍 ≤40pt 不变。
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
                 let dx = point.x - gripSwipeStart.x
                 let dy = point.y - gripSwipeStart.y
                 /* V0.2.87（AevonGripBusyRetireV287）：原「左滑 ≥6pt 才广播占用」整段删除
                  *（AevonNotifySetGripBusy(true)），理由见 124 行注释。 */
-                if dx < -14, abs(dy) < 40 {
+                if dx < -8, abs(dy) < 40 {
                     gripSwipeTouchID = 0
                     if AevonRingMenu.presented == nil {
                         lastTouchPoint = point
-                        AevonLog.info("[圆盘] 把手左滑 \(Int(dx))pt → 呼出圆盘（全局通道，全屏 App 也生效）"
-                            + "（AevonGripSwipeGlobalV260）")
+                        AevonLog.info("[圆盘] 把手左滑 \(Int(dx))pt → 呼出圆盘（全局通道，全屏 App 也生效；0.2.99 阈值 14→8pt）"
+                            + "（AevonGripSwipeGlobalV260 AevonGripThreshV299）")
                         presentRing(source: "ringgrip")
                     }
                 } else if dx < -6, abs(dy) < 40 {
@@ -970,6 +973,26 @@ enum AevonEdgeEntry {
 }
 
 // MARK: - C 入口（供 AevonTouchHook.m 调用）
+
+/// V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测回调（供 AevonGripHook.m 调用）。
+/// phase：-1=类探测失败 / -2=安装成功 / -3=安装异常；0~3 = began/moved/ended/cancelled。
+/// 只观察打日志（不改任何触摸行为），为下一版呼出手势判据取真机数据。
+@_cdecl("AevonGripProbeTouch")
+public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
+    switch phase {
+    case -1:
+        AevonLog.warn("[GripHook] SBGrabberTongue 类探测失败（iOS/环境差异）→ 本版放弃，呼出走把手通道"
+            + "（AevonGripProbeV299）")
+    case -2:
+        AevonLog.info("[GripHook] SBGrabberTongue 探测钩子已装（touchesBegan/Moved/Ended/Cancelled，只观察）"
+            + "（AevonGripProbeV299）")
+    case -3:
+        AevonLog.warn("[GripHook] SBGrabberTongue 探测钩子安装异常 → fail-open（AevonGripProbeV299）")
+    default:
+        let name = ["began", "moved", "ended", "cancelled"][min(max(phase, 0), 3)]
+        AevonLog.info("[GripHook] 抓手舌触摸 \(name) \(Int(x)),\(Int(y))（AevonGripProbeV299）")
+    }
+}
 
 /// 全局触摸回调。`phase` 是 `UITouchPhase` 的原始值：
 /// 0 = began，1 = moved，3 = ended，4 = cancelled（2 = stationary 不会传进来）。

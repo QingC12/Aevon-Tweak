@@ -39,7 +39,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>呼盘唯一入口：把手上左滑 14pt。位置与长短在下面单独调。</string>
+			<string>呼盘唯一入口：把手上左滑 8pt（0.2.99 起，之前 14pt——0.2.98 实测 23% 成功率，主力滑动 -8~-13pt 够不到旧阈值）。位置与长短在下面单独调。</string>
 			<key>label</key>
 			<string>圆盘把手</string>
 		</dict>
@@ -56,6 +56,20 @@
 			<string>RingGripEnabled</string>
 			<key>label</key>
 			<string>启用圆盘把手</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>infoText</key>
+			<string>实验（0.2.99，方案 A 灰度第一步）：探测系统「抓手舌」(SBGrabberTongue) 的触摸，为下一版把呼出主通道换成 Stheno 同款系统手势取数据。本版只观察、不改任何行为，呼出照旧走把手通道。打开后注销生效；若出现异常关掉即可。默认关。</string>
+			<key>key</key>
+			<string>GripHookProbe</string>
+			<key>label</key>
+			<string>抓手舌探测（实验）</string>
 		</dict>
 		<dict>
 			<key>action</key>
@@ -85,7 +99,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Aevon 0.2.98（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
+			<string>Aevon 0.2.99（arm64e / roothide）· 日常保持「写运行日志」打开，出问题时才好定位。</string>
 			<key>label</key>
 			<string>运行与排查</string>
 		</dict>

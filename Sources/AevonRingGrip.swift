@@ -176,10 +176,11 @@ final class AevonRingGripView: UIView {
         case .changed:
             guard !didSummon else { break }
             let delta = gesture.translation(in: self)
-            if delta.x < -14, abs(delta.y) < 30 {
+            // V0.2.99（AevonGripThreshV299）：-14→-8pt，与全局通道同步（Aevon(76) 23% 成功率实锤）。
+            if delta.x < -8, abs(delta.y) < 30 {
                 didSummon = true
-                AevonLog.info("[圆盘] 把手被左滑 \(Int(delta.x))pt → 呼出圆盘"
-                    + "（AevonRingGripV250 AevonRingGripV255）")
+                AevonLog.info("[圆盘] 把手被左滑 \(Int(delta.x))pt → 呼出圆盘（0.2.99 阈值 14→8pt）"
+                    + "（AevonRingGripV250 AevonRingGripV255 AevonGripThreshV299）")
                 onSummon?("ringgrip")
             }
         case .ended, .cancelled, .failed:

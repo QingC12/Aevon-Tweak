@@ -17,6 +17,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonSceneHook.m \
     Sources/AevonProbeSupport.m \
     Sources/AevonTouchHook.m \
+    Sources/AevonGripHook.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
     Sources/AevonCrashCatcher.swift \
