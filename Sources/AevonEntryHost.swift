@@ -540,6 +540,7 @@ enum AevonEntryHost {
     // 从不跟系统抢层级；我们 level 动不得（牵一发动全身），改为**浮层在屏即让位**。
     private static var overlayWatch: Timer?
     private static var overlayHitName = ""
+    private static var yieldGuardLogged = false
 
     static func startOverlayWatch() {
         guard overlayWatch == nil else { return }
@@ -547,15 +548,62 @@ enum AevonEntryHost {
         RunLoop.main.add(timer, forMode: .common)
         overlayWatch = timer
         AevonLog.info("[窗口] 系统浮层巡检已启动（0.25 秒一拍，只读窗口表；"
-            + "控制中心/通知中心/切换器在屏即让位）（AevonOverlayYieldV278）")
+            + "控制中心/通知中心在屏即让位；切换器须子树里真有切换器视图才算在屏；"
+            + "开窗事务进行中不新开让位）"
+            + "（AevonOverlayYieldV278 AevonSwitcherSenseV280 AevonYieldGuardV280）")
     }
 
     /// 哪些窗口算「系统瞬时浮层」——命中类名列表（不做全类表枚举，纯窗口对象判类名）。
     private static let overlayClassHints = [
         "ControlCenterWindow",   // 控制中心（1080）
         "CoverSheetWindow",      // 通知中心 / 锁屏（1050）
-        "MainSwitcherWindow",    // 多任务切换器
     ]
+
+    /// V0.2.80（AevonSwitcherSenseV280）：切换器必须过二级判据。
+    ///
+    /// Aevon(52) 日志 11:08:41.691 实锤 —— 开窗途中被让位：
+    ///     [窗口] 系统浮层让位 开：1 扇浮窗隐藏
+    ///     [窗口] 命中系统浮层 SBMainSwitcherWindow（在屏）→ 浮窗与把手让位
+    /// 同一刻探针 P7-1 给出真相（11:08:41.200）：
+    ///     SBMainSwitcherWindow level=5 hidden=0 alpha=1.00
+    ///     命中=UIView 链=UIView ↑ SBDeviceApplicationSceneView ↑ _BSUIOrientationTransformedContentView
+    /// **iOS 17 把前台 App 的场景视图 `SBDeviceApplicationSceneView` 直接挂在了
+    /// `SBMainSwitcherWindow` 下面** —— 所以「SBMainSwitcherWindow 在屏」等于「有 App 在前台」，
+    /// 与「切换器被呼出」完全是两件事。0.2.78 只看窗口在屏就判切换器，于是**每次在全屏 App 里
+    /// 开窗都会立刻把浮窗藏起来**，直到 0.25s 巡检某一拍不再命中才恢复（日志 45.192 恢复，
+    /// 中间 3.5 秒窗不可见）—— 这正是用户说的「全屏 App 时悬浮窗能打开但不显示，桌面正常」
+    ///（桌面上 SBMainSwitcherWindow 里没有 App 场景视图，所以不误判）。
+    ///
+    /// 判据：子树里必须真的出现「切换器专属视图」才算在屏；只有 App 场景视图 = 不是切换器。
+    /// 只读 subviews + 类名（不做全类表枚举、不发任何消息），上限 240 节点 / 深度 8。
+    private static func switcherReallyPresent(_ window: UIView) -> Bool {
+        var found = false
+        var visited = 0
+        func walk(_ view: UIView, _ depth: Int) {
+            guard !found, visited < 240, depth <= 8 else { return }
+            visited += 1
+            let name = String(describing: type(of: view))
+            if name.contains("FluidSwitcher") || name.contains("AppSwitcher")
+                || name.contains("ContinuousExpose") || name.contains("SwitcherPage") {
+                found = true
+                return
+            }
+            for sub in view.subviews { walk(sub, depth + 1) }
+        }
+        walk(window, 0)
+        return found
+    }
+
+    /// 单个窗口是否算「系统浮层在屏」。
+    private static func overlayWindowPresent(_ window: UIWindow) -> Bool {
+        guard !window.isHidden, window.alpha > 0.5 else { return false }
+        let name = String(describing: type(of: window))
+        // 控制中心 / 通知中心：窗口出现即算（它们收起时 alpha 极低，已被上面挡掉）
+        if overlayClassHints.contains(where: { name.contains($0) }) { return true }
+        // 切换器：窗口是常驻的，必须看子树里有没有真的切换器视图
+        if name.contains("MainSwitcherWindow") { return switcherReallyPresent(window) }
+        return false
+    }
 
     private static func overlayWatchTick() {
         // 没浮窗时不用盯（省电、也避免无意义的日志）
@@ -563,21 +611,31 @@ enum AevonEntryHost {
             if AevonWindowManager.isOverlayYielded { AevonWindowManager.setSystemOverlayYield(false) }
             return
         }
+        // V0.2.80（AevonYieldGuardV280）：开窗事务进行中一律不许让位 ——
+        // Aevon(52) 11:08:41.691 就是「开窗第 0.4 秒被让位隐藏」，
+        // 窗刚出现 0.17 秒就没了，3.5 秒后才恢复 = 用户说的「闪一下 + 打开不显示」。
+        // 注意：只挡「新开让位」，已经让位的不阻断恢复（否则控制中心收起后窗不再回来）。
         var hit = ""
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
             for w in scene.windows {
                 // alpha 门槛取 0.5：CoverSheet 这类窗口常年存在，只是收起时 alpha 极低，
                 // 用 0.5 才不会把「常驻但不可见」误判成「在屏」（0.2.70 键盘误报同款教训）。
-                guard !w.isHidden, w.alpha > 0.5 else { continue }
-                let name = String(describing: type(of: w))
-                if overlayClassHints.contains(where: { name.contains($0) }) {
-                    hit = name
-                    break
-                }
+                guard overlayWindowPresent(w) else { continue }
+                hit = String(describing: type(of: w))
+                break
             }
             if !hit.isEmpty { break }
         }
         let present = !hit.isEmpty
+        if present, AevonSwitchCoordinator.shared.hasActive {
+            if !yieldGuardLogged {
+                yieldGuardLogged = true
+                AevonLog.info("[窗口] 开窗事务进行中 → 不新开让位（命中 \(hit)，本轮跳过）"
+                    + "（AevonYieldGuardV280）")
+            }
+            return
+        }
+        yieldGuardLogged = false
         if present, overlayHitName != hit {
             overlayHitName = hit
         }

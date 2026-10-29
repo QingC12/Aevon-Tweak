@@ -136,6 +136,21 @@ final class AevonSwitchCoordinator {
         return session.phase != .aborted
     }
 
+    /// 是否有正在进行的开窗事务（V0.2.80，AevonYieldGuardV280）。
+    ///
+    /// 系统浮层巡检用它当闸门：**开窗途中一律不许让位**。
+    /// 依据 Aevon(52) 11:08:41.691 实锤 —— 开窗事务 41.289 起、42.448 完，而让位判定
+    /// 正好落在 41.691：窗刚显形 0.17 秒就被整扇隐藏，3.5 秒后才恢复，
+    /// 用户看到的就是「闪一下 + 打开后不显示」。即使将来判据再出错，
+    /// 这道闸门也能保证「刚开的窗”不会被巡检误伤。
+    var hasActive: Bool {
+        lock.lock(); defer { lock.unlock() }
+        // 带上 deadline 的宽限（+0.6s）：事务万一走了没 complete 的异常路径，
+        // 也不会把巡检永久锁死（那会退回到「控制中心按钮点不到」的老问题）。
+        let now = CACurrentMediaTime()
+        return active.values.contains { now <= $0.deadline + 0.6 }
+    }
+
     /// 事务完成：显窗成功 / 进入承载。
     func complete(_ session: AevonSwitchSession?, reason: String) {
         guard let session, session.isValid else { return }

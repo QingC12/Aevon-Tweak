@@ -521,7 +521,18 @@ enum AevonWindowManager {
             // 由 App 侧 AevonAppSceneCapRegistry 算完写 /var/mobile/aevon_caps.txt，
             // 这里只读表：0 → 旧路径；1 → 自建；-1（未登记）→ 维持自建（旧行为）。
             let routeDump = AevonSelfSceneRouteDump(bundleID)
-            let capVerdict = AevonSelfSceneAppCapVerdict(bundleID)
+            // ── V0.2.80（AevonSceneCapWaitV280）：cap=-1 时短轮询，别再把路线 B 判死 ──
+            // Aevon(52) 日志实锤断链：SB 侧读到 cap=-1（App 侧明明算出 cap=1，但 0.2.65
+            // 起「仅进程内不落盘」）→ `cap==1 || forceSelf` 恒假 → 自建场景全灭 →
+            // 19 个版本全挤在 S2（主场景改画布）。S2 必然「整屏渲染 → 跳 430x737」，
+            // 这一跳就是用户看到的闪。这里等表：App 刚被拉起时它 +0.2s/+0.6s 才落盘。
+            var capVerdict = AevonSelfSceneAppCapVerdict(bundleID)
+            if capVerdict == -1 {
+                capVerdict = AevonSelfSceneAppCapWait(bundleID, 0.65)
+                AevonLog.info("[场景] 能力表等表结束：\(bundleID) cap=\(capVerdict)"
+                    + "（等 0.65s 上限；仍 -1 就走 S2，绝不把未知当可自建）"
+                    + "（AevonSceneCapWaitV280 AevonCapsPersistV280）")
+            }
             AevonLog.info("[场景] 能力登记：\(bundleID) cap=\(capVerdict)（1=scene App 可自建，0=老式必拒，-1=未登记）（AevonSceneCapsV241）")
             // ── V0.2.42（AevonSceneRouteV242 / AevonMainSceneResizeV242）──────────
             // 0.2.41 真机（Aevon(17)）三点判读：
@@ -557,13 +568,19 @@ enum AevonWindowManager {
             // 整屏，等于把整屏塞进浮窗，还多一层「App 是否接受第二场景」的风险。
             // 一律走主场景整屏呈现：画布写一次屏尺寸（幂等，能从任何残留小画布恢复）。
             let screenAspectOn = AevonWindowView.usesScreenAspect
-            let routeSelf = selfSceneOn && !screenAspectOn && (capVerdict == 1 || forceSelf)
+            // V0.2.80（AevonSelfSceneLearnV280）：失败过的 App 不再走自建（学习式降级）
+            let selfSceneLearnedBad = AevonSelfSceneLearn.shared.hasFailed(bundleID)
+            let routeSelf = selfSceneOn && !screenAspectOn && !selfSceneLearnedBad
+                && (capVerdict == 1 || forceSelf)
             let routeMain = !routeSelf && (screenAspectOn || mainResizeOn)
             let routeName = routeSelf
                 ? "自建场景"
                 : (screenAspectOn ? "整屏等比缩放（屏幕比例档）" : (routeMain ? "主场景改画布(S2)" : "全屏接管旧路径"))
             AevonLog.info("[场景] 分流：\(bundleID) cap=\(capVerdict) 档=\(forceSelf ? "S1 试验（强制自建）" : "自动") → \(routeName)"
-                + "（S2 主场景改画布已定档常开，设置页开关已移除）（AevonSceneRouteV242 AevonScreenAspectV244 AevonMainSceneFixedV248）")
+                + (selfSceneLearnedBad ? "（该 App 上次自建连接未建立，已降级）" : "")
+                + "（S2 主场景改画布已定档常开，设置页开关已移除）"
+                + "（AevonSceneRouteV242 AevonScreenAspectV244 AevonMainSceneFixedV248"
+                + " AevonCapsPersistV280 AevonSelfSceneLearnV280）")
             if !routeSelf {
                 AevonLog.info("[场景] 分流：\(bundleID) 不走自建；取证：\(routeDump)（AevonSceneRouteV238）")
             }
@@ -642,6 +659,16 @@ enum AevonWindowManager {
                             guard let hs = hostScene else { return }
                             let state = AevonSelfSceneConnectionState(hs)
                             AevonLog.info("[场景] 连接取证（+\(delay)s）：\(state)（AevonSceneRouteV235）")
+                            // ── V0.2.80（AevonSelfSceneLearnV280）：学习式降级 ──────────
+                            // cap=1 是历史 100% 对齐的判据，但真机仍有极小概率被 App 端拒
+                            //（连接永远不建立 = 画面黑）。这里把「连不上」记进内存黑名单，
+                            // **下次**开同一个 App 直接走 S2（不再黑第二次）。
+                            // 只在本进程生命期内有效，SB 重启自动清空 —— 不落盘、不污染。
+                            if delay == 1.5, state.contains("client=nil") {
+                                AevonSelfSceneLearn.markFailed(bundleID)
+                                AevonLog.warn("[场景] 自建场景连接未建立（client=nil）→ "
+                                    + "\(bundleID) 下次开窗改走 S2（AevonSelfSceneLearnV280）")
+                            }
                         }
                     }
                 } else {

@@ -318,3 +318,35 @@ final class AevonSceneLedger {
         return head + " | " + snapshot.prefix(4).joined(separator: " ; ")
     }
 }
+
+/// 自建场景（路线 B）的学习式降级名单（V0.2.80，AevonSelfSceneLearnV280）。
+///
+/// 为什么要它：cap=1 是 0.2.31~0.41 五轮真机矩阵里唯一 100% 对齐的判据，但真机仍有
+/// 极小概率「场景建出来了、App 端却没连上」（`AevonSelfSceneConnectionState` 恒 client=nil）
+/// —— 表现就是黑窗。用户不愿反复试，所以这里把失败过的 App 记进内存名单，
+/// **下一次**开窗直接走 S2，不黑第二次。
+///
+/// 只存内存：SB 重启即清空，不落盘、不污染日志目录，也不会把一次偶发失败永久钉死
+///（重启后还会再试一次自建）。
+final class AevonSelfSceneLearn {
+    static let shared = AevonSelfSceneLearn()
+    private init() {}
+
+    private let lock = NSLock()
+    private var failed: Set<String> = []
+
+    func markFailed(_ bundleID: String) {
+        lock.lock(); defer { lock.unlock() }
+        failed.insert(bundleID)
+    }
+
+    func hasFailed(_ bundleID: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return failed.contains(bundleID)
+    }
+
+    var summary: String {
+        lock.lock(); defer { lock.unlock() }
+        return failed.isEmpty ? "无" : failed.sorted().joined(separator: ",")
+    }
+}

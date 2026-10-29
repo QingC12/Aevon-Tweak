@@ -124,6 +124,13 @@ jobs:
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.79 二进制里缺路线C标记 $m"; exit 1; }
           done
+          # V0.2.80（路线 B 复活 + 让位判据 + 事务闸门）：这四个标记必须编进主库。
+          # 缺任何一个都等于「改了源码但那条路径没被任何调用者引用」= 被整体消除。
+          for m in AevonSceneCapWaitV280 AevonSwitcherSenseV280 AevonYieldGuardV280 \
+                   AevonSelfSceneLearnV280; do
+            strings "$DYLIB" | grep -q "$m" \
+              || { echo "::error::0.2.80 二进制里缺标记 $m"; exit 1; }
+          done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
           if strings "$DYLIB" | grep -q '_UISceneLayerHostContainerView'; then
@@ -755,7 +762,8 @@ jobs:
           APP_SIZE="$(wc -c < "$APP_DYLIB" | tr -d ' ')"
           echo "app dylib 大小: $APP_SIZE 字节"
           [ "$APP_SIZE" -lt 204800 ] || { echo "::error::AevonApp.dylib 超过 200KB（$APP_SIZE）—— App 侧必须极小，主插件逻辑混进来了"; exit 1; }
-          for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200; do
+          for s in AevonAppSideV200 AevonAppObserveV200 AevonAppPrefDomainV200 AevonAppWhitelistV200 \
+                   AevonAppSceneCapV241 AevonCapsPersistV280; do
             strings "$APP_DYLIB" | grep -q "$s" \
               || { echo "::error::AevonApp.dylib 缺少标记 $s"; exit 1; }
           done
@@ -2758,11 +2766,18 @@ jobs:
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.65 主库缺标记 $s"; exit 1; }
           done
-          # ① #10 日志目录清理：不再写 aevon_caps.txt
+          # ① #10 日志目录清理：能力表不再写在 /var/mobile 根（原断言「完全不许落盘」）。
+          # ── V0.2.80（AevonCapsPersistV280）断言反转 ─────────────────────────
+          # 0.2.65 的「App 侧一个字节都不许写盘」与产品冲突：SB 侧
+          # AevonSelfSceneAppCapVerdict 一直在读这张表，不落盘就只能读到 -1 →
+          # 路线 B（自建场景）永久失效（Aevon(52) 11:08:41.486 cap=-1 实锤）。
+          # 现在改成「必须落盘，但只能落在 Aevon 自己的目录」，防回退网两条：
+          grep -q 'AevonCapsPersistV280' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.80 能力表落盘被移除（路线B会再次失效）"; exit 1; }
+          grep -q '/var/mobile/Library/Aevon/caps.txt' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.80 能力表没写进 Aevon 目录（别再把文件扔到 /var/mobile 根）"; exit 1; }
           grep -q 'aevon_caps.txt' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::0.2.65 能力表清理没做（日志目录仍会留 aevon_caps.txt）"; exit 1; }
-          grep -q 'writeToFile:path atomically:YES' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            && { echo "::error::0.2.65 又往日志目录写能力表文件了"; exit 1; } || true
+            || { echo "::error::0.2.80 旧路径兼容读取没保留"; exit 1; }
           # ② #2 浮窗边条：SB 侧发布浮窗矩形
           grep -q 'static func publishFloatFrame' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.65 SB 没把浮窗矩形写给 App 侧（浮窗内操作会漏给全屏 App）"; exit 1; }
@@ -3263,6 +3278,59 @@ jobs:
           grep -q 'objc_copyClassList' "$GITHUB_WORKSPACE/Sources/AevonSwitchTransaction.swift" \
             && { echo "::error::0.2.79 事务里出现类表枚举（SB 进程注销风险）"; exit 1; }
           echo "V0.2.79 校验: 账本(比对后写) + 单飞通道(同拍不并发写) + 切换事务(关窗即失效) 已就位"
+
+          # ── V0.2.80 校验（路线 B「自建场景」复活 + 叠层让位误判 + 开窗事务闸门）──
+          # 依据 Aevon(52) 两条实锤：
+          #   ① 11:08:41.486 cap=-1（SB 侧）而 11:08:41.873 App 侧算出 cap=1
+          #      = 0.2.65「不再落盘」把路线 B 判死了，此后 19 版全在 S2 打补丁；
+          #   ② 11:08:41.691 开窗第 0.4 秒被 SBMainSwitcherWindow 误判成「切换器在屏」
+          #      → 整扇窗隐藏 3.5 秒（= 全屏 App 里打开浮窗不显示 / 闪一下）。
+
+          # ① App 侧必须真的往盘上写（不是只写日志）
+          grep -q 'AevonCapsPersistV280' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.80 App 侧没恢复能力表落盘（路线B仍然判死）"; exit 1; }
+          grep -q 'atomically:YES' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::0.2.80 能力表没有真正写盘调用"; exit 1; }
+          # 反回退网：绝不许再出现「仅进程内，不再落盘」这种把判据掐死的写法
+          grep -q '仅进程内，不再落盘' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && { echo "::error::0.2.80 能力表又被改成不落盘（路线B会再次失效）"; exit 1; }
+
+          # ② SB 侧两条路径都要读，且要能等表
+          grep -q '/var/mobile/Library/Aevon/caps.txt' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.80 SB 侧没读新路径能力表"; exit 1; }
+          grep -q 'AevonSelfSceneAppCapWait' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
+            || { echo "::error::0.2.80 缺 cap 等表函数（App 刚拉起时必然读到 -1）"; exit 1; }
+          grep -q 'AevonSelfSceneAppCapWait' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.80 分流处没调用等表"; exit 1; }
+
+          # ③ 叠层让位：MainSwitcherWindow 不许再走「在屏即命中」，必须过二级判据
+          grep -q 'switcherReallyPresent' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.80 切换器没有二级判据（全屏 App 里会误判让位）"; exit 1; }
+          grep -q 'AevonSwitcherSenseV280' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.80 缺切换器判据标记"; exit 1; }
+          # 反回退网：MainSwitcherWindow 一旦被重新塞回「裸类名名单」就报错
+          python3 - "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+m = re.search(r'overlayClassHints\s*=\s*\[(.*?)\]', src, re.S)
+if m and 'MainSwitcherWindow' in m.group(1):
+    print("::error::0.2.80 MainSwitcherWindow 又被放回裸类名名单（会误判让位）")
+    sys.exit(1)
+PYEOF
+          [ $? -eq 0 ] || exit 1
+
+          # ④ 开窗事务闸门：开窗途中不许让位
+          grep -q 'AevonYieldGuardV280' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
+            || { echo "::error::0.2.80 巡检没有开窗事务闸门"; exit 1; }
+          grep -q 'hasActive' "$GITHUB_WORKSPACE/Sources/AevonSwitchTransaction.swift" \
+            || { echo "::error::0.2.80 事务协调器缺 hasActive"; exit 1; }
+
+          # ⑤ 学习式降级：自建连不上就记名单，下次走 S2
+          grep -q 'AevonSelfSceneLearnV280' "$GITHUB_WORKSPACE/Sources/AevonSceneLedger.swift" \
+            || { echo "::error::0.2.80 缺自建场景学习式降级"; exit 1; }
+          grep -q 'AevonSelfSceneLearn.shared.hasFailed' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.80 分流没接降级名单"; exit 1; }
+          echo "V0.2.80 校验: 能力表落盘(路线B复活) + 切换器二级判据 + 开窗事务闸门 + 学习式降级 已就位"
 
 
       # 产物只上传为 artifact（不发 Release）。下载方式见交付说明。

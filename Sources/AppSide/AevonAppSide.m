@@ -683,6 +683,57 @@ static NSArray<NSString *> *AevonAppExcludePrefixes(void) {
  * （见下方 AevonNoCapsFileV265）。delegate 未就绪（nil）不出结论，
  * 绝不把「判断不了」记成 0。 */
 __attribute__((used)) static const char AevonAppSceneCapV241Marker[] = "AevonAppSceneCapV241";
+/* V0.2.80（AevonCapsPersistV280）：能力表恢复落盘。
+ *
+ * 为什么必须恢复 —— Aevon(52) 日志 11:08:41.486 实锤：
+ *     [场景] 能力登记：com.apple.Preferences cap=-1（1=scene App 可自建，0=老式必拒，-1=未登记）
+ * 而同一轮日志 11:08:41.873 App 侧明明算出了 cap=1（delegate=PreferencesAppController，
+ * 只是当时被打成「仅进程内」不写盘）。
+ * SB 侧读不到 → cap 恒 -1 → 分流判据 `cap==1 || forceSelf` 恒假 → **自建场景（路线B）从 0.2.65
+ * 起彻底失效，此后 19 个版本全部挤在 S2（主场景改画布）上打补丁**。S2 的本质是「借主场景改尺寸」，
+ * 必然先整屏渲染再跳 430x737（AevonDouyinWarmupV251 的「预热隐形复刻」），这一跳就是用户看到的
+ * 「闪一下」。所以 0.2.79 的账本/单飞全打空靶（被改 0 次、写 1 笔），闪照旧。
+ *
+ * 落盘位置改为 Aevon 自己的目录（用户当年抱怨的是 /var/mobile 根下多出一个文件），
+ * 同时保留旧路径做兼容读取。写失败不致命：SB 侧读不到就回退 S2，不会崩、不会黑。 */
+__attribute__((used)) static const char AevonCapsPersistV280Marker[] = "AevonCapsPersistV280";
+
+/* 把 `bundleID=cap` 合并进能力表（读-改-写，只动自己这一行）。
+ * 返回写入成功的路径；nil = 两条路径都写不了。
+ * 并发面：两个 App 进程同时写有极小概率互相覆盖，后果只是「下一次开窗回退 S2」，
+ * 不产生错误判据（覆盖掉的是别人的行，不是自己的值），可接受。 */
+static NSString *AevonAppCapsWriteLine(NSString *bid, BOOL cap) {
+    NSString *line = [NSString stringWithFormat:@"%@=%d", bid, cap ? 1 : 0];
+    NSArray<NSString *> *paths = @[@"/var/mobile/Library/Aevon/caps.txt",
+                                   @"/var/mobile/aevon_caps.txt"];
+    for (NSString *path in paths) {
+        @try {
+            NSString *dir = [path stringByDeletingLastPathComponent];
+            [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:NULL];
+            NSMutableArray<NSString *> *lines = [NSMutableArray array];
+            NSString *raw = [NSString stringWithContentsOfFile:path
+                                                      encoding:NSUTF8StringEncoding
+                                                         error:NULL];
+            NSString *prefix = [bid stringByAppendingString:@"="];
+            for (NSString *l in [raw componentsSeparatedByString:@"\n"]) {
+                if (l.length == 0) { continue; }
+                if ([l hasPrefix:prefix]) { continue; }
+                [lines addObject:l];
+            }
+            [lines addObject:line];
+            NSString *out = [[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"];
+            if ([out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL]) {
+                return path;
+            }
+        } @catch (NSException *e) {
+            /* 某一条路径不可写就换下一条，绝不因为落盘失败影响 App 本身 */
+        }
+    }
+    return nil;
+}
 
 static void AevonAppSceneCapRegistry(void) {
     @try {
@@ -695,24 +746,15 @@ static void AevonAppSceneCapRegistry(void) {
         BOOL cap = [delegate respondsToSelector:sel];
         NSString *bid = gAevonAppBundleID;
         if (bid.length == 0) { return; }
-        /* V0.2.65（AevonNoCapsFileV265，用户 Aevon(38) #10「移除日志目录中 Aevon_caps.txt」）：
-         * 这张 `bundleID=1/0` 的能力表是 0.2.41 给「自建场景还是主场景改画布」做判据用的；
-         * 0.2.64 起 S2（主场景改画布）已定档常开、设置页开关都移除了，判据不再被读。
-         * 于是这张盘上文件只剩「污染日志目录」这一个作用 —— 这里只保留进程内判定与日志，
-         * 不再落盘，并顺手把历史遗留的两份都删掉。 */
-        AevonAppLog(@"场景能力登记：cap=%d（delegate=%@，仅进程内，不再落盘）"
-                    @"（AevonAppSceneCapV241 AevonNoCapsFileV265）",
-                    cap ? 1 : 0, NSStringFromClass([delegate class]));
-        static BOOL capsCleaned = NO;
-        if (!capsCleaned) {
-            capsCleaned = YES;
-            for (NSString *legacy in @[@"/var/mobile/aevon_caps.txt", @"/var/mobile/Aevon_caps.txt"]) {
-                if ([[NSFileManager defaultManager] fileExistsAtPath:legacy]) {
-                    [[NSFileManager defaultManager] removeItemAtPath:legacy error:NULL];
-                    AevonAppLog(@"已删除历史遗留的能力表文件 %@（AevonNoCapsFileV265）", legacy);
-                }
-            }
-        }
+        /* V0.2.65（AevonNoCapsFileV265）当年的判断「S2 常开、判据不再被读」是错的：
+         * SB 侧一直在读，只是永远读到 -1。标记保留（历史标记只加不改），行为由
+         * AevonCapsPersistV280 反转回来。 */
+        NSString *wrote = AevonAppCapsWriteLine(bid, cap);
+        AevonAppLog(@"场景能力登记：cap=%d（delegate=%@）→ 落盘%@ %@"
+                    @"（AevonAppSceneCapV241 AevonCapsPersistV280）",
+                    cap ? 1 : 0, NSStringFromClass([delegate class]),
+                    wrote != nil ? @"成功" : @"失败",
+                    wrote != nil ? wrote : @"（两条路径都不可写，SB 侧将回退 S2）");
     } @catch (NSException *exception) {
         AevonAppLog(@"场景能力登记异常：%@（AevonAppSceneCapV241）", exception.name);
     }
@@ -795,15 +837,15 @@ static void AevonAppSceneGateApply(void) {
     }
     /* V0.2.41（AevonAppSceneCapV241）：场景能力登记必须在排除表之前 ——
      * 排除表里的 App（银行等）同样可能被浮窗打开，也要有能力记录。
-     * 两次：0.6s（多数 App delegate 已就绪）+ 2.5s（慢启动兜底），幂等。 */
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        AevonAppSceneCapRegistry();
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        AevonAppSceneCapRegistry();
-    });
+     * 两次：0.6s（多数 App delegate 已就绪）+ 2.5s（慢启动兜底），幂等。
+     * V0.2.80（AevonCapsPersistV280）：补 0.2s 一拍 —— SB 侧开窗前最多只等 0.9s，
+     * 而浮窗拉起 App 时进程往往刚起，0.6s 那拍对「首次打开」来不及。 */
+    for (NSNumber *d in @[@0.2, @0.6, @2.5]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            AevonAppSceneCapRegistry();
+        });
+    }
     /* V0.2.42（AevonSceneGateV242）：S1 试验档的场景闸。必须在任何场景请求到达前装好
      * （SB 拉起 App 后 ~0.15s 才建自建场景，start 在更早的 UIApplication 初始化期跑）；
      * 开关关闭时只打一行日志、一个字节都不碰。 */

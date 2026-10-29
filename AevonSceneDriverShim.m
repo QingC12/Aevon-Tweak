@@ -4,6 +4,7 @@
 #import <stdio.h>
 #import <string.h>
 #import <stdlib.h>
+#import <unistd.h>
 
 /*
  * 自建场景驱动垫片（V0.2.28，AevonSelfSceneV228，P1 概念验证）。
@@ -1076,27 +1077,49 @@ NSString *AevonSelfSceneRouteDump(NSString *bundleID) {
 }
 
 /* V0.2.41（AevonSceneCapsV241）：读 App 侧能力登记表（进程内权威判据的落地）。
- * 文件由 App 侧 AevonAppSceneCapRegistry 写（/var/mobile/aevon_caps.txt，
- * `bundleID=1/0` 逐行）：1 = delegate 实现 configurationForConnecting（自建可接受），
- * 0 = 未实现（老式，必拒 → 旧路径），-1 = 该 App 从未登记（未知 → 调用方维持自建）。*/
+ * 文件由 App 侧 AevonAppSceneCapRegistry 写（`bundleID=1/0` 逐行）：1 = delegate 实现
+ * configurationForConnecting（自建可接受），0 = 未实现（老式，必拒 → 旧路径），
+ * -1 = 该 App 从未登记（未知 → 调用方回退 S2，绝不当可自建用）。
+ * V0.2.80（AevonCapsPersistV280）：新路径优先，旧路径兼容 —— App 侧两处都写，
+ * 任一处可写 SB 侧就能读到。 */
 NSInteger AevonSelfSceneAppCapVerdict(NSString *bundleID) {
     @try {
         if (bundleID.length == 0) { return -1; }
-        NSString *raw = [NSString stringWithContentsOfFile:@"/var/mobile/aevon_caps.txt"
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:NULL];
-        if (raw.length == 0) { return -1; }
-        for (NSString *line in [raw componentsSeparatedByString:@"\n"]) {
-            NSRange eq = [line rangeOfString:@"="];
-            if (eq.location == NSNotFound) { continue; }
-            if (![[line substringToIndex:eq.location] isEqualToString:bundleID]) { continue; }
-            NSString *value = [line substringFromIndex:eq.location + 1];
-            return [value isEqualToString:@"1"] ? 1 : 0;
+        for (NSString *path in @[@"/var/mobile/Library/Aevon/caps.txt",
+                                 @"/var/mobile/aevon_caps.txt"]) {
+            NSString *raw = [NSString stringWithContentsOfFile:path
+                                                      encoding:NSUTF8StringEncoding
+                                                         error:NULL];
+            if (raw.length == 0) { continue; }
+            for (NSString *line in [raw componentsSeparatedByString:@"\n"]) {
+                NSRange eq = [line rangeOfString:@"="];
+                if (eq.location == NSNotFound) { continue; }
+                if (![[line substringToIndex:eq.location] isEqualToString:bundleID]) { continue; }
+                NSString *value = [line substringFromIndex:eq.location + 1];
+                return [value isEqualToString:@"1"] ? 1 : 0;
+            }
         }
         return -1;
     } @catch (NSException *exception) {
         return -1;
     }
+}
+
+/* V0.2.80（AevonSceneCapWaitV280）：cap=-1 时等表。
+ * 调用场景：浮窗刚把 App 拉起（launchApplicationWithIdentifier:），App 侧 dylib 在
+ * +0.2s / +0.6s 两拍才落盘。这里同步轮询（每 40ms 一次，最多 maxSeconds 秒），
+ * 主线程最多被占 maxSeconds —— 所以上限压到 1.0s，且一拿到就退。
+ * 拿不到就返回 -1，调用方回退 S2（老行为，不会黑屏）。 */
+NSInteger AevonSelfSceneAppCapWait(NSString *bundleID, double maxSeconds) {
+    NSInteger verdict = AevonSelfSceneAppCapVerdict(bundleID);
+    if (verdict != -1) { return verdict; }
+    NSTimeInterval deadline = [NSDate timeIntervalSinceReferenceDate] + MAX(0.0, maxSeconds);
+    while ([NSDate timeIntervalSinceReferenceDate] < deadline) {
+        usleep(40 * 1000);
+        verdict = AevonSelfSceneAppCapVerdict(bundleID);
+        if (verdict != -1) { return verdict; }
+    }
+    return -1;
 }
 
 /* V0.2.35（AevonSceneRouteV235）：连接取证（只读）。

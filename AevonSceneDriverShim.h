@@ -155,8 +155,14 @@ NSInteger AevonSelfSceneAppBinarySupport(NSString *bundleID);
 /// Sileo 二进制含该选择子串却被拒、贴吧纯净版扫不到却成功）。
 ///   返回 1 = 该 App 能接受自建场景 → 自建（真重排）；
 ///   返回 0 = 老式 App（必拒）→ 旧路径（画面即刻出现）；
-///   返回 -1 = 该 App 从未登记（未知）→ 调用方维持自建（旧行为，下次开窗即准）。
+///   返回 -1 = 该 App 从未登记（未知）→ 调用方回退 S2（V0.2.80 起不再当可自建用，
+///             0.2.42 真机已实锤「-1 当可自建」会让老式 App 黑窗 8 秒）。
 NSInteger AevonSelfSceneAppCapVerdict(NSString *bundleID);
+
+/// V0.2.80（AevonSceneCapWaitV280）：cap 读不到时的短轮询（每 40ms，最多 maxSeconds）。
+/// 浮窗刚拉起 App 时 App 侧 dylib 才在 +0.2s/+0.6s 落盘，读得太早必然拿到 -1。
+/// 拿到就立刻返回；等不到仍返回 -1（调用方回退 S2，不会黑屏）。
+NSInteger AevonSelfSceneAppCapWait(NSString *bundleID, double maxSeconds);
 
 /// V0.2.35（AevonSceneRouteV235）：连接取证 —— 只读 FBScene 的 client 相关字段
 /// （client / clientPort，全 @try，取不到写 nil），区分「FB 层就没客户端」与
