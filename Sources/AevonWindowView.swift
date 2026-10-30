@@ -1767,19 +1767,119 @@ final class AevonWindowView: UIView {
     private var freezeReturnDeadline: TimeInterval = 0
     /// deadline 内压住撤帧只记一次日志，避免逐拍刷屏
     private var guardHoldLogged = false
+    /* V0.3.1（AevonSharpGateV301，用户 Aevon(79) #2「依旧从模糊到清晰」+ 确认「清晰度
+     * 就绪采样闸」）：**撤帧判据从「时间到了」改成「画面真的清晰了」**。
+     * Aevon(79) 三条实锤拼出真相：①盖帧图 315x540pt @3x = 945x1620 像素（图本身不模糊）；
+     * ②撤帧前 1.2s 日志「屏幕贴合：状态翻转 → 开（改报画布尺寸），已让 1 个窗口立即重排」
+     * （App 正在重排渲染）；③「让位期帧比对：一致」用的是 16x16 降采样灰度平均差 ——
+     * 模糊的本质是高频丢失，降到 16x16 后高频全没了，模糊图与清晰图**永远判"一致"**。
+     * 所以真实链条是：盖住 1.2s（清晰定格，用户无感）→ 撤帧 → 露出正在重排的画面 /
+     * 系统低清场景快照（模糊）→ 真实渲染到位（清晰）。模糊在**撤帧之后**，过去六版
+     * （0.2.94 静默闸 / 0.2.97 重抓 / 0.2.98 缓存帧 / 0.2.99 全程盖 / 0.2.100 deadline /
+     * 0.3.0 独立窗口）全修在盖帧期，所以怎么改都没用。
+     * Stheno 逆向对照（浮窗生命周期报告 §揭幕）：它的揭幕判据 = 「启动图封面 + **连续
+     * 就绪采样** + 代际」，不是固定延迟。这里搬"连续就绪采样"，采样指标换成画面清晰度
+     * —— 直接对准症状本身。 */
+    /// 盖帧图本身的清晰度基准（拉普拉斯方差；盖帧图是健康帧，作为"清晰"的参照）
+    private var freezeBaseSharpness: Double = 0
+    /// 清晰度采样的失败放行上限（超过就撤，行为退回 0.3.0，绝不把画面盖死）
+    private var freezeSharpnessDeadline: TimeInterval = 0
+    /// 上一次采样时刻（节流：0.3s 一次，抓帧=重绘纪律）
+    private var lastSharpSampleAt: TimeInterval = 0
+    /// 采样次数（上限 12 次，与 2.6s 上限双重封顶）
+    private var sharpSampleCount = 0
+    /// 「活画面仍模糊 → 继续盖」只记一次
+    private var sharpHoldLogged = false
+    /// 「清晰度就绪 → 准撤」只记一次
+    private var sharpOpenLogged = false
 
-    /// V0.2.100（AevonReturnDeadlineV2100）：撤帧唯一闸 = 盖帧 returnDeadline。
-    /// 返回 true = deadline 已过（或本路径没有盖帧），准撤；
-    /// 返回 false = 还在盖帧保护期（保持盖帧）。零几何判定。
+    /// V0.3.1（AevonSharpGateV301）：**画面清晰度评分** —— 96x96 灰度 + 3x3 拉普拉斯方差。
+    /// 模糊 = 高频丢失 = 拉普拉斯响应方差显著变小；清晰画面（文字边缘、图标、视频细节）
+    /// 方差大。同一尺度下比较「盖帧图」与「当前活画面」，就能判出前者是否已经清晰到位。
+    /// 成本：96x96 = 9216 次卷积，微秒级。
+    private func sharpnessScore(_ image: UIImage) -> Double {
+        guard let cg = image.cgImage else { return 0 }
+        let n = 96
+        var buf = [UInt8](repeating: 0, count: n * n * 4)
+        guard let ctx = CGContext(data: &buf, width: n, height: n, bitsPerComponent: 8,
+                                  bytesPerRow: n * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return 0
+        }
+        ctx.interpolationQuality = .default
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: n, height: n))
+        var gray = [Double](repeating: 0, count: n * n)
+        for i in 0..<(n * n) {
+            let o = i * 4
+            let a = Double(buf[o + 3]) / 255.0
+            gray[i] = (Double(buf[o]) * 0.3 + Double(buf[o + 1]) * 0.59
+                + Double(buf[o + 2]) * 0.11) * a
+        }
+        var sum = 0.0, sumSq = 0.0, cnt = 0.0
+        for y in 1..<(n - 1) {
+            for x in 1..<(n - 1) {
+                let c = gray[y * n + x]
+                let lap = 4 * c - gray[(y - 1) * n + x] - gray[(y + 1) * n + x]
+                    - gray[y * n + x - 1] - gray[y * n + x + 1]
+                sum += lap
+                sumSq += lap * lap
+                cnt += 1
+            }
+        }
+        guard cnt > 0 else { return 0 }
+        let mean = sum / cnt
+        return max(0, sumSq / cnt - mean * mean)
+    }
+
+    /// V0.3.1（AevonSharpGateV301）：撤帧闸 = 最短保护期 + 清晰度就绪采样。
+    /// 返回 true = 准撤（已过最短保护且活画面清晰度达标 / 采样到期 fail-open）；
+    /// 返回 false = 继续盖帧（画面还没清晰到位，露出去就是用户看到的模糊）。
     private func guardReturnDeadlineOpen(now: TimeInterval) -> Bool {
         guard freezeReturnDeadline > 0 else { return true }   // 无盖帧 = 无压帧需求
-        if now > freezeReturnDeadline { return true }
-        if !guardHoldLogged {
-            guardHoldLogged = true
-            AevonLog.warn("[窗口] 盖帧 returnDeadline 保护期内 → 冻结保持，不撤帧（1.2s 后一次撤清，零几何判定）"
-                + "（AevonFullFreezeV299 AevonReturnDeadlineV2100）")
+        // ① 最短保护期 0.9s：任何路径不得撤帧（回桌面转场的最基本保护）
+        if now <= freezeReturnDeadline {
+            if !guardHoldLogged {
+                guardHoldLogged = true
+                AevonLog.warn("[窗口] 盖帧最短保护期内 → 冻结保持，不撤帧（0.9s 起进清晰度采样）"
+                    + "（AevonFullFreezeV299 AevonReturnDeadlineV2100 AevonSharpGateV301）")
+            }
+            return false
         }
-        return false
+        // ② 清晰度就绪采样（Stheno「连续就绪采样」同构）：活画面够清晰才准撤
+        if now <= freezeSharpnessDeadline, sharpSampleCount < 12 {
+            if lastSharpSampleAt == 0 || now - lastSharpSampleAt >= 0.3 {
+                lastSharpSampleAt = now
+                sharpSampleCount += 1
+                guard let live = captureSnapshotImage() else {
+                    // 抓不到帧 = 无法判定 → fail-open 放行（绝不把画面盖死）
+                    return true
+                }
+                let base = freezeBaseSharpness
+                let score = sharpnessScore(live)
+                // 相对门槛 72% + 绝对下限兜底（纯色极简页面 base 本身很低，比值会抖）
+                let need = base > 1.0 ? base * 0.72 : 0.6
+                if score >= need {
+                    if !sharpOpenLogged {
+                        sharpOpenLogged = true
+                        AevonLog.info("[窗口] 清晰度就绪：活画面 \(Int(score)) ≥ 门槛 \(Int(need))"
+                            + "（盖帧基准 \(Int(base))，第 \(sharpSampleCount) 次采样）→ 准撤"
+                            + "（AevonSharpGateV301）")
+                    }
+                    return true
+                }
+                if !sharpHoldLogged {
+                    sharpHoldLogged = true
+                    AevonLog.info("[窗口] 活画面仍模糊（\(Int(score)) < 门槛 \(Int(need))，"
+                        + "盖帧基准 \(Int(base))，第 \(sharpSampleCount) 次采样）→ 继续盖帧等真实渲染"
+                        + "（AevonSharpGateV301）")
+                }
+            }
+            return false
+        }
+        // ③ 上限 fail-open：采样到期还在模糊 → 撤帧（行为退回 0.3.0，不劣化）
+        AevonLog.warn("[窗口] 清晰度采样到期（\(sharpSampleCount) 次 / 上限 2.6s）→ fail-open 撤帧"
+            + "（AevonSharpGateV301）")
+        return true
     }
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
@@ -2175,7 +2275,17 @@ final class AevonWindowView: UIView {
         // V0.2.100（AevonReturnDeadlineV2100，用户确认方案 F，Stheno SCWSNativeFullRequest
         // .returnDeadline 同构）：盖帧起挂 1.2s 固定撤帧保护期 —— 期内任何撤帧路径一律
         // 压住（零几何判定），到点一次撤清。回桌面转场实测 0.8~1.2s，保护期覆盖全程。
-        freezeReturnDeadline = CACurrentMediaTime() + 1.2
+        let armedAt = CACurrentMediaTime()
+        /* V0.3.1（AevonSharpGateV301）：0.9s 最短保护期 + 2.6s 清晰度采样上限。
+         * 0.2.100 的 1.2s 固定 deadline 只解决"盖了又早撤"，解决不了"撤了以后还模糊"
+         * —— 模糊在撤帧之后（App 正在重排 / 系统低清场景快照），撤帧判据必须看画面。 */
+        freezeReturnDeadline = armedAt + 0.9
+        freezeSharpnessDeadline = armedAt + 2.6
+        freezeBaseSharpness = 0
+        lastSharpSampleAt = 0
+        sharpSampleCount = 0
+        sharpHoldLogged = false
+        sharpOpenLogged = false
         guardHoldLogged = false
         // V0.2.60（AevonLiveFirstV260）：让位期整窗是隐形的，再盖一张定格帧纯属浪费
         //（还会在淡入那一刻露出旧画面）。让位收尾时会自己决定要不要垫缓存帧。
@@ -2210,6 +2320,9 @@ final class AevonWindowView: UIView {
                 + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249 AevonCacheFreezeV298）")
             return
         }
+        // V0.3.1（AevonSharpGateV301）：记下盖帧图自身的清晰度基准 —— 后面每一次采样
+        // 都拿活画面与它比，够接近才算"真实渲染已到位"，准撤。
+        freezeBaseSharpness = sharpnessScore(image)
         let view = UIImageView(image: image)
         view.contentMode = .scaleToFill
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
@@ -2279,6 +2392,8 @@ final class AevonWindowView: UIView {
         darkFreezeView = nil
         darkFreezeImage = nil   // V0.2.93（AevonFrameMatchRevealV293）比对基准随帧清
         freezeReturnDeadline = 0   // V0.2.100（AevonReturnDeadlineV2100）撤帧时钟随帧清，防旧期限残留
+        freezeSharpnessDeadline = 0   // V0.3.1（AevonSharpGateV301）采样上限随帧清
+        freezeBaseSharpness = 0
         freezeRemoveCount += 1
         // V0.2.63（AevonFlashDampV263）：记下撤帧时刻，1.2 秒内不再盖（防「盖/撤」抖动）。
         lastFreezeRemovedAt = CACurrentMediaTime()

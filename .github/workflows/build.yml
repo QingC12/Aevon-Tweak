@@ -164,7 +164,8 @@ jobs:
                    AevonCacheFreezeV298 AevonDeskNoReviveV298 AevonStuckRescueV298 \
                    AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299 \
                    AevonReturnDeadlineV2100 AevonSuspendDelayV2100 \
-                   AevonKickThrottleV300 AevonFreezeIndepWinV300 AevonGripProbe2V300; do
+                   AevonKickThrottleV300 AevonFreezeIndepWinV300 AevonGripProbe2V300 \
+                   AevonSharpGateV301 AevonKickSkipV301 AevonGripProbe3V301; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.0 二进制里缺标记 $m"; exit 1; }
           done
@@ -4000,7 +4001,7 @@ jobs:
           grep -q 'AevonQuietRevealV294' "$WVW" \
             || { echo "::error::0.2.100 AevonQuietRevealV294 标记收容丢失（历史标记必须进二进制）"; exit 1; }
           grep -q 'let transitionQuiet = guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WVW" \
-            && grep -q 'freezeReturnDeadline = CACurrentMediaTime() + 1.2' "$WVW" \
+            && grep -q 'freezeReturnDeadline = armedAt + 0.9' "$WVW" \
             && ! grep -q 'revealQuietTicks' "$WVW" \
             || { echo "::error::0.2.100 returnDeadline 闸结构不完整（AevonReturnDeadlineV2100）"; exit 1; }
           echo "V0.2.94 校验: 显形回调先于直写(冷启动回归修复)已就位（静默采样已退役→deadline 闸）"
@@ -4109,14 +4110,15 @@ jobs:
             && grep -q 'GripHookProbe' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
             || { echo "::error::0.2.99 探测骨架接线不完整"; exit 1; }
           echo "V0.2.99 校验②: SBGrabberTongue 探测骨架（默认关灰度）已接线 ✓"
-          # ③ V0.2.100 反转：撤帧闸 = returnDeadline（1.2s 固定保护期），几何静默退役
+          # ③ V0.3.1 反转：撤帧闸从「1.2s 固定 deadline」升级为「0.9s 最短保护 + 清晰度采样」
           QT=$(grep -c 'guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WV")
           if [ "$QT" -ge 4 ] \
-             && grep -q 'freezeReturnDeadline = CACurrentMediaTime() + 1.2' "$WV" \
-             && grep -q 'AevonReturnDeadlineV2100' "$WV"; then
-            echo "V0.2.99→100 校验③: 全程盖帧改 returnDeadline 闸（撤帧闸 ×$QT 处 + 1.2s 保护期）✓"
+             && grep -q 'freezeReturnDeadline = armedAt + 0.9' "$WV" \
+             && grep -q 'AevonReturnDeadlineV2100' "$WV" \
+             && grep -q 'AevonSharpGateV301' "$WV"; then
+            echo "V0.2.99→100→301 校验③: 盖帧撤帧闸（撤帧闸 ×$QT 处 + 0.9s 保护 + 清晰度采样）✓"
           else
-            echo "::error::0.2.100 returnDeadline 撤帧闸不完整（QT=$QT，应 ≥4）"; exit 1
+            echo "::error::0.3.1 撤帧闸不完整（QT=$QT，应 ≥4）"; exit 1
           fi
 
           # ── V0.2.100 校验（Aevon(77)：Stheno returnDeadline 同构 + 关窗挂起延迟 1s）──
@@ -4164,6 +4166,34 @@ jobs:
             && grep -q 'AevonGripProbe2V300' "$EE" \
             || { echo "::error::0.3.0 探针换目标不完整（setState/_setState hook + 标记）"; exit 1; }
           echo "V0.3.0 校验③: GripProbe2 识别器状态机探测（只观察）已接线 ✓"
+
+          # ── V0.3.1 校验（Aevon(79)：清晰度就绪采样闸 + 抖踢前置幂等闸 + 探针广度）──
+          # ①模糊根治：撤帧判据从「时间到了」改成「画面真的清晰了」
+          #   （Aevon(79) 实锤模糊在撤帧之后：16x16 降采样比对对模糊不敏感恒判一致）
+          grep -q 'AevonSharpGateV301' "$WV" \
+            && grep -q 'private func sharpnessScore' "$WV" \
+            && grep -q 'freezeReturnDeadline = armedAt + 0.9' "$WV" \
+            && grep -q 'freezeSharpnessDeadline = armedAt + 2.6' "$WV" \
+            && grep -q 'freezeBaseSharpness = sharpnessScore(image)' "$WV" \
+            && grep -q 'sharpSampleCount < 12' "$WV" \
+            || { echo "::error::0.3.1 清晰度就绪采样闸不完整（AevonSharpGateV301）"; exit 1; }
+          echo "V0.3.1 校验①: 清晰度就绪采样闸（0.9s 保护 + 拉普拉斯方差采样 + 2.6s fail-open）✓"
+          # ②卡屏：抖踢前置账面判据 —— 从未被浮窗改过画布的 App 一笔都不写
+          grep -q 'AevonKickSkipV301' "$WM100" \
+            && grep -q 'let needKick = (lastFloatCanvasBundle == sceneIdentifier) || !frameIsFull' "$WM100" \
+            && grep -q 'private static var lastFloatCanvasBundle = ""' "$WM100" \
+            && grep -q 'lastFloatCanvasBundle = bundleID' "$WM100" \
+            || { echo "::error::0.3.1 抖踢前置幂等闸不完整（AevonKickSkipV301）"; exit 1; }
+          echo "V0.3.1 校验②: 抖踢前置幂等闸（账面判据 + 读回双保险）✓"
+          # ③探针广度：全局识别器状态机 + 多类手势入口（签名自检 fail-closed）
+          grep -q 'AevonGripProbe3V301' "$EE" \
+            && grep -q 'AevonGripGlobalSetState' "$GH" \
+            && grep -q 'AevonGripInstallOneArg' "$GH" \
+            && grep -q 'AevonGripEncArgCount' "$GH" \
+            && grep -q '_handlePullGesture:' "$GH" \
+            && grep -q 'SBSystemGestureManager' "$GH" \
+            || { echo "::error::0.3.1 探针广度不完整（全局识别器 + 多类入口 + 签名自检）"; exit 1; }
+          echo "V0.3.1 校验③: 探针广度（全局 _setState: + 四类手势入口，签名不符即跳过）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

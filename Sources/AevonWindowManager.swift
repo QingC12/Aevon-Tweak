@@ -16,6 +16,13 @@ import UIKit
 enum AevonWindowManager {
     private static var currentView: AevonWindowView?
     private static var currentBundleID: String?
+    /// V0.3.1（AevonKickSkipV301，用户 Aevon(79) #1 + 确认「抖踢前置幂等闸」）：
+    /// **抖踢账面判据** —— 记「上一次被浮窗承载、画布被改成 430x737 的 App」。只有
+    /// 真的被我们改过画布的 App，进程才可能仍按旧画布排版，才需要抖动踢把它逼回来；
+    /// 从没被承载过的 App（画布一直是整屏）踢它纯粹是往刚进前台的进程上写怪尺寸
+    /// —— Aevon(75)/(77)/(78)/(79) 四次抖音卡屏（cs=2 死锁）全部发生在「抖音刚进
+    /// 全屏 + 被写了 4 笔抖踢」，而每次读回都已是 430x932。踢一次即消费掉。
+    private static var lastFloatCanvasBundle = ""
 
     // MARK: - 停靠列（V0.2.50，AevonDockColumnV250）
     //
@@ -238,6 +245,21 @@ enum AevonWindowManager {
                 // 直接能看到「写回 932 后读回还是不是 932」。
                 // V0.3.0（AevonKickThrottleV300）：首踢 0.30s→1.2s —— 别在 App 进场半途
                 //（cs=1）往它场景上写怪尺寸，(78) 实锤这是 cs=2 死锁的头号嫌疑。
+                /* V0.3.1（AevonKickSkipV301，用户 Aevon(79) #1 + 确认「抖踢前置幂等闸」）：
+                 * 0.3.0 只把抖踢延后到 1.3s/2.5s —— Aevon(79) 实锤踢照样执行 4 笔
+                 * （10:12:54.265 / 54.534 / 55.621 / 55.898，读回全是 fg=0 cs=2），
+                 * 因为抖踢的目标尺寸是故意的 429x931，读回 430x932 永远不相等，幂等闸
+                 * 管不到它。真正的闸是**账面判据**：只有被我们改过浮窗画布的 App 才可能
+                 * 仍按旧画布排版。从没承载过的 App（抖音从桌面进全屏）+ 读回已是整屏
+                 * → 一笔都不写。踢一次即消费记账。 */
+                let frameIsFull = (AevonMainSceneFrameState(scene) ?? "").contains(fullText)
+                let needKick = (lastFloatCanvasBundle == sceneIdentifier) || !frameIsFull
+                if !needKick {
+                    AevonLog.info("[窗口] 抖踢跳过：\(sceneIdentifier) 从未被浮窗改过画布且读回已是整屏 "
+                        + "\(Int(screen.width))x\(Int(screen.height)) → 一笔都不写"
+                        + "（AevonKickSkipV301）")
+                } else {
+                    lastFloatCanvasBundle = ""   // 踢一次即消费记账
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     let w = screen.width, h = screen.height
                     _ = AevonMainSceneSetFrame(scene, Double(w - 1), Double(h - 1))
@@ -260,6 +282,7 @@ enum AevonWindowManager {
                         }
                     }
                 }
+                }   // V0.3.1（AevonKickSkipV301）needKick 分支结束
             }
         }
         // V0.2.61（AevonDockFullscreenCloseV261，用户 Aevon(35) #2「悬浮窗打开设置后，
@@ -557,6 +580,7 @@ enum AevonWindowManager {
         // 若等唤醒之后再写，App 的**第一遍布局**（画布刚变那一刻）读到的还是整屏尺寸
         // → 又回到「要等 1.5 秒 / 上滑一下才重排」。所以顺序是：置位 → 唤醒 → 改画布。
         AevonPrefs.set("AevonFloatBundle", bundleID)
+        lastFloatCanvasBundle = bundleID   // V0.3.1（AevonKickSkipV301）记账：这个 App 的画布被改过
         // 同一条信息再发一份到共享内存 —— 沙盒最严的 App（抖音）读不到 com.Aevon 域，
         // 而它正是最需要「UIScreen = 画布」的那个 App。
         AevonNotifySetFloatStage(bundleID)

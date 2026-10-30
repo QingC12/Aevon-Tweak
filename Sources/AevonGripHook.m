@@ -1,28 +1,39 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <string.h>
 
 /*
  * V0.2.99（AevonGripProbeV299）：方案 A 灰度探测骨架 —— 呼出主通道贴 Stheno。
- *
- * 目标（用户 Aevon(76) 拍板）：呼出手势换到 hook SBGrabberTongue（系统边缘抓手舌，
- * Stheno 用 Orion hook 同类在其呼出链上被用户实证可行）。本版只做「观察」：
- *   hook 该类的 touches 系列方法，把它收到的触摸阶段/坐标/视图形态打进日志，
- *   不改任何触摸行为（原实现照常转发），为下一版确定呼出手势判据取真机数据。
- *
- * 为什么观察先行：Stheno 符号已 strip，其 hook 的具体方法与手势阈值逆向不到明文；
- *   我们需要先知道「抓手舌在哪些位置、收到什么形状的触摸序列」才能定呼出判据。
+ * V0.3.0（AevonGripProbe2V300）：换目标 hook 识别器状态机。
+ * V0.3.1（AevonGripProbe3V301，用户 Aevon(79) #3「如果所有的手势在 ios17.3.1 中不可用，
+ *   那么 Stheno 是如何支持的？肯定是我们的探针方式或者方向错了。加强一下或者一次部署
+ *   多个手势类探针」）：**广度探测** —— 前两轮只探了 SBGrabberTongue 一个类，touches 与
+ *   setState 都零数据。用户判断正确：Stheno 能支持，说明方向错、不是环境不支持。
+ *   逆向数据（stheno-ring-gesture-study.md / hook-chain-analysis-report.txt）实锤它 hook 的
+ *   是五个系统手势识别器 + 管理器：
+ *     SBReachabilityGestureRecognizer / SBGrabberTongue / SBFluidSwitcherGestureManager
+ *     / _SBFluidSwitcherPanGestureRecognizer / SBSystemGestureManager
+ *   本轮一次装四类探测，覆盖「识别器状态机」与「手势入口方法」两个层面：
+ *     ① 全局 UIGestureRecognizer 的 _setState:（覆盖面最大：任何系统手势识别器状态变化
+ *        都会经过它，一次就能看到「右缘滑动到底被哪个类识别」）—— 加类名过滤 + 双层限流；
+ *     ② SBGrabberTongue 的 _handlePullGesture:（Stheno 主通道，验证 iOS 17.3.1 是否还活着）；
+ *     ③ SBReachabilityGestureRecognizer 的 1 参手势入口（有就装）；
+ *     ④ SBSystemGestureManager 的 touch/event 入口（有就装）。
+ *   全部只观察：原实现照常转发，零语义改变。
  *
  * 安全设计（任何一条不成立就退回原样）：
- *   · Prefs 总开关 GripHookProbe 默认关（灰度，用户在设置里显式打开才装）；
- *   · 类探测失败（iOS 变更 / roothide 环境差异）→ 静默放弃，零副作用；
- *   · 类内安全交换（同 AevonSceneHookSwap 纪律：类自身有实现才 setImplementation，
- *     否则 addMethod + 从父类取原实现 —— 绝不覆盖父类方法）；
- *   · 回调 @try 全包，任何异常 fail-open（照常转发原实现，绝不吞系统手势）；
- *   · 日志限流（同一秒最多 8 行），防抓手舌高频 moved 刷爆 Aevon.log；
- *   · 0.2.72 铁律遵守：只对单个已知类做 method 操作，绝不全类表枚举。
+ *   · Prefs 总开关 GripHookProbe 默认关（用户在设置里显式打开才装）；
+ *   · 类探测失败 → 静默跳过（下一版换目标），零副作用；
+ *   · 方法签名自检（fail-closed）：参数个数 ≠ 1 的方法一律不装 —— 转发时参数个数不符
+ *     会破坏调用约定（这是 hook 私有方法最容易炸的地方）；
+ *   · 类内安全交换（类自身有实现才 setImplementation，否则 addMethod + 父类取原实现）；
+ *   · 回调 @try 全包，原实现先转发（任何异常都不影响系统手势）；
+ *   · 日志双层限流：同类名最多 10 条 + 总量 300 条，只在 began/changed 之外的状态打；
+ *   · 0.2.72 铁律遵守：只对已知类做 method 操作，绝不全类表枚举。
  */
 
 extern void AevonGripProbeTouch(NSInteger phase, CGFloat x, CGFloat y);
+extern void AevonGripProbeEvent(const char *kind, const char *cls, long state);
 
 static IMP AevonGripOrigBegan = NULL, AevonGripOrigMoved = NULL;
 static IMP AevonGripOrigEnded = NULL, AevonGripOrigCancelled = NULL;
@@ -59,15 +70,8 @@ AEVON_GRIP_TOUCH_HOOK(Ended, 2)
 AEVON_GRIP_TOUCH_HOOK(Cancelled, 3)
 
 /*
- * V0.3.0（AevonGripProbe2V300，用户 Aevon(78) #3 探针换目标 + 确认「继续探测」）：
- * Aevon(77)/(78) 两轮实锤 SBGrabberTongue 的 view 收不到 touches（系统识别器在
- * view 之前消费触摸）—— [GripHook] 除安装行外零数据，touches 探测目标作废。
- * 换目标：hook 识别器的状态机入口 setState:（公开 API）与 _setState:（私有，
- * 有才装）—— 状态变迁（possible/began/changed/ended/cancelled/failed）是
- * 「系统怎么判呼出」的直接信号。状态变迁每次只发一笔（setState 是状态变更时
- * 调用，不是逐 moved 调用），不限流。仍只观察：原实现照常转发。
- * phase 编码：10 + UIGestureRecognizerState（10=possible 11=began 12=changed
- * 13=ended 14=cancelled 15=failed 16=recognized），与 touches 0~3 区分。
+ * V0.3.0（AevonGripProbe2V300）：SBGrabberTongue 的状态机入口。
+ * phase 编码：10 + UIGestureRecognizerState / 20 + state（私有 _setState:）。
  */
 static void AevonGripHookSetState(id self, SEL _cmd, UIGestureRecognizerState state) {
     if (AevonGripOrigSetState) {
@@ -89,6 +93,108 @@ static void AevonGripHook_SetState(id self, SEL _cmd, UIGestureRecognizerState s
     }
 }
 
+// ---------------------------------------------------------------------------
+// V0.3.1（AevonGripProbe3V301）：广度探测基建
+// ---------------------------------------------------------------------------
+
+/// 类名限流表：同类名最多 10 条，全局最多 300 条（class_getName 返回的指针常驻，可直接缓存）
+static const char *gAevonGripSeenCls[32];
+static int gAevonGripSeenCnt[32];
+static int gAevonGripSeenNum = 0;
+static int gAevonGripEventTotal = 0;
+
+static BOOL AevonGripEventAllowed(const char *cls) {
+    if (cls == NULL) { return NO; }
+    if (gAevonGripEventTotal >= 300) { return NO; }
+    for (int i = 0; i < gAevonGripSeenNum; i++) {
+        if (gAevonGripSeenCls[i] == cls || strcmp(gAevonGripSeenCls[i], cls) == 0) {
+            if (gAevonGripSeenCnt[i] >= 10) { return NO; }
+            gAevonGripSeenCnt[i]++;
+            gAevonGripEventTotal++;
+            return YES;
+        }
+    }
+    if (gAevonGripSeenNum < 32) {
+        gAevonGripSeenCls[gAevonGripSeenNum] = cls;
+        gAevonGripSeenCnt[gAevonGripSeenNum] = 1;
+        gAevonGripSeenNum++;
+        gAevonGripEventTotal++;
+        return YES;
+    }
+    return NO;
+}
+
+/// type encoding 参数个数（fail-closed 用）：先跳到 ':' 之后，再数类型段。
+/// "v24@0:8q16" → 1；"v@:@" → 1；"v@:" → 0。解析不出返回 -1（视为不可装）。
+static int AevonGripEncArgCount(const char *enc) {
+    if (enc == NULL) { return -1; }
+    const char *p = strchr(enc, ':');
+    if (p == NULL) { return -1; }
+    p++;
+    int n = 0;
+    while (*p) {
+        while (*p == 'r' || *p == 'n' || *p == 'N' || *p == 'o' || *p == 'O'
+               || *p == 'R' || *p == 'V' || *p == 'A'
+               || (*p >= '0' && *p <= '9')) {
+            p++;
+        }
+        if (*p == '\0') { break; }
+        if (*p == '^') { p++; continue; }
+        if (*p == '{' || *p == '(' || *p == '[') {
+            char open = *p;
+            char close = (open == '{') ? '}' : ((open == '(') ? ')' : ']');
+            int depth = 0;
+            while (*p) {
+                if (*p == open) { depth++; }
+                else if (*p == close) { depth--; if (depth == 0) { p++; break; } }
+                p++;
+            }
+        } else {
+            p++;
+        }
+        n++;
+    }
+    return n;
+}
+
+/// 通用「1 个 id 参数」观察钩子：原实现照常转发，只记类名。
+#define AEVON_GRIP_ONE_ARG_HOOK(fnName, tagStr, origVar)                                 \
+static IMP origVar = NULL;                                                               \
+static void fnName(id self, SEL _cmd, id arg) {                                           \
+    if (origVar) { ((void (*)(id, SEL, id))origVar)(self, _cmd, arg); }                   \
+    @try {                                                                                \
+        Class c = object_getClass(self);                                                  \
+        const char *cn = c ? class_getName(c) : NULL;                                     \
+        if (AevonGripEventAllowed(cn)) { AevonGripProbeEvent(tagStr, cn, 0); }            \
+    } @catch (NSException *exception) {                                                   \
+    }                                                                                     \
+}
+
+AEVON_GRIP_ONE_ARG_HOOK(AevonGripHookPull, "pull", AevonGripOrigPull)
+AEVON_GRIP_ONE_ARG_HOOK(AevonGripHookSysGesture, "sysgesture", AevonGripOrigSysGesture)
+AEVON_GRIP_ONE_ARG_HOOK(AevonGripHookSysTouch, "systouch", AevonGripOrigSysTouch)
+
+/// 全局识别器状态钩子（全局 UIGestureRecognizer._setState: 用）
+static IMP AevonGripOrigGlobalSetState = NULL;
+
+static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
+    if (AevonGripOrigGlobalSetState) {
+        ((void (*)(id, SEL, NSInteger))AevonGripOrigGlobalSetState)(self, _cmd, state);
+    }
+    @try {
+        // 只记终态与起始态；changed(2) 逐帧刷屏，不记
+        if (state != 1 && state != 3 && state != 4 && state != 5) {
+            return;
+        }
+        Class c = object_getClass(self);
+        const char *cn = c ? class_getName(c) : NULL;
+        if (AevonGripEventAllowed(cn)) {
+            AevonGripProbeEvent("recog", cn, (long)state);
+        }
+    } @catch (NSException *exception) {
+    }
+}
+
 /// 类内安全交换（纪律同 AevonSceneHookSwap）。
 static void AevonGripHookSwap(Class cls, SEL sel, IMP replacement, IMP *original) {
     Method method = class_getInstanceMethod(cls, sel);
@@ -101,20 +207,31 @@ static void AevonGripHookSwap(Class cls, SEL sel, IMP replacement, IMP *original
     }
 }
 
+/// 签名自检 + 安装（只装「1 个 id 参数」的入口，fail-closed）。
+static BOOL AevonGripInstallOneArg(Class cls, NSString *selName, IMP replacement, IMP *original) {
+    if (cls == Nil || selName.length == 0) { return NO; }
+    SEL sel = NSSelectorFromString(selName);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (m == NULL) { return NO; }
+    const char *enc = method_getTypeEncoding(m);
+    if (enc == NULL || enc[0] != 'v') { return NO; }         // 必须返回 void
+    if (AevonGripEncArgCount(enc) != 1) { return NO; }       // 必须恰好 1 个参数
+    AevonGripHookSwap(cls, sel, replacement, original);
+    return *original != NULL;
+}
+
 BOOL AevonGripHookProbeInstall(void) {
     if (AevonGripHookInstalled) { return YES; }
     @try {
         Class cls = NSClassFromString(@"SBGrabberTongue");
         if (cls == Nil) {
-            AevonGripProbeTouch(-1, 0, 0);   // -1 = 类探测失败（环境差异，下一版换目标）
+            AevonGripProbeTouch(-1, 0, 0);   // -1 = 类探测失败（环境差异）
             return NO;
         }
         AevonGripHookSwap(cls, @selector(touchesBegan:withEvent:),      (IMP)AevonGripHookBegan,      &AevonGripOrigBegan);
         AevonGripHookSwap(cls, @selector(touchesMoved:withEvent:),      (IMP)AevonGripHookMoved,      &AevonGripOrigMoved);
         AevonGripHookSwap(cls, @selector(touchesEnded:withEvent:),      (IMP)AevonGripHookEnded,      &AevonGripOrigEnded);
         AevonGripHookSwap(cls, @selector(touchesCancelled:withEvent:),  (IMP)AevonGripHookCancelled,  &AevonGripOrigCancelled);
-        /* V0.3.0（AevonGripProbe2V300）：状态机探测。setState: 经继承链必拿得到
-         * 编码；_setState: 有才装（iOS 变更时静默跳过）。类内安全交换同上。 */
         if (class_getInstanceMethod(cls, @selector(setState:)) != NULL) {
             AevonGripHookSwap(cls, @selector(setState:), (IMP)AevonGripHookSetState, &AevonGripOrigSetState);
         }
@@ -122,6 +239,60 @@ BOOL AevonGripHookProbeInstall(void) {
         if (class_getInstanceMethod(cls, privSel) != NULL) {
             AevonGripHookSwap(cls, privSel, (IMP)AevonGripHook_SetState, &AevonGripOrig_SetState);
         }
+
+        /* ② SBGrabberTongue 的 _handlePullGesture:（Stheno 主通道） */
+        int pullHooked = AevonGripInstallOneArg(cls, @"_handlePullGesture:",
+                                                (IMP)AevonGripHookPull, &AevonGripOrigPull) ? 1 : 0;
+        if (pullHooked) {
+            AevonGripProbeEvent("install", "SBGrabberTongue._handlePullGesture:", pullHooked);
+        }
+
+        /* ③ SBReachabilityGestureRecognizer 的手势入口（Stheno 五个目标之一） */
+        Class reach = NSClassFromString(@"SBReachabilityGestureRecognizer");
+        if (reach != Nil) {
+            NSString *cand[] = { @"_handleGesture:", @"handleGesture:", @"_handleReachabilityGesture:" };
+            for (int i = 0; i < 3; i++) {
+                if (AevonGripInstallOneArg(reach, cand[i], (IMP)AevonGripHookSysGesture,
+                                           &AevonGripOrigSysGesture)) {
+                    AevonGripProbeEvent("install",
+                        [[NSString stringWithFormat:@"SBReachabilityGestureRecognizer.%@", cand[i]] UTF8String], 1);
+                    break;
+                }
+            }
+        }
+
+        /* ④ SBSystemGestureManager 的触摸/事件入口（Stheno 手势管理器层） */
+        Class sysMgr = NSClassFromString(@"SBSystemGestureManager");
+        if (sysMgr != Nil) {
+            NSString *cand[] = { @"_handleTouchEvent:", @"handleTouchEvent:", @"_handleEvent:" };
+            for (int i = 0; i < 3; i++) {
+                if (AevonGripInstallOneArg(sysMgr, cand[i], (IMP)AevonGripHookSysTouch,
+                                           &AevonGripOrigSysTouch)) {
+                    AevonGripProbeEvent("install",
+                        [[NSString stringWithFormat:@"SBSystemGestureManager.%@", cand[i]] UTF8String], 1);
+                    break;
+                }
+            }
+        }
+
+        /* ⑤ 全局识别器状态机（最强覆盖）：UIGestureRecognizer._setState:，签名 1 参才装 */
+        SEL globalSel = NSSelectorFromString(@"_setState:");
+        Method globalMethod = class_getInstanceMethod([UIGestureRecognizer class], globalSel);
+        if (globalMethod != NULL) {
+            const char *genc = method_getTypeEncoding(globalMethod);
+            if (genc != NULL && genc[0] == 'v' && AevonGripEncArgCount(genc) == 1) {
+                AevonGripOrigGlobalSetState = method_setImplementation(globalMethod,
+                                                                      (IMP)AevonGripGlobalSetState);
+                if (AevonGripOrigGlobalSetState != NULL) {
+                    AevonGripProbeEvent("install", "UIGestureRecognizer._setState:", 1);
+                }
+            } else {
+                AevonGripProbeEvent("skip", "UIGestureRecognizer._setState: 签名不符", 0);
+            }
+        } else {
+            AevonGripProbeEvent("skip", "UIGestureRecognizer._setState: 不存在", 0);
+        }
+
         AevonGripHookInstalled = YES;
         AevonGripProbeTouch(-2, 0, 0);       // -2 = 安装成功
         return YES;

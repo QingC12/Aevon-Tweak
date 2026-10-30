@@ -986,10 +986,10 @@ public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
         AevonLog.warn("[GripHook] SBGrabberTongue 类探测失败（iOS/环境差异）→ 本版放弃，呼出走把手通道"
             + "（AevonGripProbeV299）")
     case -2:
-        AevonLog.info("[GripHook] SBGrabberTongue 探测钩子已装（touches 四相 + setState:/_setState: 状态机，只观察）"
-            + "（AevonGripProbeV299 AevonGripProbe2V300）")
+        AevonLog.info("[GripHook] 探测钩子已装（touches 四相 + setState:/_setState: + 四类手势入口 + 全局识别器状态机，只观察）"
+            + "（AevonGripProbeV299 AevonGripProbe2V300 AevonGripProbe3V301）")
     case -3:
-        AevonLog.warn("[GripHook] SBGrabberTongue 探测钩子安装异常 → fail-open（AevonGripProbeV299）")
+        AevonLog.warn("[GripHook] 探测钩子安装异常 → fail-open（AevonGripProbeV299）")
     case 10...16, 20...26:
         let states = ["possible", "began", "changed", "ended", "cancelled", "failed", "recognized"]
         let st = states[(phase % 10) < states.count ? phase % 10 : 0]
@@ -998,6 +998,34 @@ public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
     default:
         let name = ["began", "moved", "ended", "cancelled"][min(max(phase, 0), 3)]
         AevonLog.info("[GripHook] 抓手舌触摸 \(name) \(Int(x)),\(Int(y))（AevonGripProbeV299）")
+    }
+}
+
+/// V0.3.1（AevonGripProbe3V301，用户 Aevon(79) #3「一次部署多个手势类探针」）：
+/// 广度探测回调（供 AevonGripHook.m 调用）。`kind`：
+/// - "recog"     全局 UIGestureRecognizer 状态变迁（cls = 识别器类名，state = 状态）
+/// - "pull"      SBGrabberTongue._handlePullGesture:（Stheno 主通道）
+/// - "sysgesture" SBReachabilityGestureRecognizer 手势入口
+/// - "systouch"  SBSystemGestureManager 触摸入口
+/// - "install"/"skip" 安装结果（cls 里带方法名与原因）
+/// 只观察打日志，不改任何触摸/手势行为。
+@_cdecl("AevonGripProbeEvent")
+public func AevonGripProbeEvent(_ kind: UnsafePointer<CChar>?,
+                                _ cls: UnsafePointer<CChar>?,
+                                _ state: Int) {
+    let k = kind.map { String(cString: $0) } ?? "?"
+    let c = cls.map { String(cString: $0) } ?? "?"
+    switch k {
+    case "recog":
+        let names = ["possible", "began", "changed", "ended", "cancelled", "failed"]
+        let st = (state >= 0 && state < names.count) ? names[state] : "\(state)"
+        AevonLog.info("[GripHook] 识别器 \(c) → \(st)（AevonGripProbe3V301）")
+    case "install":
+        AevonLog.info("[GripHook] 已装 \(c)（AevonGripProbe3V301）")
+    case "skip":
+        AevonLog.info("[GripHook] 跳过 \(c)（AevonGripProbe3V301）")
+    default:
+        AevonLog.info("[GripHook] \(k) 命中 \(c)（AevonGripProbe3V301）")
     }
 }
 
