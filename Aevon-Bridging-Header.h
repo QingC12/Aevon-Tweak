@@ -14,6 +14,13 @@ void AevonSceneHookInstall(void);
 /// 类不存在或安装异常返回 NO，调用方只记日志。
 BOOL AevonGripHookProbeInstall(void);
 
+/// V0.3.4（AevonGripSystemLegV304，用户定档「路线 A：真正改成 Stheno 式」）：
+/// 呼出主通道换成**系统手势识别器腿** —— 全局观察 `UIGestureRecognizer.setState:`，
+/// 边沿族识别器在右缘 began 时被认领（外挂 target 跟踪），位移过阈值回调 Swift 呼盘。
+/// **常驻安装**（不受 GripHookProbe 开关影响，那开关只控制实例级细节日志）。
+/// 返回 NO = 没有可装的 setState:，本腿关闭，调用方照旧用把手 + sendEvent 两条老腿。
+BOOL AevonGripSystemLegInstall(void);
+
 /// V0.1.6（AevonFullscreenCloseV106）：从「全屏 App 画面容器」反查它承载的是哪个 App。
 /// 返回形如 `com.apple.Preferences-default` 的场景标识，或直接是 bundleIdentifier；
 /// 全部路径都取不到时返回 nil —— 调用方必须把 nil 当作「未知」而不是「不是同一个 App」。

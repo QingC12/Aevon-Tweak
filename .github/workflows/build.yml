@@ -173,7 +173,8 @@ jobs:
                    AevonKickThrottleV300 AevonFreezeIndepWinV300 AevonGripProbe2V300 \
                    AevonSharpGateV301 AevonKickSkipV301 AevonGripProbe3V301 \
                    AevonTouchRouteV302 AevonGripProbe4V302 \
-                   AevonGripIntentRetireV303 AevonGripBandNarrowV303; do
+                   AevonGripIntentRetireV303 AevonGripBandNarrowV303 \
+                   AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripProbe5V304; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -4228,7 +4229,7 @@ jobs:
             && grep -q 'AevonGripCensusClass' "$GH" \
             && grep -q 'BKSHIDEventDeliveryManager' "$GH" \
             && grep -q 'SBTouchDeliveryManager' "$GH" \
-            && grep -q 'AevonGripOrigGlobalSetStatePub' "$GH" \
+            && grep -q 'gAevonOrigPubSetState' "$GH" \
             || { echo "::error::0.3.2 事件投递链类普查不完整（AevonGripProbe4V302）"; exit 1; }
           echo "V0.3.2 校验②: 事件投递链类普查 + 全局 setState: 补探（零钩子、零行为改变）✓"
 
@@ -4268,6 +4269,44 @@ jobs:
             && strings "$ADYL" | grep -q 'AevonGripBandNarrowV303' \
             || { echo "::error::V0.3.3 App 侧 dylib 缺标记（AevonRingOwnV303 / BandNarrow）"; exit 1; }
           echo "V0.3.3 校验③: 主库+App 侧标记双在位（退役/收窄/整根认领）✓"
+
+          # ── V0.3.4 校验（Aevon(82) 定档「路线 A：真正改成 Stheno 式（挂系统识别器）」）──
+          # 前提数据（Aevon(82) 日志）：右缘落指 +6ms `_UIPendingEdgeSwipe` began、+55ms
+          # `UIScreenEdgePan` / `SBFluidSwitcherScreenEdgePan` began，同拍 `SBScreenEdgePan` /
+          # `SBReachability` failed → 系统边沿管线看得见右缘；而 `SBGrabberTongue._handlePullGesture:`
+          # 10 次命中全在底部手势簇 → Stheno 0.1.23 的「主通道」在 17.3.1 不覆盖右缘，
+          # 照抄它的代码路径无效，要照抄它「骑系统识别器」的架构。
+          # ①系统腿三件：安装入口 + 边沿族过滤 + 认领（外挂 target）
+          grep -q 'AevonGripSystemLegV304' "$GH" \
+            && grep -q 'BOOL AevonGripSystemLegInstall' "$GH" \
+            && grep -q 'AevonGripIsEdgeClass' "$GH" \
+            && grep -q 'AevonGripLegArm' "$GH" \
+            && grep -q 'addTarget:p action:@selector(handleGesture:)' "$GH" \
+            || { echo "::error::V0.3.4 系统识别器腿不完整（安装/边沿族过滤/认领/外挂 target）"; exit 1; }
+          # ②几何与阈值：只认右缘 24pt 起手（屏幕中部拖动一律不碰）+ 左滑 8pt 与把手腿同口径
+          grep -q 'if (p.x < sw - 24.0) { return; }' "$GH" \
+            && grep -q 'if (dx <= -8.0 && fabs(dy) < 40.0) {' "$GH" \
+            || { echo "::error::V0.3.4 系统腿几何/阈值判据缺失（右缘 24pt + 左滑 8pt）"; exit 1; }
+          # ③fail-open 回退 + Swift 侧三标记（呼盘回调 / 腿标记 / 实例级探针）
+          grep -q 'gAevonLegEnabled = NO;' "$GH" \
+            && grep -q 'AevonGripSystemLegV304' "$EE" \
+            && grep -q 'AevonGripLegTagV304' "$EE" \
+            && grep -q 'AevonGripProbe5V304' "$EE" \
+            || { echo "::error::V0.3.4 fail-open 回退 + Swift 侧标记不完整"; exit 1; }
+          # ④常驻安装：引导必须无条件装（装进探针开关里 = 关着探针就永远呼不出圆盘）
+          grep -q '_ = AevonGripSystemLegInstall()' "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
+            || { echo "::error::V0.3.4 引导没有常驻安装系统腿"; exit 1; }
+          # ⑤防回退网：探针安装里不许再重复装全局 setState:（两次 setImplementation 会覆盖转发指针）
+          if sed -n '/BOOL AevonGripHookProbeInstall/,/AevonGripHookInstalled = YES;/p' "$GH" \
+               | grep -q 'AevonGripOrigGlobalSetState'; then
+            echo "::error::V0.3.4 探针安装里又重复装全局 setState:（转发指针会被覆盖）"
+            exit 1
+          fi
+          # ⑥标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonGripSystemLegV304' \
+            && strings "$MDYL" | grep -q 'AevonGripProbe5V304' \
+            || { echo "::error::V0.3.4 主库缺系统腿/实例探针标记"; exit 1; }
+          echo "V0.3.4 校验: 系统识别器腿（右缘 24pt 认领 + 8pt 阈值 + 外挂 target + fail-open 回退 + 常驻安装）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

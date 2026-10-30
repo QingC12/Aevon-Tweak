@@ -930,6 +930,48 @@ enum AevonEdgeEntry {
             + "（AevonRingSwallowV24 AevonGripOnlyV251 AevonSBSwallowSealV272）")
     }
 
+    // MARK: - V0.3.4（AevonGripSystemLegV304）：系统识别器腿
+
+    /// 系统腿回调（由 AevonGripHook.m 在系统边沿识别器的动作里调用）。
+    ///
+    /// 这条腿与把手腿的本质区别：**触摸归属不变**。识别器是系统自己的，我们只是给它
+    /// 外挂了一个 target；App 那边收到的序列由系统按它本来的 cancel 语义处理，我不从
+    /// sendEvent 里扣任何一帧 —— 这是 Stheno「一根手指都不碰」的同构做法。
+    static func systemLegSummon(x: CGFloat, y: CGFloat, cls: String) {
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
+        guard AevonRingMenu.presented == nil else { return }
+        let screen = UIScreen.main.bounds
+        guard x >= screen.width - 24 else { return }
+        guard CACurrentMediaTime() - lastTriggerAt > 0.6 else { return }
+        let point = CGPoint(x: x, y: y)
+        lastTouchPoint = point
+        AevonLog.info("[圆盘] 系统识别器腿呼盘（\(cls)，右缘 x=\(Int(x)) → 左滑 8pt）"
+            + "：骑系统边沿手势，不从 App 投递链里扣手指"
+            + "（AevonGripSystemLegV304 AevonGripLegTagV304）")
+        presentRing(source: "system")
+    }
+
+    /// V0.3.4（AevonGripProbe5V304）：实例级探针 —— 每个类最多 6 条。
+    /// 记 edges / 延迟投递属性 / 宿主视图类，用来定案「右缘这只手挂在哪个实例上、
+    /// 它是否本来就在延迟触摸（= 系统已经在替我们扣手指）」。
+    private static var legProbeCounts: [String: Int] = [:]
+
+    static func legProbe(cls: String, x: CGFloat, y: CGFloat, edges: Double,
+                         delays: Bool, cancels: Bool, viewCls: String) {
+        if legProbeCounts[cls, default: 0] >= 6 { return }
+        legProbeCounts[cls, default: 0] += 1
+        let edgeText: String
+        if edges < 0 {
+            edgeText = "非公有Edge类"
+        } else {
+            edgeText = "edges=\(Int(edges))"
+        }
+        AevonLog.info("[GripHook] 系统腿认领右缘 began 类=\(cls) 落点=(\(Int(x)),\(Int(y)))"
+            + " \(edgeText) 延迟began=\(delays ? "是" : "否")"
+            + " 识别时cancel=\(cancels ? "是" : "否") 宿主=\(viewCls)"
+            + "（AevonGripProbe5V304）")
+    }
+
     /// 圆盘收起：立刻解除接管，把事件通道还给系统。
     static func ringDidDismiss() {
         ringSource = ""
@@ -1023,6 +1065,26 @@ public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
 /// - "systouch"  SBSystemGestureManager 触摸入口
 /// - "install"/"skip" 安装结果（cls 里带方法名与原因）
 /// 只观察打日志，不改任何触摸/手势行为。
+/// V0.3.4（AevonGripSystemLegV304）：系统识别器腿的呼盘回调（供 AevonGripHook.m 调用）。
+/// 只在系统边沿识别器自己的 changed 帧过阈值时进来，调用点在主队列异步段里，
+/// 不会嵌在 UIKit 手势状态机内部开窗。
+@_cdecl("AevonGripSystemSummon")
+public func AevonGripSystemSummon(_ x: Double, _ y: Double, _ cls: UnsafePointer<CChar>?) {
+    let name = cls.map { String(cString: $0) } ?? "edge"
+    AevonEdgeEntry.systemLegSummon(x: CGFloat(x), y: CGFloat(y), cls: name)
+}
+
+/// V0.3.4（AevonGripProbe5V304）：实例级探针回调（只在 GripHookProbe 打开时被调用）。
+@_cdecl("AevonGripLegProbe")
+public func AevonGripLegProbe(_ cls: UnsafePointer<CChar>?, _ x: Double, _ y: Double,
+                              _ edges: Double, _ delays: Int32, _ cancels: Int32,
+                              _ viewCls: UnsafePointer<CChar>?) {
+    let name = cls.map { String(cString: $0) } ?? "edge"
+    let view = viewCls.map { String(cString: $0) } ?? "nil"
+    AevonEdgeEntry.legProbe(cls: name, x: CGFloat(x), y: CGFloat(y), edges: edges,
+                            delays: delays != 0, cancels: cancels != 0, viewCls: view)
+}
+
 @_cdecl("AevonGripProbeEvent")
 public func AevonGripProbeEvent(_ kind: UnsafePointer<CChar>?,
                                 _ cls: UnsafePointer<CChar>?,

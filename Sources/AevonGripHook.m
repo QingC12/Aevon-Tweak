@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <string.h>
+#import <math.h>
 
 /*
  * V0.2.99（AevonGripProbeV299）：方案 A 灰度探测骨架 —— 呼出主通道贴 Stheno。
@@ -204,49 +205,210 @@ static void AevonGripCensusClass(NSString *clsName, NSArray<NSString *> *sels) {
     }
 }
 
-/// 全局识别器状态钩子（全局 UIGestureRecognizer._setState: 用）
-static IMP AevonGripOrigGlobalSetState = NULL;
+// ---------------------------------------------------------------------------
+// V0.3.4（AevonGripSystemLegV304，用户定档「路线 A：真正改成 Stheno 式（挂系统识别器）」）
+//
+// 0.3.3 之前的呼出主通道是「自建 5pt 竖条 + 自建 UIPan」，本质是从 App 手里**抢**触摸
+//（所以必须靠 App 侧吞摸收尾，卡屏温床）。Stheno 从不抢：它 hook 系统手势识别器，触摸
+// 本来就属于系统手势，App 侧走系统自带的 cancel 语义。
+//
+// 0.3.2 探针给了这条路的前提（Aevon(81) 日志第 316/323/325 行）：
+//   右缘 (414,693) 落指后 6ms `_UIPendingEdgeSwipeGestureRecognizer → began`，
+//   55ms 后 `SBFluidSwitcherScreenEdgePanGestureRecognizer → began`、
+//   `UIScreenEdgePanGestureRecognizer → began`，同拍 `SBScreenEdgePan` /
+//   `SBReachability` / `SBCoverSheetPresentation` 全部 → failed。
+//   ⇒ 系统边沿手势管线**看得见右缘**，只是我们之前没用它。
+//   ⇒ 同时实锤 `SBGrabberTongue._handlePullGesture:` 10 次命中全在底部手势簇，
+//     右缘零命中 —— Stheno 0.1.23 的「主通道」在 17.3.1 上不覆盖右缘，所以照抄它的
+//     代码路径无效，要照抄它**骑系统识别器**的架构。
+//
+// 本腿做法（全程公有 API，不碰私有方法）：
+//   ① 全局观察 `UIGestureRecognizer.setState:`（0.3.2 已实证可装、零崩溃）；
+//   ② 只在**边沿族**类名（EdgeSwipe / ScreenEdgePan / EdgePan）且 state=Began 时介入；
+//   ③ 落点 x 必须在右缘 24pt 内才认领（否则是 App 中部的普通拖动，一律不碰）；
+//   ④ 认领 = 给该识别器**外挂一个 target**（addTarget:action:，公有 API），后续
+//      Changed 帧从识别器自己的 `locationInView:nil` 读位移，dx ≤ -8pt 且 |dy| < 40pt
+//      → 回调 Swift 呼盘。**一根手指都不从 App 的投递链里拿掉**，因此结构上不会再出现
+//      「App 收到 began 收不到 ended」。
+//   ⑤ 同一根手指可能被多个识别器同时 began（日志里就是三个类同拍），所以候选是**列表**
+//      （最多 4 个并行跟踪），谁先过阈值谁呼盘；重复呼盘由 Swift 侧 0.6s 节流 + 已展开
+//      判定吸收。每个候选 2.0 秒过期（fail-open，绝不留悬挂 target）。
+//   ⑥ 任何一步失败都只影响本腿（静默跳过），把手 + sendEvent 两条老腿原样保留当回退网。
+// ---------------------------------------------------------------------------
 
-static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
-    if (AevonGripOrigGlobalSetState) {
-        ((void (*)(id, SEL, NSInteger))AevonGripOrigGlobalSetState)(self, _cmd, state);
-    }
+extern void AevonGripSystemSummon(double x, double y, const char *cls);
+extern void AevonGripLegProbe(const char *cls, double x, double y, double edges,
+                              int delays, int cancels, const char *viewCls);
+
+static BOOL gAevonLegProbeOn = NO;      // 设置页 GripHookProbe 打开时才打实例级细节
+static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
+static BOOL gAevonGlobalHooksInstalled = NO;
+static IMP gAevonOrigPubSetState = NULL;
+static IMP gAevonOrigPrivSetState = NULL;
+
+@class AevonGripLegProxy;
+
+@interface AevonGripLegProxy : NSObject
+@property (nonatomic, weak) UIGestureRecognizer *recog;
+@property (nonatomic) CGPoint start;
+@property (nonatomic) CFTimeInterval stamp;
+@property (nonatomic, assign) const char *cls;
+@property (nonatomic) BOOL done;
+- (void)handleGesture:(UIGestureRecognizer *)g;
+@end
+
+static NSMutableArray<AevonGripLegProxy *> *gAevonLegProxies = nil;
+
+static void AevonGripLegDrop(AevonGripLegProxy *p) {
+    if (p == nil) { return; }
+    p.done = YES;      // 先置位：已排队的回调进来也只走回收分支，不会再呼盘
     @try {
-        // 只记终态与起始态；changed(2) 逐帧刷屏，不记
-        if (state != 1 && state != 3 && state != 4 && state != 5) {
+        if (gAevonLegProxies == nil) { gAevonLegProxies = [NSMutableArray array]; }
+        UIGestureRecognizer *g = p.recog;
+        if (g != nil) {
+            [g removeTarget:p action:@selector(handleGesture:)];
+        }
+        [gAevonLegProxies removeObject:p];
+    } @catch (NSException *exception) {
+    }
+}
+
+/// 过期清理：每个钩子调用顺手扫一遍（代价 = 最多 4 次指针比较）。
+static void AevonGripLegPrune(void) {
+    if (gAevonLegProxies.count == 0) { return; }
+    CFTimeInterval now = CACurrentMediaTime();
+    NSArray<AevonGripLegProxy *> *snapshot = [gAevonLegProxies copy];
+    for (AevonGripLegProxy *p in snapshot) {
+        if (p.done || p.recog == nil || now - p.stamp > 2.0) {
+            AevonGripLegDrop(p);
+        }
+    }
+}
+
+/// 边沿族判定：只认这几类系统手势识别器，其余（点击/长按/滚动/键盘）一概不碰。
+static BOOL AevonGripIsEdgeClass(const char *cn) {
+    if (cn == NULL) { return NO; }
+    return strstr(cn, "EdgeSwipe") != NULL
+        || strstr(cn, "ScreenEdgePan") != NULL
+        || strstr(cn, "EdgePan") != NULL;
+}
+
+@implementation AevonGripLegProxy
+
+- (void)handleGesture:(UIGestureRecognizer *)g {
+    @try {
+        if (self.done) {
+            AevonGripLegDrop(self);
             return;
         }
-        Class c = object_getClass(self);
-        const char *cn = c ? class_getName(c) : NULL;
-        if (AevonGripEventAllowed(cn)) {
-            AevonGripProbeEvent("recog", cn, (long)state);
+        UIGestureRecognizerState st = g.state;
+        if (st == UIGestureRecognizerStateChanged) {
+            CGPoint now = [g locationInView:nil];
+            double dx = (double)now.x - (double)self.start.x;
+            double dy = (double)now.y - (double)self.start.y;
+            if (dx <= -8.0 && fabs(dy) < 40.0) {
+                self.done = YES;
+                const char *cn = self.cls;
+                double fx = (double)now.x, fy = (double)now.y;
+                AevonGripLegDrop(self);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    AevonGripSystemSummon(fx, fy, cn != NULL ? cn : "edge");
+                });
+                return;
+            }
+            if (dx * dx + dy * dy > 3600.0) {   // 位移超 60pt 还没过阈值 = 不是呼盘手势
+                self.done = YES;
+                AevonGripLegDrop(self);
+            }
+        } else if (st == UIGestureRecognizerStateEnded
+                   || st == UIGestureRecognizerStateCancelled
+                   || st == UIGestureRecognizerStateFailed) {
+            self.done = YES;
+            AevonGripLegDrop(self);
         }
     } @catch (NSException *exception) {
     }
 }
 
-/// V0.3.2（AevonGripProbe4V302）：公有 `setState:` 版本的观察钩子。
-/// 0.3.1 实锤 `UIGestureRecognizer._setState:` 在 iOS 17.3.1 上**不存在**，
-/// 所以那条「最强覆盖」的全局探测腿是空的 —— 这里补探公有名 `setState:`。
-/// 转发指针独立（不复用 _setState: 那条），避免两个都装上时互相覆盖成无限递归。
-static IMP AevonGripOrigGlobalSetStatePub = NULL;
+@end
 
-static void AevonGripGlobalSetStatePub(id self, SEL _cmd, NSInteger state) {
-    if (AevonGripOrigGlobalSetStatePub) {
-        ((void (*)(id, SEL, NSInteger))AevonGripOrigGlobalSetStatePub)(self, _cmd, state);
+/// 认领右缘 began：外挂 target 并记起始点（外挂动作走下一个 runloop，
+/// 避免在 UIKit 手势状态机内部改 target 列表）。
+static void AevonGripLegArm(UIGestureRecognizer *g, CGPoint start, const char *cn) {
+    if (g == nil || cn == NULL) { return; }
+    if (gAevonLegProxies == nil) { gAevonLegProxies = [NSMutableArray array]; }
+    if (gAevonLegProxies.count >= 4) { return; }
+    AevonGripLegProxy *p = [[AevonGripLegProxy alloc] init];
+    p.recog = g;
+    p.start = start;
+    p.stamp = CACurrentMediaTime();
+    p.cls = cn;
+    [gAevonLegProxies addObject:p];
+
+    /* 实例级探针（GripHookProbe 打开才有这一行）：edges / 延迟投递属性 / 宿主的视图类，
+     * 用来定案「右缘这只手到底挂在哪个实例上、它是否本来就在延迟触摸」。 */
+    double edges = -1.0;
+    if ([g isKindOfClass:[UIScreenEdgePanGestureRecognizer class]]) {
+        edges = (double)((UIScreenEdgePanGestureRecognizer *)g).edges;
     }
+    int delays = g.delaysTouchesBegan ? 1 : 0;
+    int cancels = g.cancelsTouchesInView ? 1 : 0;
+    const char *viewCls = "nil";
     @try {
-        // 只记 began/ended/cancelled/failed；changed 逐帧刷屏不记
-        if (state != 1 && state != 3 && state != 4 && state != 5) {
-            return;
-        }
-        Class c = object_getClass(self);
-        const char *cn = c ? class_getName(c) : NULL;
-        if (AevonGripEventAllowed(cn)) {
-            AevonGripProbeEvent("recog", cn, (long)state);
-        }
+        UIView *v = g.view;
+        if (v != nil) { viewCls = class_getName(object_getClass(v)); }
     } @catch (NSException *exception) {
     }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            if (p.done) { return; }
+            [g addTarget:p action:@selector(handleGesture:)];
+            if (gAevonLegProbeOn) {
+                AevonGripLegProbe(cn, (double)start.x, (double)start.y, edges, delays, cancels, viewCls);
+            }
+        } @catch (NSException *exception) {
+        }
+    });
+}
+
+/// 全局 setState: 的唯一观察点：探针记账 + 右缘 began 认领（两条钩子共用）。
+static void AevonGripLegObserve(id self, NSInteger state) {
+    @try {
+        AevonGripLegPrune();
+        Class c = object_getClass(self);
+        const char *cn = c ? class_getName(c) : NULL;
+        if (gAevonLegProbeOn && (state == 1 || state == 3 || state == 4 || state == 5)) {
+            if (AevonGripEventAllowed(cn)) {
+                AevonGripProbeEvent("recog", cn, (long)state);
+            }
+        }
+        if (!gAevonLegEnabled || state != 1) { return; }
+        if (!AevonGripIsEdgeClass(cn)) { return; }
+        UIGestureRecognizer *g = (UIGestureRecognizer *)self;
+        CGPoint p = [g locationInView:nil];
+        CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+        if (p.x < sw - 24.0) { return; }        // 只认右缘起手，屏幕中部拖动一律不碰
+        for (AevonGripLegProxy *old in gAevonLegProxies) {
+            if (old.recog == g) { return; }     // 同一识别器不重复认领
+        }
+        AevonGripLegArm(g, p, cn);
+    } @catch (NSException *exception) {
+    }
+}
+
+static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
+    if (gAevonOrigPrivSetState) {
+        ((void (*)(id, SEL, NSInteger))gAevonOrigPrivSetState)(self, _cmd, state);
+    }
+    AevonGripLegObserve(self, state);
+}
+
+static void AevonGripGlobalSetStatePub(id self, SEL _cmd, NSInteger state) {
+    if (gAevonOrigPubSetState) {
+        ((void (*)(id, SEL, NSInteger))gAevonOrigPubSetState)(self, _cmd, state);
+    }
+    AevonGripLegObserve(self, state);
 }
 
 /// 类内安全交换（纪律同 AevonSceneHookSwap）。
@@ -274,9 +436,53 @@ static BOOL AevonGripInstallOneArg(Class cls, NSString *selName, IMP replacement
     return *original != NULL;
 }
 
+/// V0.3.4（AevonGripSystemLegV304）：系统识别器腿安装 —— **常驻**，不看探针开关
+///（探针开关只控制实例级细节日志）。装不上就 fail-open 退回把手 + sendEvent 两条老腿。
+BOOL AevonGripSystemLegInstall(void) {
+    if (gAevonGlobalHooksInstalled) { return YES; }
+    @try {
+        Class gr = [UIGestureRecognizer class];
+
+        /* ① 公有 setState:（0.3.2 实证：iOS 17.3.1 上存在的就是它） */
+        Method pub = class_getInstanceMethod(gr, @selector(setState:));
+        if (pub != NULL) {
+            const char *enc = method_getTypeEncoding(pub);
+            if (enc != NULL && enc[0] == 'v' && AevonGripEncArgCount(enc) == 1) {
+                gAevonOrigPubSetState = method_setImplementation(pub, (IMP)AevonGripGlobalSetStatePub);
+            }
+        }
+
+        /* ② 私有 _setState:（17.3.1 实测不存在；将来存在就一起观察，转发指针独立防递归） */
+        SEL privSel = NSSelectorFromString(@"_setState:");
+        Method priv = class_getInstanceMethod(gr, privSel);
+        if (priv != NULL) {
+            const char *enc = method_getTypeEncoding(priv);
+            if (enc != NULL && enc[0] == 'v' && AevonGripEncArgCount(enc) == 1) {
+                gAevonOrigPrivSetState = method_setImplementation(priv, (IMP)AevonGripGlobalSetState);
+            }
+        }
+
+        if (gAevonOrigPubSetState == NULL && gAevonOrigPrivSetState == NULL) {
+            gAevonLegEnabled = NO;
+            AevonGripProbeEvent("skip", "AevonGripSystemLegV304 无 setState: 可装 → 本腿关闭", 0);
+            return NO;
+        }
+        gAevonGlobalHooksInstalled = YES;
+        AevonGripProbeEvent("install",
+            "AevonGripSystemLegV304 系统识别器腿已装（右缘 began 认领 + 外挂 target 跟踪）", 1);
+        return YES;
+    } @catch (NSException *exception) {
+        gAevonLegEnabled = NO;
+        return NO;
+    }
+}
+
 BOOL AevonGripHookProbeInstall(void) {
     if (AevonGripHookInstalled) { return YES; }
     @try {
+        /* V0.3.4：探针开关只负责打开实例级细节日志；观察钩子本身由系统腿常驻安装。 */
+        gAevonLegProbeOn = YES;
+        AevonGripSystemLegInstall();
         Class cls = NSClassFromString(@"SBGrabberTongue");
         if (cls == Nil) {
             AevonGripProbeTouch(-1, 0, 0);   // -1 = 类探测失败（环境差异）
@@ -329,23 +535,9 @@ BOOL AevonGripHookProbeInstall(void) {
             }
         }
 
-        /* ⑤ 全局识别器状态机（最强覆盖）：UIGestureRecognizer._setState:，签名 1 参才装 */
-        SEL globalSel = NSSelectorFromString(@"_setState:");
-        Method globalMethod = class_getInstanceMethod([UIGestureRecognizer class], globalSel);
-        if (globalMethod != NULL) {
-            const char *genc = method_getTypeEncoding(globalMethod);
-            if (genc != NULL && genc[0] == 'v' && AevonGripEncArgCount(genc) == 1) {
-                AevonGripOrigGlobalSetState = method_setImplementation(globalMethod,
-                                                                      (IMP)AevonGripGlobalSetState);
-                if (AevonGripOrigGlobalSetState != NULL) {
-                    AevonGripProbeEvent("install", "UIGestureRecognizer._setState:", 1);
-                }
-            } else {
-                AevonGripProbeEvent("skip", "UIGestureRecognizer._setState: 签名不符", 0);
-            }
-        } else {
-            AevonGripProbeEvent("skip", "UIGestureRecognizer._setState: 不存在", 0);
-        }
+        /* ⑤ V0.3.4：原「全局 _setState: 安装」整段删除 —— 系统腿的 AevonGripSystemLegInstall
+         * 已经统一处理公有/私有两条 setState:（不管装没装探针都常驻），这里再装一次会把
+         * 转发指针覆盖掉，表现为手势状态回调丢失。 */
 
         /* ⑥ V0.3.2（AevonGripProbe4V302）：事件投递链类普查 —— 只查存在性/签名，不装钩子。
          * 这是「发往抖音的触摸走哪个类」的候选清单，也是「SB 侧窄口径吞摸」的选点依据。 */
@@ -361,23 +553,9 @@ BOOL AevonGripHookProbeInstall(void) {
         AevonGripCensusClass(@"UIGestureRecognizer", @[@"setState:", @"_setState:", @"_updateGestureWithEvent:buttonEvent:"]);
         AevonGripCensusClass(@"SBSystemGestureManager", @[@"_handleTouchEvent:", @"handleTouchEvent:", @"_handleEvent:"]);
 
-        /* ⑦ V0.3.2：全局识别器 setState: 补探（0.3.1 实锤 _setState: 不存在，这条腿空着） */
-        SEL pubSetStateSel = NSSelectorFromString(@"setState:");
-        Method pubSetStateMethod = class_getInstanceMethod([UIGestureRecognizer class], pubSetStateSel);
-        if (pubSetStateMethod != NULL) {
-            const char *penc = method_getTypeEncoding(pubSetStateMethod);
-            if (penc != NULL && penc[0] == 'v' && AevonGripEncArgCount(penc) == 1) {
-                AevonGripOrigGlobalSetStatePub = method_setImplementation(pubSetStateMethod,
-                                                                         (IMP)AevonGripGlobalSetStatePub);
-                if (AevonGripOrigGlobalSetStatePub != NULL) {
-                    AevonGripProbeEvent("install", "UIGestureRecognizer.setState:", 1);
-                }
-            } else {
-                AevonGripProbeEvent("skip", "UIGestureRecognizer.setState: 签名不符", 0);
-            }
-        } else {
-            AevonGripProbeEvent("skip", "UIGestureRecognizer.setState: 不存在", 0);
-        }
+        /* ⑦ V0.3.4：原 0.3.2 的「全局 setState: 补探」并进 AevonGripSystemLegInstall
+         *（常驻安装、探针开关只控制细节日志），此处不再重复安装 —— 两条腿各装一次
+         * setImplementation 会互相覆盖转发指针，表现为无限递归/丢帧。 */
 
         AevonGripHookInstalled = YES;
         AevonGripProbeTouch(-2, 0, 0);       // -2 = 安装成功

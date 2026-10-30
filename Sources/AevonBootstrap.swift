@@ -116,6 +116,18 @@ enum AevonBootstrap {
             AevonLog.warn("[引导] 场景钩子安装抛异常（\(name): \(exReason ?? "无")），已拦截（AevonBootShieldV39）")
         }
 
+        // V0.3.4（AevonGripSystemLegV304）：系统识别器腿 —— **常驻安装**，
+        // 不受 GripHookProbe 开关影响（那开关只控制实例级细节日志）。
+        // 右缘 began 由系统边沿识别器认领，呼盘不再依赖自建控件抢触摸。
+        exName = nil
+        exReason = nil
+        AevonTryExecute({
+            _ = AevonGripSystemLegInstall()
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] 系统识别器腿安装抛异常（\(name): \(exReason ?? "无")），已拦截，呼出退回把手通道（AevonGripSystemLegV304）")
+        }
+
         // V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测骨架（默认关，@try 包裹 fail-open）。
         exName = nil
         exReason = nil
