@@ -244,8 +244,16 @@ extern void AevonGripLegProbe(const char *cls, double x, double y, double edges,
 extern void AevonGripLegOutcome(const char *cls, int kind, double maxDx, int frames);
 
 static BOOL gAevonLegProbeOn = NO;      // 设置页 GripHookProbe 打开时才打实例级细节
-/* V0.3.9（AevonGripOwnLegV309）：装配入口前置声明 —— 定义在文件尾部，
- * 而调用点（AevonGripLegObserve）在上方。 */
+/* V0.3.9（AevonGripOwnLegV309）：自建识别器腿的全局状态 —— **定义必须放在这里**，
+ * 因为 AevonGripLegObserve（下方）要读 gAevonOwnLegEnabled 决定装不装；
+ * 放到文件尾部会变成「use of undeclared identifier」（0.3.9 第一次构建就栽在这）。 */
+static BOOL gAevonOwnLegEnabled = NO;       // 自建腿总闸（prefs 打开才 YES）
+static BOOL gAevonOwnRegistered = NO;       // 走的是「管理器注册」那条路（view 由系统给，可能恒 nil）
+static BOOL gAevonOwnManagerTried = NO;
+static BOOL gAevonOwnLegProbeOn = NO;       // GripHookProbe（只控制取证深度）
+static id gAevonOwnGesture = nil;           // 我们自己的识别器实例（ARC 全局强引用）
+static id gAevonOwnManager = nil;           // 系统手势管理器（拿不到就退回直接挂宿主）
+/* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
 static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
 static BOOL gAevonGlobalHooksInstalled = NO;
@@ -652,12 +660,8 @@ extern int AevonGripOwnBandHit(double x, double y);
 extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
 extern void AevonGripOwnLog(const char *kind, const char *detail);
 
-static BOOL gAevonOwnLegEnabled = NO;       // 自建腿总闸（prefs 打开 + 安装成功才 YES）
-static BOOL gAevonOwnRegistered = NO;       // 是否走的是「管理器注册」这条路（那时 view 由系统给，可能恒 nil）
-static BOOL gAevonOwnManagerTried = NO;
-static id gAevonOwnGesture = nil;           // 我们自己的识别器实例（ARC 全局强引用）
-static id gAevonOwnManager = nil;           // 系统手势管理器（拿不到就退回直接挂宿主）
-static BOOL gAevonOwnLegProbeOn = NO;       // GripHookProbe（只控制取证/断言的深度）
+/* 全局状态（gAevonOwnLegEnabled / gAevonOwnGesture …）定义在前置区 —— 见
+ * AevonGripLegObserve 上方的说明，别挪回这里。 */
 
 #pragma mark - 自建识别器
 
