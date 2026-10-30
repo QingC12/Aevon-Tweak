@@ -1997,7 +1997,16 @@ final class AevonWindowView: UIView {
     /// `installDarkFreeze` / `installTransitionFreeze` 的入口闸，同时停掉三处抓帧
     /// （空闲预抓 / 滚动刷新 / 可信首帧）—— 不盖帧就没有消费方，抓帧只是热路径白烧。
     /// 改回 `false` 即整条回退到 0.3.24 的盖帧行为（代码与判据全部保留）。
-    static var freezeDisabled = true
+    /// **⛔ 不能写成字面量 `true`**：Swift -O 的 whole-module 优化会做「从未被写过的
+    /// var 恒为该值」的推断，把 `guard` 之后的函数体整段判为 unreachable 并删除 ——
+    /// 连带里面的历史标记串（AevonFreezePassthruV287 等）一起消失，0.3.25 第一次
+    /// 构建就是红在这条（`0.2.82~0.3.1 二进制里缺标记 AevonFreezePassthruV287`）。
+    /// 走 UserDefaults 取值，编译器拿不到编译期常量 → 函数体与标记都保留。
+    /// 键 `AevonFreezeOff325` 写成 false 即可临时恢复 0.3.24 的盖帧行为（回退通道）。
+    static let freezeDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonFreezeOff325") as? Bool
+        return v ?? true
+    }()
     /// 「盖帧已停用」日志只打前 3 条，避免每次内容掉出画刷一行
     private static var freezeSkipLogCount = 0
     /// V0.3.24（AevonSharpCacheGateV324）：同窗历史**最清晰**帧的拉普拉斯方差 —— 撤帧门槛的
