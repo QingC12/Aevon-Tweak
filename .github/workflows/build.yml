@@ -2627,8 +2627,12 @@ jobs:
           grep -q 'canvasWarmupDelay: warmupCanvas ? 0.30 : 0' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.90 预热时长不在 0.30 秒（开窗提速回潮）"; exit 1; }
-          grep -q 'now() + 0.30' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.90 预热切换与预热时长不一致（应同为 0.30）"; exit 1; }
+          # V0.3.0 反转：原锚「WM 里 now() + 0.30」从 0.2.90 起一直寄生在全屏兜底踢块的
+          # 首踢延迟上（0.3.0 已按 Aevon(78) 取证把首踢改成 1.2s）；预热 0.30s 切换的
+          # 真机制 = canvasWarmupDelay 参数 → SceneHost 的 canvasWarmupDeadline。
+          grep -q 'self.canvasWarmupDeadline = canvasWarmupDelay > 0 ? CACurrentMediaTime() + canvasWarmupDelay : 0' \
+            "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
+            || { echo "::error::0.2.90 预热切换机制失踪（canvasWarmupDeadline 应由 canvasWarmupDelay 推导）"; exit 1; }
           # V0.2.92（AevonKickCompressV292）反转：kick 起手 0.20 → 0.12（Aevon(61) #2
           # 时序账：poll 就绪后 kick 双笔 0.45 是最后大头；0.20/0.25 只是保守等待值）。
           grep -q 'now() + 0.12' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
