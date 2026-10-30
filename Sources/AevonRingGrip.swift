@@ -353,10 +353,14 @@ enum AevonRingGrip {
      * 因此不再有镜像公式，CI 的 V0.3.13 块改为断言「App 侧吐带已归零」。 */
     static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect {
         guard screenW >= 100, screenH >= 200 else { return .zero }
-        let rawW = CGFloat(AevonPrefs.double("GripZoneW", default: Double(zoneWDefault)))
-        let wPct = min(max(rawW, zoneWMin), zoneWMax)
-        let rawH = CGFloat(AevonPrefs.double("GripZoneH", default: Double(zoneHDefault)))
-        let hPct = min(max(rawH, zoneHMin), zoneHMax)
+        // ⛔ 常量在 `AevonRingGripView` 上，本函数属于 `enum AevonRingGrip` —— 必须带前缀
+        // （0.3.6 那条老账：静态成员先看宿主类型是谁，别想当然）。
+        let rawW = CGFloat(AevonPrefs.double("GripZoneW",
+                                             default: Double(AevonRingGripView.zoneWDefault)))
+        let wPct = min(max(rawW, AevonRingGripView.zoneWMin), AevonRingGripView.zoneWMax)
+        let rawH = CGFloat(AevonPrefs.double("GripZoneH",
+                                             default: Double(AevonRingGripView.zoneHDefault)))
+        let hPct = min(max(rawH, AevonRingGripView.zoneHMin), AevonRingGripView.zoneHMax)
         let w = screenW * wPct / 100.0
         let h = screenH * hPct / 100.0
         return CGRect(x: screenW - w, y: screenH - h, width: w, height: h)
@@ -548,7 +552,7 @@ enum AevonRingGrip {
             AevonRingGrip.setVisible(false)
             AevonEdgeEntry.presentRing(source: source)
         }
-        view.alpha = AevonRingGripView.gripShownAlpha   // V0.3.13：隐藏开关在装窗这一刻就生效
+        view.alpha = gripShownAlpha   // V0.3.13：隐藏开关在装窗这一刻就生效（与 setVisible 同一个宿主：enum AevonRingGrip）
         guard AevonEntryHost.attachOverlay(view) else { return }
         grip = view
         installKbObserversIfNeeded()
@@ -572,7 +576,7 @@ enum AevonRingGrip {
          * 设成「按开关状态恢复」的那一处口径：圆盘没展开、键盘没在屏才允许显形。 */
         let shouldShow = !keyboardSuppressed && AevonRingMenu.presented == nil
             && AevonPrefs.bool("RingGripEnabled", default: true)
-        grip.alpha = shouldShow ? AevonRingGripView.gripShownAlpha : AevonRingGripView.gripHiddenAlpha
+        grip.alpha = shouldShow ? gripShownAlpha : gripHiddenAlpha
         grip.setNeedsLayout()
         grip.layoutIfNeeded()
     }
