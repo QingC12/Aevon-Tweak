@@ -2080,8 +2080,12 @@ jobs:
           # V0.3.3 反转（AevonGripBandNarrowV303）：命中带 40 → 12pt（用户定档方案 C）。
           grep -q 'hitOutsetX: CGFloat = 12' "$W/Sources/AevonRingGrip.swift" \
             || { echo "::error::V0.3.3 把手命中带没收窄到 12pt（误吞面仍是 46pt）"; exit 1; }
-          grep -q 'outsetX = 12.0' "$W/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::V0.3.3 App 侧命中带没跟 SB 侧同步（两侧不一致必出鬼）"; exit 1; }
+          # V0.3.14 反转：App 侧命中带已随把手吞带整段删除 —— 不再有「两侧同步」这回事，
+          # 改成守「它真的不在了」：同步的前提是两侧都有这段几何，现在只有 SB 侧有。
+          if grep -qE 'outsetX = [0-9]' "$W/Sources/AppSide/AevonAppSide.m"; then
+            echo "::error::V0.3.14 App 侧命中带几何又回来了（0.3.14 已整段拆净，两侧同步判据作废）"
+            exit 1
+          fi
           grep -q 'AevonRingGrip.installIfNeeded' "$W/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.50 把手没装到入口容器"; exit 1; }
           grep -q 'AevonRingGrip.setVisible(true)' "$W/Sources/AevonRingMenu.swift" \
