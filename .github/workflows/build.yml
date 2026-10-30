@@ -178,7 +178,8 @@ jobs:
                    AevonGripYieldV305 AevonGripLegOutcomeV305 \
                    AevonGripYieldDeepV306 AevonYieldDefaultV307 AevonGripZoneV308 \
                    AevonGripOwnLegV309 AevonOwnLegRegV310 AevonOwnLegDefaultV310 \
-                   AevonOwnLegTypeV311 AevonOwnSuppressV311; do
+                   AevonOwnLegTypeV311 AevonOwnSuppressV311 \
+                   AevonOwnClaimV312 AevonOwnIvarV312 AevonOwnUIKitMgrV312; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -4492,11 +4493,14 @@ jobs:
           echo "V0.3.9 校验: 自建识别器（落指即判 + 0.1.9 三闸 + 白名单取证 + 默认关）✓"
 
           # ── V0.3.10 校验（Aevon(88)：自建腿一行没跑 → 真名注册 + 主动装配 + 实时开关 + 转正）──
-          # ①注册必须用 census 实测的真名（两参 withType:），且不许再出现 0.3.10 那个
-          #   17.3.1 上不存在的 toDisplayWithIdentity 调用（取证名单里留着它当反证，不算）
+          # ①注册必须用 census 实测的真名（两参 withType:）。
+          #   V0.3.12 **反转**了原来的「注册体不许出现 toDisplayWithIdentity」——
+          #   0.3.10 得出「17.3.1 上不存在」是因为拿它去问了 SB 的两个管理器类，
+          #   而它的宿主是 UIKitCore 的 `_UISystemGestureManager`（带下划线）。
+          #   现在两条都是正路，防回退网改成「两条都必须留在注册体里」。
           [ "$(grep -c 'addGestureRecognizer:withType:' "$OWNM")" -ge 2 ] \
             || { echo "::error::V0.3.10 真名 addGestureRecognizer:withType: 未同时在取证与注册里出现"; exit 1; }
-          python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("static BOOL AevonOwnTryRegister"); j=s.find("static void AevonOwnAttachTo",i); ok=(i>0 and j>i and "toDisplayWithIdentity" not in s[i:j]); print("V0.3.10 注册体里已无 toDisplayWithIdentity（真名 withType:）✓" if ok else "::error::V0.3.10 注册体仍在调不存在的 toDisplayWithIdentity"); sys.exit(0 if ok else 1)' "$OWNM"
+          python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("static BOOL AevonOwnTryRegister"); j=s.find("static void AevonOwnAttachTo",i); body=s[i:j] if (i>0 and j>i) else ""; ok=("toDisplayWithIdentity" in body and "_UISystemGestureManager" in s and "withType:" in body); print("V0.3.12 注册体两条路并存（toDisplayWithIdentity 宿主 _UISystemGestureManager + withType:）✓" if ok else "::error::V0.3.12 注册体缺一条路（toDisplayWithIdentity / withType: / _UISystemGestureManager）"); sys.exit(0 if ok else 1)' "$OWNM"
           # ②两参调用前必须签名 fail-closed（参数个数不符会破坏调用约定，arm64e 直接炸）
           grep -q "enc\[0\] != 'v' || AevonGripEncArgCount(enc) != 2" "$OWNM" \
             || { echo "::error::V0.3.10 两参注册前没做签名自检"; exit 1; }
@@ -4549,6 +4553,41 @@ jobs:
             && strings "$MDYL" | grep -q 'AevonOwnSuppressV311' \
             || { echo "::error::V0.3.11 主库缺类型值取证/去重标记"; exit 1; }
           echo "V0.3.11 校验: withType: 真名注册 + 类型值运行时实测（未知不猜）+ moved 首帧探针 + 滚动闸 + 双线去重 ✓"
+
+          # ── V0.3.12 校验（Aevon(90)：只有第一次呼盘不跟手 → 连带认领 + 修正查错类 + ivar 取证）──
+          # ①连带认领：ObjC 侧提供 C 入口，Swift 侧必须真的在「达阈值、守卫全过」那一刻调它
+          grep -q 'void AevonGripOwnLegClaim(void)' "$OWNM" \
+            && grep -q 'ownClaimNow' "$OWNM" \
+            || { echo "::error::V0.3.12 连带认领缺失（AevonGripOwnLegClaim / ownClaimNow）"; exit 1; }
+          grep -q '@_silgen_name("AevonGripOwnLegClaim")' "$OWNE" \
+            && grep -q 'AevonGripOwnLegClaimBridge()' "$OWNE" \
+            || { echo "::error::V0.3.12 Swift 侧没在呼盘前调用认领（「只有第一次生效」的根因没修）"; exit 1; }
+          # ②认领后必须有兜底放行 —— 手指不抬手/ended 没派进来时，绝不能让识别器卡在 Began
+          grep -q 'ownHoldFired' "$OWNM" \
+            || { echo "::error::V0.3.12 认领后缺兜底放行（识别器可能卡在 Began）"; exit 1; }
+          # ③防回退：从旁听升级到正路时必须摘掉旧识别器（否则同一个手势有两个家）
+          grep -q 'removeGestureRecognizer:old' "$OWNM" \
+            || { echo "::error::V0.3.12 升级到正路时没摘掉旁听识别器"; exit 1; }
+          # ④防回退：0.3.11 的 census 闸从来没被置 YES（每轮 kick 重打一遍）—— 必须改成按类去重
+          grep -q 'gAevonOwnCensusSeen' "$OWNM" \
+            || { echo "::error::V0.3.12 census 重复输出的缺陷没修"; exit 1; }
+          # ⑤ivar 形状取证在位（KVC 五 key 全 miss + 钩子等不到，这是唯一没读过的取证面）
+          grep -q 'AevonOwnDumpIvars' "$OWNM" \
+            && grep -q 'class_copyIvarList' "$OWNM" \
+            && grep -q 'object_getIvar' "$OWNM" \
+            || { echo "::error::V0.3.12 ivar 形状取证缺失"; exit 1; }
+          # ⑥查错类的修正：toDisplayWithIdentity 的宿主是 UIKitCore 的 _UISystemGestureManager
+          grep -q '_UISystemGestureManager' "$OWNM" \
+            || { echo "::error::V0.3.12 没把 toDisplayWithIdentity 的宿主类找对"; exit 1; }
+          # ⑦新路调用前同样必须签名 fail-closed（参数个数不符会破坏 arm64e 调用约定）
+          grep -q "denc\[0\] == 'v' && AevonGripEncArgCount(denc) == 2" "$OWNM" \
+            || { echo "::error::V0.3.12 toDisplayWithIdentity 调用前没做签名自检"; exit 1; }
+          # ⑧标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonOwnClaimV312' \
+            && strings "$MDYL" | grep -q 'AevonOwnIvarV312' \
+            && strings "$MDYL" | grep -q 'AevonOwnUIKitMgrV312' \
+            || { echo "::error::V0.3.12 主库缺认领/ivar/宿主类修正标记"; exit 1; }
+          echo "V0.3.12 校验: 借腿呼盘连带认领 + 装配可升级 + _UISystemGestureManager 真宿主 + ivar 形状取证 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

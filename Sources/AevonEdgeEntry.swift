@@ -995,6 +995,11 @@ enum AevonEdgeEntry {
         }
         let point = CGPoint(x: x, y: y)
         lastTouchPoint = point
+        // V0.3.12（AevonOwnClaimV312）：呼盘之前先「连带认领」这根手指。
+        // 自建腿此刻正 hold 着它（落点在带内才 hold），认领 = 让它进 Began、
+        // 把 App 已派发的触摸 cancel 掉，并且让它真的「识别成功」一次 ——
+        // Aevon(90) 里「只有第一次不跟手」的根因就是它从没成功过，UIKit 撤了延迟资格。
+        AevonGripOwnLegClaimBridge()
         AevonLog.info("[圆盘] 系统识别器腿呼盘（\(cls)，右缘起点 x=\(Int(edgeRef)) → 左滑 8pt）"
             + "：骑系统边沿手势，不从 App 投递链里扣手指"
             + "（AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripYieldDeepV306）")
@@ -1370,3 +1375,10 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
 
 /// V0.1.2（AevonGuardCleanupV102）：Guard 回执计数与 handler 已随 Guard 移除。
 /// 历史 CI 校验串（AevonGuardAckV35）由 AevonAssertionShim.m 的 used 常量收容。
+
+/// V0.3.12（AevonOwnClaimV312）：ObjC 侧「连带认领」入口（AevonGripHook.m 里的
+/// `void AevonGripOwnLegClaim(void)`）。借腿真的赢下仲裁、要呼盘的那一刻调进来。
+/// 为什么不从 ObjC 侧自己调：`AevonGripSystemSummon` 之后 Swift 里还有总开关/圆盘已开/
+/// 自建腿抢先/带外/节流五道守卫 —— ObjC 不知道最终有没有真呼盘，只有这里知道。
+@_silgen_name("AevonGripOwnLegClaim")
+private func AevonGripOwnLegClaimBridge()
