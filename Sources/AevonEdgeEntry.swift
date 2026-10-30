@@ -940,7 +940,8 @@ enum AevonEdgeEntry {
     /// 这条腿与把手腿的本质区别：**触摸归属不变**。识别器是系统自己的，我们只是给它
     /// 外挂了一个 target；App 那边收到的序列由系统按它本来的 cancel 语义处理，我不从
     /// sendEvent 里扣任何一帧 —— 这是 Stheno「一根手指都不碰」的同构做法。
-    static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat, cls: String) {
+    static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat,
+                                startY: CGFloat, cls: String) {
         guard AevonPrefs.bool("Enabled", default: true) else {
             legBlocked(cls: cls, reason: "总开关关")
             return
@@ -955,9 +956,28 @@ enum AevonEdgeEntry {
         // 天然向左位移，用当前点判右缘等于「滑得越到位越不被认」。startX<=0 兜底用当前点。
         let edgeRef = startX > 0 ? startX : x
         let screen = UIScreen.main.bounds
-        guard edgeRef >= screen.width - 24 else {
-            legBlocked(cls: cls, reason: "不在右缘 24pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
+        /* V0.3.8（AevonGripZoneV308）：触发范围从「右缘 24pt + y 不限」收成**一条带**。
+         *
+         * 用户 Aevon(86)：换成系统手势后「整个右侧都会触发圆盘，还会和左滑返回插件冲突」。
+         * 现场数据：68 次呼盘起点 x 406~425（全在右缘），但落点 y 从 381 一直铺到 722 ——
+         * 判据里根本没有 y，所以右缘任意高度左滑都会呼盘。
+         * 现在横向取 GripWidth、纵向取 GripY/GripLen 算出的把手带（含上下余量）。
+         * 带外的右缘左滑不再被我们截胡，归还给侧滑返回插件。 */
+        let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)
+        guard band.width > 0 else {
+            legBlocked(cls: cls, reason: "屏幕尺寸异常")
             return
+        }
+        guard edgeRef >= band.minX else {
+            legBlocked(cls: cls, reason: "不在右缘 \(Int(band.width))pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
+            return
+        }
+        if !AevonRingGrip.scopeFullEdge {
+            let yRef = startY > 0 ? startY : y
+            guard yRef >= band.minY && yRef <= band.maxY else {
+                legBlocked(cls: cls, reason: "不在把手带内（起点y=\(Int(yRef)) 带=\(Int(band.minY))~\(Int(band.maxY))，GripScope 关着）")
+                return
+            }
         }
         guard CACurrentMediaTime() - lastTriggerAt > 0.6 else {
             /* V0.3.5（AevonGripYieldV305）：0.6s 节流拦下要记账 —— Aevon(83) 日志里
@@ -1154,10 +1174,12 @@ public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
 /// 不会嵌在 UIKit 手势状态机内部开窗。
 @_cdecl("AevonGripSystemSummon")
 public func AevonGripSystemSummon(_ x: Double, _ y: Double, _ startX: Double,
+                                  _ startY: Double,
                                   _ cls: UnsafePointer<CChar>?) {
     let name = cls.map { String(cString: $0) } ?? "edge"
     AevonEdgeEntry.systemLegSummon(x: CGFloat(x), y: CGFloat(y),
-                                   startX: CGFloat(startX), cls: name)
+                                   startX: CGFloat(startX), startY: CGFloat(startY),
+                                   cls: name)
 }
 
 /// V0.3.4（AevonGripProbe5V304）：实例级探针回调（只在 GripHookProbe 打开时被调用）。

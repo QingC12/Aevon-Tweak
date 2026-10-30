@@ -52,7 +52,7 @@
 			<key>min</key>
 			<real>36</real>
 			<key>max</key>
-			<real>120</real>
+			<real>400</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -60,7 +60,51 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>36 = 很短的一条，120 = 接近一根手指高度；默认 64。</string>
+			<string>36 = 很短的一条，400 = 盖住整条右缘（相当于 0.3.7 的「右侧任意高度都能呼」）；默认 64。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>label</key>
+			<string>触发宽度：pt</string>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripWidth</string>
+			<key>default</key>
+			<real>24</real>
+			<key>min</key>
+			<real>12</real>
+			<key>max</key>
+			<real>60</real>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>从屏幕右缘向内算。24 = 默认（0.3.7 的体感）；越小越不容易误碰，但越难划中；最小 17（把手自身宽度，再小没有意义）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>右缘整条都能呼（不推荐）</string>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripScope</string>
+			<key>default</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>「右缘整条都能呼」关着（推荐）：只有把手那一条带能呼出圆盘，带外的右缘左滑归侧滑返回插件 —— 这就是「不跟左滑返回插件抢手势」。打开：右缘任意高度左滑都呼盘，等于 0.3.7 的行为，会和侧滑返回插件冲突。只有当你发现把手带怎么调都呼不出来时才需要打开。</string>
 		</dict>
 	</array>
 </dict>

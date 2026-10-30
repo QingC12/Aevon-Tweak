@@ -1921,7 +1921,7 @@ static void AevonGripRefreshCache(void) {
         CFRelease(enabled);
     }
     if (!on) { return; }
-    double ratio = 30.0, len = 64.0;
+    double ratio = 30.0, len = 64.0, bandW = 24.0;
     CFPropertyListRef y = CFPreferencesCopyAppValue(CFSTR("GripY"), CFSTR("com.Aevon"));
     if (y != NULL) {
         if (CFGetTypeID(y) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)y, kCFNumberDoubleType, &ratio); }
@@ -1932,19 +1932,35 @@ static void AevonGripRefreshCache(void) {
         if (CFGetTypeID(l) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)l, kCFNumberDoubleType, &len); }
         CFRelease(l);
     }
+    /* V0.3.8（AevonGripZoneV308）：触发带宽度可配（GripWidth），App 侧必须跟读同一个 key。 */
+    CFPropertyListRef wpref = CFPreferencesCopyAppValue(CFSTR("GripWidth"), CFSTR("com.Aevon"));
+    if (wpref != NULL) {
+        if (CFGetTypeID(wpref) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)wpref, kCFNumberDoubleType, &bandW); }
+        CFRelease(wpref);
+    }
     if (ratio < 10) { ratio = 10; }
     if (ratio > 90) { ratio = 90; }
     if (len < 36) { len = 36; }
-    if (len > 120) { len = 120; }
+    /* V0.3.8：上限 120 → 400，与 SB 侧 AevonRingGripView.lenMax 严格同步
+     * （用户把 GripLen 拉到 400 = 整条右缘都能呼盘）。 */
+    if (len > 400) { len = 400; }
+    if (bandW < 12) { bandW = 12; }
+    if (bandW > 60) { bandW = 60; }
     CGSize screen = gAevonRealScreen;
     if (screen.width < 100 || screen.height < 200) { return; }
     /* V0.3.3（AevonGripBandNarrowV303）：outsetX 40 → 12，与 SB 侧
      * AevonRingGrip.swift 的 hitOutsetX 严格同步（两侧不一致 = 一侧吞一侧不吞，
-     * 就是 0.2.61~0.2.84 反复出现的「吞不掉/误吞」那一类鬼）。 */
-    const double barWidth = 5.0, outsetX = 12.0, outsetY = 14.0;
+     * 就是 0.2.61~0.2.84 反复出现的「吞不掉/误吞」那一类鬼）。
+     *
+     * V0.3.8（AevonGripZoneV308）：横向宽度改由 GripWidth 决定，下限仍是
+     * barWidth + outsetX（17pt）。纵向多给 bandPadY（10pt，上下各一份）——
+     * 必须与 SB 侧 `AevonRingGrip.bandRect` 的公式**一字不差**：
+     * 触发带 ⊂ 吞带 是「呼盘不带动 App」的前提，吞带比触发带小就会出现
+     * 「圆盘出来了、App 却跟着滑了几个像素」这种半截状态。 */
+    const double barWidth = 5.0, outsetX = 12.0, outsetY = 14.0, bandPadY = 10.0;
     double cy = screen.height * (1.0 - ratio / 100.0);
-    double hitW = barWidth + outsetX;
-    double hitH = len + outsetY * 2.0;
+    double hitW = bandW < (barWidth + outsetX) ? (barWidth + outsetX) : bandW;
+    double hitH = len + (outsetY + bandPadY) * 2.0;
     gAevonGripRect = CGRectMake(screen.width - hitW, cy - hitH / 2.0, hitW, hitH);
 }
 

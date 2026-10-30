@@ -236,7 +236,7 @@ static void AevonGripCensusClass(NSString *clsName, NSArray<NSString *> *sels) {
 //   ⑥ 任何一步失败都只影响本腿（静默跳过），把手 + sendEvent 两条老腿原样保留当回退网。
 // ---------------------------------------------------------------------------
 
-extern void AevonGripSystemSummon(double x, double y, double startX, const char *cls);
+extern void AevonGripSystemSummon(double x, double y, double startX, double startY, const char *cls);
 extern void AevonGripLegProbe(const char *cls, double x, double y, double edges,
                               int delays, int cancels, const char *viewCls);
 /// V0.3.5（AevonGripLegOutcomeV305）：认领了但没走到呼盘时的结局上报。
@@ -344,9 +344,14 @@ static void AevonGripLegFinish(AevonGripLegProxy *p, int kind) {
                  * 原因=不在右缘 24pt 内」全是这个：起手 x=420，滑到 x=400 时
                  * 400 < 430-24=406 就被自己否决了。右缘判据必须看起点。 */
                 double sx = (double)self.start.x;
+                /* V0.3.8（AevonGripZoneV308）：began 落点 y 也一起带过去。
+                 * 判据从「右缘整条」收成「把手带」之后，纵向必须看**起点**而不是当前点 ——
+                 * 0.3.6 已经用 7 条「不在右缘」实锤过「用当前点自己否决自己」这个坑，
+                 * 只是那次踩的是 x（左滑天然向左）、这次会踩 y（上下抖动 |dy|<40pt）。 */
+                double sy = (double)self.start.y;
                 AevonGripLegDrop(self);
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    AevonGripSystemSummon(fx, fy, sx, cn != NULL ? cn : "edge");
+                    AevonGripSystemSummon(fx, fy, sx, sy, cn != NULL ? cn : "edge");
                 });
                 return;
             }
@@ -607,3 +612,12 @@ BOOL AevonGripHookProbeInstall(void) {
  * 这就是 Stheno 的架构：只骑系统识别器，Aevon 一根手指都不碰。
  * 标记必须是纯 ASCII 且带 used —— 注释永不进二进制，App 侧标记同理。 */
 __attribute__((used)) static const char AevonYieldDefaultV307Marker[] = "AevonYieldDefaultV307";
+
+/* V0.3.8（AevonGripZoneV308）：触发区从「右缘 24pt × 任意高度」收成一条可配的带。
+ * 依据 Aevon(86)：68 次呼盘起点 x 406~425（全在右缘），落点 y 从 381 铺到 722 ——
+ * 判据里没有 y，于是右缘任意高度左滑都呼盘，还和侧滑返回插件抢手势。
+ * 现在横向 GripWidth（12~60，默认 24，下限 17）、纵向 GripY/GripLen（Len 上限
+ * 120→400）+ 上下各 10pt 余量；带外归还给插件。GripScope 开关可切回整条兜底。
+ * 同一份几何在 App 侧 AevonAppSide.m 的 AevonGripRefreshCache 里镜像一份 ——
+ * 触发带必须 ⊂ 吞带，否则会出现「圆盘出来了、App 却跟着滑了几像素」的半截状态。 */
+__attribute__((used)) static const char AevonGripZoneV308Marker[] = "AevonGripZoneV308";

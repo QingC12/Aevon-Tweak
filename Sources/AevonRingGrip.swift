@@ -60,9 +60,24 @@ final class AevonRingGripView: UIView {
      * **App 侧 AevonAppSide.m 的 outsetX 必须与此同步**（两侧不一致 = 一侧吞一侧不吞）。 */
     static let hitOutsetX: CGFloat = 12
     static let hitOutsetY: CGFloat = 14
+    /* V0.3.8（AevonGripZoneV308）：触发带宽度改为**可配**（偏好 GripWidth，12–60pt，默认 24）。
+     *
+     * 为什么是 24 而不是 17：0.3.4~0.3.7 系统腿判据里硬编码的就是 `screen.width - 24`，
+     * 用户 Aevon(86) 已经是这个体感；把它变成可配时**默认取同一个值 = 横向行为零变化**，
+     * 这样本版唯一的变量就是纵向（收窄触发范围），出事好归因。
+     * 下限仍取 `barWidth + hitOutsetX`（=17pt），保证滑条拉到 12 也不会比 0.3.3 更窄。 */
+    static let widthMin: CGFloat = 12
+    static let widthMax: CGFloat = 60
+    static let widthDefault: CGFloat = 24
+    /* 触发带纵向余量（pt，上下各一份）：给「手指落点比把手中心偏一点」留活路。
+     * 没有它，GripLen 拉到 36 时触发带只有 92pt 高，实测会掉呼盘成功率。 */
+    static let bandPadY: CGFloat = 10
     /// 长度可调区间（pt）与默认值
     static let lenMin: CGFloat = 36
-    static let lenMax: CGFloat = 120
+    /* V0.3.8（AevonGripZoneV308）：上限 120 → 400。
+     * 用户 Aevon(86) 要的「右缘任意高度都能呼」不必再加一个模式开关 —— 把长度拉到 400
+     * 就把整条右缘盖住了，滑条本身就是那个开关。 */
+    static let lenMax: CGFloat = 400
     static let lenDefault: CGFloat = 64
     /// 位置可调区间（占屏幕高度比例，从底部起）与默认值
     static let ratioMin: CGFloat = 0.10
@@ -173,19 +188,28 @@ final class AevonRingGripView: UIView {
         return clamped
     }
 
-    /// 竖条长度（pt）。读偏好 GripLen（36–120，默认 64）。
+    /// 竖条长度（pt）。读偏好 GripLen（36–400，默认 64）。V0.3.8：上限 120→400。
     private var barLength: CGFloat {
         let raw = CGFloat(AevonPrefs.double("GripLen", default: 64))
         return min(max(raw, AevonRingGripView.lenMin), AevonRingGripView.lenMax)
+    }
+
+    /// 命中带总宽（pt）。读偏好 GripWidth（12–60，默认 24）。
+    /// V0.3.8（AevonGripZoneV308）：下限取 `barWidth + hitOutsetX`（17pt），
+    /// 保证再怎么调也不会比 0.3.3 定的 12pt 外扩更窄。
+    private var hitWidth: CGFloat {
+        let raw = CGFloat(AevonPrefs.double("GripWidth", default: 24))
+        let clamped = min(max(raw, AevonRingGripView.widthMin), AevonRingGripView.widthMax)
+        return max(clamped, AevonRingGripView.barWidth + AevonRingGripView.hitOutsetX)
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         let len = barLength
         let w = AevonRingGripView.barWidth
-        // 命中区：竖条中心纵向 = 屏幕底部 bottomRatio 处；横向贴右缘向内扩 hitOutsetX
+        // 命中区：竖条中心纵向 = 屏幕底部 bottomRatio 处；横向宽度取偏好 GripWidth
         let cy = bounds.height * (1.0 - bottomRatio)
-        let hitW = w + AevonRingGripView.hitOutsetX
+        let hitW = hitWidth
         let hitH = len + AevonRingGripView.hitOutsetY * 2
         handle.frame = CGRect(x: bounds.width - hitW,
                               y: cy - hitH / 2,
@@ -305,6 +329,38 @@ enum AevonRingGrip {
     /// 由 `AevonRingGripView.applyYieldMode()` 同步（构造 + 偏好变更各一次），
     /// **不进触摸热路径、零 IPC**。
     static var yieldActive = false
+
+    /* V0.3.8（AevonGripZoneV308）：触发带几何的**唯一权威算法**。
+     *
+     * 用户 Aevon(86)：换成系统手势后「整个右侧都会触发圆盘，还会和左滑返回插件冲突」——
+     * 根因不是缺能力，是系统腿判据写死成 `startX >= screen.width - 24`，**y 一个字节都没判**，
+     * 于是右缘任意高度左滑都呼盘。这里把几何收成一条带：横向 GripWidth、纵向
+     * 中心 GripY + 长度 GripLen（上下各 14pt outset + 10pt 余量）。
+     *
+     * ⛔ 两侧必须严格同侧（0.2.61~0.2.84 反复踩）：本函数是 SB 侧权威，
+     * `Sources/AppSide/AevonAppSide.m` 的 `AevonGripRefreshCache` 是本函数的 ObjC 镜像，
+     * 读同一组 key、用同一个公式。任何一侧改公式，CI 的 V0.3.8 校验块会红。 */
+    static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect {
+        guard screenW >= 100, screenH >= 200 else { return .zero }
+        let rawW = CGFloat(AevonPrefs.double("GripWidth", default: 24))
+        let w = max(min(max(rawW, AevonRingGripView.widthMin), AevonRingGripView.widthMax),
+                    AevonRingGripView.barWidth + AevonRingGripView.hitOutsetX)
+        let rawLen = CGFloat(AevonPrefs.double("GripLen", default: 64))
+        let len = min(max(rawLen, AevonRingGripView.lenMin), AevonRingGripView.lenMax)
+        let rawRatio = CGFloat(AevonPrefs.double("GripY", default: 30)) / 100.0
+        let ratio = min(max(rawRatio, AevonRingGripView.ratioMin), AevonRingGripView.ratioMax)
+        let cy = screenH * (1.0 - ratio)
+        let h = len + (AevonRingGripView.hitOutsetY + AevonRingGripView.bandPadY) * 2
+        return CGRect(x: screenW - w, y: cy - h / 2, width: w, height: h)
+    }
+
+    /// V0.3.8（AevonGripZoneV308）：触发范围模式。
+    /// `false`（默认）= 只在把手那条带内呼盘，带外的右缘左滑归还给侧滑返回插件；
+    /// `true` = 右缘任意高度都能呼盘（0.3.7 的行为，作为兜底）。
+    /// 等价做法：把 GripLen 拉到 400 也能盖住整条右缘，这个开关是给「不想算数值」的场合用的。
+    static var scopeFullEdge: Bool {
+        return AevonPrefs.bool("GripScope", default: false)
+    }
 
     private static var kbObserversInstalled = false
     private static var kbSenseAt: CFTimeInterval = 0
