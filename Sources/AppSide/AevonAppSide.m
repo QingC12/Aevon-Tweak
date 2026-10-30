@@ -2117,42 +2117,15 @@ static BOOL AevonPointInCanvasBand(UIWindow *win, CGPoint p) {
         || (p.y >= cs.height - bottomBand);
 }
 
-/* V0.2.77（AevonBandTap2V277，用户 Aevon(49) #2「抖音全屏打开时右侧评论按钮无法点击，
- * 卸载 Aevon 后正常」）：
+/* V0.3.14（AevonAppBandPurgeV314）：`AevonPointHitsTapTarget` 已随把手区分支一起删除。
+ * 它是 0.2.77 为「把手带与抖音右栏按钮几何重叠」专门写的 tap 豁免判据 ——
+ * 把手带在 0.3.13 归零、本版连分支一起拆净，这个函数就成了零调用的死代码
+ * （`-Werror,-Wunused-function` 直接拦下，正好证明它真的没人用了）。
  *
- * 把手命中区（右缘 45 × 92pt，心点 y≈652）与抖音右栏「评论/收藏」竖排**几何重叠**。
- * 0.2.75 只给「画布边缘带」加了 tap 豁免，把手区那条分支还是无条件整根吞 →
- * 全屏 App 里落在把手带内的按钮永远收不到 touchUp。这里把豁免判据抽成公共函数，
- * 把手分支也用它。
- *
- * 判据（宁可漏放，不可误放 —— 放错的代价是「滑把手带动 App 滚动」）：
- *   ① UIControl / 挂了 UITapGestureRecognizer 的视图 → 可点击；
- *   ② 抖音右栏是自绘 view（没有控件类、也不一定挂手势）→ 追加「小尺寸可交互视图」
- *      （≤ 120x120pt）当第三条；
- *   ③ 任一祖先链上有 UIScrollView（列表 / feed / 网页）→ 一律不豁免，
- *      「从内容上起手滑把手」照旧整根吞，不把 AevonCanvasBandV268 的初衷破掉。 */
-static BOOL AevonPointHitsTapTarget(UIWindow *win, CGPoint p, UIEvent *event) {
-    UIView *hit = nil;
-    @try { hit = [win hitTest:p withEvent:event]; } @catch (NSException *e) { hit = nil; }
-    if (hit == nil) { return NO; }
-    BOOL hasScroll = NO, hasControl = NO, hasTap = NO;
-    int depth = 0;
-    for (UIView *v = hit; v != nil && depth < 12; v = v.superview, depth++) {
-        if ([v isKindOfClass:[UIScrollView class]]) { hasScroll = YES; }
-        if ([v isKindOfClass:[UIControl class]]) { hasControl = YES; }
-        for (UIGestureRecognizer *g in v.gestureRecognizers) {
-            if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
-        }
-    }
-    if (hasScroll) { return hasControl; }
-    if (hasControl || hasTap) { return YES; }
-    CGSize s = hit.bounds.size;
-    if (s.width > 0 && s.height > 0 && s.width <= 120 && s.height <= 120
-        && hit.userInteractionEnabled) {
-        return YES;
-    }
-    return NO;
-}
+ * 判据本体没有丢：仍留在 `AevonPointInCanvasBand` 的调用点（承载画布边缘带
+ * 的 tap 豁免是内联写在那里的），浮窗交互不受影响。 */
+（标记 `AevonBandTap2V277` 已由文件上方的 used 常量继续收容，CI 不受影响。）
+
 
 /* V0.2.84（AevonStaleRectGateV284，Aevon(57)「全屏 App 触摸失效」死区实锤）：
  *
