@@ -4400,7 +4400,7 @@ jobs:
           grep -q 'static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat,' "$EE" \
             && grep -q 'startY: CGFloat, cls: String)' "$EE" \
             && grep -q 'let edgeRef = startX > 0 ? startX : x' "$EE" \
-            && grep -q 'guard edgeRef >= band.minX else' "$EE" \
+            && grep -q 'guard edgeRef >= edgeMinX else' "$EE" \
             || { echo "::error::V0.3.6 Swift 右缘判据还是用当前 x（7 条误拦的来源）"; exit 1; }
           # ④防回退：右缘判据不许再直接拿当前 x 判（形态锁）
           if grep -q 'guard x >= screen.width - 24 else' "$EE"; then
