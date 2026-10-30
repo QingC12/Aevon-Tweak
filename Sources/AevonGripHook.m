@@ -1988,6 +1988,30 @@ __attribute__((used)) static const char AevonRingIcon35V321Marker[] = "AevonRing
  * 现在三处都先比「值有没有变」，没变就一个字节都不动。 */
 __attribute__((used)) static const char AevonPrefsGateV321Marker[] = "AevonPrefsGateV321";
 
+/* V0.3.22（AevonGifHoverV322）：划过动画按用户提供的 Stheno 屏幕录制重做。
+ *
+ * 录屏 295×639 = iPhone 15 Pro（393pt）的 1/4 ⇒ **1 GIF px = 1.333 pt**。量一个被
+ * 手指压住的图标（32pt）：峰值抬升 61pt = 1.9×，缩放 32 → 40pt = 1.25×，**全程等比、
+ * 无过冲**；升起 100ms（归一化 17%→2% / 33%→22% / 50%→50% / 83%→93% = easeInOut），
+ * 回落 235ms（同样 easeInOut），**跳上去就一直停在空中，离开才慢慢沉**。
+ *
+ * 0.3.21 错在把稳态压回地面：34ms 冲到顶、66ms 就回地面 = 4 帧，眼睛只读得到「抖」。
+ * 本版 `hoverLift` 0 → 46pt（1.31×：我们环的径向间隙只有 39pt，1.9× 会横穿外圈）、
+ * `hoverScale` 1.18 → 1.25、三张关键帧表全部单调、全部 easeInOut、过冲归零。 */
+__attribute__((used)) static const char AevonGifHoverV322Marker[] = "AevonGifHoverV322";
+
+/* V0.3.22（AevonGifHaloV322）：图标脚下那圈**白色柔光底盘**。
+ * 录屏里每个图标都有，被压住的更亮 —— 它是「图标跳出来」的主要读感来源。
+ * 用预渲染的径向渐变位图（96×96 全类共享一份），不用 shadow：
+ * shadow 的模糊核会跟着 `layer.transform` 每帧重算，等于把 0.3.20 刚按下去的
+ * GPU 开销又开回来。抬起的图标同时 `zPosition = 1000` 画在邻居上面。 */
+__attribute__((used)) static const char AevonGifHaloV322Marker[] = "AevonGifHaloV322";
+
+/* V0.3.22（AevonGifEntranceV322）：展开入场去掉过冲。
+ * 录屏里图标从召唤点飞出来、边飞边长大，一次都没有放大过头再缩回去；
+ * 0.3.20/0.3.21 的 1.06 过冲在 21 个图标同时入场时会让盘面「嗡」一下。 */
+__attribute__((used)) static const char AevonGifEntranceV322Marker[] = "AevonGifEntranceV322";
+
 /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指。
  * 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，
  * 应该修改为不能通过手势触发圆盘」。根因是 `presentRing` 的守卫里根本没有「当前在不在

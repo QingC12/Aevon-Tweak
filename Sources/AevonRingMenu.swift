@@ -13,6 +13,21 @@ final class AevonRingIcon: UIView {
     /// 是否成功拿到原生图标（决定高亮时改边框还是改底色）
     private let hasIcon: Bool
 
+    /* V0.3.22（AevonGifHaloV322）：图标脚下一圈**白色柔光底盘**。
+     *
+     * GIF 里每个图标下面都有这圈白底，被手指压住的那个最亮 —— 它是「图标从盘面
+     * 跳出来」的主要读感来源，比边框变色强得多（也是 Stheno 看起来很「Q」的原因
+     * 之一：白底把图标从背景里切出来，视觉重量集中，跳起来才有存在感）。
+     *
+     * 实现选的是**预渲染一张径向渐变位图**，不是 shadow 也不是多层圆：
+     *   · 用 `layer.shadow`：模糊核会跟着 `layer.transform` 每帧重算，跳一次 100ms
+     *     就是十来次重栅格化 —— 0.3.20 刚把阴影开销按下去，不能再开回来；
+     *   · 用三层不同 alpha 的圆：21 个图标 × 3 = 63 个额外图层，太浪费；
+     *   · 位图 = 一个带纹理的quad，缩放只是 texture 拉伸，代价约等于零。
+     * 图只生成一次（96×96，各图标共享同一份 UIImage）。 */
+    private let haloView = UIImageView()
+    private var haloOn = false
+
     /* V0.3.20（AevonKeyframeHoverV320）：划过动画改成 **一条定长关键帧**。
      *
      * 三版的血泪账：
@@ -42,6 +57,10 @@ final class AevonRingIcon: UIView {
     /// 入场 / 划过 / 落地共用一把键：`layer.transform` 只允许有一个主人
     ///（否则入场动画会和划过动画同时写它，呼盘后立刻划过就有一跳）。
     private static let hoverKey = "aevonHover"
+    /// V0.3.22：这一条关键帧启动时的姿态。关键帧表会按它**重新定标**
+    ///（见 `AevonHoverKeyframes.rebase`），求值时必须用同一个基准，否则
+    /// 取样点落在「没定标的那条曲线」上，下一次接手就会跳一下。
+    private var hoverMotionFrom: AevonHoverSample = .ground
 
     init(bundleID: String, name: String, size: CGFloat) {
         self.bundleID = bundleID
@@ -72,6 +91,18 @@ final class AevonRingIcon: UIView {
         layer.shadowOffset = CGSize(width: 0, height: 2)
         layer.shadowPath = UIBezierPath(roundedRect: bounds,
                                         cornerRadius: size * 0.26).cgPath
+
+        /* V0.3.22（AevonGifHaloV322）：白晕先挂上（在 iconView 之下），默认全透明。
+         * 直径 ≈ 1.42× 图标 —— GIF 里量出来的比值（图标 24px、白盘 34px）。
+         * 它跟着 `layer.transform` 一起缩放，所以抬起放大 1.25 时白晕同步长大，
+         * 和 GIF 里「白盘也跟着变亮变大」一致。 */
+        let halo = size * 0.21
+        haloView.frame = bounds.insetBy(dx: -halo, dy: -halo)
+        haloView.image = AevonRingIcon.haloImage
+        haloView.contentMode = .scaleToFill
+        haloView.alpha = 0
+        haloView.isUserInteractionEnabled = false
+        addSubview(haloView)
 
         if let icon = icon {
             iconView.image = icon
@@ -113,6 +144,45 @@ final class AevonRingIcon: UIView {
     /// 以前是 `highlighted ? 10 : 6`，每次高亮切换都要重算一次模糊核。
     static let shadowRadius: CGFloat = 8
 
+    /// V0.3.22（AevonGifHaloV322）：白色柔光底盘位图，**全类共享一份**。
+    ///
+    /// 中心 α≈0.95（被图标自己盖住，看不到），到 62% 半径还有 0.55，
+    /// 之后平滑收到 0 —— 露出来的那圈就是 GIF 里那种「白雾」。
+    static let haloImage: UIImage? = {
+        let d: CGFloat = 96
+        let rect = CGRect(x: 0, y: 0, width: d, height: d)
+        let renderer = UIGraphicsImageRenderer(size: rect.size)
+        return renderer.image { ctx in
+            let c = ctx.cgContext
+            let colors = [UIColor(white: 1, alpha: 0.95).cgColor,
+                          UIColor(white: 1, alpha: 0.88).cgColor,
+                          UIColor(white: 1, alpha: 0.46).cgColor,
+                          UIColor(white: 1, alpha: 0.0).cgColor] as CFArray
+            let locs: [CGFloat] = [0.0, 0.46, 0.72, 1.0]
+            guard let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                     colors: colors, locations: locs) else { return }
+            c.drawRadialGradient(g,
+                                 startCenter: CGPoint(x: d / 2, y: d / 2), startRadius: 0,
+                                 endCenter: CGPoint(x: d / 2, y: d / 2), endRadius: d / 2,
+                                 options: [])
+        }
+    }()
+
+    /// V0.3.22（AevonGifHaloV322）：白晕开关。跟着高亮走，不和 `layer.transform` 抢主人
+    ///（transform 归关键帧引擎，这里只动 `alpha`，两条通道互不覆盖）。
+    func setHalo(_ on: Bool, animated: Bool) {
+        guard on != haloOn else { return }
+        haloOn = on
+        guard animated else {
+            haloView.alpha = on ? 1 : 0
+            return
+        }
+        UIView.animate(withDuration: on ? 0.10 : 0.17,
+                       delay: 0,
+                       options: [.beginFromCurrentState, .curveEaseOut],
+                       animations: { self.haloView.alpha = on ? 1 : 0 })
+    }
+
     /// 高亮「松手就会打开」的那个图标
     func setHighlighted(_ highlighted: Bool) {
         setHighlighted(highlighted, animated: false)
@@ -147,6 +217,8 @@ final class AevonRingIcon: UIView {
                 : UIColor(white: 0.12, alpha: 0.92)
         }
         if animated { CATransaction.commit() }
+        // V0.3.22（AevonGifHaloV322）：白晕跟着高亮走（GIF 里被压住的那个最亮）
+        setHalo(highlighted, animated: animated)
     }
 
     // MARK: - V0.3.20（AevonKeyframeHoverV320）：划过关键帧
@@ -156,33 +228,45 @@ final class AevonRingIcon: UIView {
         let elapsed = CGFloat(CACurrentMediaTime() - hoverMotionStart)
         switch hoverMotion {
         case .rise:
-            return AevonHoverKeyframes.sample(AevonHoverKeyframes.riseKeys, at: elapsed)
+            return AevonHoverKeyframes.sample(AevonHoverKeyframes.riseKeys, at: elapsed,
+                                              from: hoverMotionFrom)
         case .land:
-            return AevonHoverKeyframes.sample(AevonHoverKeyframes.landKeys, at: elapsed)
+            return AevonHoverKeyframes.sample(AevonHoverKeyframes.landKeys, at: elapsed,
+                                              from: hoverMotionFrom)
         case .entrance:
-            return AevonHoverKeyframes.sample(AevonHoverKeyframes.entranceKeys, at: elapsed)
+            return AevonHoverKeyframes.sample(AevonHoverKeyframes.entranceKeys, at: elapsed,
+                                              from: hoverMotionFrom)
         case .idle:
             return hoverLifted ? AevonHoverKeyframes.lifted : .ground
         }
     }
 
-    /// 入场：0.30 → 1.06（过冲）→ 0.975 → 1.00，带 `delay` 错峰。
+    /// 入场：0.34 → 0.82 → 0.958 → 0.994 → 1.00，260ms，带 `delay` 错峰。
+    ///
+    /// V0.3.22（AevonGifEntranceV322）：去掉 0.3.20 那版的 1.06 过冲。
+    /// GIF 里图标从召唤点飞出来、边飞边长大，**一次都没有放大过头再缩回去**；
+    /// 21 个图标同时过冲会让整个盘面「嗡」一下，那个震感是负资产。
     func playHoverEntrance(after delay: TimeInterval) {
         let anim = AevonHoverKeyframes.animation(AevonHoverKeyframes.entranceKeys,
-                                                 from: .init(lift: 0, sx: 0.30, sy: 0.30),
+                                                 from: .init(lift: 0, scale: 0.34),
                                                  style: .entrance)
         anim.beginTime = CACurrentMediaTime() + delay
-        // 延时期间必须显示第一帧（0.30），否则会先以终点（1.0）露一帧再「缩小重来」
+        // 延时期间必须显示第一帧（0.34），否则会先以终点（1.0）露一帧再「缩小重来」
         anim.fillMode = .both
         layer.transform = CATransform3DIdentity
         layer.removeAnimation(forKey: AevonRingIcon.hoverKey)
         layer.add(anim, forKey: AevonRingIcon.hoverKey)
         hoverMotion = .entrance
         hoverMotionStart = anim.beginTime
+        hoverMotionFrom = .init(lift: 0, scale: 0.34)
         hoverLifted = false
     }
 
-    /// 被划过：抬起 + 抖动 + 挤压，200ms 停在 (12pt, 1.30)。
+    /// 被划过：**100ms 抬到 `hoverLift` 并停住**（GIF 的「跳上去」）。
+    ///
+    /// V0.3.22（AevonGifHoverV322）：稳态从「贴地」改回「悬停」。
+    /// 0.3.21 冲上去 34ms、66ms 就回地面，全程 90ms ≈ 4 帧，眼睛读不到「跳」；
+    /// GIF 是跳上去就一直停着，手指离开才慢慢沉 —— 那才叫跳起来。
     func riseHover() {
         let from = hoverSample()
         let anim = AevonHoverKeyframes.animation(AevonHoverKeyframes.riseKeys,
@@ -191,13 +275,19 @@ final class AevonRingIcon: UIView {
         layer.transform = AevonHoverKeyframes.lifted.transform3D()
         layer.removeAnimation(forKey: AevonRingIcon.hoverKey)
         layer.add(anim, forKey: AevonRingIcon.hoverKey)
+        /* V0.3.22（AevonGifHaloV322）：抬起的那一个必须画在相邻图标**上面**。
+         * 用 `zPosition` 而不是 `bringSubviewToFront` —— 后者会动 subviews 数组，
+         * 一次切换要重排 21 个图层；zPosition 只是渲染顺序，零结构变更。
+         * 不用子层重排的代价：hitTest 不受影响（图标本身 `isUserInteractionEnabled = false`）。 */
+        layer.zPosition = 1000
         hoverMotion = .rise
         hoverMotionStart = CACurrentMediaTime()
+        hoverMotionFrom = from
         hoverLifted = true
         setHighlighted(true, animated: true)
     }
 
-    /// 被离开：触地压扁 + 一记余弹，250ms 归零。
+    /// 被离开：**170ms 慢慢沉回去**，单调、无回弹（GIF 的「松手落下」）。
     func landHover() {
         let from = hoverSample()
         let anim = AevonHoverKeyframes.animation(AevonHoverKeyframes.landKeys,
@@ -206,8 +296,10 @@ final class AevonRingIcon: UIView {
         layer.transform = CATransform3DIdentity
         layer.removeAnimation(forKey: AevonRingIcon.hoverKey)
         layer.add(anim, forKey: AevonRingIcon.hoverKey)
+        layer.zPosition = 0
         hoverMotion = .land
         hoverMotionStart = CACurrentMediaTime()
+        hoverMotionFrom = from
         hoverLifted = false
         setHighlighted(false, animated: true)
     }
@@ -215,13 +307,25 @@ final class AevonRingIcon: UIView {
     /// 归零（收起圆盘 / 重建列表时）。**必须同时清掉 layer 上的动画** ——
     /// 关键帧是 `fillMode: .forwards`，只清状态不摘动画，`dismiss` 后面写的
     /// `icon.transform` 会被这条在途动画盖住（图标就不往圆心收了）。
-    func resetHover() {
+    ///
+    /// V0.3.22（AevonGifHoverV322）：加了 `snap` 开关。
+    /// `snap = true`（重建列表）：直接抹平到 identity。
+    /// `snap = false`（收起圆盘）：**保留当前 transform**，让后面的「吸回圆心」
+    /// 动画从这里接着走 —— 否则稳态抬起 46pt 的图标会先**啪一下掉回原位**再飞向圆心，
+    /// 0.3.21 因为 `hoverLift = 0` 看不出来，这一版会非常明显。
+    func resetHover(snap: Bool = true) {
         layer.removeAnimation(forKey: AevonRingIcon.hoverKey)
-        layer.transform = CATransform3DIdentity
+        if snap {
+            layer.transform = CATransform3DIdentity
+            layer.zPosition = 0
+        }
         hoverMotion = .idle
         hoverMotionStart = 0
+        hoverMotionFrom = .ground
         hoverLifted = false
-        setHighlighted(false, animated: false)
+        // 收起档让它跟着一起淡出，不要「白圈啪一下就没了」
+        setHighlighted(false, animated: !snap)
+        setHalo(false, animated: !snap)
     }
 
     /// 名字太长会挤成一团：超过 6 个字就截断（圆盘上一行最多 4 字、两行 8 字，取 6 兼顾）
@@ -305,22 +409,19 @@ final class AevonRingMenu: UIView {
     /// 圆心命中半径（比按钮本身放大一点，手指压在图标边缘也算）
     private static let centerHitRadius: CGFloat = 40
 
-    // MARK: - 划过图标的「跳跃」动画（V0.0.35 起，V0.3.21 定档为「单跳落地」）
+    // MARK: - 划过图标的「跳跃」动画（V0.0.35 起，V0.3.22 按 Stheno 录屏定档）
     //
-    // 用户 Aevon(104) 的两条要求，都在这一组常量里：
-    //   ① 「图标跳动的高度增加 50%」 —— 8pt → 12pt；
-    //   ② 「划过图标时放大效果再大一点，圆盘看起来更 Q 弹」 —— 1.18 → 1.30。
-    //
-    // V0.3.21（AevonHoverJumpV321，用户 Aevon(97) 定档「方案 A · 单跳落地」）：
-    //   · `hoverLift` **12 → 0**：0.3.20 用「常驻抬起 12pt」表示高亮，可 69ms 一个切换下
-    //     那个常驻偏移读起来是「一直浮着」。现在稳态就在地面，32pt 的跳跃感全部由
-    //     `riseKeys` 那 90ms 提供 —— 字面意义上的「跳起来然后落回去」。
-    //   · `hoverScale` **1.30 → 1.18**：配合图标 40 → 35pt，35 × 1.18 = 41.3，
-    //     高亮那个看起来跟旧版 40pt 差不多大，而未高亮的都变小了 ⇒ 选中对比更强。
-    /// 高亮稳态的向上偏移（V0.3.21 起为 0：落回地面，跳跃交给 rise 关键帧）
-    static let hoverLift: CGFloat = 0
-    /// 高亮稳态的放大倍数（跳跃过程中的峰值放大约 1.26，见 hoverKeyframes 的 riseKeys）
-    static let hoverScale: CGFloat = 1.18
+    // V0.3.22（AevonGifHoverV322，用户给的 Stheno 屏幕录制）：
+    //   · `hoverLift` **0 → 46pt**：0.3.21 把稳态压在地面，靠「34ms 冲到顶、66ms 回地面」
+    //     表达跳跃 —— 66ms ≈ 4 帧，眼睛读不到「跳」，只读得到「抖一下」。
+    //     录屏里是**跳上去就一直停在空中**（手指压着不动它就停着），离开才慢慢沉下去。
+    //     这 46pt 换算自录屏：图标 32pt、峰值抬升 61pt ⇒ **1.9×**；我们图标 35pt、
+    //     环径向间隙只有 39pt，取 **1.31×（46pt）** —— 再高内圈图标会横穿外圈。
+    //   · `hoverScale` **1.18 → 1.25**：录屏里 32pt → 40pt 正好 1.25，全程等比。
+    /// 高亮稳态的向上偏移（= `riseKeys` 末帧）
+    static let hoverLift: CGFloat = 46
+    /// 高亮稳态的放大倍数（= `riseKeys` 末帧）
+    static let hoverScale: CGFloat = 1.25
     /* V0.3.20（AevonKeyframeHoverV320）：这里原来是一整套弹簧参数 —— 划过弹簧的
      * response、四拍余韵的振幅 / response 放大 / 错峰延迟三组数组、升起与回落两个初速，
      * 连同下发函数一起整块删掉了（「Q 弹」现在来自下面这些定长关键帧）。
@@ -947,7 +1048,11 @@ final class AevonRingMenu: UIView {
         // 时 UIKit 的行为不保证 —— 呼盘后立刻划过会有一跳。现在 `layer.transform`
         // 只有 keyframe 引擎一个主人（入场 / 升起 / 落地共用一把键 `aevonHover`）。
         // 位置（center）与 alpha 仍走弹簧，两者与 transform 不冲突。
-        let spring = AevonSpring.params(response: 0.50,
+        /* V0.3.22（AevonGifEntranceV322）：位置弹簧 0.50 → **0.36**。
+         * GIF 里缩放 260ms 到位、位移也差不多同时停下（约 270ms）；
+         * 原来 0.50 的位置弹簧要走 ~480ms，图标会「先长到原大、再慢慢飘到位置」，
+         * 两段节奏是错开的。0.36 让它和缩放同一条时间线收尾。 */
+        let spring = AevonSpring.params(response: 0.36,
                                         dampingFraction: hoverZ,
                                         initialVelocity: CGVector(dx: 0.25, dy: 0.25))
         for (index, icon) in icons.enumerated() {
@@ -990,7 +1095,9 @@ final class AevonRingMenu: UIView {
          * 接管 transform。关键帧是 `fillMode: .forwards`，只清状态不摘动画的话，
          * 下面 `icon.transform = scale(0.1)` 会被在途动画盖住 —— 图标就不往圆心收了。 */
         for icon in icons {
-            icon.resetHover()
+            // V0.3.22：收起档**不要抹平 transform** —— 抬起 46pt 的图标要
+            // 从这里平滑地被吸回圆心，而不是先掉回原位再飞。
+            icon.resetHover(snap: false)
         }
         // V0.3.19（AevonHoverTrailV319）：收起前把本轮划过汇总打一次（逐条日志已改汇总）
         flushHoverSummary()
