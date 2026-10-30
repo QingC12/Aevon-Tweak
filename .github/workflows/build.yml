@@ -175,7 +175,8 @@ jobs:
                    AevonTouchRouteV302 AevonGripProbe4V302 \
                    AevonGripIntentRetireV303 AevonGripBandNarrowV303 \
                    AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripProbe5V304 \
-                   AevonGripYieldV305 AevonGripLegOutcomeV305; do
+                   AevonGripYieldV305 AevonGripLegOutcomeV305 \
+                   AevonGripYieldDeepV306; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -4348,6 +4349,38 @@ jobs:
             && strings "$MDYL" | grep -q 'AevonGripLegOutcomeV305' \
             || { echo "::error::V0.3.5 主库缺让路/结局标记"; exit 1; }
           echo "V0.3.5 校验: 让路开关（实时生效 + 默认关）+ 探针时间限流 + 系统腿结局三分类✓"
+
+          # ── V0.3.6 校验（Aevon(84) 定档「方案 A：让路彻底化」）──
+          # 前提数据（Aevon(84) 日志）：让路开关在 11:53:58 打开，之后仍有 37 次
+          # 「把手左滑 → 呼出圆盘（全局通道）」；系统腿 44 次「达阈值但被拦 原因=圆盘已开」
+          # + 7 次「不在右缘 24pt 内」。结论：①让路只摘了可视控件层，SB 侧全局通道没停；
+          # ②右缘判据用了当前 x，左滑后 x 变小 → 自我否决。
+          # ①收口：hitTestScreenPoint 必须读静态让路镜像（SB 侧全局通道唯一入口）
+          grep -q 'static var yieldActive = false' "$RG" \
+            && grep -q 'guard !yieldActive else { return false }' "$RG" \
+            && grep -q 'AevonRingGripView.yieldActive = want' "$RG" \
+            || { echo "::error::V0.3.6 让路没接到 hitTestScreenPoint（SB 侧全局通道照样呼盘）"; exit 1; }
+          # ②moved 呼盘分支也要让路（防止开关在呼盘手势进行中被打开时残留半截手指）
+          grep -q 'if !AevonRingGripView.yieldActive,' "$EE" \
+            || { echo "::error::V0.3.6 moved 呼盘分支缺让路判断"; exit 1; }
+          # ③右缘判据必须用 began 起点：ObjC 传 startX + Swift 收 startX + 判据读 edgeRef
+          grep -q 'extern void AevonGripSystemSummon(double x, double y, double startX, const char \*cls)' "$GH" \
+            && grep -q 'double sx = (double)self.start.x;' "$GH" \
+            && grep -q 'AevonGripSystemSummon(fx, fy, sx,' "$GH" \
+            || { echo "::error::V0.3.6 ObjC 没把 began 起点 x 传给系统腿（右缘判据会自我否决）"; exit 1; }
+          grep -q 'static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat, cls: String)' "$EE" \
+            && grep -q 'let edgeRef = startX > 0 ? startX : x' "$EE" \
+            && grep -q 'guard edgeRef >= screen.width - 24 else' "$EE" \
+            || { echo "::error::V0.3.6 Swift 右缘判据还是用当前 x（7 条误拦的来源）"; exit 1; }
+          # ④防回退：右缘判据不许再直接拿当前 x 判（形态锁）
+          if grep -q 'guard x >= screen.width - 24 else' "$EE"; then
+            echo "::error::V0.3.6 右缘判据回退成当前 x（Aevon(84) 7 条误拦的真因）"
+            exit 1
+          fi
+          # ⑤标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonGripYieldDeepV306' \
+            || { echo "::error::V0.3.6 主库缺让路彻底化标记"; exit 1; }
+          echo "V0.3.6 校验: 让路接到全局通道收口点 + 右缘判据用 began 起点（防回退网在位）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

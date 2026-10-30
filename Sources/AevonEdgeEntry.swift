@@ -367,7 +367,10 @@ enum AevonEdgeEntry {
             // 代价（已知并接受）：未达阈值的半截左滑会留在 App 里（抖音可能误暂停 /
             // 半进博主主页）。这是「完全不能用」与「偶发误触发」之间的取舍，用户定档
             // 先消灭卡屏。
-            if gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
+            // V0.3.6（AevonGripYieldDeepV306）：让路模式下即使 gripSwipeTouchID 还有
+            // 残留（开关是在呼盘手势进行中打开的），这半截手指也不再呼盘 —— 右缘归系统腿。
+            if !AevonRingGripView.yieldActive,
+               gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
                 let dx = point.x - gripSwipeStart.x
                 let dy = point.y - gripSwipeStart.y
                 /* V0.2.87（AevonGripBusyRetireV287）：原「左滑 ≥6pt 才广播占用」整段删除
@@ -937,7 +940,7 @@ enum AevonEdgeEntry {
     /// 这条腿与把手腿的本质区别：**触摸归属不变**。识别器是系统自己的，我们只是给它
     /// 外挂了一个 target；App 那边收到的序列由系统按它本来的 cancel 语义处理，我不从
     /// sendEvent 里扣任何一帧 —— 这是 Stheno「一根手指都不碰」的同构做法。
-    static func systemLegSummon(x: CGFloat, y: CGFloat, cls: String) {
+    static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat, cls: String) {
         guard AevonPrefs.bool("Enabled", default: true) else {
             legBlocked(cls: cls, reason: "总开关关")
             return
@@ -946,9 +949,14 @@ enum AevonEdgeEntry {
             legBlocked(cls: cls, reason: "圆盘已开")
             return
         }
+        // V0.3.6（AevonGripYieldDeepV306）：右缘判据改用 **began 落点**，不再用当前点。
+        // Aevon(84) 日志实锤 7 条「达阈值但被拦 原因=不在右缘 24pt 内」：左滑 20pt 后
+        // 手指已从 x=420 滑到 x=400，而 400 < 430-24=406 → 自己把自己否决。呼盘手势
+        // 天然向左位移，用当前点判右缘等于「滑得越到位越不被认」。startX<=0 兜底用当前点。
+        let edgeRef = startX > 0 ? startX : x
         let screen = UIScreen.main.bounds
-        guard x >= screen.width - 24 else {
-            legBlocked(cls: cls, reason: "不在右缘 24pt 内")
+        guard edgeRef >= screen.width - 24 else {
+            legBlocked(cls: cls, reason: "不在右缘 24pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
             return
         }
         guard CACurrentMediaTime() - lastTriggerAt > 0.6 else {
@@ -960,9 +968,9 @@ enum AevonEdgeEntry {
         }
         let point = CGPoint(x: x, y: y)
         lastTouchPoint = point
-        AevonLog.info("[圆盘] 系统识别器腿呼盘（\(cls)，右缘 x=\(Int(x)) → 左滑 8pt）"
+        AevonLog.info("[圆盘] 系统识别器腿呼盘（\(cls)，右缘起点 x=\(Int(edgeRef)) → 左滑 8pt）"
             + "：骑系统边沿手势，不从 App 投递链里扣手指"
-            + "（AevonGripSystemLegV304 AevonGripLegTagV304）")
+            + "（AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripYieldDeepV306）")
         presentRing(source: "system")
     }
 
@@ -1145,9 +1153,11 @@ public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
 /// 只在系统边沿识别器自己的 changed 帧过阈值时进来，调用点在主队列异步段里，
 /// 不会嵌在 UIKit 手势状态机内部开窗。
 @_cdecl("AevonGripSystemSummon")
-public func AevonGripSystemSummon(_ x: Double, _ y: Double, _ cls: UnsafePointer<CChar>?) {
+public func AevonGripSystemSummon(_ x: Double, _ y: Double, _ startX: Double,
+                                  _ cls: UnsafePointer<CChar>?) {
     let name = cls.map { String(cString: $0) } ?? "edge"
-    AevonEdgeEntry.systemLegSummon(x: CGFloat(x), y: CGFloat(y), cls: name)
+    AevonEdgeEntry.systemLegSummon(x: CGFloat(x), y: CGFloat(y),
+                                   startX: CGFloat(startX), cls: name)
 }
 
 /// V0.3.4（AevonGripProbe5V304）：实例级探针回调（只在 GripHookProbe 打开时被调用）。

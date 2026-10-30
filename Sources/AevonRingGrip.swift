@@ -84,6 +84,20 @@ final class AevonRingGripView: UIView {
     /// 还是「认领了但比把手慢」，只有让把手闭嘴才能测出来。
     private var yieldMode = false
 
+    /// V0.3.6（AevonGripYieldDeepV306）：让路状态的**静态镜像**。
+    ///
+    /// Aevon(84) 日志实锤 0.3.5 的让路开关无效：开关开着（`11:53:58.120 把手让路模式已开`）
+    /// 之后仍有 **37 次「把手左滑 → 呼出圆盘（全局通道）」**。原因是 0.3.5 只摘了可视控件层
+    /// （`point(inside:)` / `hitTest` / pan），而真正的主力是 **SpringBoard 侧 sendEvent 的
+    /// 全局通道** —— 它走 `AevonGrip.hitTestScreenPoint`，根本不看视图层有没有交互。
+    /// 现场铁证：`11:54:27.741 手指落在把手上 (420,695)` → `.778 全局通道呼盘`（比系统腿早 40ms）
+    /// → `.801 系统腿认领` → `.803 达阈值但被拦 原因=圆盘已开`。
+    ///
+    /// 这个镜像就是那个收口点：`hitTestScreenPoint` 让路时直接返回 false，SB 侧的
+    /// 「把手候选登记」与「左滑呼盘」同时失效，一处改动覆盖两条代码路径。
+    /// 由 `applyYieldMode()` 同步（构造 + 偏好变更各一次），**不进触摸热路径、零 IPC**。
+    static var yieldActive = false
+
     var onSummon: ((String) -> Void)?
 
     override init(frame: CGRect) {
@@ -132,6 +146,9 @@ final class AevonRingGripView: UIView {
     /// 设置页改完会走 Darwin 通知 → `AevonRingGrip.refreshFromPrefs()` → 这里，**实时生效**。
     func applyYieldMode() {
         let want = AevonPrefs.bool("GripSystemYield", default: false)
+        // V0.3.6（AevonGripYieldDeepV306）：静态镜像无条件对齐（哪怕状态没变），
+        // 这样把手实例被销毁重建后不会留下过期值。
+        AevonRingGripView.yieldActive = want
         guard want != yieldMode else { return }
         yieldMode = want
         if want {
@@ -141,14 +158,14 @@ final class AevonRingGripView: UIView {
             }
             AevonLog.warn("[圆盘] 把手让路模式已开（实验）：把手不接触摸、不装 pan，"
                 + "右缘全部交给系统 gesture view → 系统识别器腿 100% 接管；"
-                + "App 侧吞带与 sendEvent 全局通道保留当兜底（AevonGripYieldV305）")
+                + "SB 侧全局通道的手势呼盘同步停用（AevonGripYieldV305 AevonGripYieldDeepV306）")
         } else {
             handle.isUserInteractionEnabled = true
             if (handle.gestureRecognizers ?? []).isEmpty {
                 installHandlePan()
             }
             AevonLog.info("[圆盘] 把手让路模式已关：把手恢复自建 pan（系统腿只做补充）"
-                + "（AevonGripYieldV305）")
+                + "（AevonGripYieldV305 AevonGripYieldDeepV306）")
         }
     }
 
@@ -485,6 +502,10 @@ enum AevonRingGrip {
 
     /// V0.2.60（AevonGripSwipeGlobalV260）：屏幕点是否落在把手命中区（给全局通道问）。
     static func hitTestScreenPoint(_ point: CGPoint) -> Bool {
+        // V0.3.6（AevonGripYieldDeepV306）：让路模式下**整条把手通道闭嘴上锁**。
+        // 这是 SB 侧全局通道唯一入口（AevonEdgeEntry 落指登记 + moved 呼盘都走它），
+        // 在这里返回 false 就一次性停掉两条代码路径 —— 0.3.5 只关视图层留下的洞。
+        guard !yieldActive else { return false }
         syncKeyboardSuppression()   // V0.2.68 AevonKbSenseV268：判定前先现场核一次键盘（0.5s 缓存）
         guard !keyboardSuppressed else { return false }   // V0.2.67 AevonKbHideV267
         guard AevonPrefs.bool("RingGripEnabled", default: true) else { return false }

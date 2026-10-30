@@ -236,7 +236,7 @@ static void AevonGripCensusClass(NSString *clsName, NSArray<NSString *> *sels) {
 //   ⑥ 任何一步失败都只影响本腿（静默跳过），把手 + sendEvent 两条老腿原样保留当回退网。
 // ---------------------------------------------------------------------------
 
-extern void AevonGripSystemSummon(double x, double y, const char *cls);
+extern void AevonGripSystemSummon(double x, double y, double startX, const char *cls);
 extern void AevonGripLegProbe(const char *cls, double x, double y, double edges,
                               int delays, int cancels, const char *viewCls);
 /// V0.3.5（AevonGripLegOutcomeV305）：认领了但没走到呼盘时的结局上报。
@@ -339,9 +339,14 @@ static void AevonGripLegFinish(AevonGripLegProxy *p, int kind) {
                 self.reported = YES;    // 达阈值这条路自己负责呼盘，不再报「未达阈值」
                 const char *cn = self.cls;
                 double fx = (double)now.x, fy = (double)now.y;
+                /* V0.3.6（AevonGripYieldDeepV306）：把 **began 落点 x** 一起带过去。
+                 * 呼盘手势天然向左位移 —— Aevon(84) 日志里 7 次「达阈值但被拦
+                 * 原因=不在右缘 24pt 内」全是这个：起手 x=420，滑到 x=400 时
+                 * 400 < 430-24=406 就被自己否决了。右缘判据必须看起点。 */
+                double sx = (double)self.start.x;
                 AevonGripLegDrop(self);
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    AevonGripSystemSummon(fx, fy, cn != NULL ? cn : "edge");
+                    AevonGripSystemSummon(fx, fy, sx, cn != NULL ? cn : "edge");
                 });
                 return;
             }
