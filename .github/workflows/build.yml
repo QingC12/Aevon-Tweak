@@ -1277,9 +1277,16 @@ jobs:
             || { echo "::error::内容区比例不是 3:5 竖窗（5:3 = 高5:宽3，Aevon(106) 纠偏）"; exit 1; }
           grep -q 'applyContentLayout' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::内容必须 App 场景原生布局（AevonFloatSceneLayoutV224）"; exit 1; }
-          # V0.2.27 反转（AevonFloatEdgeGripV227）：落指即拖取代长按 0.3s —— 不许回潮
-          grep -q 'minimumPressDuration' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            && { echo "::error::边条长按不许回潮（0.2.27 落指即拖，AevonFloatEdgeGripV227）"; exit 1; }
+          # V0.2.27 反转（AevonFloatEdgeGripV227）：左右边条落指即拖 —— 不许回潮。
+          # V0.3.25 例外：**底边**的关闭预备态必须是 long press（Stheno
+          # `sc_addTerminationGestureToRegion:` = 0.4s / 12pt），全文件只允许这一处。
+          MPD_COUNT=$(grep -vE '^[[:space:]]*(///|//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            | grep -c 'minimumPressDuration')
+          [ "$MPD_COUNT" -eq 1 ] \
+            || { echo "::error::边条长按不许回潮（只允许底边一处，实际 $MPD_COUNT 处；AevonFloatEdgeGripV227 / AevonBottomSplitV325）"; exit 1; }
+          grep -B3 'minimumPressDuration' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            | grep -q 'edges == .bottom' \
+            || { echo "::error::长按必须只挂在底边（AevonBottomSplitV325）"; exit 1; }
           grep -q 'floatBarHoldDelay: CFTimeInterval = 0$' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::全局通道边条必须落指即拖（延迟=0，AevonFloatEdgeGripV227）"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" | grep -q 'restoreDefaultFrame' \
