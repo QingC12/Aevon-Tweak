@@ -190,6 +190,9 @@ final class AevonEntryContainerView: UIView {
 /// 入口宿主：创建唯一窗口 + 唯一容器，并负责把容器搬到「当前最高的画面容器」上。
 enum AevonEntryHost {
     private static var window: AevonEntryWindow?
+    /// V0.3.0（AevonFreezeIndepWinV300）：入口窗 internal 只读访问器 —— 盖帧统一挂
+    /// 这扇独立窗口（层级 10000000 恒在最上），系统转场缩放永远碰不到它。
+    static var freezeWindow: AevonEntryWindow? { return window }
     // V0.2.91（AevonHomeFreezeV291）：internal 化 —— 回桌面过渡哨要读这两个引用。
     static var container: AevonEntryContainerView?
     /// 浮窗层（V0.0.36）：容器内专门承载浮窗外壳的子视图，永远在入口控件之下。

@@ -26,6 +26,7 @@ extern void AevonGripProbeTouch(NSInteger phase, CGFloat x, CGFloat y);
 
 static IMP AevonGripOrigBegan = NULL, AevonGripOrigMoved = NULL;
 static IMP AevonGripOrigEnded = NULL, AevonGripOrigCancelled = NULL;
+static IMP AevonGripOrigSetState = NULL, AevonGripOrig_SetState = NULL;
 static BOOL AevonGripHookInstalled = NO;
 static CFTimeInterval AevonGripLastLogAt = 0;
 
@@ -57,6 +58,37 @@ AEVON_GRIP_TOUCH_HOOK(Moved, 1)
 AEVON_GRIP_TOUCH_HOOK(Ended, 2)
 AEVON_GRIP_TOUCH_HOOK(Cancelled, 3)
 
+/*
+ * V0.3.0（AevonGripProbe2V300，用户 Aevon(78) #3 探针换目标 + 确认「继续探测」）：
+ * Aevon(77)/(78) 两轮实锤 SBGrabberTongue 的 view 收不到 touches（系统识别器在
+ * view 之前消费触摸）—— [GripHook] 除安装行外零数据，touches 探测目标作废。
+ * 换目标：hook 识别器的状态机入口 setState:（公开 API）与 _setState:（私有，
+ * 有才装）—— 状态变迁（possible/began/changed/ended/cancelled/failed）是
+ * 「系统怎么判呼出」的直接信号。状态变迁每次只发一笔（setState 是状态变更时
+ * 调用，不是逐 moved 调用），不限流。仍只观察：原实现照常转发。
+ * phase 编码：10 + UIGestureRecognizerState（10=possible 11=began 12=changed
+ * 13=ended 14=cancelled 15=failed 16=recognized），与 touches 0~3 区分。
+ */
+static void AevonGripHookSetState(id self, SEL _cmd, UIGestureRecognizerState state) {
+    if (AevonGripOrigSetState) {
+        ((void (*)(id, SEL, UIGestureRecognizerState))AevonGripOrigSetState)(self, _cmd, state);
+    }
+    @try {
+        AevonGripProbeTouch(10 + (NSInteger)state, 0, 0);
+    } @catch (NSException *exception) {
+    }
+}
+
+static void AevonGripHook_SetState(id self, SEL _cmd, UIGestureRecognizerState state) {
+    if (AevonGripOrig_SetState) {
+        ((void (*)(id, SEL, UIGestureRecognizerState))AevonGripOrig_SetState)(self, _cmd, state);
+    }
+    @try {
+        AevonGripProbeTouch(20 + (NSInteger)state, 0, 0);
+    } @catch (NSException *exception) {
+    }
+}
+
 /// 类内安全交换（纪律同 AevonSceneHookSwap）。
 static void AevonGripHookSwap(Class cls, SEL sel, IMP replacement, IMP *original) {
     Method method = class_getInstanceMethod(cls, sel);
@@ -81,6 +113,15 @@ BOOL AevonGripHookProbeInstall(void) {
         AevonGripHookSwap(cls, @selector(touchesMoved:withEvent:),      (IMP)AevonGripHookMoved,      &AevonGripOrigMoved);
         AevonGripHookSwap(cls, @selector(touchesEnded:withEvent:),      (IMP)AevonGripHookEnded,      &AevonGripOrigEnded);
         AevonGripHookSwap(cls, @selector(touchesCancelled:withEvent:),  (IMP)AevonGripHookCancelled,  &AevonGripOrigCancelled);
+        /* V0.3.0（AevonGripProbe2V300）：状态机探测。setState: 经继承链必拿得到
+         * 编码；_setState: 有才装（iOS 变更时静默跳过）。类内安全交换同上。 */
+        if (class_getInstanceMethod(cls, @selector(setState:)) != NULL) {
+            AevonGripHookSwap(cls, @selector(setState:), (IMP)AevonGripHookSetState, &AevonGripOrigSetState);
+        }
+        SEL privSel = NSSelectorFromString(@"_setState:");
+        if (class_getInstanceMethod(cls, privSel) != NULL) {
+            AevonGripHookSwap(cls, privSel, (IMP)AevonGripHook_SetState, &AevonGripOrig_SetState);
+        }
         AevonGripHookInstalled = YES;
         AevonGripProbeTouch(-2, 0, 0);       // -2 = 安装成功
         return YES;

@@ -2215,13 +2215,21 @@ final class AevonWindowView: UIView {
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
         view.layer.masksToBounds = true
         /* V0.2.90（AevonRootFreezeV290，用户 Aevon(63) 视频实锤「回桌面时悬浮窗整体
-         * 消失约 1 秒再弹回 = 由虚到实」）：**冻结帧升级为窗口根级覆盖**。
-         * 视频逐帧取证：回桌面动画中面板跟着 App 卡片一起缩放（内容呈现视图物理上
-         * 在切换器的缩放层级里），场景退场后被系统收走 → 面板连同窗体内的旧盖帧
-         * 一起消失 ~1s 再弹回；同一时刻**窗口根级的右缘把手始终可见** = 根级视图
-         * 能存活整段动画。把冻结帧挂到窗口根（与把手同层），无论窗体在动画里发生
-         * 什么，定格剪影都顶在原地 —— 用户看到的是「画面停住」，不是「消失再出现」。 */
-        if let win = window {
+         * 消失约 1 秒再弹回 = 由虚到实」）：冻结帧升级为窗口根级覆盖 —— 视频逐帧取证
+         * 回桌面动画中面板跟着 App 卡片一起缩放（内容呈现视图物理上在切换器的缩放
+         * 层级里），窗体内盖帧会跟着消失 ~1s 再弹回；窗口根级能存活整段动画。
+         * V0.3.0（AevonFreezeIndepWinV300，用户 Aevon(78) #2「依旧模糊→清晰」+ 确认
+         * 只做方案三）：**盖帧统一挂 AevonEntryWindow（独立窗口）**。0.2.100 的
+         * returnDeadline 闸把「撤早了」堵住了，但盖帧仍跟着宿主窗口搬家：浮窗态挂
+         * AevonEntryWindow、全屏态挂 SBMainSwitcherWindow —— 后者在转场缩放层级里，
+         * 冻结帧自身也会被系统重采样（模糊来源之二）。Stheno 无模糊段的完整结构优势
+         * = 独立窗口系统动画动不了它：现在盖帧一律挂入口窗（层级 10000000 恒在最上、
+         * 不在任何转场层级里），坐标跨窗换算（UIKit convert 走屏幕坐标，同屏两窗成立）。
+         * 入口窗不在（极端时序）才回退旧宿主窗口路径。 */
+        if let indep = AevonEntryHost.freezeWindow, indep.window != nil {
+            view.frame = convert(contentClip.frame, to: indep)
+            indep.addSubview(view)
+        } else if let win = window {
             view.frame = convert(contentClip.frame, to: win)
             win.addSubview(view)
         } else {
@@ -2245,7 +2253,7 @@ final class AevonWindowView: UIView {
             + "returnDeadline 1.2s 内不撤帧）"
             + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249"
             + " AevonFreezePassthruV287 AevonRootFreezeV290 AevonCacheFreezeV298"
-            + " AevonQuietRefreezeV297 AevonReturnDeadlineV2100）")
+            + " AevonQuietRefreezeV297 AevonReturnDeadlineV2100 AevonFreezeIndepWinV300）")
     }
 
     /// V0.2.91（AevonHomeFreezeV291）：回桌面过渡哨命中的**无条件**冻结入口。

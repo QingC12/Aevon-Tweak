@@ -975,8 +975,10 @@ enum AevonEdgeEntry {
 // MARK: - C 入口（供 AevonTouchHook.m 调用）
 
 /// V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测回调（供 AevonGripHook.m 调用）。
-/// phase：-1=类探测失败 / -2=安装成功 / -3=安装异常；0~3 = began/moved/ended/cancelled。
-/// 只观察打日志（不改任何触摸行为），为下一版呼出手势判据取真机数据。
+/// phase：-1=类探测失败 / -2=安装成功 / -3=安装异常；0~3 = touches began/moved/ended/cancelled；
+/// V0.3.0（AevonGripProbe2V300）：10~16 = setState: 状态变迁（possible/began/changed/
+/// ended/cancelled/failed/recognized），20~26 = _setState: 同表。
+/// 只观察打日志（不改任何触摸行为），为呼出手势判据取真机数据。
 @_cdecl("AevonGripProbeTouch")
 public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
     switch phase {
@@ -984,10 +986,15 @@ public func AevonGripProbeTouch(_ phase: Int, _ x: CGFloat, _ y: CGFloat) {
         AevonLog.warn("[GripHook] SBGrabberTongue 类探测失败（iOS/环境差异）→ 本版放弃，呼出走把手通道"
             + "（AevonGripProbeV299）")
     case -2:
-        AevonLog.info("[GripHook] SBGrabberTongue 探测钩子已装（touchesBegan/Moved/Ended/Cancelled，只观察）"
-            + "（AevonGripProbeV299）")
+        AevonLog.info("[GripHook] SBGrabberTongue 探测钩子已装（touches 四相 + setState:/_setState: 状态机，只观察）"
+            + "（AevonGripProbeV299 AevonGripProbe2V300）")
     case -3:
         AevonLog.warn("[GripHook] SBGrabberTongue 探测钩子安装异常 → fail-open（AevonGripProbeV299）")
+    case 10...16, 20...26:
+        let states = ["possible", "began", "changed", "ended", "cancelled", "failed", "recognized"]
+        let st = states[(phase % 10) < states.count ? phase % 10 : 0]
+        let via = phase >= 20 ? "_setState:" : "setState:"
+        AevonLog.info("[GripHook] 识别器状态变迁 via \(via) → \(st)（AevonGripProbe2V300）")
     default:
         let name = ["began", "moved", "ended", "cancelled"][min(max(phase, 0), 3)]
         AevonLog.info("[GripHook] 抓手舌触摸 \(name) \(Int(x)),\(Int(y))（AevonGripProbeV299）")

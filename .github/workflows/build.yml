@@ -163,9 +163,10 @@ jobs:
                    AevonGripIntentV297 AevonQuietRefreezeV297 \
                    AevonCacheFreezeV298 AevonDeskNoReviveV298 AevonStuckRescueV298 \
                    AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299 \
-                   AevonReturnDeadlineV2100 AevonSuspendDelayV2100; do
+                   AevonReturnDeadlineV2100 AevonSuspendDelayV2100 \
+                   AevonKickThrottleV300 AevonFreezeIndepWinV300 AevonGripProbe2V300; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.100 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.3.0 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -4133,6 +4134,32 @@ jobs:
             echo "::error::0.2.100 几何静默闸残留（guardTransitionQuiet/guardFreezeHoldDeadline 应删净）"; exit 1
           fi
           echo "V0.2.100 校验: returnDeadline 撤帧闸（1.2s，零几何判定）+ 挂起延迟 1s 已就位"
+
+          # ── V0.3.0 校验（Aevon(78)：抖动踢限流 + 盖帧挂独立窗口 + 探针换目标）──
+          # ①抖动踢限流：首踢 1.2s（0.30 退役）、第二轮 +1.3s（绝对 2.5s）、写前读回幂等
+          if grep -q 'AevonKickThrottleV300' "$WM100" \
+             && grep -q 'DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {' "$WM100" \
+             && grep -q 'DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {' "$WM100" \
+             && ! grep -q 'now() + 0.30' "$WM100" \
+             && grep -q '读回已是整屏' "$WM100"; then
+            echo "V0.3.0 校验①: 全屏兜底抖动踢限流（首踢 1.2s + 二轮 2.5s + 幂等读回）✓"
+          else
+            echo "::error::0.3.0 抖动踢限流不完整（1.2/1.3 延迟 + 0.30 退役 + 幂等读回）"; exit 1
+          fi
+          # ②盖帧统一挂独立窗口：EntryHost 暴露 freezeWindow + 挂载优先走入口窗 + 标记
+          EH="$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift"
+          grep -q 'static var freezeWindow: AevonEntryWindow?' "$EH" \
+            && grep -q 'AevonEntryHost.freezeWindow' "$WV" \
+            && grep -q 'AevonFreezeIndepWinV300' "$WV" \
+            || { echo "::error::0.3.0 盖帧独立窗口挂载不完整（freezeWindow 访问器 + 挂载分支 + 标记）"; exit 1; }
+          echo "V0.3.0 校验②: 盖帧统一挂 AevonEntryWindow（Stheno 独立窗口同构）✓"
+          # ③探针换目标：识别器状态机 hook（setState: + _setState:）在垫片里，Swift 侧收编码
+          GH="$GITHUB_WORKSPACE/Sources/AevonGripHook.m"
+          grep -q 'AevonGripHookSetState' "$GH" \
+            && grep -q '_setState:' "$GH" \
+            && grep -q 'AevonGripProbe2V300' "$EE" \
+            || { echo "::error::0.3.0 探针换目标不完整（setState/_setState hook + 标记）"; exit 1; }
+          echo "V0.3.0 校验③: GripProbe2 识别器状态机探测（只观察）已接线 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

@@ -205,11 +205,28 @@ enum AevonWindowManager {
         if currentView == nil, dockedViews.isEmpty {
             let screen = UIScreen.main.bounds.size
             if screen.height > 200, let scene = AevonSceneHelper.scene(for: sceneIdentifier) {
-                _ = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
-                AevonLog.info("[窗口] 全屏出现兜底：确认主场景画布 = 整屏 "
-                    + "\(Int(screen.width))x\(Int(screen.height))（读回 "
-                    + "\(AevonMainSceneFrameState(scene) ?? "")）"
-                    + "（AevonFullscreenRecoverV264）")
+                /* V0.3.0（AevonKickThrottleV300，用户 Aevon(78) #1 三版同现场 + 确认「抖动踢限流」）：
+                 * Aevon(75)/(77)/(78) 三次抖音卡屏（cs=2 进程内死锁型）全是同一场景：
+                 * App 刚进全屏的 1 秒内吃了一顿场景写入 —— 「全屏出现兜底」画布写 1 笔
+                 * + 两轮抖动踢 4 笔（其中 2 笔是 429x931 怪尺寸），全落在 cs=1（进场半途）。
+                 * Aevon(78) 实锤：09:33:36.5~37.5 五笔连写后用户呼圆盘 12 次逃生态；
+                 * 且每次读回都已是 430x932 —— 很多笔是幂等浪费。Stheno 独立场景路线
+                 * 从不写前台 App 场景 = 结构性免疫。限流三刀：
+                 *   ① 画布写前读回，已是整屏就跳过（幂等闸）；
+                 *   ② 首踢 0.30s → 1.2s（cs=1 正常只 0.3~0.5s，+1.2s 时 App 已稳定前台）；
+                 *   ③ 第二轮 +0.35s → +1.3s（绝对 +2.5s），保留防断层。 */
+                let fullText = "frame=\(Int(screen.width))x\(Int(screen.height))"
+                if (AevonMainSceneFrameState(scene) ?? "").contains(fullText) {
+                    AevonLog.info("[窗口] 全屏出现兜底：读回已是整屏 \(Int(screen.width))x"
+                        + "\(Int(screen.height))，跳过画布写（AevonFullscreenRecoverV264"
+                        + " AevonKickThrottleV300）")
+                } else {
+                    _ = AevonMainSceneSetFrame(scene, Double(screen.width), Double(screen.height))
+                    AevonLog.info("[窗口] 全屏出现兜底：确认主场景画布 = 整屏 "
+                        + "\(Int(screen.width))x\(Int(screen.height))（读回 "
+                        + "\(AevonMainSceneFrameState(scene) ?? "")）"
+                        + "（AevonFullscreenRecoverV264 AevonKickThrottleV300）")
+                }
                 // V0.2.66（AevonFullKickV266，用户 Aevon(39) #11「关闭悬浮窗后全屏打开抖音
                 // 会出现断层」）：画布写回整屏只改了 scene frame —— App 进程可能仍按
                 // 上一轮浮窗画布 737 排版（frame 写入不必然触发 relayout）。这里不依赖
@@ -219,22 +236,27 @@ enum AevonWindowManager {
                 // 桌面再开黑屏」）：一轮抖动踢不够 —— Aevon(43) 里 FullKick 完成后全屏
                 // 仍黑。补第二轮（+0.35s 再抖一次）并在每轮后打画布读回，下一份日志
                 // 直接能看到「写回 932 后读回还是不是 932」。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                // V0.3.0（AevonKickThrottleV300）：首踢 0.30s→1.2s —— 别在 App 进场半途
+                //（cs=1）往它场景上写怪尺寸，(78) 实锤这是 cs=2 死锁的头号嫌疑。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     let w = screen.width, h = screen.height
                     _ = AevonMainSceneSetFrame(scene, Double(w - 1), Double(h - 1))
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                         _ = AevonMainSceneSetFrame(scene, Double(w), Double(h))
                         AevonLog.info("[窗口] 全屏兜底抖动踢完成：\(Int(w - 1))x\(Int(h - 1)) → "
                             + "\(Int(w))x\(Int(h))（逼 App 按真实屏幕重排，读回 "
-                            + "\(AevonMainSceneFrameState(scene) ?? "")）（AevonFullKickV266 AevonFullKick2V271）")
+                            + "\(AevonMainSceneFrameState(scene) ?? "")）"
+                            + "（AevonFullKickV266 AevonFullKick2V271 AevonKickThrottleV300）")
                     }
                     // 第二轮：有些 App 第一轮抖动时还没进渲染（场景刚转前台），白抖。
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    // V0.3.0：+0.35s → +1.3s（绝对 +2.5s），保留防断层但离开进场窗口。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
                         _ = AevonMainSceneSetFrame(scene, Double(w - 1), Double(h - 1))
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                             _ = AevonMainSceneSetFrame(scene, Double(w), Double(h))
                             AevonLog.info("[窗口] 全屏兜底第二轮抖动踢完成：读回 "
-                                + "\(AevonMainSceneFrameState(scene) ?? "")（AevonFullKick2V271）")
+                                + "\(AevonMainSceneFrameState(scene) ?? "")"
+                                + "（AevonFullKick2V271 AevonKickThrottleV300）")
                         }
                     }
                 }
