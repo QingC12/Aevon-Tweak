@@ -950,6 +950,13 @@ enum AevonEdgeEntry {
             legBlocked(cls: cls, reason: "圆盘已开")
             return
         }
+        // V0.3.11（AevonOwnSuppressV311）：同一次手势里，自建腿已经在 0.35s 内呼过盘了。
+        // 以前靠「圆盘已开」拦第二条，会多打一条「达阈值但被拦」；自建腿接管后这里主动让路。
+        let ownAge = AevonGripOwnSummonAge()
+        if ownAge < 0.35 {
+            legBlocked(cls: cls, reason: "自建腿已抢先（\(Int(ownAge * 1000))ms 前）")
+            return
+        }
         // V0.3.6（AevonGripYieldDeepV306）：右缘判据改用 **began 落点**，不再用当前点。
         // Aevon(84) 日志实锤 7 条「达阈值但被拦 原因=不在右缘 24pt 内」：左滑 20pt 后
         // 手指已从 x=420 滑到 x=400，而 400 < 430-24=406 → 自己把自己否决。呼盘手势
@@ -1040,6 +1047,9 @@ enum AevonEdgeEntry {
         }
         let point = CGPoint(x: x, y: y)
         lastTouchPoint = point
+        // V0.3.11：真的呼盘了才盖时间戳 —— 只在守卫全过之后盖，
+        // 这样「自建腿想呼但被拦」不会白占 0.35s 抑制窗、把系统腿也拖下水。
+        AevonGripOwnStampSummon()
         AevonLog.info("[圆盘] 自建识别器腿呼盘（右缘起点 x=\(Int(startX))"
             + " → 左滑 \(Int(max(0, startX - x)))pt）："
             + "触摸从落指第一帧就被扣住，App 收不到 began"

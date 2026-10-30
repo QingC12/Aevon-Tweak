@@ -31,6 +31,12 @@ BOOL AevonGripSystemLegInstall(void);
 BOOL AevonGripOwnLegReady(void);
 void AevonGripOwnLegEnable(BOOL on, BOOL probeOn);
 
+/// V0.3.11（AevonOwnSuppressV311）：自建腿真正呼盘后盖时间戳，系统腿在 0.35s 内主动让路。
+/// 只盖在「守卫全过、真的要开圆盘」那一刻 —— 自建腿想呼但被拦时不能白占抑制窗。
+void AevonGripOwnStampSummon(void);
+/// 距上一次自建腿真正呼盘的秒数；从没呼过返回一个很大的数（9999）。
+double AevonGripOwnSummonAge(void);
+
 /// V0.1.6（AevonFullscreenCloseV106）：从「全屏 App 画面容器」反查它承载的是哪个 App。
 /// 返回形如 `com.apple.Preferences-default` 的场景标识，或直接是 bundleIdentifier；
 /// 全部路径都取不到时返回 nil —— 调用方必须把 nil 当作「未知」而不是「不是同一个 App」。

@@ -258,9 +258,25 @@ static id gAevonOwnManager = nil;           // 系统手势管理器（拿不到
  * 而且管理器只找一次，找到不成就永远不装。这里改成主动重试（6s 起每 2s，上限 15 次）。 */
 static int gAevonOwnArmTries = 0;
 static BOOL gAevonOwnCensusLogged = NO;
+/* V0.3.11（AevonOwnLegTypeV311）：注册 API 的第二个参数是「手势类型」（unsigned long long）。
+ * Stheno 逆向数据里没有这个数值（数值枚举不会出现在 strings 里），0.3.9/0.3.10 已经
+ * 因为「猜 API 名」烧过两次 run —— 这次**一个常量都不写**：
+ *   · 优先从系统自己那只边沿识别器实例上 KVC 读出来（对象/标量都走 KVC，禁 perform）；
+ *   · 读不到就钩一次 addGestureRecognizer:withType: 做纯转发取证，抄系统自己传的值。
+ * 取到之前 gAevonOwnGestureType 保持 -1，注册函数见到 -1 一律不调（宁可少一轮也不猜）。 */
+static long long gAevonOwnGestureType = -1;
+static NSMutableDictionary<NSString *, NSNumber *> *gAevonOwnTypeByClass = nil;
+static BOOL gAevonOwnTypeHooked = NO;
+static IMP gAevonOrigAddWithType = NULL;
+static BOOL gAevonOwnTypeProbeLogged = NO;
+/* V0.3.11：自建腿最近一次**真正呼盘**的时刻（不是 hold、不是 pass）。
+ * 系统腿在同一手势里晚 20ms 达阈值时靠它让路，日志里不再出现成对的「达阈值但被拦」。 */
+static CFTimeInterval gAevonOwnSummonStamp = 0;
 /* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
 extern void AevonGripOwnLegKick(void);
+/* V0.3.11：类型值取证也在 AevonGripLegObserve 里触发（那时边沿识别器实例就在手上）。 */
+static void AevonOwnProbeGestureType(id recog, const char *cn);
 static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
 static BOOL gAevonGlobalHooksInstalled = NO;
 static IMP gAevonOrigPubSetState = NULL;
@@ -447,6 +463,9 @@ static void AevonGripLegObserve(id self, NSInteger state) {
          * 第一次见到时装配（第一根手指赶不上，从第二根开始生效，可接受）。 */
         if (gAevonOwnLegEnabled) {
             AevonGripOwnLegArm(g.view);
+            /* V0.3.11：注册要的「手势类型值」不猜常量 —— 就从系统自己这只边沿识别器上读。
+             * 每类只读一次（内部 early-return），KVC 全不命中时自动装取证钩子。 */
+            AevonOwnProbeGestureType(self, cn);
         }
         CGPoint p = [g locationInView:nil];
         CGFloat sw = [UIScreen mainScreen].bounds.size.width;
@@ -678,6 +697,8 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
     CGPoint _ownStart;
     BOOL _ownSummoned;
     NSTimer *_ownBail;
+    CFTimeInterval _ownStartStamp;   // V0.3.11：落指时刻（0.9s 总上限的基准）
+    int _ownMovedFrames;             // V0.3.11：本手势收到的 moved 帧数（判「注册到底生效没有」）
 }
 
 - (instancetype)init {
@@ -708,9 +729,24 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
 }
 
 /// 0.1.9 复发的闸门：0.28s 内没达到阈值就当成「不是呼盘手势」，立刻放行。
+/// V0.3.11：从「固定 0.28s」改成「滚动 0.28s + 总上限 0.9s」—— 手指只要还在动就算数，
+/// 慢速滑动不会被误放行；但无论如何 0.9s 必放，绝不会把触摸扣到抬手之后。
 - (void)ownBailFired {
     _ownBail = nil;
     [self ownPass:"0.28s 内未达阈值 → 放行（AevonNoStuckV309 防扣死）"];
+}
+
+- (void)ownBailRearm {
+    [_ownBail invalidate];
+    _ownBail = nil;
+    CFTimeInterval left = 0.9 - (CACurrentMediaTime() - _ownStartStamp);
+    if (left <= 0.02) { return; }
+    NSTimeInterval span = left < 0.28 ? left : 0.28;
+    _ownBail = [NSTimer scheduledTimerWithTimeInterval:span
+                                                target:self
+                                              selector:@selector(ownBailFired)
+                                              userInfo:nil
+                                               repeats:NO];
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -724,6 +760,8 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
     }
     _ownStart = p;
     _ownSummoned = NO;
+    _ownMovedFrames = 0;
+    _ownStartStamp = CACurrentMediaTime();
     [_ownBail invalidate];
     _ownBail = [NSTimer scheduledTimerWithTimeInterval:0.28
                                                 target:self
@@ -739,6 +777,15 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
     CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
     CGFloat dx = p.x - _ownStart.x;
     CGFloat dy = p.y - _ownStart.y;
+    /* V0.3.11（AevonOwnLegTypeV311）：每个手势只打第一条 moved —— 这是「注册到底生效没有」
+     * 唯一可靠的判据。0.3.10 的 38 次 hold 全部 0.28s 超时放行、一条 moved 都没有，
+     * 说明当时那只识别器压根不在系统手势会话里（只是挂在宿主视图上旁听）。 */
+    _ownMovedFrames++;
+    if (_ownMovedFrames == 1) {
+        NSString *line = [NSString stringWithFormat:
+                          @"首帧 moved dx=%.0f dy=%.0f（注册生效 → 系统在派移动帧）", dx, dy];
+        AevonGripOwnLog("move", line.UTF8String);
+    }
     if (fabs((double)dy) > 40.0) {
         [self ownPass:"纵向为主 → 放行（不抢滚动/翻页）"];
         return;
@@ -751,7 +798,10 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
         AevonGripOwnSummon((double)p.x, (double)p.y,
                            (double)_ownStart.x, (double)_ownStart.y);
         self.state = UIGestureRecognizerStateEnded;
+        return;
     }
+    /* 有移动但还没到阈值：把闸往后滚（总上限 0.9s），避免慢速滑动被误放行。 */
+    [self ownBailRearm];
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -855,72 +905,163 @@ static id AevonOwnLookupManager(void) {
     return found;
 }
 
-/// display identity：注册 API 的第二个参数。Stheno 存的是 `__systemDisplayIdentity`，
-/// 来源就是屏幕/场景的 displayIdentity。拿不到就传 nil（让系统自己取主屏）。
-static id AevonOwnDisplayIdentity(void) {
-    NSMutableArray *owners = [NSMutableArray array];
-    @try {
-        [owners addObject:[UIScreen mainScreen]];
-    } @catch (NSException *exception) {
-    }
-    @try {
-        for (UIScene *s in [[UIApplication sharedApplication] connectedScenes]) {
-            [owners addObject:s];
-        }
-    } @catch (NSException *exception) {
-    }
-    for (id owner in owners) {
-        if (owner == nil) { continue; }
-        for (NSString *k in @[@"_displayIdentity", @"displayIdentity"]) {
-            @try {
-                id v = [owner valueForKey:k];
-                if (v != nil) { return v; }
-            } @catch (NSException *exception) {
+/// V0.3.11：`AevonOwnDisplayIdentity` 随 0.3.10 的 `toDisplayWithIdentity` 一起退役 ——
+/// 真正要用的第二个参数是「手势类型值」，不是 display identity。留着它只会多一个
+/// 无调用者的 static 函数（编译器每条都报 unused）。
+
+/* V0.3.11（AevonOwnLegTypeV311）：注册 API 是 **census 实测的真名**
+ * `addGestureRecognizer:withType:`（`v32@0:8@16Q24`，两个参数：识别器 + 类型值），
+ * SBSystemGestureManager 与 SBMainDisplaySystemGestureManager 上都有。
+ *
+ * 0.3.10 之所以注册不上：候选里放的是从 ScreenCore strings 推断出来的
+ * `addGestureRecognizer:toDisplayWithIdentity:` —— 那个名字在 17.3.1 上**根本不存在**，
+ * 而唯一存在的 `addGestureRecognizer:withType:` 恰好不在候选表里（0.3.9 有、0.3.10 丢了）。
+ *
+ * 类型值不猜：由 AevonOwnProbeGestureType / AevonOwnInstallTypeHook 从系统自己那只
+ * 边沿识别器上读出来（见 gAevonOwnGestureType 的说明）。
+ */
+/// 类型值偏好：右缘用的 `_UIPendingEdgeSwipe` 优先，其次任何 EdgeSwipe，再次任何 Edge 类。
+static long long AevonOwnBestGestureType(void) {
+    if (gAevonOwnGestureType >= 0) { return gAevonOwnGestureType; }
+    if (gAevonOwnTypeByClass.count == 0) { return -1; }
+    NSArray<NSString *> *prefer = @[@"_UIPendingEdgeSwipeGestureRecognizer",
+                                    @"EdgeSwipe", @"ScreenEdgePan", @"Edge"];
+    for (NSString *key in prefer) {
+        for (NSString *cls in gAevonOwnTypeByClass) {
+            BOOL hit = [key hasPrefix:@"_"] ? [cls isEqualToString:key] : ([cls rangeOfString:key].location != NSNotFound);
+            if (!hit) { continue; }
+            long long v = gAevonOwnTypeByClass[cls].longLongValue;
+            if (v >= 0) {
+                gAevonOwnGestureType = v;
+                NSString *line = [NSString stringWithFormat:@"选定类型值 %lld（来源 %@）", v, cls];
+                AevonGripOwnLog("type", line.UTF8String);
+                return v;
             }
         }
     }
-    return nil;
+    return -1;
 }
 
-/* V0.3.10（AevonOwnLegRegV310）：注册候选换成 **Stheno 逆向 strings 实测的真名**。
- *
- * `analysis/screencore/strings_ScreenCore.txt` 里连续三行就是 Stheno 的调用序列：
- *     662  _UISystemGestureManager
- *     664  addGestureRecognizer:toDisplayWithIdentity:
- *     669  SBSystemGestureManager
- *     671  acquireSystemGestureDisableAssertionForReason:exceptSystemGestureTypes:
- *
- * 而 0.3.9 试的三个候选（`addGestureRecognizer:` / `registerGestureRecognizer:`
- * / `_registerGestureRecognizer:`）**一个都不是真名** —— 所以那一版即使开关打开，
- * 也必然落到「挂宿主旁听」这条没有仲裁身份的退路。这版先试两参真名。
- */
-/// 注册：白名单逐个试，签名必须「返回 void + 参数个数与候选一致」，否则不调。
+/* 前置声明：ProbeGestureType 在 KVC 全不命中时要装取证钩子，而钩子定义在它下面。 */
+static void AevonOwnInstallTypeHook(void);
+
+/// 类型值一到手就立刻重试一次装配 —— kick 的 15 次预算（约 30s）可能已经用完，
+/// 那种情况下「后续才拿到类型值」不能让整条腿永久放弃。这里把预算清零再来一轮。
+static void AevonOwnOnTypeAcquired(void) {
+    if (!gAevonOwnLegEnabled || gAevonOwnRegistered) { return; }
+    gAevonOwnArmTries = 0;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AevonGripOwnLegKick();
+    });
+}
+
+/// 从一只**系统自己的**边沿识别器上把类型值读出来（每类只读一次，读不到就装取证钩子）。
+static void AevonOwnProbeGestureType(id recog, const char *cn) {
+    if (recog == nil || cn == NULL) { return; }
+    NSString *cls = [NSString stringWithUTF8String:cn];
+    if (cls.length == 0) { return; }
+    if (gAevonOwnTypeByClass == nil) { gAevonOwnTypeByClass = [NSMutableDictionary dictionary]; }
+    if (gAevonOwnTypeByClass[cls] != nil) { return; }
+    /* 只对边沿族读 —— 底部上滑/侧滑返回的类型值不是我们要的，别污染 */
+    if (!AevonGripIsEdgeClass(cn)) { return; }
+    for (NSString *k in @[@"gestureType", @"_gestureType", @"systemGestureType",
+                         @"_systemGestureType", @"type"]) {
+        @try {
+            id v = [recog valueForKey:k];
+            if (v == nil) { continue; }
+            if (![v isKindOfClass:[NSNumber class]]) { continue; }
+            long long n = [(NSNumber *)v longLongValue];
+            gAevonOwnTypeByClass[cls] = @(n);
+            NSString *line = [NSString stringWithFormat:@"%@ 的 %@ = %lld（KVC 实测）", cls, k, n];
+            AevonGripOwnLog("type", line.UTF8String);
+            AevonOwnOnTypeAcquired();
+            return;
+        } @catch (NSException *exception) {
+        }
+    }
+    /* 五个 key 全不命中 → 装一次性取证钩子，抄系统自己传给 addGestureRecognizer:withType: 的值 */
+    AevonOwnInstallTypeHook();
+}
+
+/// 取证钩子：只转发 + 记录，不改任何行为（签名 census 实测 v32@0:8@16Q24）。
+static void AevonOwnAddWithType(id self, SEL _cmd, id g, unsigned long long type) {
+    if (gAevonOrigAddWithType != NULL) {
+        ((void (*)(id, SEL, id, unsigned long long))gAevonOrigAddWithType)(self, _cmd, g, type);
+    }
+    @try {
+        const char *cn = g != nil ? class_getName(object_getClass(g)) : "nil";
+        if (cn != NULL && AevonGripIsEdgeClass(cn)) {
+            NSString *cls = [NSString stringWithUTF8String:cn];
+            if (gAevonOwnTypeByClass == nil) { gAevonOwnTypeByClass = [NSMutableDictionary dictionary]; }
+            if (gAevonOwnTypeByClass[cls] == nil) {
+                gAevonOwnTypeByClass[cls] = @((long long)type);
+                NSString *line = [NSString stringWithFormat:
+                                  @"%@ 由系统以类型值 %llu 加入（钩子实测）", cls, type];
+                AevonGripOwnLog("type", line.UTF8String);
+                AevonOwnOnTypeAcquired();
+            }
+        }
+    } @catch (NSException *exception) {
+    }
+}
+
+static void AevonOwnInstallTypeHook(void) {
+    if (gAevonOwnTypeHooked) { return; }
+    gAevonOwnTypeHooked = YES;
+    /* 不枚举类表（0.2.72 SIGTRAP 铁律）：只对两个已知类名取方法，签名必须严格匹配
+     * 「返回 void + 2 个参数」，任何一项不符一律不装。 */
+    SEL sel = NSSelectorFromString(@"addGestureRecognizer:withType:");
+    for (NSString *name in @[@"SBSystemGestureManager", @"SBMainDisplaySystemGestureManager"]) {
+        Class c = NSClassFromString(name);
+        if (c == Nil) { continue; }
+        Method m = class_getInstanceMethod(c, sel);
+        if (m == NULL) { continue; }
+        const char *enc = method_getTypeEncoding(m);
+        if (enc == NULL || enc[0] != 'v' || AevonGripEncArgCount(enc) != 2) { continue; }
+        IMP old = method_setImplementation(m, (IMP)AevonOwnAddWithType);
+        if (old == NULL || old == (IMP)AevonOwnAddWithType) { continue; }
+        gAevonOrigAddWithType = old;
+        AevonGripOwnLog("typehook", "已装类型值取证钩子（只转发 + 记录，不改行为）");
+        return;   // 两个类共用同一份 Method（子类继承），装一次就够
+    }
+}
+
+/// 注册：签名必须「返回 void + 恰好 2 个参数」，类型值必须已实测到手，否则不调。
 static BOOL AevonOwnTryRegister(id mgr, UIGestureRecognizer *g) {
     if (mgr == nil || g == nil) { return NO; }
-    /* ①两参真名：addGestureRecognizer:toDisplayWithIdentity:（Stheno 用的就是它） */
-    SEL sel2 = NSSelectorFromString(@"addGestureRecognizer:toDisplayWithIdentity:");
+    /* ①两参真名：addGestureRecognizer:withType:（census 实测，两边管理器都有） */
+    SEL sel2 = NSSelectorFromString(@"addGestureRecognizer:withType:");
     if ([mgr respondsToSelector:sel2]) {
         Method m = class_getInstanceMethod([mgr class], sel2);
         if (m != NULL) {
             const char *enc = method_getTypeEncoding(m);
             if (enc == NULL || enc[0] != 'v' || AevonGripEncArgCount(enc) != 2) {
                 NSString *line = [NSString stringWithFormat:
-                                  @"addGestureRecognizer:toDisplayWithIdentity: 签名不符（%s）→ 不调",
+                                  @"addGestureRecognizer:withType: 签名不符（%s）→ 不调",
                                   enc ? enc : "?"];
                 AevonGripOwnLog("register", line.UTF8String);
             } else {
-                id identity = AevonOwnDisplayIdentity();
+                long long type = AevonOwnBestGestureType();
+                if (type < 0) {
+                    /* 类型值还没取到 —— 绝不猜常量，等 kick 下一轮（取到后自动重试）。 */
+                    if (!gAevonOwnTypeProbeLogged) {
+                        gAevonOwnTypeProbeLogged = YES;
+                        AevonGripOwnLog("register", "类型值尚未取到（KVC/钩子都没命中）→ 本轮不注册，"
+                                                    "继续借识别器腿，等下一轮重试");
+                    }
+                    return NO;
+                }
                 @try {
-                    ((void (*)(id, SEL, id, id))objc_msgSend)(mgr, sel2, g, identity);
+                    ((void (*)(id, SEL, id, unsigned long long))objc_msgSend)
+                        (mgr, sel2, g, (unsigned long long)type);
                     NSString *line = [NSString stringWithFormat:
-                                      @"已用 addGestureRecognizer:toDisplayWithIdentity: 注册进系统手势管理器"
-                                      @"（拿到仲裁身份；identity=%s）",
-                                      identity != nil ? class_getName(object_getClass(identity)) : "nil"];
+                                      @"已用 addGestureRecognizer:withType: 注册进系统手势管理器"
+                                      @"（拿到仲裁身份；类型值 %lld 来自系统实测）", type];
                     AevonGripOwnLog("register", line.UTF8String);
                     return YES;
                 } @catch (NSException *exception) {
                     NSString *line = [NSString stringWithFormat:
-                                      @"addGestureRecognizer:toDisplayWithIdentity: 抛异常 %@ → 换下一个",
+                                      @"addGestureRecognizer:withType: 抛异常 %@ → 换下一个",
                                       exception.name];
                     AevonGripOwnLog("register", line.UTF8String);
                 }
@@ -1094,6 +1235,21 @@ BOOL AevonGripOwnLegReady(void) {
     return gAevonOwnGesture != nil;
 }
 
+/* V0.3.11（AevonOwnSuppressV311）：自建腿呼盘成功后 0.35s 内，系统腿不再重复呼盘。
+ * 两条腿同时活着是刻意的（任何一条失效功能不丢），但同一次手势会有两只识别器
+ * 在 20ms 内先后达阈值 —— 之前靠「圆盘已开」拦掉第二条，日志里会多一条
+ * 「达阈值但被拦 原因=圆盘已开」。改成自建腿主动让路，日志更干净，也避免
+ * 圆盘刚收起时第二条腿又把窗开开。 */
+void AevonGripOwnStampSummon(void) {
+    gAevonOwnSummonStamp = CACurrentMediaTime();
+}
+
+/// 距上一次自建腿真正呼盘的秒数；从没呼过返回一个很大的数。
+double AevonGripOwnSummonAge(void) {
+    if (gAevonOwnSummonStamp <= 0) { return 9999.0; }
+    return CACurrentMediaTime() - gAevonOwnSummonStamp;
+}
+
 
 /* V0.3.7（AevonYieldDefaultV307）：让路模式转正 —— GripSystemYield 默认值
  * false → true，SB 侧把手默认不接触摸，右缘呼盘全部交给系统边沿识别器。
@@ -1130,3 +1286,14 @@ __attribute__((used)) static const char AevonGripOwnLegV309Marker[] = "AevonGrip
  * ②开关改实时生效（走 com.aevon.prefschanged）。默认值同时转正为开。 */
 __attribute__((used)) static const char AevonOwnLegRegV310Marker[] = "AevonOwnLegRegV310";
 __attribute__((used)) static const char AevonOwnLegDefaultV310Marker[] = "AevonOwnLegDefaultV310";
+
+/* V0.3.11（AevonOwnLegTypeV311）：0.3.10 的注册名是从 strings 推的、根本不存在的
+ * `addGestureRecognizer:toDisplayWithIdentity:`；真名是 **census 实测**的
+ * `addGestureRecognizer:withType:`（v32@0:8@16Q24，SBSystemGestureManager 与
+ * SBMainDisplaySystemGestureManager 都有）。第二个参数「手势类型」不写常量：
+ * 优先从系统自己那只边沿识别器上 KVC 读，读不到就钩一次同名方法抄系统传的值。
+ * 配套三处：①moved 首帧探针（判注册到底生效没有）；②闸从固定 0.28s 改成
+ * 滚动 0.28s + 总上限 0.9s（慢速滑动不再被误放行）；③自建腿呼盘后 0.35s 内
+ * 系统腿让路（AevonOwnSuppressV311），日志不再出现成对的「达阈值但被拦」。 */
+__attribute__((used)) static const char AevonOwnLegTypeV311Marker[] = "AevonOwnLegTypeV311";
+__attribute__((used)) static const char AevonOwnSuppressV311Marker[] = "AevonOwnSuppressV311";

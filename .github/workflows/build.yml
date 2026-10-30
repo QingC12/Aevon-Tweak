@@ -177,7 +177,8 @@ jobs:
                    AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripProbe5V304 \
                    AevonGripYieldV305 AevonGripLegOutcomeV305 \
                    AevonGripYieldDeepV306 AevonYieldDefaultV307 AevonGripZoneV308 \
-                   AevonGripOwnLegV309 AevonOwnLegRegV310 AevonOwnLegDefaultV310; do
+                   AevonGripOwnLegV309 AevonOwnLegRegV310 AevonOwnLegDefaultV310 \
+                   AevonOwnLegTypeV311 AevonOwnSuppressV311; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -249,8 +250,11 @@ jobs:
             exit 1
           fi
           echo "V0.1.4/V0.1.5 校验: 图标启动先释放浮窗 + 系统手势管线 + FBScene 写入已彻底移除"
-          strings "$DYLIB" | grep -q 'addGestureRecognizer:toDisplayWithIdentity:' \
-            || { echo "::error::系统手势管线登记选择子未编入（AevonSystemGestureV105）"; exit 1; }
+          # V0.3.11（AevonOwnLegTypeV311）：登记选择子改成 census 实测的真名
+          # addGestureRecognizer:withType:（v32@0:8@16Q24）。0.3.10 断言的
+          # toDisplayWithIdentity 在 17.3.1 上根本不存在，是看 strings 推错的。
+          strings "$DYLIB" | grep -q 'addGestureRecognizer:withType:' \
+            || { echo "::error::系统手势管线登记选择子未编入（AevonSystemGestureV105 V0.3.11 真名 withType:）"; exit 1; }
           echo "V0.1.5 校验: 不写场景设置 + 有限前台补偿 + 系统手势管线 + 单浮窗 + 轻点呼出/吸附已删"
           # V0.1.6（Aevon(73) 修复）：
           # ①全屏启动时自动关浮窗（AevonFullscreenCloseV106）—— 浮窗黑窗的正解：
@@ -4488,9 +4492,11 @@ jobs:
           echo "V0.3.9 校验: 自建识别器（落指即判 + 0.1.9 三闸 + 白名单取证 + 默认关）✓"
 
           # ── V0.3.10 校验（Aevon(88)：自建腿一行没跑 → 真名注册 + 主动装配 + 实时开关 + 转正）──
-          # ①注册候选必须是 Stheno 逆向 strings 实测的真名（两参 toDisplayWithIdentity）
-          [ "$(grep -c 'addGestureRecognizer:toDisplayWithIdentity:' "$OWNM")" -ge 2 ] \
-            || { echo "::error::V0.3.10 两参真名 addGestureRecognizer:toDisplayWithIdentity: 未同时在取证与注册里出现"; exit 1; }
+          # ①注册必须用 census 实测的真名（两参 withType:），且不许再出现 0.3.10 那个
+          #   17.3.1 上不存在的 toDisplayWithIdentity 调用（取证名单里留着它当反证，不算）
+          [ "$(grep -c 'addGestureRecognizer:withType:' "$OWNM")" -ge 2 ] \
+            || { echo "::error::V0.3.10 真名 addGestureRecognizer:withType: 未同时在取证与注册里出现"; exit 1; }
+          python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("static BOOL AevonOwnTryRegister"); j=s.find("static void AevonOwnAttachTo",i); ok=(i>0 and j>i and "toDisplayWithIdentity" not in s[i:j]); print("V0.3.10 注册体里已无 toDisplayWithIdentity（真名 withType:）✓" if ok else "::error::V0.3.10 注册体仍在调不存在的 toDisplayWithIdentity"); sys.exit(0 if ok else 1)' "$OWNM"
           # ②两参调用前必须签名 fail-closed（参数个数不符会破坏调用约定，arm64e 直接炸）
           grep -q "enc\[0\] != 'v' || AevonGripEncArgCount(enc) != 2" "$OWNM" \
             || { echo "::error::V0.3.10 两参注册前没做签名自检"; exit 1; }
@@ -4513,6 +4519,36 @@ jobs:
             && strings "$MDYL" | grep -q 'AevonOwnLegDefaultV310' \
             || { echo "::error::V0.3.10 主库缺自建腿注册/转正标记"; exit 1; }
           echo "V0.3.10 校验: 真名注册（两参 + 签名自检）+ 主动重试装配 + 开关实时生效 + 旁听门控 + 默认转正 ✓"
+
+          # ── V0.3.11 校验（Aevon(89)：38 次 hold / 0 次 moved → 真名 withType: + 类型值实测）──
+          # ①类型值必须是「运行时读出来」的，源码里不许出现硬编码的手势类型常量
+          grep -q 'static long long gAevonOwnGestureType = -1;' "$OWNM" \
+            && grep -q 'AevonOwnBestGestureType(void)' "$OWNM" \
+            || { echo "::error::V0.3.11 缺类型值运行时取证（gAevonOwnGestureType / AevonOwnBestGestureType）"; exit 1; }
+          # ②类型值没取到就绝不许调注册（宁可少一轮也不猜常量 —— 0.3.9/0.3.10 猜名字已烧两次 run）
+          grep -q 'if (type < 0) {' "$OWNM" \
+            && grep -q '本轮不注册' "$OWNM" \
+            || { echo "::error::V0.3.11 类型值未知时没拦注册（会拿 -1 当类型值调下去）"; exit 1; }
+          # ③取证钩子必须签名 fail-closed 且装在「已知类名」上（0.2.72：禁全类表枚举）
+          grep -q 'method_setImplementation(m, (IMP)AevonOwnAddWithType)' "$OWNM" \
+            && grep -q 'enc\[0\] != .v. || AevonGripEncArgCount(enc) != 2' "$OWNM" \
+            || { echo "::error::V0.3.11 类型值取证钩子缺失或没做签名自检"; exit 1; }
+          # ④moved 首帧探针必须在（这是判「注册到底生效没有」唯一的硬判据）
+          grep -q 'AevonGripOwnLog("move"' "$OWNM" \
+            || { echo "::error::V0.3.11 缺 moved 首帧探针（无法区分「注册没生效」和「手势没移动」）"; exit 1; }
+          # ⑤闸必须是滚动 0.28s + 总上限 0.9s（0.3.10 的固定 0.28s 会把慢速滑动误放行）
+          grep -q '0.9 - (CACurrentMediaTime() - _ownStartStamp)' "$OWNM" \
+            && grep -q 'ownBailRearm' "$OWNM" \
+            || { echo "::error::V0.3.11 防扣死闸没改成滚动 + 总上限"; exit 1; }
+          # ⑥自建腿呼盘后系统腿让路（0.35s 抑制窗），避免同一次手势两条腿都呼
+          grep -q 'AevonGripOwnSummonAge()' "$OWNE" \
+            && grep -q 'AevonGripOwnStampSummon()' "$OWNE" \
+            || { echo "::error::V0.3.11 自建腿/系统腿去重缺失（抑制窗没接）"; exit 1; }
+          # ⑦标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonOwnLegTypeV311' \
+            && strings "$MDYL" | grep -q 'AevonOwnSuppressV311' \
+            || { echo "::error::V0.3.11 主库缺类型值取证/去重标记"; exit 1; }
+          echo "V0.3.11 校验: withType: 真名注册 + 类型值运行时实测（未知不猜）+ moved 首帧探针 + 滚动闸 + 双线去重 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
