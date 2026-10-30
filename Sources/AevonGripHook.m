@@ -1725,6 +1725,20 @@ void AevonGripOwnLegKick(void) {
 /// 开关（由 Swift 启动时按 prefs 调，**设置页改动也会实时调到这里**）。
 void AevonGripOwnLegEnable(BOOL on, BOOL probeOn) {
     BOOL was = gAevonOwnLegEnabled;
+    /* V0.3.21（AevonPrefsGateV321）：**状态没变就什么都不做**。
+     *
+     * 用户 Aevon(96) 实测：拖阻尼滑条时这个函数 96 秒里被调了 202 次
+     *（间隔 16~17ms = 每帧一次，因为每帧写一次偏好就会广播一次 prefschanged）。
+     * 每次都无条件刷一条「已启用 → 立即开始装配」并 dispatch 一次 Kick ——
+     * 而 Kick 进门第一句就是 `if (gAevonOwnRegistered) return;`，实际什么都没做。
+     * 202 条日志全是噪声，还让「真装配」在日志里彻底看不出来。
+     *
+     * 现在：已经启用（on && was）只同步取证开关就返回。probeOn 单独变化也要吸收，
+     * 否则改 GripHookProbe 会走进下面的装配分支。 */
+    if (on && was) {
+        gAevonOwnLegProbeOn = probeOn;
+        return;
+    }
     gAevonOwnLegEnabled = on;
     gAevonOwnLegProbeOn = probeOn;
     if (on) {
@@ -1944,6 +1958,35 @@ __attribute__((used)) static const char AevonShadowPathV320Marker[] = "AevonShad
  * 「平均 fps / 最大帧间隔 / >16.7ms 的帧数」。前三版判断流畅度全靠手感描述，
  * 这版起有硬指标 —— 下一轮不用再猜「丢帧」是渲染慢还是事件少。 */
 __attribute__((used)) static const char AevonFrameProbeV320Marker[] = "AevonFrameProbeV320";
+
+/* V0.3.21（AevonHoverJumpV321）：划过动画的波形从「高频小幅抖动」换成**一次单峰起跳**。
+ * 用户 Aevon(97)：「这次滑动时的动画还可以，但是图标只在原地抖动，而不是向上跳起然后回落」。
+ * 帧率那一半已经满分（119.8fps / 4083 帧 / 最大间隔 35.9ms / >16.7ms 只有 2 帧），
+ * 所以剩下的是时间尺度与波形：
+ *   ① 34.09 秒 494 次划过 ⇒ 平均 **69ms** 一个切换，而 0.3.20 的 rise+land = 450ms
+ *      ⇒ 每个图标的动画平均只播到 15% 就被改目标；
+ *   ② lift 轨道 48ms 就到顶，之后 152ms 困在 9.2~16 之间 12Hz 往复，末态还停在 12pt
+ *      —— 没有「离地 → 触地」的对比，读到的就是原地抖；
+ *   ③ **`CATransform3DConcat(T, S)` 把平移量乘了 sy**，而 sy 在 1.12~1.38 之间同频振荡
+ *      ⇒ 垂直位置被叠了一层更大的抖动。已改成 `Concat(S, T)`，lift 就是 pt 原值。
+ * 新波形：7 帧 / 90ms，峰值 32pt 在 34ms，66ms 触地（早于 69ms 的切换节奏），
+ * 落定不抬起（hoverLift = 0）+ 放大 1.18。 */
+__attribute__((used)) static const char AevonHoverJumpV321Marker[] = "AevonHoverJumpV321";
+
+/* V0.3.21（AevonRingIcon35V321）：图标 40 → 35pt，环距与基准一起收（弧间距 46 → 42、
+ * 内圈基准 62 → 60、径向步进 44 → 39、自适应系数 0.78 → 0.83）。
+ * 21 个 App（8/13）实测：半径 62/106 → 60/99、图标 38 → 35、最外缘 126 → 116.5。
+ * 内圈 60 是物理下限：圆心半径 24 + 图标半径 17.5 + 18pt 间隙 = 59.5，再小会压到中心盘。 */
+__attribute__((used)) static const char AevonRingIcon35V321Marker[] = "AevonRingIcon35V321";
+
+/* V0.3.21（AevonPrefsGateV321）：设置变更回调的**三处变更门控**。
+ * 用户 Aevon(96)：拖阻尼滑条时 `自建腿 enable` 96 秒里被打了 **202 次**（间隔 16~17ms，
+ * 即每帧一次）。那条链是「每次写偏好 → Darwin 通知 → 整条刷新」：
+ *   ① `AevonGripOwnLegEnable(true, …)` 无条件打日志 + 排一次 Kick（装配早就完成了）；
+ *   ② `AevonRingStore.refreshFromSettings()` 每帧**写一次快照 UserDefaults**（跨进程写盘）；
+ *   ③ `AevonRingGrip.refreshFromPrefs()` 每帧 `setNeedsLayout + layoutIfNeeded` 同步布局。
+ * 现在三处都先比「值有没有变」，没变就一个字节都不动。 */
+__attribute__((used)) static const char AevonPrefsGateV321Marker[] = "AevonPrefsGateV321";
 
 /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指。
  * 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，

@@ -646,18 +646,42 @@ enum AevonRingGrip {
             + " AevonGripZoneV313 AevonHandleHideV313）")
     }
 
+    /// V0.3.21（AevonPrefsGateV321）：上一次真正下发过的「几何 + 可见性」签名。
+    /// 用元组不用字符串 —— 这条函数在拖滑条时每帧跑一次，字符串插值要分配内存。
+    private static var lastRefreshSignature: (Double, Double, CGFloat, CGFloat, CGFloat)?
+    private static var lastRefreshGripID: ObjectIdentifier?
+
     /// V0.2.59（AevonGripCustomV259）：设置页改了 GripY / GripLen → 实时重排。
     /// 参数读取在 layoutSubviews 里做（每次现读偏好、带夹取），
     /// 这里只需让把手视图重排一次。位置不落盘状态、无缓存漂移。
     static func refreshFromPrefs() {
         guard let grip = grip, grip.superview != nil else { return }
-        // V0.3.5（AevonGripYieldV305）：让路开关实时切换（Darwin 通知已通到这条路）
-        grip.applyYieldMode()
         /* V0.3.13（AevonHandleHideV313）：隐藏开关也在这条路上实时生效 ——
          * 设成「按开关状态恢复」的那一处口径：圆盘没展开、键盘没在屏才允许显形。 */
         let shouldShow = !keyboardSuppressed && AevonRingMenu.presented == nil
             && AevonPrefs.bool("RingGripEnabled", default: true)
-        grip.alpha = shouldShow ? gripShownAlpha : gripHiddenAlpha
+        let shownAlpha = shouldShow ? gripShownAlpha : gripHiddenAlpha
+        let zoneW = AevonPrefs.double("GripZoneW", default: Double(AevonRingGripView.zoneWDefault))
+        let zoneH = AevonPrefs.double("GripZoneH", default: Double(AevonRingGripView.zoneHDefault))
+        /* V0.3.21（AevonPrefsGateV321）：**几何与可见性都没变就一个字都不动**。
+         *
+         * 这条函数挂在 `aevonPrefsChangedHandler` 上，任何偏好变化都会跑（拖阻尼滑条时
+         * 每帧一次）。原来每次都走 `setNeedsLayout + layoutIfNeeded` —— 一次同步布局，
+         * 里面还要重算 `bandRect` 并读两次偏好。而阻尼滑条根本不改几何。
+         *
+         * 签名里同时比 `ObjectIdentifier(grip)`：把手视图销毁重建后，即使偏好一个字
+         * 没变也必须完整刷新一次（新实例的 frame 还是空的）。 */
+        let signature = (zoneW, zoneH, shownAlpha, grip.bounds.width, grip.bounds.height)
+        if lastRefreshGripID == ObjectIdentifier(grip),
+           let last = lastRefreshSignature, last == signature,
+           grip.alpha == shownAlpha {
+            return
+        }
+        lastRefreshGripID = ObjectIdentifier(grip)
+        lastRefreshSignature = signature
+        // V0.3.5（AevonGripYieldV305）：让路开关实时切换（Darwin 通知已通到这条路）
+        grip.applyYieldMode()
+        grip.alpha = shownAlpha
         grip.setNeedsLayout()
         grip.layoutIfNeeded()
     }

@@ -72,9 +72,16 @@ enum AevonRingStore {
 
     /// 设置页广播 prefschanged 后调用（**唯一**的跨进程刷新入口）。
     /// 读到可信列表就更新缓存并写快照；读到空列表时保留旧缓存（防漂移读）。
+    ///
+    /// V0.3.21（AevonPrefsGateV321）：**列表没变就立刻返回**。
+    /// 这条函数挂在 `aevonPrefsChangedHandler` 上，而那个 handler 只要**任何**偏好
+    /// 变化就会跑（拖阻尼滑条时每帧一次，16~17ms）。原来每帧都 `set(snapshotKey)`
+    /// 一次 —— 那是一次跨进程 cfprefsd 写盘，白扔。现在只有列表真的不一样才落盘。
+    /// 判据用 `cached`（进程内权威缓存）对比新读到的列表，相等即跳过。
     static func refreshFromSettings() {
         let list = readList(forKey: key)
         if !list.isEmpty {
+            if let current = cached, current == list { return }
             cached = list
             UserDefaults(suiteName: suite)?.set(list, forKey: snapshotKey)
         } else if cached == nil {

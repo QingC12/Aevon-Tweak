@@ -1,32 +1,43 @@
 import UIKit
 
-/* V0.3.20（AevonKeyframeHoverV320）：圆盘图标的划过动画 —— **定长关键帧引擎**。
+/* V0.3.20（AevonKeyframeHoverV320）→ V0.3.21（AevonHoverJumpV321）：
+ * 圆盘图标的划过动画 —— **定长关键帧引擎**，本版把波形整体换成「一次起跳、必须触地」。
  *
- * 为什么把弹簧整条换掉（Aevon(96) 取证）：
+ * ═══ 0.3.20 为什么「只在原地抖动」（Aevon(97) 取证）═══
  *
- * ① 「上一个还在空中」不是它忘了落地，是它永远落不了地。
- *    0.3.19 的余韵按**队列下标**取振幅 [1.0, 0.60, 0.32, 0.14]、response 再乘
- *    [1, 1.25, 1.55, 1.85]，沉降到 1% 分别要 0.34 / 0.43 / 0.53 / 0.63 秒；
- *    而实测划过间隔中位数只有 72~100ms。**每个图标还没走到目标就被改目标**，
- *    身后于是形成一条永不落地的人形扇（10pt / 5pt / 2pt）。用户看到的就是这条扇。
+ * 帧率那一半已经满分：**119.8fps / 4083 帧 / 最大间隔 35.9ms / >16.7ms 只有 2 帧**。
+ * 所以剩下的问题不在渲染，在**时间尺度与波形**：
  *
- * ② 「丢帧」= 每图标一条弹道 + `finishAnimation(at: .current)`。
- *    一次切换影响 5 个图标、×12 次/秒 = 60 次/秒重建 animator，每次 `stopAnimation(false)`
- *    + `finishAnimation(at: .current)` 都要取**当前呈现值**（渲染服务器往返）。
- *    120Hz 每帧预算 9.26ms，这一项本身就够造成可见顿挫。
+ * ① 时间尺度差 6.5 倍。
+ *    34.09 秒里 494 次划过 ⇒ **平均 69ms 一个切换**；
+ *    而 0.3.20 的 rise 200ms + land 250ms = 450ms。**每个图标的动画平均只播到 15%**
+ *    就被改目标。谁都走不完一次起落，叠起来只剩抖动。
  *
- * ③ animate.css 的 `rubberBand` / `shakeY` 之所以看着「Q 且顺」，不是因为数值，
- *    而是因为它们是**定长、一次播完、不 retarget** 的关键帧：
- *      · `shakeY`   = ±10px 定长上下抖，起止都回 0 —— 它一定会结束；
- *      · `rubberBand` = **非等比**的挤压往复（scaleX 1.25 / scaleY 0.75 → 0.75 / 1.25 …），
- *        「Q 弹」的物理来源就是这组体积守恒的 squash & stretch，等比放大只会「变大」。
+ * ② 波形本身就是「抖」，不是「跳」。
+ *    0.3.20 的 lift 轨道是 0 → 11(24ms) → 16(48ms) → 9.2 → 13.6 → 10.6 → 12.5 → 12：
+ *    位移在 48ms 就到顶，之后 152ms 一直困在 9.2~16 之间以约 12Hz 往复（振幅 6.8pt），
+ *    末态还停在 12pt 不落地 —— 没有「离地 → 触地」的对比，眼睛读到的就是原地高频抖。
  *
- * 所以这里同时用两者：**抬升走 shakeY 的衰减抖动，缩放走 rubberBand 的挤压往复**。
- * 手指扫过时 A 升起、B 在 72ms 后升起、A 同时开始落地 —— 真正的「先后起伏」，
- * 而且任意时刻最多两三个图标在空中。
+ * ③ **矩阵顺序把位移和缩放耦合在一起**（这一条最隐蔽）。
+ *    `CATransform3DConcat(a, b)` 是 `a·b`，点按 `p' = p·a·b` 变换 ⇒ **a 先生效**。
+ *    旧代码写 `Concat(Translation, Scale)` ⇒ 先平移再缩放 ⇒ **平移量被 sy 放大**，
+ *    实际抬升 = `lift × sy`。而 sy 正好在以 12Hz 振荡（1.12~1.38），于是
+ *    **垂直位置被叠了一层同频抖动，幅度比 6.8pt 还大**。这才是「抖」的放大来源。
+ *    现在改成 `Concat(Scale, Translation)`：先缩放、再精确平移 ——
+ *    `lift` 就是屏幕上的 pt 数，一个子像素都不差。
  *
- * 关键帧的另一半好处：**可以纯数学求值**。中途改目标时用 `sample(_:at:)` 取当前值，
- * 不需要问渲染服务器，所以不会再出现 `finishAnimation(at: .current)` 那个往返。
+ * ═══ 本版（用户 Aevon(97) 定档「方案 A · 单跳落地」）═══
+ *
+ *   · 起跳 → 触地 → 落定，**单峰、主形变 66ms 内收完**；
+ *   · 峰值 **32pt**（图标 35pt 的 91%）在 t=34ms，t=66ms 已回到地面；
+ *   · **触地时刻（66ms）早于下一次切换（69ms）** —— 被打断时 `sample()` 接住的姿态
+ *     已接近地面，不会累积偏移。这是「抖」从结构上消失的原因；
+ *   · 稳态 **不抬起**（`hoverLift = 0`）、放大 1.18：高亮靠蓝框 + 略微放大辨认，
+ *     不再有「浮在半空」的常驻偏移；
+ *   · 缩放全程放大幅度可见：起跳拉伸 1.26、触地压扁 0.81、回弹 1.24、落定 1.18。
+ *
+ * 关键帧的第二个好处不变：**可以纯数学求值**。中途改目标时用 `sample(_:at:)` 取当前值，
+ * 不需要问渲染服务器，所以永远不会回到 `finishAnimation(at: .current)` 那个往返。
  */
 
 /// 一帧关键帧：上抬 pt + 非等比缩放。
@@ -49,9 +60,16 @@ struct AevonHoverSample {
     static let ground = AevonHoverSample(lift: 0, sx: 1, sy: 1)
 
     func transform3D() -> CATransform3D {
-        // 先缩放（绕 layer 锚点 = 中心）再上移 —— 顺序反了会绕左上角放大。
-        return CATransform3DConcat(CATransform3DMakeTranslation(0, -lift, 0),
-                                   CATransform3DMakeScale(sx, sy, 1))
+        /* ⛔ 顺序就是语义：`CATransform3DConcat(a, b)` = `a·b`，点走 `p' = p·a·b`，
+         * 也就是 **a 先生效**。要「先绕中心缩放、再精确上移 lift pt」，必须是
+         * `Concat(Scale, Translation)`。
+         *
+         * V0.3.21（AevonHoverJumpV321）修正：0.3.20 写的是 `Concat(Translation, Scale)`,
+         * 等于先平移再缩放 ⇒ **平移量被 sy 乘了一遍**（实测抬升 = lift × sy）。
+         * sy 在 1.12~1.38 之间以 12Hz 振荡，于是垂直位置被叠了一层同频抖动 ——
+         * 这正是 Aevon(97)「只在原地抖动」的放大来源。改过来之后 lift 就是 pt 原值。 */
+        return CATransform3DConcat(CATransform3DMakeScale(sx, sy, 1),
+                                   CATransform3DMakeTranslation(0, -lift, 0))
     }
 }
 
@@ -64,37 +82,36 @@ enum AevonHoverStyle {
 
 enum AevonHoverKeyframes {
 
-    /// 划过升起：**shakeY 的抖动 × rubberBand 的挤压**，200ms 停在 (12pt, 1.30)。
+    /// 划过起跳：**一次单峰起落**，90ms 回到地面（V0.3.21 AevonHoverJumpV321）。
     ///
-    /// lift 轨道：0 → 16.0（冲过目标 4pt）→ 9.2（回落）→ 13.6 → 10.6 → 12.5 → 12.0，
-    /// 三个来回、逐次收敛，就是 animate__shakeY 的「抖」。
-    /// 缩放轨道：sx / sy 交替反向（1.20/1.12 → 1.12/1.30 → 1.34/1.22 → 1.22/1.38 …），
-    /// `sx·sy` 从 1.34 稳步爬到 1.69 = 1.30²，**体积守恒** —— 这就是 rubberBand 的「捏」。
+    /// lift 轨道：0 → 19.0(16ms 起跳拉伸) → **32.0(34ms 顶点)** → 5.0(56ms 下落)
+    ///          → 0(66ms **触地**) → 0 → 0。
+    /// **只有一个峰、必然触地** —— 这是「向上跳起然后回落」的字面实现。
+    /// 66ms 触地早于 69ms 的平均切换间隔，被打断时接住的姿态已经在地面附近。
+    ///
+    /// 缩放轨道：起跳时 **竖向拉长**（1.10/1.26，sx·sy = 1.39 体积膨胀），
+    /// 顶点横向铺开（1.26/1.16），触地 **压扁**（0.92/0.88，sx·sy = 0.81），
+    /// 回弹 1.24/1.22，落定 1.18 = `hoverScale`。放大幅度全程可见 —— 用户点名要的
+    /// 「跳起来时有放大效果」就在这条轨道上，不靠抬升制造存在感。
     static let riseKeys: [AevonHoverKey] = [
-        AevonHoverKey(t: 0.000, lift: 0, sx: 1.00, sy: 1.00),
-        AevonHoverKey(t: 0.024, lift: 11.0, sx: 1.20, sy: 1.12),
-        AevonHoverKey(t: 0.048, lift: 16.0, sx: 1.12, sy: 1.30),
-        AevonHoverKey(t: 0.080, lift: 9.2, sx: 1.34, sy: 1.22),
-        AevonHoverKey(t: 0.112, lift: 13.6, sx: 1.22, sy: 1.38),
-        AevonHoverKey(t: 0.144, lift: 10.6, sx: 1.30, sy: 1.28),
-        AevonHoverKey(t: 0.172, lift: 12.5, sx: 1.28, sy: 1.32),
-        AevonHoverKey(t: 0.200, lift: 12.0, sx: AevonRingMenu.hoverScale, sy: AevonRingMenu.hoverScale),
+        AevonHoverKey(t: 0.000, lift: 0.0, sx: 1.00, sy: 1.00),
+        AevonHoverKey(t: 0.016, lift: 19.0, sx: 1.10, sy: 1.26),
+        AevonHoverKey(t: 0.034, lift: 32.0, sx: 1.26, sy: 1.16),
+        AevonHoverKey(t: 0.056, lift: 5.0, sx: 1.04, sy: 0.99),
+        AevonHoverKey(t: 0.066, lift: 0.0, sx: 0.92, sy: 0.88),
+        AevonHoverKey(t: 0.082, lift: 0.0, sx: 1.24, sy: 1.22),
+        AevonHoverKey(t: 0.090, lift: 0.0, sx: AevonRingMenu.hoverScale, sy: AevonRingMenu.hoverScale),
     ]
 
-    /// 划过落地：**触地压扁 + 一记余弹**，250ms 归零。
+    /// 划过落地（离开该图标）：**只有缩放回落，没有位移**，60ms 归零。
     ///
-    /// lift 走 12 → 3.0 → **−1.8**（沉到地面以下）→ 2.6 → −0.5 → 0.6 → 0；
-    /// 缩放走 1.30 → 0.93/0.89（**压扁**，`sx·sy` = 0.83）→ 1.06（弹回）→ 0.98 → 1.00。
-    /// 中间那记「压扁 → 弹起 → 再轻轻触一次」就是用户要的「落地再弹一次」，
-    /// 也是唯一保留的余韵 —— 它会**一定结束**，不像 0.3.19 的队列那样挂在空中。
+    /// 因为方案 A 的稳态本来就在地面（`hoverLift = 0`），起跳那 32pt 已经在 `rise`
+    /// 里完整地「上去又下来」了。所以 land 只剩「把 1.18 的放大收回去」，
+    /// 顺手带一点点回压 —— 再给它加位移就会变成第二次跳，又回到「抖」。
     static let landKeys: [AevonHoverKey] = [
-        AevonHoverKey(t: 0.000, lift: 12.0, sx: AevonRingMenu.hoverScale, sy: AevonRingMenu.hoverScale),
-        AevonHoverKey(t: 0.048, lift: 3.0, sx: 1.13, sy: 1.11),
-        AevonHoverKey(t: 0.086, lift: -1.8, sx: 0.93, sy: 0.89),
-        AevonHoverKey(t: 0.124, lift: 2.6, sx: 1.06, sy: 1.05),
-        AevonHoverKey(t: 0.162, lift: -0.5, sx: 0.98, sy: 0.98),
-        AevonHoverKey(t: 0.205, lift: 0.6, sx: 1.012, sy: 1.012),
-        AevonHoverKey(t: 0.250, lift: 0.0, sx: 1.00, sy: 1.00),
+        AevonHoverKey(t: 0.000, lift: 0.0, sx: AevonRingMenu.hoverScale, sy: AevonRingMenu.hoverScale),
+        AevonHoverKey(t: 0.030, lift: 0.0, sx: 0.99, sy: 0.99),
+        AevonHoverKey(t: 0.060, lift: 0.0, sx: 1.00, sy: 1.00),
     ]
 
     /// 展开入场：0.30 → 1.06（过冲）→ 0.975（回压）→ 1.00，520ms。
@@ -113,7 +130,11 @@ enum AevonHoverKeyframes {
     static var landDuration: CFTimeInterval { CFTimeInterval(landKeys[landKeys.count - 1].t) }
     static var entranceDuration: CFTimeInterval { CFTimeInterval(entranceKeys[entranceKeys.count - 1].t) }
 
-    /// 抬起稳态（划过之后停住的样子）。
+    /// 高亮稳态（划过之后停住的样子）。
+    ///
+    /// V0.3.21（AevonHoverJumpV321）：`hoverLift` 从 12 改成 **0** —— 用户 Aevon(97)
+    /// 要的是「向上跳起然后回落」，落下来就该在地面上；常驻的 12pt 抬起读起来像
+    /// 「一直浮着」。跳跃感全部由 `riseKeys` 那 90ms 提供，稳态只留 1.18 的放大 + 蓝框。
     static let lifted = AevonHoverSample(lift: AevonRingMenu.hoverLift,
                                          sx: AevonRingMenu.hoverScale,
                                          sy: AevonRingMenu.hoverScale)
@@ -176,8 +197,15 @@ enum AevonHoverKeyframes {
         return anim
     }
 
-    /// 分段缓动：落下要**加速**（easeIn），触地弹起要**骤停**（easeOut），
-    /// 其余用 easeInEaseOut。这条规则就是「重量感」的来源。
+    /// 分段缓动：**起手要快、下落要加速、触地要骤停** —— 这三条就是「重量感」。
+    ///
+    /// V0.3.21（AevonHoverJumpV321）：rise 的 6 段按新波形重排 ——
+    ///   段 0（0→19 起跳）easeOut 快速出手；
+    ///   段 1（19→32 到顶）easeOut 减速；
+    ///   段 2、3（32→5→0 下落并触地）easeIn **加速**，这是重力；
+    ///   段 4（触地压扁→回弹）easeBoth；
+    ///   段 5（回弹→落定）easeOut。
+    /// 0.3.20 那版下落段用的是 easeInEaseOut，起步慢、落下来软，读起来像「飘」。
     private static func timingFunctions(count: Int, style: AevonHoverStyle) -> [CAMediaTimingFunction] {
         let easeIn = CAMediaTimingFunction(name: .easeIn)
         let easeOut = CAMediaTimingFunction(name: .easeOut)
@@ -190,7 +218,11 @@ enum AevonHoverKeyframes {
                 if index == 2 { return easeOut }
                 return easeBoth
             case .rise:
-                return index == 0 ? easeOut : easeBoth
+                if index == 0 { return easeOut }
+                if index == 1 { return easeOut }
+                if index == 2 || index == 3 { return easeIn }
+                if index == count - 1 { return easeOut }
+                return easeBoth
             case .entrance:
                 return index < 2 ? easeOut : easeBoth
             }

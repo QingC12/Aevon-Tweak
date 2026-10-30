@@ -274,7 +274,17 @@ final class AevonRingIcon: UIView {
 final class AevonRingMenu: UIView {
     private static var current: AevonRingMenu?
 
-    private static let iconSize: CGFloat = 40
+    /* V0.3.21（AevonRingIcon35V321）：图标 40 → **35pt**（用户 Aevon(97) 定档）。
+     *
+     * 连同 `radii(forCounts:)` 的环距与基准一起收：
+     *   弧间距 46 → 42、内圈基准 62 → 60、相邻圈径向步进 44 → 39，
+     *   自适应系数 0.78 → 0.83（保证 35pt 能被撑满，而不是被 0.78 算成 32）。
+     * 21 个 App（8/13）实测结果：半径 62/106 → **60/99**，图标 38 → **35**，
+     * 最外缘 126 → 116.5 —— 整体更紧，中心盘反而没变（37.5，见 layoutHub 的自适应式）。
+     *
+     * ⛔ 内圈 60 已经贴到物理下限：圆心半径 24 + 图标半径 17.5 + 18pt 间隙 = 59.5。
+     * 再小图标就会压到中心底盘上（0.2.10 那版「中心图标被盖住」就是这么来的）。 */
+    private static let iconSize: CGFloat = 35
     private static let centerSize: CGFloat = 48
     /// 命中半径系数
     private static let hitFactor: CGFloat = 0.95
@@ -295,19 +305,22 @@ final class AevonRingMenu: UIView {
     /// 圆心命中半径（比按钮本身放大一点，手指压在图标边缘也算）
     private static let centerHitRadius: CGFloat = 40
 
-    // MARK: - 划过图标的「跳跃」动画（V0.0.35 起，V0.2.18 加大）
+    // MARK: - 划过图标的「跳跃」动画（V0.0.35 起，V0.3.21 定档为「单跳落地」）
     //
     // 用户 Aevon(104) 的两条要求，都在这一组常量里：
-    //   ① 「图标跳动的高度增加 50%」 —— 8pt → 12pt（`hoverLift`）；
-    //   ② 「划过图标时放大效果再大一点，圆盘看起来更 Q 弹」 —— 1.18 → 1.30（`hoverScale`），
-    //      同时把弹簧阻尼从 0.42 降到 0.34、初速从 2.8 提到 3.4 —— 阻尼越低回摆越多，
-    //      视觉上就是「弹上去 → 超调 → 吸回来」的那一下。
+    //   ① 「图标跳动的高度增加 50%」 —— 8pt → 12pt；
+    //   ② 「划过图标时放大效果再大一点，圆盘看起来更 Q 弹」 —— 1.18 → 1.30。
     //
-    // 位置放在这里而不是写进 `setHovered` 里：这两个数以后只该改这一处。
-    /// 划过图标时的向上跳跃高度（屏幕坐标，负 y = 向上）
-    static let hoverLift: CGFloat = 12
-    /// 划过图标时的放大倍数
-    static let hoverScale: CGFloat = 1.30
+    // V0.3.21（AevonHoverJumpV321，用户 Aevon(97) 定档「方案 A · 单跳落地」）：
+    //   · `hoverLift` **12 → 0**：0.3.20 用「常驻抬起 12pt」表示高亮，可 69ms 一个切换下
+    //     那个常驻偏移读起来是「一直浮着」。现在稳态就在地面，32pt 的跳跃感全部由
+    //     `riseKeys` 那 90ms 提供 —— 字面意义上的「跳起来然后落回去」。
+    //   · `hoverScale` **1.30 → 1.18**：配合图标 40 → 35pt，35 × 1.18 = 41.3，
+    //     高亮那个看起来跟旧版 40pt 差不多大，而未高亮的都变小了 ⇒ 选中对比更强。
+    /// 高亮稳态的向上偏移（V0.3.21 起为 0：落回地面，跳跃交给 rise 关键帧）
+    static let hoverLift: CGFloat = 0
+    /// 高亮稳态的放大倍数（跳跃过程中的峰值放大约 1.26，见 hoverKeyframes 的 riseKeys）
+    static let hoverScale: CGFloat = 1.18
     /* V0.3.20（AevonKeyframeHoverV320）：这里原来是一整套弹簧参数 —— 划过弹簧的
      * response、四拍余韵的振幅 / response 放大 / 错峰延迟三组数组、升起与回落两个初速，
      * 连同下发函数一起整块删掉了（「Q 弹」现在来自下面这些定长关键帧）。
@@ -662,14 +675,14 @@ final class AevonRingMenu: UIView {
 
     /// V0.2.11（AevonRingHubFitV211）：心圆底盘 + 四宫格图标的尺寸与位置。
     ///
-    /// 0.2.10 把底盘写死成 92 / 70 —— 92 的半径 46 比「内圈半径 62 − 图标半宽 19 = 43」
-    /// 还大 3pt，于是底盘边缘必然压在内圈图标的内侧边上（用户 Aevon(97) 看到的
-    /// 「中心图标被盖住」）。现在按**实际内圈半径和本圈图标尺寸**反算：
+    /// 0.2.10 把底盘写死成 92 / 70 —— 92 的半径 46 比「内圈半径 60 − 图标半宽 17.5 = 42.5」
+    /// 还大 3.5pt，于是底盘边缘必然压在内圈图标的内侧边上（早期反馈「中心图标被盖住」）。
+    /// 现在按**实际内圈半径和本圈图标尺寸**反算：
     ///   底盘半径 = min(46, 内圈半径 − 图标半宽 − 5)，至少 35；
     ///   内层半径 = 底盘半径 − 6，至少 30。
     /// 一圈布局（内圈半径更大）时自动放大，多圈挤压时自动缩小，永远不与图标相交。
     private func layoutHub() {
-        let innerRadius = ringRadii.first ?? 62
+        let innerRadius = ringRadii.first ?? 60
         let iconHalf = (icons.first.map { $0.bounds.width } ?? AevonRingMenu.iconSize) / 2
         let plateRadius = min(46, max(35, innerRadius - iconHalf - 5))
         let innerHole = max(30, plateRadius - 6)
@@ -698,22 +711,25 @@ final class AevonRingMenu: UIView {
     /// 各圈半径。
     ///
     /// V0.0.30（AevonRingDenseV29 → 自适应间距）：**一切以圆心图标为基准向外扩散**——
-    /// 半径 = max(内圈基准 62 + 44×圈序, 每圈数量 × 46pt ÷ 2π)，即「图标中心间距 ≈46pt」
-    /// 恒定、内圈永远不小于贴住圆心的 62（62 − 圆心半径 24 − 图标半径 20 = 18pt 间隙）。
-    /// 8 个 → 62、20 个(8/12) → 62/88、25 个(10/15) → 73/110，
+    /// 半径 = max(内圈基准 60 + 39×圈序, 每圈数量 × 42pt ÷ 2π)，即「图标中心间距 ≈42pt」
+    /// 恒定、内圈永远不小于贴住圆心的 60（60 − 圆心半径 24 − 图标半径 17.5 = 18.5pt 间隙）。
+    /// 8 个 → 60、21 个(8/13) → 60/99、25 个(10/15) → 71/110。
     /// 不会再出现「内圈被数量撑到 70+、离中心一大截」（用户 Aevon(23) 反馈）。
     /// 上限压到 maxRadius（不顶屏幕边）。
+    ///
+    /// V0.3.21（AevonRingIcon35V321）：46 / 62 / 44 三个数一起收到 **42 / 60 / 39**，
+    /// 与图标 35pt 配套。39 = 35 + 4pt 径向间隙，42 = 35 + 7pt 弧上间隙。
     private func radii(forCounts counts: [Int]) -> [CGFloat] {
         guard !counts.isEmpty else { return [] }
-        let spacing: CGFloat = 46
-        let inner: CGFloat = 62
+        let spacing: CGFloat = 42
+        let inner: CGFloat = 60
         let limit = maxRadius
         var result: [CGFloat] = []
         var previous: CGFloat = 0
         for (index, count) in counts.enumerated() {
-            let base = inner + 44 * CGFloat(index)
+            let base = inner + 39 * CGFloat(index)
             var r = max(base, spacing * CGFloat(count) / (2 * .pi))
-            r = max(r, previous + 44)
+            r = max(r, previous + 39)
             r = min(r, limit)
             result.append(r)
             previous = r
@@ -780,10 +796,12 @@ final class AevonRingMenu: UIView {
             let step = 360 / CGFloat(max(count, 1))
             // 相邻圈错开半个步进：图标不会在上下方向连成一条直线，视觉更自然
             let offset: CGFloat = (ringIndex % 2 == 1) ? step / 2 : 0
-            // V0.0.31（AevonRingAutoSizeV31）：图标大小自适应 —— 按本圈弧间距缩放，
-            // 挤的时候自动变小、疏的时候保持 40pt，永远不互相重叠。
+            // V0.0.31（AevonRingIcon35V321）：图标大小自适应 —— 按本圈弧间距缩放，
+            // 挤的时候自动变小、疏的时候最多到 `iconSize`（35pt，0.3.21 从 40 收下来）。
+            // 系数 0.78 → 0.83：0.78 会把 47pt 的弧间距算成 36.7 → 再被 35 截到 35，
+            // 内圈 8 个时仍然只有 32.8，撑不满 35。0.83 让「疏」的那一圈真的能到 35。
             let arcSpacing = 2 * CGFloat.pi * radius / CGFloat(max(count, 1))
-            let iconSize = min(AevonRingMenu.iconSize, max(28, arcSpacing * 0.78))
+            let iconSize = min(AevonRingMenu.iconSize, max(28, arcSpacing * 0.83))
             for i in 0..<count {
                 guard cursor < bundleIDs.count else { break }
                 let bundleID = bundleIDs[cursor]
@@ -808,7 +826,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，间距 46pt 恒定 / 内圈贴中心 62 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35 AevonRingGlyphTopV211 AevonRingHubFitV211）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，图标 \(Int(icons.first?.bounds.width ?? 0))pt / 间距 42pt 恒定 / 内圈贴中心 60 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35 AevonRingGlyphTopV211 AevonRingHubFitV211 AevonRingIcon35V321 AevonHoverJumpV321）")
     }
 
     private func drawRingTracks() {

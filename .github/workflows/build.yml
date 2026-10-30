@@ -187,7 +187,8 @@ jobs:
                    AevonOwnFeedV317 \
                    AevonSceneGateV318 AevonSpringUnifyV318 \
                    AevonKeyframeHoverV320 AevonShadowPathV320 \
-                   AevonSquashStretchV320 AevonFrameProbeV320; do
+                   AevonSquashStretchV320 AevonFrameProbeV320 \
+                   AevonHoverJumpV321 AevonRingIcon35V321 AevonPrefsGateV321; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -1181,10 +1182,10 @@ jobs:
           #   已整体退役 —— 那三个数是 iOS 7 老 API 的组合，和 Stheno 用的 SwiftUI
           #   `spring(response:dampingFraction:)` 不是同一个物理量。现在由 AevonSpring
           #   换算，改那三条断言为**反转**（不许再长回来）。
-          grep -q 'static let hoverLift: CGFloat = 12' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
-            || { echo "::error::图标跳跃高度不是 12pt（用户要求 8 → 12，+50%）"; exit 1; }
-          grep -q 'static let hoverScale: CGFloat = 1.30' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
-            || { echo "::error::划过图标的放大倍数不是 1.30（1.18 已被用户否掉：不够 Q 弹）"; exit 1; }
+          grep -q 'static let hoverLift: CGFloat = 0' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::V0.3.21 稳态抬起必须归零（用户 Aevon(97) 要的是「跳起然后回落」，常驻 12pt 读起来是「一直浮着」）"; exit 1; }
+          grep -q 'static let hoverScale: CGFloat = 1.18' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::V0.3.21 高亮稳态放大倍数是 1.18（配 35pt 图标 = 41.3，与旧版 40pt 视觉等同）"; exit 1; }
           grep -q 'static let hoverSpringDamping: CGFloat = 0.34' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             && { echo "::error::hoverSpringDamping 又回来了（V0.3.18 起圆盘全部走 AevonSpring.params，老的 duration+damping+velocity 三件套已退役）"; exit 1; }
           grep -q 'static let hoverSpringVelocity: CGFloat = 3.4' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
@@ -5058,7 +5059,9 @@ jobs:
             || { echo "::error::V0.3.20 关键帧播完必须摘掉（模型值已是终点；不摘会盖住 dismiss 的 transform）"; exit 1; }
 
           # ② 关键帧表自洽：帧数 / 首帧为 0 / t 严格递增。
-          #    rise 8 帧（200ms）、land 7 帧（250ms）、entrance 4 帧（520ms）。
+          #    V0.3.21（AevonHoverJumpV321）：rise **7 帧（90ms，单峰起跳 32pt 后触地）**、
+          #    land **3 帧（60ms，只收缩放）**、entrance 4 帧（520ms）。
+          #    0.3.20 的 8 帧 / 7 帧（200ms / 250ms）已被 69ms 的实际切换节奏否掉。
           awk '
             /static let (riseKeys|landKeys|entranceKeys)/ { tbl=$3; n=0; prev=-1; mono=1; next }
             tbl != "" && /AevonHoverKey\(t:/ {
@@ -5071,9 +5074,9 @@ jobs:
               prev = v
             }
             tbl != "" && /^    \]/ {
-              want = (tbl == "riseKeys:" ? 8 : (tbl == "landKeys:" ? 7 : 4))
-              if (n != want) { printf "::error::V0.3.20 %s 关键帧数 %d（应 %d）\n", tbl, n, want; bad=1 }
-              if (!mono) { printf "::error::V0.3.20 %s 的 t 不是「首帧 0 + 严格递增」\n", tbl; bad=1 }
+              want = (tbl == "riseKeys:" ? 7 : (tbl == "landKeys:" ? 3 : 4))
+              if (n != want) { printf "::error::V0.3.21 %s 关键帧数 %d（应 %d）\n", tbl, n, want; bad=1 }
+              if (!mono) { printf "::error::V0.3.21 %s 的 t 不是「首帧 0 + 严格递增」\n", tbl; bad=1 }
               tbl = ""
             }
             END { exit bad }
@@ -5125,6 +5128,130 @@ jobs:
               || { echo "::error::V0.3.20 主库缺标记 $m320"; exit 1; }
           done
           echo "V0.3.20 校验: 定长关键帧（shakeY 抖动 + rubberBand 挤压 + 一记余弹）+ 解析求值接住中途改目标 + shadowPath/去 mask + 帧率自证 ✓"
+
+          # ══════════════════════════════════════════════════════════════════
+          # V0.3.21 校验（AevonHoverJumpV321 / AevonRingIcon35V321 / AevonPrefsGateV321）
+          # ══════════════════════════════════════════════════════════════════
+          # 用户 Aevon(97)：「这次滑动时的动画还可以，但是图标只在原地抖动，而不是向上
+          # 跳起然后回落」+「修复自建腿 enable 96 秒 202 次」。
+          # 帧率那一半 0.3.20 已经满分（119.8fps / 最大间隔 35.9ms / >16.7ms 只有 2 帧），
+          # 本版只解决三件事：波形（单峰起跳）、矩阵顺序（平移被 sy 放大）、设置链路空转。
+          echo "── V0.3.21: 单跳落地 + 图标 35pt + 设置变更门控 ──"
+
+          # ①②③ 关键帧：矩阵顺序 / 单峰起跳波形 / 时长上限 —— 一次解析完。
+          #    ⛔ 不许用 `grep -o 't: [0-9.]*'` 取值：`lift: ` 里也含 `t: `，取出来的是 lift
+          #      （0.3.20 就在这个坑上栽过一次，三张表全报「首帧不为 0」）。
+          python3 - "$KF" <<'PYEOF' || exit 1
+          import io, re, sys
+
+          def err(msg):
+              print("::error::" + msg)
+              sys.exit(1)
+
+          src = io.open(sys.argv[1], encoding="utf-8").read()
+
+          # ① 矩阵顺序：⛔ 必须先缩放再平移。
+          #    CATransform3DConcat(a, b) = a·b，点走 p' = p·a·b ⇒ a 先生效。
+          #    写成 Concat(Translation, Scale) 等于先平移再缩放 —— 平移量被 sy 乘一遍，
+          #    而 sy 在振荡 ⇒ 垂直位置被叠了一层同频抖动。这是「原地抖」的放大来源。
+          i = src.find("func transform3D()")
+          if i < 0:
+              err("V0.3.21 找不到 transform3D()")
+          body = src[i:i + 1600]
+          m = re.search(r"CATransform3DConcat\(\s*CATransform3DMake(\w+)\s*\([^)]*\)\s*,\s*CATransform3DMake(\w+)", body)
+          if not m:
+              err("V0.3.21 transform3D() 里没有 CATransform3DConcat(两个矩阵)")
+          if m.group(1) != "Scale" or m.group(2) != "Translation":
+              err("V0.3.21 transform3D() 顺序是 Concat(%s, %s)，必须 Concat(Scale, Translation)"
+                  "；先平移再缩放会把 lift 乘上 sy，垂直位置跟着缩放振荡 = 用户看到的「原地抖动」"
+                  % (m.group(1), m.group(2)))
+
+          # ② 单峰起跳：峰值 ≥ 30pt、过了峰值不许再往上、末帧必须落地、触地 ≤ 70ms。
+          i = src.find("static let riseKeys")
+          if i < 0:
+              err("V0.3.21 找不到 riseKeys")
+          seg = src[i:src.find("\n    ]", i)]
+          keys = [(float(t), float(l)) for t, l in
+                  re.findall(r"AevonHoverKey\(t: ([\d.]+), lift: ([\d.\-]+)", seg)]
+          if len(keys) < 5:
+              err("V0.3.21 riseKeys 只解析到 %d 帧" % len(keys))
+          seq = [l for _, l in keys]
+          peak = max(seq)
+          if peak < 30.0:
+              err("V0.3.21 rise 峰值 %.1fpt < 30pt（用户定档 32pt）" % peak)
+          pk = seq.index(peak)
+          for a, b in zip(seq[:pk], seq[1:pk + 1]):
+              if b <= a:
+                  err("V0.3.21 rise 峰值前不是严格上升（%.1f → %.1f）" % (a, b))
+          for a, b in zip(seq[pk:], seq[pk + 1:]):
+              if b > a + 0.001:
+                  err("V0.3.21 rise 过了峰值又往上走（%.1f → %.1f）—— 那成了第二次跳/抖动" % (a, b))
+          if abs(seq[-1]) > 0.001:
+              err("V0.3.21 rise 末帧 lift 是 %.1f，方案 A 必须落回地面 0" % seq[-1])
+          landed = [t for t, l in keys if l <= 0.001 and t > 1e-9]
+          if not landed:
+              err("V0.3.21 rise 从没回到地面（末态还浮着）")
+          if landed[0] > 0.0701:
+              err("V0.3.21 rise 触地 %.0fms > 70ms（晚于平均切换间隔 69ms，会被截断在半空）"
+                  % (landed[0] * 1000))
+
+          # ③ 时长上限：rise ≤ 100ms、land ≤ 80ms
+          i = src.find("static let landKeys")
+          if i < 0:
+              err("V0.3.21 找不到 landKeys")
+          lseg = src[i:src.find("\n    ]", i)]
+          lkeys = [float(t) for t in re.findall(r"AevonHoverKey\(t: ([\d.]+)", lseg)]
+          if not lkeys:
+              err("V0.3.21 landKeys 解析为空")
+          rise_ms = keys[-1][0] * 1000
+          land_ms = lkeys[-1] * 1000
+          if rise_ms > 100.5:
+              err("V0.3.21 rise 时长 %.0fms > 100ms（69ms 的切换节奏下会被截断）" % rise_ms)
+          if land_ms > 80.5:
+              err("V0.3.21 land 时长 %.0fms > 80ms" % land_ms)
+
+          print("V0.3.21 关键帧: Concat(Scale, Translation) / 峰值 %.1fpt / 触地 %.0fms / rise %.0fms / land %.0fms / 末帧落地 ✓"
+                % (peak, landed[0] * 1000, rise_ms, land_ms))
+          PYEOF
+
+          # ④ 图标 35pt + 环距参数（42 / 60 / 39 / 0.83）—— 用户 Aevon(97) 定档
+          grep -qF 'private static let iconSize: CGFloat = 35' "$RM" \
+            || { echo "::error::V0.3.21 图标不是 35pt（用户 Aevon(97) 定档 40 → 35）"; exit 1; }
+          grep -qF 'let spacing: CGFloat = 42' "$RM" \
+            || { echo "::error::V0.3.21 弧间距基准不是 42pt"; exit 1; }
+          grep -qF 'let inner: CGFloat = 60' "$RM" \
+            || { echo "::error::V0.3.21 内圈基准不是 60（物理下限 59.5，再小会压到中心底盘）"; exit 1; }
+          grep -qF 'let base = inner + 39 * CGFloat(index)' "$RM" \
+            || { echo "::error::V0.3.21 相邻圈径向步进不是 39pt（= 图标 35 + 4pt 间隙）"; exit 1; }
+          grep -qF 'arcSpacing * 0.83' "$RM" \
+            || { echo "::error::V0.3.21 自适应系数不是 0.83（0.78 会把 47pt 弧间距算成 36.7，撑不满 35pt）"; exit 1; }
+          grep -qF '间距 42pt 恒定 / 内圈贴中心 60' "$RM" \
+            || { echo "::error::V0.3.21 展开日志串没跟着改（间距 46 / 内圈 62 是旧几何）"; exit 1; }
+
+          # ⑤ 设置变更门控三处 —— 用户 Aevon(96) 的 202 次/96 秒
+          #    ⛔ 三处都必须「值没变就先返回」，缺一处就还是一帧一次空转。
+          grep -qF 'if (on && was) {' "$GITHUB_WORKSPACE/Sources/AevonGripHook.m" \
+            || { echo "::error::V0.3.21 AevonGripOwnLegEnable 没有「已启用就直接返回」（拖滑条每帧刷一条装配日志）"; exit 1; }
+          grep -qF 'if let current = cached, current == list { return }' "$GITHUB_WORKSPACE/Sources/AevonRingStore.swift" \
+            || { echo "::error::V0.3.21 refreshFromSettings 没有「列表没变就不写快照」（每帧一次跨进程写盘）"; exit 1; }
+          grep -qF 'last == signature' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::V0.3.21 refreshFromPrefs 没有签名短路（每帧一次 setNeedsLayout+layoutIfNeeded 同步布局）"; exit 1; }
+          grep -qF 'lastRefreshGripID == ObjectIdentifier(grip)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::V0.3.21 refreshFromPrefs 的签名没绑视图实例（把手重建后会被跳过，frame 空着）"; exit 1; }
+          # 反向：三处门控不许把原有语义删掉
+          grep -qF 'grip.applyYieldMode()' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::V0.3.21 门控把 applyYieldMode 短路掉了（让路开关不能实时生效）"; exit 1; }
+          grep -qF 'AevonGripOwnLegEnable(true,' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::V0.3.21 门控把 prefs 回调里的自建腿开关调用删了"; exit 1; }
+
+          # ⑥ 三个新标记必须进主库（`used` 纯 ASCII C 串）
+          for m321 in AevonHoverJumpV321 AevonRingIcon35V321 AevonPrefsGateV321; do
+            grep -q "$m321" "$GITHUB_WORKSPACE/Sources/AevonGripHook.m" \
+              || { echo "::error::V0.3.21 源码缺标记 $m321"; exit 1; }
+            strings "$MDYL" | grep -q "$m321" \
+              || { echo "::error::V0.3.21 主库缺标记 $m321"; exit 1; }
+          done
+          echo "V0.3.21 校验: 单峰起跳（32pt / 66ms 触地）+ 矩阵顺序修正 + 图标 35pt 环径重算 + 设置变更门控三处 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
