@@ -310,7 +310,7 @@ final class AevonRingMenu: UIView {
     static let hoverScale: CGFloat = 1.30
     /* V0.3.20（AevonKeyframeHoverV320）：这里原来是一整套弹簧参数 —— 划过弹簧的
      * response、四拍余韵的振幅 / response 放大 / 错峰延迟三组数组、升起与回落两个初速，
-     * 连同下发函数一起整块删掉了（下面「现在」那一段有为什么）。
+     * 连同下发函数一起整块删掉了（「Q 弹」现在来自下面这些定长关键帧）。
      *
      * 为什么删，而不是再调一次数（Aevon(96) 定量）：
      *   余韵按**队列下标**取振幅 [1.0, 0.60, 0.32, 0.14]、response 再乘 [1, 1.25, 1.55, 1.85]
@@ -322,11 +322,7 @@ final class AevonRingMenu: UIView {
      *   这就是「丢帧」。
      *
      * 现在动画全部在 `Sources/AevonHoverKeyframes.swift`：定长关键帧、一次播完、
-     * 中途改目标纯数学接住。这里只留两个「停住时该长什么样」的数。 */
-    /// 划过图标时的向上跳跃高度（屏幕坐标，负 y = 向上）
-    static let hoverLift: CGFloat = 12
-    /// 划过图标时的放大倍数
-    static let hoverScale: CGFloat = 1.30
+     * 中途改目标纯数学接住。`hoverLift` / `hoverScale` 就是关键帧表末帧（停住的样子）。 */
     /// V0.3.20（AevonHighlightFadeV320）：蓝框 / 光晕跟着一起淡入的时长。
     static let hoverHighlightFade: TimeInterval = 0.13
     /// 指针事件中断多久之后允许新手指出手接管（自愈，防止某条通道漏发 ended 把圆盘卡死）
