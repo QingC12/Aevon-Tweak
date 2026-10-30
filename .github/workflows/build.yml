@@ -4932,12 +4932,13 @@ jobs:
           if grep -q 'usingSpringWithDamping:' "$RM"; then
             echo "::error::V0.3.18 圆盘又用回 UIView.animate(usingSpringWithDamping:)（老 API 的 duration ≠ SwiftUI 的 response）"; exit 1
           fi
-          # ②入场（center+alpha）/ 收起 两处仍走 params。
-          #   V0.3.20（AevonKeyframeHoverV320）反转：划过那一条已整块换成定长关键帧，
-          #   所以这里从 ≥3 降到 ≥2 —— 但**不许降到 1**，那说明收起也被顺手删了。
+          # ② 收起仍走 params —— **入场已退役**。
+          #   V0.3.20：≥3 → ≥2（划过换成关键帧）；
+          #   V0.3.23：入场也换成 AevonRingUnfold 的进度驱动 ⇒ 只剩收起 1 处。
+          #   降到 0 说明收起那条也被顺手删了（收起会变成硬切）。
           PARAM_CNT=$(grep -c 'AevonSpring.params(' "$RM" || true)
-          [ "$PARAM_CNT" -ge 2 ] \
-            || { echo "::error::V0.3.20 AevonSpring.params 只有 $PARAM_CNT 处（应 ≥2：入场 / 收起）"; exit 1; }
+          [ "$PARAM_CNT" -ge 1 ] \
+            || { echo "::error::V0.3.23 AevonSpring.params 0 处 —— 收起那条弹簧被删了（会变成硬切）"; exit 1; }
           grep -q 'AevonSpring.coefficients(response: 0.45, dampingFraction: 0.68)' "$RM" \
             || { echo "::error::V0.3.18 旋转积分器没换到统一 ζ 谱（仍是孤立的 140/16）"; exit 1; }
           if grep -qE 'let stiffness: CGFloat = 140' "$RM"; then
