@@ -1402,7 +1402,13 @@ enum AevonWindowManager {
             // 才会按真实屏幕重排。少了这一拍，App 就停在「按 430x737 排版、窗口却 430x932」
             // 的状态里，全屏打开就是黑的，只有杀进程重来才重建。
             // 所以 0.75s（App 侧信号已清）再写一次整屏画布 —— 有界、只一次、只在关窗时。
-            scheduleSleep(bundleID: bundleID, after: 1.05)
+            // V0.2.100（AevonSuspendDelayV2100，用户 Aevon(77) 抖音 cs=2 卡屏 18s 现场
+            // （08:30:00 无前台记录→08:30:18 Aweme cs=2，呼盘 4 次开设置逃生）+ 确认
+            // 低风险行为规避实验）：挂起再延 1.0s。现场判读 cs=2 = 进程内死锁，救援闸
+            // （cs=1 专用）管不到；嫌疑最大的一笔 = App 刚恢复整屏、还没渲染完新布局
+            // 就被 fg=NO 挂起，再唤醒时 UI 死锁。挂起推迟到关窗后 ~2.05s，给 App 完整
+            // 渲染窗口；代价仅是多保活 1s，无视觉影响（挂起前后都是最后一帧）。
+            scheduleSleep(bundleID: bundleID, after: 2.05)
             // V0.2.91（AevonCloseReviveV291）：关窗唤醒被覆盖的全屏 App —— 两轮
             // setForeground(force)（+0.45s / +0.85s）。等 0.45s 是让 teardown 的
             // 画布还原抖动（0.15/0.40s）先走完，别跟我们的唤醒写入挤在同一拍；
@@ -1670,7 +1676,7 @@ enum AevonWindowManager {
         view.teardown()
         // V0.2.56（AevonCloseDisarmV256）：停靠小窗关闭同样强制解除拖拽吞咽状态。
         AevonEdgeEntry.forceDisarmFloatGesture(reason: "关闭停靠小窗 \(bundleID)")
-        scheduleSleep(bundleID: bundleID, after: 0.75)
+        scheduleSleep(bundleID: bundleID, after: 1.75)   // V0.2.100（AevonSuspendDelayV2100）+1.0s 同主窗路径
         AevonForegroundManager.shared.remove(bundleID: bundleID, sceneID: nil)
         relayoutDock(side: side, animated: true)
         AevonLog.info("[停靠] \(bundleID) 已从停靠列关闭（\(reason)，该侧剩 "
@@ -1823,8 +1829,9 @@ enum AevonWindowManager {
                 AevonAssertionShim.releaseKeepAlive(forPID: Int32(pid))
             }
             AevonSceneHelper.sleep(bundleID)
-            AevonLog.info("[窗口] \(bundleID) 场景已挂起（画布还原与抖动都已完成，再开窗不会断层）"
-                + "（AevonCloseSettleV249）")
+            AevonLog.info("[窗口] \(bundleID) 场景已挂起（画布还原与抖动都已完成，再开窗不会断层；"
+                + "挂起已延至关窗后 ~2s，防 App 刚恢复整屏就被挂起诱发 UI 死锁）"
+                + "（AevonCloseSettleV249 AevonSuspendDelayV2100）")
         }
         pendingSleep[bundleID] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -1863,7 +1870,7 @@ enum AevonWindowManager {
             AevonSceneHelper.stopKeepAlive(view.bundleID)
             AevonSceneHelper.unregisterSelfScene(view.bundleID)
             view.teardown()
-            scheduleSleep(bundleID: view.bundleID, after: 0.6)
+            scheduleSleep(bundleID: view.bundleID, after: 1.6)   // V0.2.100（AevonSuspendDelayV2100）+1.0s 统一语义
         }
         dockedViews.removeAll()
         // V0.2.59（AevonDockStageV259）：集合清空必须广播（notify state 不随清理自动归零）。

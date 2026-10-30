@@ -1752,68 +1752,34 @@ final class AevonWindowView: UIView {
     private var darkFreezeImage: UIImage?
     /// 让位期比对只做一次（0.2.65 教训：drawHierarchy 强迫重绘 = 闪，绝不逐拍抓）。
     private var frameMatchTried = false
-    /* V0.2.94（AevonQuietRevealV294，用户 Aevon(71) #2「清晰→模糊→实时」+ 用户确认
-     * 按 Stheno 方案 M）：**撤帧再加一道「转场静默」闸**。Aevon(71) 实锤：0.2.93 链路
-     * 全正常（比对一致 0.68s 撤帧、alpha 全程 1），但撤帧落在回桌面动画结束**之前**
-     * → 露出的活表面还被系统缩放重采样（模糊）→ 动画彻底结束才清晰。Stheno 对应
-     * 设计（逆向报告 §4.5 CONFIRMED）：sc_pollForMainSwitcherDismissal…stableHidden
-     * Samples —— 连续 N 次采样确认切换器真的静下来才开始展示实时。现在撤帧前必须
-     * 「场景视图几何连续 2 拍静止」（frame 尺寸差 >2pt 或 transform 非恒等 = 还在动）；
-     * 场景已被收走（appSceneView==nil / 出窗）= 转场已结束 = 视作静默（fail-open）。
-     * 冻结帧全程在盖，多等无感。 */
-    /// 场景视图几何连续静止的拍数（0.2s 一拍，≥2 才放行撤帧）
-    private var revealQuietTicks = 0
-    /// 上一拍场景视图几何（frame 尺寸，用于 tick-to-tick 比较）
-    private var revealPrevGeo: CGSize = .zero
-    /// 「转场未静默压住撤帧」只记一次日志，避免让位期逐拍刷屏
-    private var quietHoldLogged = false
-    /// V0.2.97（AevonQuietRefreezeV297）：静默重抓替换——转场静默后重抓一帧清晰画面
-    /// 替换模糊冻结帧，让位期最多 1 次（抓帧=重绘纪律，绝不逐拍抓）。
-    private var revealRefreezeDone = false
-    /// V0.2.99（AevonFullFreezeV299，用户 Aevon(76)「依旧模糊→清晰」+ 确认 Stheno 同款全程盖帧）：
-    /// 常驻看门/布防期撤帧路径的同款转场静默采样。0.2.94 只给让位路径装了闸 —— Aevon(76)
-    /// 日志实锤 14.769 盖缓存帧 → 14.832「看门：内容回来了(cs=2)」立即撤（只盖 63ms）→
-    /// 露出缩放中的实时宿主 0.9s（糊）→ 15.738 又重新盖。这三条撤帧路径也必须等几何静止。
-    private var guardQuietTicks = 0
-    private var guardPrevGeo: CGSize = .zero
-    /// 盖帧时刻起算的强制放行上限（几何一直不静也不能盖死，fail-open）
-    private var guardFreezeHoldDeadline: TimeInterval = 0
-    /// 转场未静止压住撤帧的限流日志
+    /* V0.2.94~0.2.99 的「转场静默」几何采样（revealQuietTicks/guardQuietTicks 等）已于
+     * V0.2.100 整体退役 —— Aevon(77) 实锤：几何静止 ≠ 画面清晰（静止时活表面仍是被
+     * 切换器重采样后的模糊帧），且「静默重抓」从模糊表面抓回来的还是模糊帧。 */
+    /* V0.2.100（AevonReturnDeadlineV2100，用户 Aevon(77)「按 Stheno 无模糊段是独立窗口的
+     * 结构优势去重新制作，回桌面不要任何几何禁止画面模糊」+ 确认方案 F）：
+     * **Stheno SCWSNativeFullRequest.returnDeadline 同构** —— 逆向报告 §4.4 CONFIRMED：
+     * 它回桌面时立一个独立返回窗口承接视觉，挂固定 returnDeadline，等转场彻底走完才
+     * completeReturn；它的场景是 owned 场景、不在切换器缩放层级里，转场动不了它。
+     * Aevon 的场景被系统放在切换器缩放层级里，唯一等价做法 = **盖帧挂固定 returnDeadline
+     * （盖帧起 1.2s），deadline 内任何路径不得撤帧**；到点一次撤清，此时回桌面转场
+     * （实测 0.8~1.2s）已结束、活表面已清晰。全程零几何判定、纯独立窗口遮盖。
+     * 盖帧时刻起算的撤帧时钟（installDarkFreeze 设定，removeDarkFreeze 清零）。 */
+    private var freezeReturnDeadline: TimeInterval = 0
+    /// deadline 内压住撤帧只记一次日志，避免逐拍刷屏
     private var guardHoldLogged = false
 
-    /// 看门/布防撤帧的转场静默闸（Stheno stableHiddenSamples 同款纪律）。
-    /// 返回 true = 几何连续 2 拍静止（或场景已收走=转场结束），准撤；
-    /// 返回 false = 还在转场里（保持盖帧）。超过 guardFreezeHoldDeadline 强制放行。
-    private func guardTransitionQuiet(now: TimeInterval) -> Bool {
-        if guardFreezeHoldDeadline > 0, now > guardFreezeHoldDeadline {
-            if !guardHoldLogged {
-                guardHoldLogged = true
-                AevonLog.warn("[窗口] 转场静默闸放行超时（2.0s 上限）→ 撤帧 fail-open（AevonFullFreezeV299）")
-            }
-            return true
-        }
-        if let sv = AevonEntryHost.appSceneView, sv.window != nil {
-            let sz = sv.frame.size
-            let transformed = !sv.transform.isIdentity
-            if guardPrevGeo.width > 0,
-               (abs(sz.width - guardPrevGeo.width) > 2
-                || abs(sz.height - guardPrevGeo.height) > 2 || transformed) {
-                guardQuietTicks = 0
-            } else {
-                guardQuietTicks += 1
-            }
-            guardPrevGeo = sz
-        } else {
-            // 场景已收走/出窗 = 转场已结束 = 静默（fail-open）
-            guardQuietTicks += 1
-            guardPrevGeo = .zero
-        }
-        let quiet = guardQuietTicks >= 2
-        if !quiet, !guardHoldLogged {
+    /// V0.2.100（AevonReturnDeadlineV2100）：撤帧唯一闸 = 盖帧 returnDeadline。
+    /// 返回 true = deadline 已过（或本路径没有盖帧），准撤；
+    /// 返回 false = 还在盖帧保护期（保持盖帧）。零几何判定。
+    private func guardReturnDeadlineOpen(now: TimeInterval) -> Bool {
+        guard freezeReturnDeadline > 0 else { return true }   // 无盖帧 = 无压帧需求
+        if now > freezeReturnDeadline { return true }
+        if !guardHoldLogged {
             guardHoldLogged = true
-            AevonLog.warn("[窗口] cs=2 但场景几何仍在变（回桌面转场中）→ 冻结保持，不撤帧（AevonFullFreezeV299）")
+            AevonLog.warn("[窗口] 盖帧 returnDeadline 保护期内 → 冻结保持，不撤帧（1.2s 后一次撤清，零几何判定）"
+                + "（AevonFullFreezeV299 AevonReturnDeadlineV2100）")
         }
-        return quiet
+        return false
     }
     /// V0.2.61（AevonLiveFirstFixV261）：淡入之后的「稳定期」。
     ///
@@ -1896,10 +1862,7 @@ final class AevonWindowView: UIView {
         liveWaitTicks = 0
         liveAwaitingContent = false
         frameMatchTried = false   // V0.2.93（AevonFrameMatchRevealV293）每次让位重置比对额度
-        revealQuietTicks = 0      // V0.2.94（AevonQuietRevealV294）静默拍数与几何基线重置
-        revealPrevGeo = .zero
-        quietHoldLogged = false
-        revealRefreezeDone = false  // V0.2.97（AevonQuietRefreezeV297）重抓额度重置
+        guardHoldLogged = false   // V0.2.100（AevonReturnDeadlineV2100）限流日志重置
         alpha = 1
         liveSettleUntil = 0
         /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
@@ -2026,47 +1989,12 @@ final class AevonWindowView: UIView {
              * 判定只看场景的 contentState（cs=2 = 在画），足够了。 */
             let live = (sceneHost.contentLooksRendering == true)
             liveWaitTicks = live ? liveWaitTicks + 1 : 0
-            /* V0.2.94（AevonQuietRevealV294，用户 Aevon(71) #2「清晰 → 模糊 → 继续变成
-             * 实时画面」+ 用户确认按 Stheno 方案 M）：**转场静默采样**（Stheno 纪律
-             * sc_pollForMainSwitcherDismissal…stableHiddenSamples）。每拍比较场景视图
-             * 几何（frame 尺寸 tick-to-tick + transform 恒等性）：连续 2 拍静止才放行
-             * 撤帧。回桌面动画期间撤帧 → 露出的活表面被系统缩放重采样 = 模糊，动画
-             * 结束才清晰 —— 撤帧必须等转场真的静下来。场景已收走（appSceneView==nil
-             * / 出窗）= 转场已结束 = 视作静默（fail-open，绝不卡死揭幕）。 */
-            if let sv = AevonEntryHost.appSceneView, sv.window != nil {
-                let sz = sv.frame.size
-                let transformed = !sv.transform.isIdentity
-                if revealPrevGeo.width > 0,
-                   (abs(sz.width - revealPrevGeo.width) > 2
-                    || abs(sz.height - revealPrevGeo.height) > 2 || transformed) {
-                    revealQuietTicks = 0
-                } else {
-                    revealQuietTicks += 1
-                }
-                revealPrevGeo = sz
-            } else {
-                revealQuietTicks += 1
-                revealPrevGeo = .zero
-            }
-            let transitionQuiet = revealQuietTicks >= 2
-            /* V0.2.97（AevonQuietRefreezeV297，用户 Aevon(74)「悬浮窗中的内容已经会从
-             * 模糊到清晰」+ 用户确认方案 S-A）：**静默重抓替换模糊冻结帧**。
-             * 0.2.94 的静默闸解决了「撤帧落在动画中」——但盖帧本身发生在过渡哨命中
-             * 瞬间，那时 App 表面正在转场里被重采样，抓下来的位图就是模糊的；帧比对
-             * 是灰度结构比对、对模糊不敏感 → 模糊帧一直盖到撤帧（0.5~0.7s），用户
-             * 看到的「从模糊到清晰」本体就是这张模糊冻结帧。修法：转场静默（几何
-             * 连续 2 拍静止）后表面已清晰稳定，重抓一帧**替换**冻结帧——替换后窗口
-             * 显示的是清晰定格，随后的撤帧/比对全部基于清晰帧。额度 1 次（0.2.65
-             * 抓帧=重绘纪律）；抓不到（全黑/空壳）fail-open 保持原帧。 */
-            if transitionQuiet, darkFreezeView != nil, !revealRefreezeDone, liveWaitTicks >= 1,
-               let fresh = captureSnapshotImage() {
-                revealRefreezeDone = true
-                frameMatchTried = true   // 新帧=刚抓的实时，比对恒真，额度并入重抓
-                darkFreezeView?.image = fresh
-                darkFreezeImage = fresh
-                AevonLog.info("[窗口] 转场静默(\(revealQuietTicks) 拍) → 重抓清晰帧替换模糊冻结帧"
-                    + "（帧 \(Int(fresh.size.width))x\(Int(fresh.size.height))，AevonQuietRefreezeV297）")
-            }
+            /* V0.2.100（AevonReturnDeadlineV2100）：0.2.94 的转场静默几何采样与 0.2.97 的
+             * 静默重抓整体退役 —— Aevon(77) 实锤：几何静止 ≠ 画面清晰；静默重抓从模糊
+             * 表面抓回来的还是模糊帧（3~7 拍重抓多条命中，用户仍见模糊→清晰）。
+             * 改为 Stheno returnDeadline 同构：盖帧挂 1.2s 固定期，期内任何路径不撤帧，
+             * 到点一次撤清（活表面已清晰）。让位路径与看门/布防路径共用同一个闸。 */
+            let transitionQuiet = guardReturnDeadlineOpen(now: CACurrentMediaTime())
             /* V0.2.93（AevonFrameMatchRevealV293，用户 Aevon(62)「从虚变实的淡入还在」
              * + 用户确认按 Stheno 方案 A）：Stheno 揭幕纪律 = 封面与目标内容**一致**才揭幕。
              * 0.2.92 的 2 拍稳定撤帧里，撤帧瞬间「定格→实时」的画面差异 = 用户看到的
@@ -2081,19 +2009,19 @@ final class AevonWindowView: UIView {
                     matched = freezeMatchesLive(freeze, liveImg)
                 }
                 AevonLog.info("[窗口] 让位期帧比对：\(matched ? "一致" : "不一致 → 退回 2 拍稳定")"
-                    + "，转场\(transitionQuiet ? "已静默(\(revealQuietTicks) 拍)" : "未静默(\(revealQuietTicks) 拍)")"
-                    + "（AevonFrameMatchRevealV293 AevonQuietRevealV294）")
+                    + "，盖帧\(transitionQuiet ? "已过 returnDeadline" : "在 returnDeadline 保护期内")"
+                    + "（AevonFrameMatchRevealV293 AevonQuietRevealV294 AevonReturnDeadlineV2100）")
                 if matched {
                     if transitionQuiet {
-                        finishLiveWait(reason: "实时画面与冻结帧比对一致且转场静默，零跳变交接"
+                        finishLiveWait(reason: "实时画面与冻结帧比对一致且盖帧到期，零跳变交接"
                             + "（AevonFrameMatchRevealV293 AevonQuietRevealV294）")
                         return
                     }
-                    // 比对一致但转场还在动：压住不撤（撤了就是模糊期），只记一次日志
-                    if !quietHoldLogged {
-                        quietHoldLogged = true
-                        AevonLog.info("[窗口] 帧比对一致但转场未静默 → 压住撤帧等静默"
-                            + "（AevonQuietRevealV294）")
+                    // 比对一致但 returnDeadline 未到：压住不撤（撤了就是模糊期），只记一次日志
+                    if !guardHoldLogged {
+                        guardHoldLogged = true
+                        AevonLog.info("[窗口] 帧比对一致但盖帧 returnDeadline 未到 → 压住撤帧"
+                            + "（AevonQuietRevealV294 AevonReturnDeadlineV2100）")
                     }
                 }
             }
@@ -2108,7 +2036,8 @@ final class AevonWindowView: UIView {
             // 已经不成立 —— 现在撤帧前画面一直是冻结帧，多等 1 拍（0.1s）无感；
             // 而撤早了 = cs 先报 2、远程表面还没真画上 → 用户看到黑一瞬。收回 2 拍。
             if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12, transitionQuiet {
-                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍，转场静默 \(revealQuietTicks) 拍）")
+                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍，盖帧已过 returnDeadline）"
+                    + "（AevonQuietRevealV294 AevonReturnDeadlineV2100）")
             } else if now > liveWaitDeadline {
                 finishLiveWait(reason: "上限到达")
             }
@@ -2137,9 +2066,10 @@ final class AevonWindowView: UIView {
             case .some(true):
                 idleDarkTicks = 0
                 renderTicks += 1
-                // V0.2.99（AevonFullFreezeV299）：撤帧过转场静默闸——回桌面动画中 cs 先报 2
-                // 时撤帧 = 露出被缩放重采样的实时宿主（Aevon(76) 的模糊窗口期），等几何静止。
-                if renderTicks >= 2, guardTransitionQuiet(now: CACurrentMediaTime()) {
+                // V0.2.100（AevonReturnDeadlineV2100）：撤帧过盖帧 returnDeadline 闸——
+                // 回桌面转场中 cs 先报 2 时撤帧 = 露出被缩放重采样的实时宿主（Aevon(76)
+                // 的模糊窗口期），deadline（1.2s）内一律保持盖帧。
+                if renderTicks >= 2, guardReturnDeadlineOpen(now: CACurrentMediaTime()) {
                     removeDarkFreeze(reason: "看门：内容回来了（cs=2）")
                 }
             case .some(false):
@@ -2177,10 +2107,10 @@ final class AevonWindowView: UIView {
             // （0.4s）才撤」防的是「cs 先报 2、表面还没画」。现在第一拍就**现场验证**：
             // drawHierarchy 抓得到真画面 = 远程表面确实在画 → 立刻撤冻结；
             // 抓不到就按老规矩等满 2 拍（抓不到 ≠ 黑，宁可持续定格也不露黑窗）。
-            if renderTicks >= 2, guardTransitionQuiet(now: CACurrentMediaTime()) {
+            if renderTicks >= 2, guardReturnDeadlineOpen(now: CACurrentMediaTime()) {
                 removeDarkFreeze(reason: "布防：内容已回画（cs=2 连续 2 拍）")
             } else if darkFreezeView != nil, captureSnapshotImage() != nil,
-                      guardTransitionQuiet(now: CACurrentMediaTime()) {
+                      guardReturnDeadlineOpen(now: CACurrentMediaTime()) {
                 renderTicks = 2
                 removeDarkFreeze(reason: "布防：cs=2 且现场抓到真画面（第一拍验证，AevonDarkGuardV253）")
             }
@@ -2242,12 +2172,11 @@ final class AevonWindowView: UIView {
     /// 空壳一律不盖：宁可让真实画面自己回来，也不盖一张假的。
     private func installDarkFreeze(reason: String) {
         guard darkFreezeView == nil, hintLabel.isHidden, !isTearingDown else { return }
-        // V0.2.99（AevonFullFreezeV299）：重置看门转场静默采样 + 设 fail-open 上限
-        //（几何一直不静也不能盖死，2.0s 强制放行）。
-        guardQuietTicks = 0
-        guardPrevGeo = .zero
+        // V0.2.100（AevonReturnDeadlineV2100，用户确认方案 F，Stheno SCWSNativeFullRequest
+        // .returnDeadline 同构）：盖帧起挂 1.2s 固定撤帧保护期 —— 期内任何撤帧路径一律
+        // 压住（零几何判定），到点一次撤清。回桌面转场实测 0.8~1.2s，保护期覆盖全程。
+        freezeReturnDeadline = CACurrentMediaTime() + 1.2
         guardHoldLogged = false
-        guardFreezeHoldDeadline = CACurrentMediaTime() + 2.0
         // V0.2.60（AevonLiveFirstV260）：让位期整窗是隐形的，再盖一张定格帧纯属浪费
         //（还会在淡入那一刻露出旧画面）。让位收尾时会自己决定要不要垫缓存帧。
         //
@@ -2312,9 +2241,11 @@ final class AevonWindowView: UIView {
         darkFreezeImage = image   // V0.2.93（AevonFrameMatchRevealV293）留存供让位期比对
         AevonLog.warn("[窗口] 内容不出画 → 盖上最后一帧（\(reason)，\(padSource)不挡触摸，重申由看门自动兜底；"
             + "根级覆盖 \(Int(view.frame.width))x\(Int(view.frame.height))，"
-            + "帧 \(Int(image.size.width))x\(Int(image.size.height))，父层=\(view.superview.map { String(describing: type(of: $0)) } ?? "无")）"
+            + "帧 \(Int(image.size.width))x\(Int(image.size.height))，父层=\(view.superview.map { String(describing: type(of: $0)) } ?? "无")，"
+            + "returnDeadline 1.2s 内不撤帧）"
             + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249"
-            + " AevonFreezePassthruV287 AevonRootFreezeV290 AevonCacheFreezeV298）")
+            + " AevonFreezePassthruV287 AevonRootFreezeV290 AevonCacheFreezeV298"
+            + " AevonQuietRefreezeV297 AevonReturnDeadlineV2100）")
     }
 
     /// V0.2.91（AevonHomeFreezeV291）：回桌面过渡哨命中的**无条件**冻结入口。
@@ -2339,6 +2270,7 @@ final class AevonWindowView: UIView {
         guard let view = darkFreezeView else { return }
         darkFreezeView = nil
         darkFreezeImage = nil   // V0.2.93（AevonFrameMatchRevealV293）比对基准随帧清
+        freezeReturnDeadline = 0   // V0.2.100（AevonReturnDeadlineV2100）撤帧时钟随帧清，防旧期限残留
         freezeRemoveCount += 1
         // V0.2.63（AevonFlashDampV263）：记下撤帧时刻，1.2 秒内不再盖（防「盖/撤」抖动）。
         lastFreezeRemovedAt = CACurrentMediaTime()

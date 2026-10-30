@@ -162,9 +162,10 @@ jobs:
                    AevonProbeSceneV296 AevonScenePollFastV296 \
                    AevonGripIntentV297 AevonQuietRefreezeV297 \
                    AevonCacheFreezeV298 AevonDeskNoReviveV298 AevonStuckRescueV298 \
-                   AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299; do
+                   AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299 \
+                   AevonReturnDeadlineV2100 AevonSuspendDelayV2100; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.2.99 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.2.100 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -2060,12 +2061,11 @@ jobs:
           if sed -n '/override func didMoveToWindow/,/^    }/p' "$W/Sources/AevonWindowView.swift" | grep -q 'startGuardTimerIfNeeded'; then :; else
             echo "::error::0.2.50 守卫不是上屏即起（事件没来时完全没有守卫 = 黑屏 >1 秒）"; exit 1
           fi
-          # V0.2.99 反转（AevonFullFreezeV299）：原检查 0.2.50 单行形态
-          # 「if renderTicks >= 2 { removeDarkFreeze」—— 0.2.99 给该撤帧装了更强的
-          # 转场静默闸（几何 2 拍静止 + 2.0s fail-open），2 拍确认语义保留且升级；
-          # 形态断言随之升级为「撤帧必须过 guardTransitionQuiet」。
-          grep -q 'renderTicks >= 2, guardTransitionQuiet' "$W/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.99 撤冻结 2 拍确认被拆（renderTicks+静默闸必须同条件）"; exit 1; }
+          # V0.2.100 反转（AevonReturnDeadlineV2100）：0.2.99 的转场静默几何闸退役，
+          # 换为 Stheno returnDeadline 同构闸 guardReturnDeadlineOpen（1.2s 固定保护期），
+          # 2 拍确认语义保留；形态断言随之升级。
+          grep -q 'renderTicks >= 2, guardReturnDeadlineOpen' "$W/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.100 撤冻结 2 拍确认被拆（renderTicks+deadline 闸必须同条件）"; exit 1; }
           grep -q 'AevonDarkGuardV250' "$W/AevonSceneDriverShim.m" \
             || { echo "::error::0.2.50 缺常驻守卫标记"; exit 1; }
           # ⑥ 熄屏：必须真拦锁屏（日志已证 isIdleTimerDisabled 在本机 12 次全无效，位掩码恒 4）
@@ -3986,15 +3986,16 @@ jobs:
             echo "::error::0.2.94 onCanvasSettled 赋值必须先于 writeCanvasDirect（AevonRevealOrderFixV294，冷启动兜底显窗回归；实测 A=$ASETTLING W=$WDIRECT）"
             exit 1
           fi
-          # ②方案 M：转场静默采样闸（Stheno stableHiddenSamples 纪律）
+          # ②V0.2.100 反转：转场静默几何采样退役 → Stheno returnDeadline 闸（AevonReturnDeadlineV2100）。
+          # AevonQuietRevealV294 标记收容在让位日志串里，二进制必须仍有。
           WVW="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
           grep -q 'AevonQuietRevealV294' "$WVW" \
-            || { echo "::error::0.2.94 缺转场静默采样标记（AevonQuietRevealV294）"; exit 1; }
-          grep -q 'let transitionQuiet = revealQuietTicks >= 2' "$WVW" \
-            && grep -q 'revealQuietTicks += 1' "$WVW" \
-            && grep -q 'revealPrevGeo' "$WVW" \
-            || { echo "::error::0.2.94 静默采样结构不完整（AevonQuietRevealV294）"; exit 1; }
-          echo "V0.2.94 校验: 显形回调先于直写(冷启动回归修复) + 转场静默采样闸(方案 M) 已就位"
+            || { echo "::error::0.2.100 AevonQuietRevealV294 标记收容丢失（历史标记必须进二进制）"; exit 1; }
+          grep -q 'let transitionQuiet = guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WVW" \
+            && grep -q 'freezeReturnDeadline = CACurrentMediaTime() + 1.2' "$WVW" \
+            && ! grep -q 'revealQuietTicks' "$WVW" \
+            || { echo "::error::0.2.100 returnDeadline 闸结构不完整（AevonReturnDeadlineV2100）"; exit 1; }
+          echo "V0.2.94 校验: 显形回调先于直写(冷启动回归修复)已就位（静默采样已退役→deadline 闸）"
 
           # ── V0.2.95 校验（Aevon(72)：冷开窗快慢分化，微信 1.24s / 抖音 0.88s / 设置 0.25s）──
           # 方案 P：①cap 等表(0.65s)+routeDump 扫描挪进「自建开启」分支（默认档无消费方，白等）
@@ -4052,12 +4053,13 @@ jobs:
           else
             echo "::error::0.2.97 吞层分支缺 return true（吞层不生效，实测命中=$SW）"; exit 1
           fi
-          # ③静默重抓：transitionQuiet 后重抓替换，额度 1 次 + 布防重置
-          grep -q 'revealRefreezeDone' "$WV" \
-            && grep -q 'AevonQuietRefreezeV297' "$WV" \
-            && grep -q 'darkFreezeView?.image = fresh' "$WV" \
-            || { echo "::error::0.2.97 缺静默重抓替换（AevonQuietRefreezeV297）"; exit 1; }
-          echo "V0.2.97 校验: 把手意图吞咽(防半截左滑泄漏) + 静默重抓替换模糊冻结帧 已就位"
+          # ③V0.2.100 反转：静默重抓退役（从模糊表面抓帧=死路），AevonQuietRefreezeV297
+          # 标记收容进盖帧日志串；重抓代码必须已删净。
+          grep -q 'AevonQuietRefreezeV297' "$WV" \
+            && ! grep -q 'darkFreezeView?.image = fresh' "$WV" \
+            && ! grep -q 'revealRefreezeDone' "$WV" \
+            || { echo "::error::0.2.100 静默重抓未删净或标记收容丢失（AevonQuietRefreezeV297）"; exit 1; }
+          echo "V0.2.97 校验: 把手意图吞咽(防半截左滑泄漏)已就位（静默重抓已退役→returnDeadline）"
 
           # ── V0.2.98 校验（Aevon(75)：S-B 缓存帧盖底 + 桌面态免唤醒 + cs=1 停滞救援）──
           WV98="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
@@ -4099,15 +4101,35 @@ jobs:
             && grep -q 'GripHookProbe' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
             || { echo "::error::0.2.99 探测骨架接线不完整"; exit 1; }
           echo "V0.2.99 校验②: SBGrabberTongue 探测骨架（默认关灰度）已接线 ✓"
-          # ③ 全程盖帧：三条撤帧路径都过 guardTransitionQuiet，installDarkFreeze 设 fail-open 上限
-          QT=$(grep -c 'guardTransitionQuiet(now: CACurrentMediaTime())' "$WV")
-          if [ "$QT" -ge 3 ] \
-             && grep -q 'guardFreezeHoldDeadline = CACurrentMediaTime() + 2.0' "$WV" \
-             && grep -q 'AevonFullFreezeV299' "$WV"; then
-            echo "V0.2.99 校验③: 全程盖帧（撤帧静默闸 ×$QT 处 + 2.0s fail-open）✓"
+          # ③ V0.2.100 反转：撤帧闸 = returnDeadline（1.2s 固定保护期），几何静默退役
+          QT=$(grep -c 'guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WV")
+          if [ "$QT" -ge 4 ] \
+             && grep -q 'freezeReturnDeadline = CACurrentMediaTime() + 1.2' "$WV" \
+             && grep -q 'AevonReturnDeadlineV2100' "$WV"; then
+            echo "V0.2.99→100 校验③: 全程盖帧改 returnDeadline 闸（撤帧闸 ×$QT 处 + 1.2s 保护期）✓"
           else
-            echo "::error::0.2.99 撤帧静默闸不完整（QT=$QT，应 ≥3）"; exit 1
+            echo "::error::0.2.100 returnDeadline 撤帧闸不完整（QT=$QT，应 ≥4）"; exit 1
           fi
+
+          # ── V0.2.100 校验（Aevon(77)：Stheno returnDeadline 同构 + 关窗挂起延迟 1s）──
+          WM100="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
+          # ①挂起延迟三处全同步（2.05 / 1.75 / 1.6），无旧值残留
+          if grep -q 'scheduleSleep(bundleID: bundleID, after: 2.05)' "$WM100" \
+             && grep -q 'scheduleSleep(bundleID: bundleID, after: 1.75)' "$WM100" \
+             && grep -q 'scheduleSleep(bundleID: view.bundleID, after: 1.6)' "$WM100" \
+             && ! grep -qE 'after: 1\.05\)|after: 0\.75\)|after: 0\.6\)' "$WM100"; then
+            echo "V0.2.100 校验①: 关窗挂起延迟 +1.0s 三处同步（2.05/1.75/1.6）✓"
+          else
+            echo "::error::0.2.100 挂起延迟不同步（应 2.05/1.75/1.6 且无旧值）"; exit 1
+          fi
+          # ②挂起执行日志带 AevonSuspendDelayV2100 标记（进二进制）
+          grep -q 'AevonSuspendDelayV2100' "$WM100" \
+            || { echo "::error::0.2.100 缺 AevonSuspendDelayV2100 标记"; exit 1; }
+          # ③几何静默闸删净：guardTransitionQuiet 与 guardFreezeHoldDeadline 不许残留
+          if grep -q 'guardTransitionQuiet\|guardFreezeHoldDeadline' "$WV"; then
+            echo "::error::0.2.100 几何静默闸残留（guardTransitionQuiet/guardFreezeHoldDeadline 应删净）"; exit 1
+          fi
+          echo "V0.2.100 校验: returnDeadline 撤帧闸（1.2s，零几何判定）+ 挂起延迟 1s 已就位"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
