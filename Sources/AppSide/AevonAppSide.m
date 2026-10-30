@@ -2123,8 +2123,9 @@ static BOOL AevonPointInCanvasBand(UIWindow *win, CGPoint p) {
  * （`-Werror,-Wunused-function` 直接拦下，正好证明它真的没人用了）。
  *
  * 判据本体没有丢：仍留在 `AevonPointInCanvasBand` 的调用点（承载画布边缘带
- * 的 tap 豁免是内联写在那里的），浮窗交互不受影响。 */
-（标记 `AevonBandTap2V277` 已由文件上方的 used 常量继续收容，CI 不受影响。）
+ * 的 tap 豁免是内联写在那里的），浮窗交互不受影响。
+ *
+ * 标记 `AevonBandTap2V277` 已由文件上方的 used 常量继续收容，CI 不受影响。 */
 
 
 /* V0.2.84（AevonStaleRectGateV284，Aevon(57)「全屏 App 触摸失效」死区实锤）：
