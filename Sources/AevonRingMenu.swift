@@ -160,10 +160,18 @@ final class AevonRingMenu: UIView {
     static let hoverLift: CGFloat = 12
     /// 划过图标时的放大倍数
     static let hoverScale: CGFloat = 1.30
-    /// 跳跃 / 放大的弹簧参数（时长、阻尼比、初速）
-    static let hoverSpringDuration: TimeInterval = 0.52
-    static let hoverSpringDamping: CGFloat = 0.34
-    static let hoverSpringVelocity: CGFloat = 3.4
+    /* V0.3.18（AevonSpringUnifyV318）：跳跃 / 放大的弹簧参数改成 **response**（一个振荡周期）。
+     *
+     * 0.3.17 及以前这里是 `UIView.animate(0.52, damping 0.34, velocity 3.4)`。那是 iOS 7 的
+     * 老 API，duration 的语义是「起到静止的总时长」，和 Stheno 用的 SwiftUI
+     * `Animation.spring(response:dampingFraction:)` 里的 response **不是同一个物理量**；
+     * 配上 0.34 的低阻尼与 3.4 的初速，划过图标是「猛冲 → 大幅过冲 → 晃回来」。
+     * 更要紧的是它和圆盘上另外四条弹道（ζ 0.55 / 0.676 / 0.78 / easeOut）各弹各的 ——
+     * 同一个盘上五种手感，观感就是不连贯。
+     *
+     * 现在全部走 `AevonSpring.params`：response 0.40、ζ 由用户滑条给（默认 0.72），
+     * 回摆约 4% —— 看得见「弹」，但收得干净。老的那三个常量已删除，不许再长回来。 */
+    static let hoverSpringResponse: Double = 0.40
     /// 指针事件中断多久之后允许新手指出手接管（自愈，防止某条通道漏发 ended 把圆盘卡死）
     private static let pointerStaleInterval: CFTimeInterval = 1.2
     /// V0.2.66（AevonRingIdleV266）：指针静默多久后判定「手指早已离屏但 ended 漏发」
@@ -271,6 +279,9 @@ final class AevonRingMenu: UIView {
             return
         }
         let menu = AevonRingMenu(frame: host.bounds)
+        /* V0.3.18（AevonSpringUnifyV318）：阻尼比在展开这一刻读一次，之后整局复用。
+         * 滑条改动要下次呼盘才生效 —— 这是刻意的：逐帧读 prefs 是跨进程 IPC。 */
+        menu.hoverZ = AevonSpring.userDampingFraction()
         host.addSubview(menu)
         host.bringSubviewToFront(menu)
         current = menu
@@ -631,7 +642,14 @@ final class AevonRingMenu: UIView {
 
     /// V0.0.33 速度弹簧积分器（AevonRingSpringV33）。
     /// 加速度 = 刚度 × 位移 − 阻尼 × 速度；半隐式欧拉积分，60/120Hz 自适应 dt。
-    /// 手感调参：刚度 140（跟手）/ 阻尼 16（急停过冲约 12%，慢拖黏滞）。
+    ///
+    /// V0.3.18（AevonSpringUnifyV318）：系数不再是一组孤立的 140/16，改由
+    /// `AevonSpring.coefficients(response:dampingFraction:)` 从 (0.45, 0.68) 换算 ——
+    /// 与划过 / 入场 / 收起是同一条 ζ 谱。140/16 等价于 (0.531, 0.676)，数值接近但
+    /// 换算基准不同；统一之后「拖着转」与「划过去」的收尾是同一个劲儿。
+    /// k = (2π/0.45)² ≈ 195、c = 2×0.68×2π/0.45 ≈ 19。
+    private static let spinSpring = AevonSpring.coefficients(response: 0.45, dampingFraction: 0.68)
+
     @objc private func stepDamping() {
         guard AevonRingMenu.current === self, !isDismissing else {
             stopDamping()
@@ -647,8 +665,8 @@ final class AevonRingMenu: UIView {
         }
         // dt 用 displayLink 真实帧间隔（秒），120Hz 设备上步长减半，手感一致
         let dt = CGFloat(displayLink?.duration ?? (1.0 / 60.0))
-        let stiffness: CGFloat = 140
-        let damping: CGFloat = 16
+        let stiffness: CGFloat = AevonRingMenu.spinSpring.stiffness
+        let damping: CGFloat = AevonRingMenu.spinSpring.damping
         let accel = stiffness * diff - damping * displayVelocity
         displayVelocity += accel * dt
         displayRotation += displayVelocity * dt
@@ -690,16 +708,20 @@ final class AevonRingMenu: UIView {
         trackLayer.add(fade, forKey: "fade")
         trackLayer.opacity = 1
 
-        // V0.0.30（AevonRingSpringV30）：图标从圆心「弹射」到各自轨道 ——
-        // SwiftUI spring(dampingFraction: 0.55) 的手感等价物：
-        // UISpringTimingParameters 弹簧 + 逐个错峰，末端自然过冲回摆（Q 弹感）。
-        let spring = UISpringTimingParameters(dampingRatio: 0.55, initialVelocity: CGVector(dx: 0.4, dy: 0.4))
+        // V0.0.30（AevonRingSpringV30）：图标从圆心「弹射」到各自轨道。
+        // V0.3.18（AevonSpringUnifyV318）：换成与划过同一条 ζ 谱 ——
+        // 以前是 `UISpringTimingParameters(dampingRatio: 0.55)` + duration 0.55（老式的
+        // 「百分比阻尼 + 总时长」组合），和划过那条（ζ 0.34）不是一套手感。
+        // 现在 response 0.50 / ζ = 用户的滑条值（默认 0.72），入场的过冲量也跟着滑条走。
+        let spring = AevonSpring.params(response: 0.50,
+                                        dampingFraction: hoverZ,
+                                        initialVelocity: CGVector(dx: 0.25, dy: 0.25))
         for (index, icon) in icons.enumerated() {
             let target = icon.center
             icon.center = ringCenter
             icon.alpha = 0
             icon.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
-            let animator = UIViewPropertyAnimator(duration: 0.55, timingParameters: spring)
+            let animator = UIViewPropertyAnimator(duration: 1.0, timingParameters: spring)
             animator.addAnimations {
                 icon.alpha = 1
                 icon.transform = .identity
@@ -730,6 +752,15 @@ final class AevonRingMenu: UIView {
         cancelCenterHold()
         clearPointer()
         stopDamping()
+        /* V0.3.18（AevonSpringUnifyV318）：收起时先把划过动画停在当前值，再让「吸附回圆心」
+         * 接管这批 transform —— 两个 animator 同时写 transform 会互相打断，收起来一顿一顿。 */
+        if let hovering = hoverAnimator {
+            if hovering.isRunning {
+                hovering.stopAnimation(false)
+                hovering.finishAnimation(at: .current)
+            }
+            hoverAnimator = nil
+        }
         AevonRingMenu.current = nil
         // V0.2.50（AevonRingGripV250）：圆盘收起 → 把手重新露出来
         AevonRingGrip.setVisible(true)
@@ -742,9 +773,13 @@ final class AevonRingMenu: UIView {
             return
         }
         // V0.0.30：图标被圆心「吸」回来（弹簧收拢），比整体淡出更有生命感
-        let spring = UISpringTimingParameters(dampingRatio: 0.78, initialVelocity: CGVector(dx: 0.5, dy: 0.5))
+        // V0.3.18（AevonSpringUnifyV318）：同一条 ζ 谱里收得最紧的一档（response 0.32 / ζ 0.85）——
+        // 收起是「决定已经做完」，不需要回摆，只要不硬切。
+        let spring = AevonSpring.params(response: 0.32,
+                                        dampingFraction: max(hoverZ, 0.85),
+                                        initialVelocity: CGVector(dx: 0.30, dy: 0.30))
         for icon in icons {
-            let animator = UIViewPropertyAnimator(duration: 0.3, timingParameters: spring)
+            let animator = UIViewPropertyAnimator(duration: 1.0, timingParameters: spring)
             animator.addAnimations {
                 icon.center = self.ringCenter
                 icon.transform = CGAffineTransform(scaleX: 0.1, y: 0.1)
@@ -1173,9 +1208,17 @@ final class AevonRingMenu: UIView {
     /// 每帧都会调一次，只有真的换了一个图标才是用户看得见的「划过」。
     private var hoveredBundleID = ""
 
+    /// V0.3.18（AevonSpringUnifyV318）：划过动画的**唯一** animator（见 `startHoverAnimation`）。
+    private var hoverAnimator: UIViewPropertyAnimator?
+
+    /// 本次展开的阻尼比。在 `present` 里读一次缓存 —— `AevonPrefs` 走 CFPreferences，
+    /// 是跨进程 IPC，放进 `setHovered` 这种逐帧路径会拖慢触摸响应。
+    var hoverZ: Double = AevonSpring.defaultDampingFraction
+
     private func setHovered(_ icon: AevonRingIcon?) {
         let newID = icon?.bundleID ?? ""
-        if newID != hoveredBundleID {
+        let changed = newID != hoveredBundleID
+        if changed {
             hoveredBundleID = newID
             /* V0.3.17（AevonHoverTrackV317）：只在**高亮真的换了**时打一条。
              * 这条日志是本版唯一的验收判据 —— 上一份日志分不清「移动帧到了但没高亮」
@@ -1190,31 +1233,54 @@ final class AevonRingMenu: UIView {
                     + "→ 高亮 + 跳跃（AevonHoverTrackV317）")
             }
         }
-        for item in icons {
-            let on = (item === icon)
-            item.setHighlighted(on)
-            // V0.0.35（AevonRingHopV35）：划过图标 = 放大 + **向上跳跃** ——
-            // 位移用屏幕坐标向上（y 负），与圆周角度无关，任何位置的图标都是「向上跳」。
-            // V0.2.18（AevonRingJumpPunchV218）：跳跃高度 8 → 12pt（用户要求 +50%），
-            // 放大 1.18 → 1.30，弹簧阻尼 0.42 → 0.34、初速 2.8 → 3.4、时长 0.45 → 0.52。
-            // 四个数一起动才有「Q 弹」：只放大是变粗，只加高是变飘，阻尼降下来才有回摆。
-            let target: CGAffineTransform
-            if on {
-                target = CGAffineTransform(translationX: 0, y: -AevonRingMenu.hoverLift)
-                    .scaledBy(x: AevonRingMenu.hoverScale, y: AevonRingMenu.hoverScale)
-            } else {
-                target = .identity
+        /* V0.3.18（AevonSpringUnifyV318）：高亮集合没变就**一个字都不动**。
+         * 以前是「每个图标各自判断 transform != target 再起动画」，在划过中途新动画与
+         * 旧动画并存；这里改成整盘一条弹道，没换图标时重启只会把弹簧按回第 0 帧，
+         * 表现是一顿一顿。 */
+        if !changed && hoverAnimator != nil { return }
+        // 展开后的首帧（还没划过任何图标）不必启动动画：全场本来就都是 identity。
+        if !changed && hoverAnimator == nil && icon == nil { return }
+        startHoverAnimation(highlighting: icon)
+    }
+
+    /// V0.3.18（AevonSpringUnifyV318）：**一条弹道带动全部图标** —— 旧高亮回落与
+    /// 新高亮升起在同一个 animator 里、用同一条弹簧，这是「连续感」的来源。
+    ///
+    /// 切换高亮时先把现有 animator 停在当前值（`stopAnimation(false)` +
+    /// `finishAnimation(at: .current)`），再从定格处重新出发。这正是 SwiftUI 在目标
+    /// 变化时的 retarget 行为（也就是它 `blendDuration` 想解决的问题）：画面永远是
+    /// 「从此刻的位置接着弹」，不会跳回起点重来。
+    private func startHoverAnimation(highlighting icon: AevonRingIcon?) {
+        if let anim = hoverAnimator {
+            if anim.isRunning {
+                anim.stopAnimation(false)
+                anim.finishAnimation(at: .current)
             }
-            if item.transform != target {
-                UIView.animate(withDuration: AevonRingMenu.hoverSpringDuration,
-                               delay: 0,
-                               usingSpringWithDamping: AevonRingMenu.hoverSpringDamping,
-                               initialSpringVelocity: AevonRingMenu.hoverSpringVelocity,
-                               options: [.allowUserInteraction, .beginFromCurrentState]) {
-                    item.transform = target
+            hoverAnimator = nil
+        }
+        // V0.0.35（AevonRingHopV35）：划过图标 = 放大 + **向上跳跃**。
+        // 位移用屏幕坐标向上（y 负），与圆周角度无关，任何位置的图标都是「向上跳」。
+        let params = AevonSpring.params(response: AevonRingMenu.hoverSpringResponse,
+                                        dampingFraction: hoverZ)
+        let animator = UIViewPropertyAnimator(duration: 1.0, timingParameters: params)
+        animator.addAnimations {
+            for item in self.icons {
+                let on = (item === icon)
+                /* V0.3.18：高亮（边框 / 光晕 / 底色）也放进同一条弹道。
+                 * 以前它在动画块外、瞬时生效 —— 图标放大是弹簧、边框是硬切，
+                 * 快划时就看见「框先跳、块后弹」。layer 属性在
+                 * UIViewPropertyAnimator 的动画块内会被一并驱动。 */
+                item.setHighlighted(on)
+                if on {
+                    item.transform = CGAffineTransform(translationX: 0, y: -AevonRingMenu.hoverLift)
+                        .scaledBy(x: AevonRingMenu.hoverScale, y: AevonRingMenu.hoverScale)
+                } else {
+                    item.transform = .identity
                 }
             }
         }
+        hoverAnimator = animator
+        animator.startAnimation()
     }
 
     // MARK: - 本地触摸（第二根手指 / 抬手后再按）

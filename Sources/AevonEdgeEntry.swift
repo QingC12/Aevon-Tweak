@@ -950,6 +950,14 @@ enum AevonEdgeEntry {
             legBlocked(cls: cls, reason: "圆盘已开")
             return
         }
+        /* V0.3.18（AevonSceneGateV318）：借腿是兜底通道（自建腿就绪时不呼盘），但只要它
+         * 还活着，就同样不许在控制中心 / 通知中心 / 锁屏里呼盘 —— 判据与自建腿共用
+         * `AevonRingGrip.systemOverlayBlockingRing()`，两边不许各写一套。 */
+        let overlayLeg = AevonRingGrip.systemOverlayBlockingRing()
+        if !overlayLeg.isEmpty {
+            legBlocked(cls: cls, reason: "系统浮层在屏（\(overlayLeg)）→ 不呼盘")
+            return
+        }
         /* V0.3.13（AevonOwnGateV313）：自建腿已注册 → 借腿**整条退为兜底**，不再呼盘。
          *
          * 依据 Aevon(91)：开关打开的 55 秒里 27 次呼盘 **27 次全走自建腿**，
@@ -1070,6 +1078,20 @@ enum AevonEdgeEntry {
         }
         guard AevonRingMenu.presented == nil else {
             ownLegBlocked("圆盘已开")
+            return
+        }
+        /* V0.3.18（AevonSceneGateV318）：系统浮层兜底闸。
+         *
+         * 主闸在 ObjC 侧 `-touchesBegan:`（那里判到浮层就直接 Failed、把手指原样还回去）。
+         * 这里只是兜底：落指时还没有浮层、达阈值之前那 0.28 秒里用户把控制中心拉了出来
+         * —— 极罕见，但一旦发生，圆盘会盖在控制中心上面（用户报的就是这个观感）。
+         *
+         * ⚠️ 走到这里说明 `_ownSummoned` 已经是 YES、这根手指已经扣住了，拒绝呼盘不会
+         * 自动还回去；它会在抬手时由 `AevonGripOwnLift` 正常收尾。所以**这道闸不能
+         * 取代主闸**，只是补一个时间窗。 */
+        let overlay = AevonRingGrip.systemOverlayBlockingRing()
+        if !overlay.isEmpty {
+            ownLegBlocked("系统浮层在屏（\(overlay)）→ 不呼盘")
             return
         }
         guard CACurrentMediaTime() - lastTriggerAt > 0.6 else {
@@ -1378,6 +1400,15 @@ public func AevonGripOwnLift(_ x: Double, _ y: Double, _ cancelled: Int32) {
 @_cdecl("AevonGripOwnMove")
 public func AevonGripOwnMove(_ x: Double, _ y: Double) {
     AevonEdgeEntry.ownLegMove(x: CGFloat(x), y: CGFloat(y))
+}
+
+/// V0.3.18（AevonSceneGateV318）：系统浮层闸 —— 控制中心 / 通知中心 / 锁屏（含解锁后
+/// 还没上滑进桌面）里不许呼盘。返回 1 = 有浮层在屏，自建腿**必须立刻放行这根手指**。
+///
+/// 用 Int32 而不是 Bool：C 的 BOOL 在各架构下宽度不同（与 `AevonGripOwnBandHit` 同一条口径）。
+@_cdecl("AevonGripSystemOverlayBlocked")
+public func AevonGripSystemOverlayBlocked() -> Int32 {
+    return AevonRingGrip.systemOverlayBlockingRing().isEmpty ? 0 : 1
 }
 
 /// V0.3.9（AevonGripOwnLegV309）：自建腿的取证/结局日志桥（类普查、挂载、放行原因）。

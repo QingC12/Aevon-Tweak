@@ -706,6 +706,12 @@ extern int AevonGripOwnBandHit(double x, double y);
 /// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选（暂扣）。
 extern int AevonGripOwnHitLevel(double x, double y);
 extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
+/// V0.3.18（AevonSceneGateV318）：系统浮层闸 —— 控制中心 / 通知中心 / 锁屏（含解锁后
+/// 还没上滑进桌面）里返回 1。
+///
+/// 判据在 Swift 侧（`AevonRingGrip.systemOverlayBlockingRing`，复用 0.2.78 让位那套
+/// 窗口栈实证），这里只要一个 int —— 热路径上不碰字符串、不碰 prefs。
+extern int AevonGripSystemOverlayBlocked(void);
 /// V0.3.16（AevonOwnLiftV316）：自建腿抬手回调 —— 召唤成功后这根手指的**终点**。
 /// 第三个参数：0 = touchesEnded（正常抬手），1 = touchesCancelled（被系统摘链）。
 extern void AevonGripOwnLift(double x, double y, int32_t cancelled);
@@ -741,6 +747,7 @@ enum {
     AevonOwnPassBail,       // 0.28s 内没达阈值
     AevonOwnPassTap,        // 抬手没左滑
     AevonOwnPassStrict,     // V0.3.14：边缘候选但不像纯水平左滑 → 立刻还回去
+    AevonOwnPassOverlay,    // V0.3.18：系统浮层在屏（控制中心/通知中心/锁屏）→ 不接管
     AevonOwnPassKindCount
 };
 static NSInteger gAevonOwnPassByKind[AevonOwnPassKindCount];
@@ -948,6 +955,22 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
                        @"落点不在右缘呼出区 x=%.0f y=%.0f（屏 %.0fx%.0f）→ 放行"
                        "（侧滑返回/边缘滚动不受影响）", p.x, p.y, scr.width, scr.height];
         [self ownPass:"pass" bucket:AevonOwnPassBand detail:d];
+        return;
+    }
+    /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏（含「解锁了但还没上滑
+     * 进桌面」）里**不接管这根手指**。
+     *
+     * 为什么必须在落指这一刻判、并且主动 Failed：`ownSummonAtPoint:` 一旦执行就已经把
+     * `_ownSummoned` 置 YES、识别器抬进 Began，那时再拒绝呼盘，这根手指会一直被扣到
+     * 抬手 —— 在控制中心里右缘左滑会变成「划不动」，App 与系统都收不到帧。
+     * 所以这道闸的语义不是「不呼盘」，而是「这根手指根本不归我们」：判到浮层就
+     * `ownPass:` → Failed，UIKit 立刻把被 delay 的触摸补发给系统，用户该滑什么滑什么。
+     *
+     * 判在 `level == 0` 之后：落点本来就在带外的手指（绝大多数）不必付这次窗口表扫描
+     * 和一次 prefs 读取。 */
+    if (AevonGripSystemOverlayBlocked() != 0) {
+        [self ownPass:"pass" bucket:AevonOwnPassOverlay
+               detail:@"系统浮层在屏（控制中心/通知中心/锁屏）→ 不接管，触摸原样还给系统"];
         return;
     }
     _ownStart = p;
@@ -1893,3 +1916,26 @@ __attribute__((used)) static const char AevonOwnLiftV316Marker[] = "AevonOwnLift
  * 两条都不再成立。Stheno 同构：`-sc_handleArcPan:` → `-sc_pointForGestureRecognizer:`
  * → `-sc_updateSelectionAtPoint:`，它的圆盘从不经过任何旁路通道。 */
 __attribute__((used)) static const char AevonOwnFeedV317Marker[] = "AevonOwnFeedV317";
+
+/* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指。
+ * 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，
+ * 应该修改为不能通过手势触发圆盘」。根因是 `presentRing` 的守卫里根本没有「当前在不在
+ * 桌面」这一条，而自建腿是系统级识别器、全局生效。
+ * 本版把闸放在**落指那一刻**（`-touchesBegan:`），判到浮层就 `ownPass:` → Failed：
+ * 语义不是「不呼盘」，而是「这根手指根本不归我们」，UIKit 立刻把被 delay 的触摸补发给
+ * 系统 —— 否则手指会被扣到抬手，控制中心里右缘左滑变成「划不动」。
+ * 判据复用 0.2.78 让位那套窗口栈（Aevon(50) 实锤）：ControlCenterWindow(1080) /
+ * CoverSheetWindow(1050)，门槛 `!isHidden && alpha > 0.5`。Stheno 的 `_SBFZStackParticipant`
+ * 用的是切换器身份仲裁，本版不走那条（0.2.81 已判定它在 iOS 17 上不可靠）。 */
+__attribute__((used)) static const char AevonSceneGateV318Marker[] = "AevonSceneGateV318";
+
+/* V0.3.18（AevonSpringUnifyV318）：圆盘弹簧统一到 (response, dampingFraction)。
+ * 用户 2026-10-30：「圆盘中图标的动画……为什么我感觉没有 Stheno 的动画流畅」。
+ * Stheno 的二进制里 4 处引用 `SwiftUI.Animation.spring(response:dampingFraction:blendDuration:)`，
+ * 参数存在 `SettingEnv.__dampingFraction`（设置页有 DampingFractionControlView 滑条）
+ * —— 即「一套 SwiftUI 弹簧 + 一个全局阻尼值」。而 Aevon 之前同一个盘上跑五种弹法，
+ * 阻尼比 0.34 / 0.55 / 0.676 / 0.78 各弹各的，划过还用的是 iOS 7 的老
+ * `usingSpringWithDamping`（duration 语义与 response 不是一个物理量）。
+ * 本版：AevonSpring 按 ω0 = 2π/response、k = ω0²、c = 2ζω0 换算成 UIKit 物理参数，
+ * 五处共用一条 ζ 谱；划过改成单个 UIViewPropertyAnimator + 停在当前值重发（连续弹道）。 */
+__attribute__((used)) static const char AevonSpringUnifyV318Marker[] = "AevonSpringUnifyV318";

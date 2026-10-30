@@ -74,6 +74,24 @@
 			<string>隐藏把手</string>
 		</dict>
 		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>infoText</key>
+			<string>0.3.18 新增（AevonSceneGateV318），默认关 = 默认拦截。关着的时候，控制中心、通知中心、锁屏（包括「已经解锁但还没上滑进桌面」那一段）里右缘左滑不会呼出圆盘 —— 那几个界面上圆盘会盖在系统浮层上面，既看不到该看的东西也点不动。
+
+打开它就恢复旧行为（任何界面都能呼盘）。这是一条退路：万一你实际想要的正是「CC 里也能呼盘」，不必重装插件。
+
+改动立即生效，不用注销。</string>
+			<key>key</key>
+			<string>RingAnywhere</string>
+			<key>label</key>
+			<string>系统浮层里也能呼盘</string>
+		</dict>
+		<dict>
 			<key>action</key>
 			<string>aevonOpenGrip</string>
 			<key>cell</key>

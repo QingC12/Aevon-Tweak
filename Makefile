@@ -27,6 +27,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonEntryHost.swift \
     Sources/AevonEdgeEntry.swift \
     Sources/AevonRingMenu.swift \
+    Sources/AevonSpring.swift \
     Sources/AevonRingStore.swift \
     Sources/AevonAppList.swift \
     Sources/AevonAppIcon.swift \

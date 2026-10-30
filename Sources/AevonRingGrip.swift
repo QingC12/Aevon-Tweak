@@ -410,6 +410,43 @@ enum AevonRingGrip {
         return CGRect(x: screenW - w, y: core.minY, width: w, height: core.height)
     }
 
+    // MARK: - 系统浮层闸（V0.3.18，AevonSceneGateV318）
+
+    /// 控制中心 / 通知中心 / 锁屏（含「解锁了但还没上滑进桌面」）里**不许呼盘**。
+    ///
+    /// 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，
+    /// 应该修改为不能通过手势触发圆盘」。根因很直接：`presentRing` 的守卫只有「入口窗口
+    /// 可用 / 0.6s 节流 / 圆盘未开」，**全代码没有一条「当前在不在桌面」的判据**，
+    /// 而自建腿是系统级 `UIGestureRecognizer`、全局生效 —— 所以那三处一律能呼。
+    ///
+    /// 判据直接复用 0.2.78 让位那套（Aevon(50) 窗口栈实锤，见
+    /// `AevonEntryHost.overlayWindowPresent`）：`ControlCenterWindow`（level 1080）/
+    /// `CoverSheetWindow`（level 1050，锁屏与通知中心共用同一个窗口）。
+    ///
+    /// **只复用判据、不复用它的状态**：那套是 0.25 秒一拍的定时巡检，且
+    /// `guard AevonWindowManager.hasAnyWindow else { return }` —— 呼盘时通常没有浮窗，
+    /// 巡检停着，读到的只会是过期值。这里做**同步一次扫描**：纯只读窗口表，
+    /// 不 hitTest、不碰任何触摸热路径（只有落点命中右缘带时才会走到）。
+    ///
+    /// alpha 门槛取 0.5 与让位那套一致：CoverSheet 这类窗口常年存在，只是收起时 alpha
+    /// 极低，用 0.5 才不会把「常驻但不可见」误判成「在屏」（0.2.70 键盘误报同款教训）。
+    ///
+    /// 返回命中的窗口类名；空串 = 没有系统浮层，可以呼盘。
+    static func systemOverlayBlockingRing() -> String {
+        // 退路开关（默认关 = 默认拦截）。要从「拦」退回「不拦」不必重装。
+        if AevonPrefs.bool("RingAnywhere", default: false) { return "" }
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows {
+                guard !w.isHidden, w.alpha > 0.5 else { continue }
+                let name = String(describing: type(of: w))
+                if name.contains("ControlCenterWindow") || name.contains("CoverSheetWindow") {
+                    return name
+                }
+            }
+        }
+        return ""
+    }
+
     /// V0.3.8（AevonGripZoneV308）：触发范围模式。
     /// `false`（默认）= 只在把手那条带内呼盘，带外的右缘左滑归还给侧滑返回插件；
     /// `true` = 右缘任意高度都能呼盘（0.3.7 的行为，作为兜底）。

@@ -184,7 +184,8 @@ jobs:
                    AevonEdgePadV314 AevonGripHardcodeV315 AevonHandleTopV315 \
                    AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 \
                    AevonOwnLogAsciiV315 AevonOwnLiftV316 \
-                   AevonOwnFeedV317 AevonHoverTrackV317; do
+                   AevonOwnFeedV317 AevonHoverTrackV317 \
+                   AevonSceneGateV318 AevonSpringUnifyV318; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -780,9 +781,10 @@ jobs:
           # Grip.plist：呼出区页 = 两条滑条 + 两个开关（说明一律走 footerText，滑条不挂 infoText）
           [ -s "$ICON_DIR/Grip.plist" ] || { echo "::error::bundle 缺少 Grip.plist（呼出区二级页）"; exit 1; }
           # V0.3.13（AevonGripZoneV313）：GripY+GripLen+GripWidth 三滑条 → GripZoneW+GripZoneH 两滑条。
+          # V0.3.18（AevonSpringUnifyV318）：+RingSpringDamping（划过动画阻尼，临时项）→ 三滑条。
           GRIP_SLIDER_TOTAL=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c 'PSSliderCell' || true)
-          [ "$GRIP_SLIDER_TOTAL" -eq 2 ] \
-            || { echo "::error::Grip.plist 滑杆数不是 2（GripZoneW + GripZoneH，实际 $GRIP_SLIDER_TOTAL）"; exit 1; }
+          [ "$GRIP_SLIDER_TOTAL" -eq 3 ] \
+            || { echo "::error::Grip.plist 滑杆数不是 3（GripZoneW + GripZoneH + RingSpringDamping，实际 $GRIP_SLIDER_TOTAL）"; exit 1; }
           GRIP_SLIDER_RANGE=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c -e '<key>min</key>' -e '<key>max</key>' || true)
           [ "$GRIP_SLIDER_RANGE" -ge 4 ] \
             || { echo "::error::Grip.plist 滑杆缺 min/max 量程（V0.0.29 护栏：缺量程退化成 0~1）"; exit 1; }
@@ -809,7 +811,7 @@ jobs:
           fi
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'GripHandleHidden' \
             || { echo "::error::Root.plist 缺少 GripHandleHidden（隐藏把手没提到一级页）"; exit 1; }
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];ok=(len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15 Grip.plist: 宽度 5pt/1~60 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15 Grip.plist 量程不符（应 5pt/1~60、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];z=[i for i in it if i.get('key')=='RingSpringDamping'];ok=(len(z)==1 and float(z[0].get('min',0))==0.5 and float(z[0].get('max',0))==1.0 and float(z[0].get('default',0))==0.72 and len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15 Grip.plist: 宽度 5pt/1~60 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15 Grip.plist 量程不符（应 5pt/1~60、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
             || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
@@ -1135,7 +1137,8 @@ jobs:
           # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）→ 6 个改 7 个。
           # V0.3.15（AevonGripHardcodeV315）：7 → 5。GripHookProbe / GripSystemYield / GripOwnLeg
           # 三个默认开启的呼出手势开关全部写进代码、从设置页移除；GripHandleHidden 从二级页提上来。
-          [ "$ROOT_SW" -eq 5 ] || { echo "::error::一级页开关数不是 5（实际 $ROOT_SW）—— 0.3.15 清单：Enabled/RingGripEnabled/GripHandleHidden/LogEnabled/CrashGuard"; exit 1; }
+          # V0.3.18（AevonSceneGateV318）：+RingAnywhere（系统浮层里也能呼盘，默认关）→ 5 个改 6 个。
+          [ "$ROOT_SW" -eq 6 ] || { echo "::error::一级页开关数不是 6（实际 $ROOT_SW）—— 0.3.18 清单：Enabled/RingGripEnabled/GripHandleHidden/RingAnywhere/LogEnabled/CrashGuard"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
           # V0.2.58（AevonGripToggleV258）反转：+RingGripEnabled（隔离实验开关）
@@ -1143,7 +1146,7 @@ jobs:
           # V0.2.99（AevonGripProbeV299）：+GripHookProbe（方案 A 灰度探测开关，默认关）
           # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势，0.3.7 起默认开）
           # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）
-          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHandleHidden,LogEnabled,CrashGuard" ] \
+          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHandleHidden,RingAnywhere,LogEnabled,CrashGuard" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
           grep -q 'AevonPrefs.bool("Enabled", default: true)' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
@@ -1171,17 +1174,22 @@ jobs:
           #   ② 「划过图标时放大效果再大一点，让圆盘看起来更 Q 弹」；
           #   ③ 「手指没离开屏幕就算在圆盘里，只有离开屏幕时在盘外 / 在图标间隙里才收」。
           #
-          # ①② 落在 AevonRingMenu 的四个常量上（8 → 12pt、1.18 → 1.30、阻尼 .42 → .34、
-          #   初速 2.8 → 3.4）。这里把数值钉死在断言里：手感是用户点名要的，
-          #   以后谁想调，先在这四条上吵赢。
+          # ①② 落在 AevonRingMenu 的常量上（8 → 12pt、1.18 → 1.30）。
+          #   V0.3.18（AevonSpringUnifyV318）：弹簧参数（阻尼 .42 → .34、初速 2.8 → 3.4）
+          #   已整体退役 —— 那三个数是 iOS 7 老 API 的组合，和 Stheno 用的 SwiftUI
+          #   `spring(response:dampingFraction:)` 不是同一个物理量。现在由 AevonSpring
+          #   换算，改那三条断言为**反转**（不许再长回来）。
           grep -q 'static let hoverLift: CGFloat = 12' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::图标跳跃高度不是 12pt（用户要求 8 → 12，+50%）"; exit 1; }
           grep -q 'static let hoverScale: CGFloat = 1.30' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::划过图标的放大倍数不是 1.30（1.18 已被用户否掉：不够 Q 弹）"; exit 1; }
           grep -q 'static let hoverSpringDamping: CGFloat = 0.34' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
-            || { echo "::error::跳跃弹簧阻尼不是 0.34（阻尼越大回摆越少，Q 弹感来自低阻尼）"; exit 1; }
+            && { echo "::error::hoverSpringDamping 又回来了（V0.3.18 起圆盘全部走 AevonSpring.params，老的 duration+damping+velocity 三件套已退役）"; exit 1; }
           grep -q 'static let hoverSpringVelocity: CGFloat = 3.4' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
-            || { echo "::error::跳跃弹簧初速不是 3.4"; exit 1; }
+            && { echo "::error::hoverSpringVelocity 又回来了（V0.3.18 起用 response+dampingFraction，不再有 initialSpringVelocity）"; exit 1; }
+          # V0.3.18（AevonSpringUnifyV318）反转：划过动画改用 response（一个振荡周期）。
+          grep -q 'static let hoverSpringResponse: Double = 0.40' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::划过弹簧的 response 不是 0.40（V0.3.18 起统一到 AevonSpring）"; exit 1; }
           # 放大到 1.30 之后，命中判定再拿 frame 就会跟着膨胀 30%，隔壁图标被抢 ——
           # 一律用 bounds（不受 transform 影响）。这条是「放大」带出来的必然副作用。
           if grep -q 'icon\.frame\.width' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift"; then
@@ -4853,6 +4861,83 @@ jobs:
           strings "$MDYL" | grep -q 'AevonHoverTrackV317' \
             || { echo "::error::V0.3.17 主库缺标记 AevonHoverTrackV317"; exit 1; }
           echo "V0.3.17 校验: 自建腿每帧喂盘（召唤后先喂再判状态 + 只认本指）+ 来源改 ownleg + 权威 moved 换通道重设基线 + 划过留痕 + 看门狗未动 ✓"
+
+          # ── V0.3.18 校验（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指 ──
+          # ①判据只有一份（自建腿与借腿共用同一个函数；两边各写一套必然漂）
+          grep -q 'static func systemOverlayBlockingRing() -> String' "$RG" \
+            || { echo "::error::V0.3.18 缺 systemOverlayBlockingRing（判据必须唯一）"; exit 1; }
+          grep -q 'ControlCenterWindow' "$RG" \
+            || { echo "::error::V0.3.18 判据没看控制中心窗口"; exit 1; }
+          grep -q 'CoverSheetWindow' "$RG" \
+            || { echo "::error::V0.3.18 判据没看 CoverSheet 窗口（锁屏与通知中心共用它）"; exit 1; }
+          grep -q '!w.isHidden, w.alpha > 0.5' "$RG" \
+            || { echo "::error::V0.3.18 窗口可见性缺 alpha 门槛（CoverSheet 常年常驻，不看 alpha 会一直判成在屏）"; exit 1; }
+          # ②退路开关默认关 = 默认拦截
+          grep -q 'AevonPrefs.bool("RingAnywhere", default: false)' "$RG" \
+            || { echo "::error::V0.3.18 RingAnywhere 不是默认关（默认关才等于默认拦截）"; exit 1; }
+          grep -q 'RingAnywhere' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
+            || { echo "::error::V0.3.18 Root.plist 缺 RingAnywhere 退路开关"; exit 1; }
+          # ③两条腿各一道兜底（主闸在 ObjC 落指处）
+          BLK_CNT=$(grep -c 'AevonRingGrip.systemOverlayBlockingRing()' "$EE" || true)
+          [ "$BLK_CNT" -ge 2 ] \
+            || { echo "::error::V0.3.18 系统浮层闸只装在 $BLK_CNT 处（应 ≥2：ownLegSummon + systemLegSummon）"; exit 1; }
+          # ④主闸：落指那一刻判，判到就 Failed（不 Failed 会把手指扣到抬手 → CC 里右缘划不动）
+          grep -q 'extern int AevonGripSystemOverlayBlocked(void);' "$OWNM" \
+            || { echo "::error::V0.3.18 ObjC 侧缺 AevonGripSystemOverlayBlocked 声明"; exit 1; }
+          grep -q '@_cdecl("AevonGripSystemOverlayBlocked")' "$EE" \
+            || { echo "::error::V0.3.18 Swift 侧缺 AevonGripSystemOverlayBlocked 桥"; exit 1; }
+          BEG_SEG="$(sed -n '/^- (void)touchesBegan:/,/^- (void)touchesMoved:/p' "$OWNM")"
+          echo "$BEG_SEG" | grep -q 'if (AevonGripSystemOverlayBlocked() != 0)' \
+            || { echo "::error::V0.3.18 touchesBegan 没有系统浮层闸（CC/通知中心/锁屏里照样能呼盘）"; exit 1; }
+          echo "$BEG_SEG" | grep -q 'bucket:AevonOwnPassOverlay' \
+            || { echo "::error::V0.3.18 浮层分支没走 ownPass（不置 Failed 会把手指一直扣住）"; exit 1; }
+          OVL_LN=$(echo "$BEG_SEG" | grep -n 'AevonGripSystemOverlayBlocked()' | head -n1 | cut -d: -f1)
+          START_LN=$(echo "$BEG_SEG" | grep -n '_ownStart = p' | head -n1 | cut -d: -f1)
+          { [ -n "$OVL_LN" ] && [ -n "$START_LN" ] && [ "$OVL_LN" -lt "$START_LN" ]; } \
+            || { echo "::error::V0.3.18 浮层闸排在接管手指之后（_ownStart 已写，闸等于没装）"; exit 1; }
+          grep -q 'AevonOwnPassOverlay' "$OWNM" \
+            || { echo "::error::V0.3.18 放行分类里没有 AevonOwnPassOverlay"; exit 1; }
+          # ⑤标记进主库（`used` 纯 ASCII C 串，注释不算）
+          strings "$MDYL" | grep -q 'AevonSceneGateV318' \
+            || { echo "::error::V0.3.18 主库缺标记 AevonSceneGateV318"; exit 1; }
+          echo "V0.3.18 校验: 系统浮层闸（窗口表判据唯一 + alpha 门槛 + 落指即 Failed + 两条腿各一道 + RingAnywhere 退路）✓"
+
+          # ── V0.3.18 校验（AevonSpringUnifyV318）：圆盘弹簧统一到 (response, ζ) ──
+          SP="$GITHUB_WORKSPACE/Sources/AevonSpring.swift"
+          [ -s "$SP" ] || { echo "::error::V0.3.18 缺 Sources/AevonSpring.swift"; exit 1; }
+          grep -q 'static func params(response: Double,' "$SP" \
+            || { echo "::error::V0.3.18 AevonSpring 缺 params(response:dampingFraction:)"; exit 1; }
+          grep -q 'static func coefficients(response: Double,' "$SP" \
+            || { echo "::error::V0.3.18 AevonSpring 缺 coefficients（旋转积分器要跟同一套 ζ 谱）"; exit 1; }
+          # ①老的三件套彻底退役：duration 与 response 不是一个物理量
+          if grep -q 'usingSpringWithDamping:' "$RM"; then
+            echo "::error::V0.3.18 圆盘又用回 UIView.animate(usingSpringWithDamping:)（老 API 的 duration ≠ SwiftUI 的 response）"; exit 1
+          fi
+          # ②划过 / 入场 / 收起 三处都走 params
+          PARAM_CNT=$(grep -c 'AevonSpring.params(' "$RM" || true)
+          [ "$PARAM_CNT" -ge 3 ] \
+            || { echo "::error::V0.3.18 AevonSpring.params 只有 $PARAM_CNT 处（应 ≥3：划过 / 入场 / 收起）"; exit 1; }
+          grep -q 'AevonSpring.coefficients(response: 0.45, dampingFraction: 0.68)' "$RM" \
+            || { echo "::error::V0.3.18 旋转积分器没换到统一 ζ 谱（仍是孤立的 140/16）"; exit 1; }
+          if grep -qE 'let stiffness: CGFloat = 140' "$RM"; then
+            echo "::error::V0.3.18 旋转积分器还写死 140"; exit 1
+          fi
+          # ③连续弹道：整盘一个 animator，切换时停在当前值再重发（SwiftUI 的 retarget 同构）
+          grep -q 'private var hoverAnimator: UIViewPropertyAnimator?' "$RM" \
+            || { echo "::error::V0.3.18 缺 hoverAnimator（每图标各起一条动画 = 多弹道打架）"; exit 1; }
+          grep -q 'anim.stopAnimation(false)' "$RM" \
+            && grep -q 'anim.finishAnimation(at: .current)' "$RM" \
+            || { echo "::error::V0.3.18 切换高亮时没把动画停在当前值（会跳回起点重弹）"; exit 1; }
+          # ④阻尼只读一次（逐帧读 CFPreferences 是跨进程 IPC）
+          grep -q 'menu.hoverZ = AevonSpring.userDampingFraction()' "$RM" \
+            || { echo "::error::V0.3.18 present 没缓存 hoverZ（逐帧读 prefs 会拖慢触摸）"; exit 1; }
+          grep -q 'AevonPrefs.double("RingSpringDamping"' "$SP" \
+            || { echo "::error::V0.3.18 AevonSpring 没读 RingSpringDamping 滑条"; exit 1; }
+          grep -q 'AevonSpringUnifyV318' "$RM" \
+            || { echo "::error::V0.3.18 缺标记 AevonSpringUnifyV318"; exit 1; }
+          strings "$MDYL" | grep -q 'AevonSpringUnifyV318' \
+            || { echo "::error::V0.3.18 主库缺标记 AevonSpringUnifyV318"; exit 1; }
+          echo "V0.3.18 校验: 弹簧统一（response+ζ → mass/stiffness/damping）+ 一条弹道 retarget + 阻尼单次读 + 标记进主库 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

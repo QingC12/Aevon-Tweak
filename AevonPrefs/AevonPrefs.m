@@ -1135,6 +1135,17 @@ static NSArray *AevonBuildFallbackGrip(id target) {
                                 @"调大到 20~30 更容易划中，但会开始抢右缘附近的横向操作。");
     if (groupW != nil) [result addObject:groupW];
 
+    /* V0.3.18（AevonSpringUnifyV318）：阻尼滑条 —— **临时项**，动画定型后会连同
+     * Grip.plist 那一项一起删掉，改由 `AevonSpring.defaultDampingFraction` 定值。
+     * 兜底里也要有，否则 plist 读失败时这一页与正常页差一条，用户会以为功能没了。 */
+    id springGroup = AevonNewGroup(@"划过动画",
+                                   @"0.3.18 起划过 / 入场 / 收起 / 旋转共用一套弹簧。"
+                                   @"0.72 = 默认；往 1.0 拖最稳，往 0.5 拖最 Q。"
+                                   @"临时项，手感定型后会删掉。");
+    if (springGroup != nil) [result addObject:springGroup];
+    id springZ = AevonNewSlider(@"阻尼系数", target, @"RingSpringDamping", 0.5, 1.0, 0.72);
+    if (springZ != nil) [result addObject:springZ];
+
     return result.count > 0 ? result : nil;
 }
 
