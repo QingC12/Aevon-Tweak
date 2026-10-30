@@ -81,7 +81,7 @@
 			<key>infoText</key>
 			<string>实验（0.3.5，让路 A/B）：打开后把手完全不接触摸，右缘的手指全部交给系统边沿手势识别器接收 —— 也就是让系统手势接管呼盘。关着时是「把手为主、系统腿补充」。打开后立即生效（不用注销）。如果打开后呼不出圆盘，说明系统那只识别器在你的系统版本上接不住右缘手势，关掉即可。默认关。</string>
 			<key>key</key>
-			<string>GripYieldSystem</string>
+			<string>GripSystemYield</string>
 			<key>label</key>
 			<string>把手让路给系统手势（实验）</string>
 		</dict>

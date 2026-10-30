@@ -131,7 +131,7 @@ final class AevonRingGripView: UIView {
     /// V0.3.5（AevonGripYieldV305）：读偏好并切换让路状态。
     /// 设置页改完会走 Darwin 通知 → `AevonRingGrip.refreshFromPrefs()` → 这里，**实时生效**。
     func applyYieldMode() {
-        let want = AevonPrefs.bool("GripYieldSystem", default: false)
+        let want = AevonPrefs.bool("GripSystemYield", default: false)
         guard want != yieldMode else { return }
         yieldMode = want
         if want {
