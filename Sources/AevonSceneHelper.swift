@@ -256,3 +256,84 @@ enum AevonSceneHelper {
         }
     }
 }
+
+/// V0.3.24（AevonSceneOwnedV324）：**同一 FBScene 在本进程只允许一个呈现者**。
+///
+/// 用户 Aevon(98) #3「主悬浮窗有概率黑屏，并且同时出现两个黑屏的主悬浮窗」的结构成因：
+/// 两次开窗交错时，两扇 AevonWindowView 各自持一个 `AevonSceneHost`，而 `AevonSceneHost.init`
+/// 只用 UUID 保证 presenter 标识唯一，**从不检查这个场景是否已经被另一扇窗占着**。
+/// 两个 presenter 去呈现同一个 FBScene，结果是谁都拿不到远程层 —— 两扇一起黑。
+///
+/// Stheno 对照（SCFloatingSceneManager）：`__sessionsByBundleID` / `__hostingScenePointers`
+/// / `__hostingSceneIdentifiers` / `__hostingBundleIdentifiers` 四张表，配
+/// `sc_sessionForBundleIdentifier:` / `sc_isHostingSceneIdentifier:`。它的「一个场景一个会话」
+/// 是**表约束**，不是时序运气。
+///
+/// 这里做最小等价物：按 sceneID 登记占用者令牌。已被占用 → 拒绝创建（fail-closed，
+/// 上层走「复用现有窗」而不是新建），从结构上堵死双黑。
+///
+/// 失效保护：占用记录带续期时间戳，`AevonSceneHost` 每 0.5s 探测时续期一次；
+/// 超过 30s 没续期视为旧主已死（进程内异常路径未走 invalidate），可被接管 ——
+/// 宁可偶发接管，也不能让某个 App 因为一次漏注销永远开不了窗。
+enum AevonSceneOwnership {
+    private final class Entry {
+        let token: UUID
+        let bundleID: String
+        var renewedAt: CFTimeInterval
+        init(token: UUID, bundleID: String, renewedAt: CFTimeInterval) {
+            self.token = token
+            self.bundleID = bundleID
+            self.renewedAt = renewedAt
+        }
+    }
+
+    private static var entries: [String: Entry] = [:]
+    private static let lock = NSLock()
+    /// 超过这么久没续期 → 视为旧主已死，可接管
+    private static let staleAfter: CFTimeInterval = 30
+
+    /// 申请占用。返回 false = 该场景正在被另一扇窗呈现（调用方应放弃新建）。
+    static func claim(sceneID: String, bundleID: String) -> UUID? {
+        guard !sceneID.isEmpty else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        let now = CACurrentMediaTime()
+        if let existing = entries[sceneID], now - existing.renewedAt < staleAfter {
+            AevonLog.warn("[场景] 场景 \(sceneID) 已被 \(existing.bundleID) 占用 → 拒绝第二扇窗"
+                + "（请求方 \(bundleID)）（AevonSceneOwnedV324）")
+            return nil
+        }
+        if entries[sceneID] != nil {
+            AevonLog.warn("[场景] 场景 \(sceneID) 的旧占用已 \(Int(now - (entries[sceneID]?.renewedAt ?? now)))s "
+                + "未续期 → 判失效，由 \(bundleID) 接管（AevonSceneOwnedV324）")
+        }
+        let token = UUID()
+        entries[sceneID] = Entry(token: token, bundleID: bundleID, renewedAt: now)
+        return token
+    }
+
+    /// 续期（由 AevonSceneHost 的 0.5s 探测循环调用）。
+    static func renew(sceneID: String, token: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[sceneID], entry.token == token else { return }
+        entry.renewedAt = CACurrentMediaTime()
+    }
+
+    /// 注销（invalidate / deinit）。
+    static func release(sceneID: String, token: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[sceneID], entry.token == token else { return }
+        entries.removeValue(forKey: sceneID)
+        AevonLog.info("[场景] 场景 \(sceneID) 占用已释放（\(entry.bundleID)）（AevonSceneOwnedV324）")
+    }
+
+    /// 诊断串（窗口栈 / 取证用）。
+    static func summary() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        if entries.isEmpty { return "无占用" }
+        return entries.map { "\($0.key)=\($0.value.bundleID)" }.sorted().joined(separator: ",")
+    }
+}

@@ -2614,13 +2614,19 @@ jobs:
             && { echo "::error::0.2.61 视图层又出现按落点自动停靠（拖到边缘松手就停靠已退役）"; exit 1; } || true
           grep -q 'dockCurrent' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::0.2.61 视图层又直接调 dockCurrent（停靠唯一入口 = 点边条，走全局通道）"; exit 1; } || true
-          # ④双击窗口：只认原地轻点（≤8pt）+ 间隔 0.45s + 半径 16
-          grep -q 'floatDoubleTapGap: CFTimeInterval = 0.45' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            || { echo "::error::0.2.61 双击间隔未放宽到 0.45s"; exit 1; }
-          grep -q 'floatDoubleTapRadius: CGFloat = 16' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            || { echo "::error::0.2.61 双击半径未收到 16pt"; exit 1; }
-          grep -q 'let moved = hypot(point.x - floatBeganPoint.x' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
-            || { echo "::error::0.2.61 双击第一击缺「原地轻点」位移判定（拖完再点会被当双击）"; exit 1; }
+          # ④双击窗口：**0.3.24 起整条退役** —— 底边改为上滑关闭终止手势
+          #    （AevonBottomFlickV324，对齐 Stheno 的 __bottomLikeTouchRegions +
+          #    sc_shouldCloseForBottomUpwardFlick:）。双击三件套（间隔/半径/原地轻点
+          #    位移判定）已无任何读取者，这里改成反向网防回潮。
+          if grep -q 'private static let floatDoubleTapGap' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
+            echo "::error::0.3.24 双击间隔常量回潮（底边双击已退役，改上滑关闭）"; exit 1
+          fi
+          if grep -q 'private static let floatDoubleTapRadius' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
+            echo "::error::0.3.24 双击半径常量回潮（底边双击已退役，改上滑关闭）"; exit 1
+          fi
+          if grep -q 'floatBeganPoint = point' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
+            echo "::error::0.3.24 双击「原地轻点」落点登记回潮（无读取者，已随双击语义退役）"; exit 1
+          fi
           # ⑥停靠点一下装回：真实控件命中层 + 全局通道按窗口 frame 兜底
           grep -q 'private func installDockTapCatcher' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.61 停靠态没铺「点一下装回」命中层"; exit 1; }
@@ -5343,6 +5349,81 @@ jobs:
 
           echo "V0.3.22 校验: 跳上去停住（46pt/100ms）+ 170ms 单调回落 + 白色柔光底盘 + zPosition 置顶 + 全程等比 ✓"
           echo "V0.3.23 校验: 进度驱动径向展开（等比铺开 / 拖动跟手 / 时间兜底）+ 图标 40pt 环径重算 + 中心面板差异化 ✓"
+
+          # ── V0.3.24 校验（Aevon(98) 三项：上滑关闭 / 定时模糊 / 双黑窗）──────────────
+          WV="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
+          EE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
+          WM="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
+          SH="$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"
+
+          # ① 底边 = 上滑关闭（AevonBottomFlickV324）；按 Stheno 的
+          #    __bottomLikeTouchRegions + sc_addTerminationGestureToRegion: 模型
+          strings "$DYLIB" | grep -q 'AevonBottomFlickV324' \
+            || { echo "::error::V0.3.24 主库缺标记 AevonBottomFlickV324（底边上滑关闭没编进去）"; exit 1; }
+          grep -qF 'func handleBottomFlickPan' "$WV" \
+            || { echo "::error::V0.3.24 缺少底部上滑关闭手势"; exit 1; }
+          grep -qF 'flickDistance: CGFloat = 40' "$WV" \
+            || { echo "::error::V0.3.24 上滑位移阈值不是 40pt"; exit 1; }
+          grep -qF 'floatFlickDistance: CGFloat = 40' "$EE" \
+            || { echo "::error::V0.3.24 全局通道与视图侧的上滑阈值不同源"; exit 1; }
+          grep -qF 'floatFlickCandidate = true' "$EE" \
+            || { echo "::error::V0.3.24 全局通道没登记上滑候选"; exit 1; }
+          grep -qF '底边上滑 → 关闭浮窗（上滑' "$EE" \
+            || { echo "::error::V0.3.24 关窗必须发生在抬手（ended），否则 App 侧双投竞态会回来"; exit 1; }
+          #    反向：双击关闭不许回潮
+          if grep -v '^[[:space:]]*//' "$WV" | grep -q 'numberOfTapsRequired = 2'; then
+            echo "::error::V0.3.24 底边双击关闭不许回潮（已改上滑，AevonBottomFlickV324）"; exit 1
+          fi
+          if grep -v '^[[:space:]]*//' "$EE" | grep -q 'floatLastTapAt <= floatDoubleTapGap'; then
+            echo "::error::V0.3.24 全局通道还在判双击（AevonBottomFlickV324）"; exit 1
+          fi
+
+          # ② 盖帧：缓存入库清晰度闸 + 历史基线门槛 + 可信首帧
+          #    （AevonSharpCacheGateV324 / AevonSharpPrimeV324）
+          for s in AevonSharpCacheGateV324 AevonSharpPrimeV324; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.3.24 主库缺标记 $s"; exit 1; }
+          done
+          grep -qF 'private func admitSnapshot' "$WV" \
+            || { echo "::error::V0.3.24 缓存帧没有入库闸（模糊帧会污染盖帧源 → 定格本身就是模糊的）"; exit 1; }
+          grep -qF 'self.admitSnapshot(self.captureSnapshotImage(), tag: "空闲预抓")' "$WV" \
+            || { echo "::error::V0.3.24 空闲预抓没走入库闸"; exit 1; }
+          grep -qF 'admitSnapshot(fresh, tag: "滚动刷新")' "$WV" \
+            || { echo "::error::V0.3.24 滚动刷新没走入库闸"; exit 1; }
+          grep -qF 'need = freezeBaseTrusted ? max(base * 0.72, sharpBaseline * 0.75)' "$WV" \
+            || { echo "::error::V0.3.24 撤帧门槛没接历史清晰基线（base 被污染 = 自洽陷阱）"; exit 1; }
+          grep -qF 'primeSharpSnapshot(reason: reason)' "$WV" \
+            || { echo "::error::V0.3.24 开窗定稿没建立可信首帧（回桌面可能无图可盖）"; exit 1; }
+          grep -qF 'private var sharpBaseline: Double = 0' "$WV" \
+            || { echo "::error::V0.3.24 缺历史清晰基线变量"; exit 1; }
+
+          # ③ 开窗单飞 + 按 bundleID 去重 + 场景占用 + presenter 重建
+          #    （AevonOpenSingleFlightV324 / AevonOpenDedupV324 / AevonSceneOwnedV324 /
+          #     AevonPresenterRebuildV324）
+          for s in AevonOpenSingleFlightV324 AevonOpenDedupV324 AevonSceneOwnedV324 AevonPresenterRebuildV324; do
+            strings "$DYLIB" | grep -q "$s" \
+              || { echo "::error::V0.3.24 主库缺标记 $s"; exit 1; }
+          done
+          grep -qF 'openingToken &+= 1' "$WM" \
+            || { echo "::error::V0.3.24 开窗没有单飞令牌"; exit 1; }
+          grep -qF 'guard myToken == openingToken else {' "$WM" \
+            || { echo "::error::V0.3.24 开窗异步链没过单飞闸（两次 open 会各建一扇窗）"; exit 1; }
+          grep -qF 'incomingBundleID: bundleID)' "$WM" \
+            || { echo "::error::V0.3.24 开窗清扫没按 bundleID 去重（会保护错对象、留下真野窗）"; exit 1; }
+          grep -qF 'AevonSceneOwnership.claim' "$SH" \
+            || { echo "::error::V0.3.24 场景宿主没抢占用（两个 presenter 抢同一场景 = 双黑）"; exit 1; }
+          grep -qF 'AevonSceneOwnership.release' "$SH" \
+            || { echo "::error::V0.3.24 场景占用没有释放路径（该 App 之后永远开不了窗）"; exit 1; }
+          grep -qF 'AevonSceneOwnership.renew' "$SH" \
+            || { echo "::error::V0.3.24 场景占用没续期（30s 后会被判失效并接管）"; exit 1; }
+          grep -qF 'func rebuildPresenter' "$SH" \
+            || { echo "::error::V0.3.24 缺 presenter 重建兜底"; exit 1; }
+          grep -qF 'rebuildCount < 1' "$SH" \
+            || { echo "::error::V0.3.24 presenter 重建没有上限（会反复黑闪）"; exit 1; }
+          grep -qF 'sceneHost.rebuildPresenter(' "$WV" \
+            || { echo "::error::V0.3.24 看门没触发 presenter 重建"; exit 1; }
+
+          echo "V0.3.24 校验: 底边上滑关闭（抬手执行，取代双击）+ 盖帧清晰度闸/历史基线/可信首帧 + 开窗单飞/场景占用/presenter 重建 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

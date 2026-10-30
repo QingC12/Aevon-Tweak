@@ -16,6 +16,11 @@ import UIKit
 enum AevonWindowManager {
     private static var currentView: AevonWindowView?
     private static var currentBundleID: String?
+    /// V0.3.24（AevonOpenSingleFlightV324）：开窗单飞的单调令牌 —— 每次真正要建窗时自增，
+    /// 所有异步闭包里对不上 `openingToken` 就是过期链，直接中止。`close()` 也会自增，
+    /// 关窗即作废所有在途开窗链（否则关窗后 1.3 秒的兜底显窗会把刚关掉的窗又显出来）。
+    private static var openingToken: UInt64 = 0
+    private static var openingBundleID: String?
     /// V0.3.1（AevonKickSkipV301，用户 Aevon(79) #1 + 确认「抖踢前置幂等闸」）：
     /// **抖踢账面判据** —— 记「上一次被浮窗承载、画布被改成 430x737 的 App」。只有
     /// 真的被我们改过画布的 App，进程才可能仍按旧画布排版，才需要抖动踢把它逼回来；
@@ -524,7 +529,7 @@ enum AevonWindowManager {
         // 开窗前把「还没收干净的上一扇窗」扫一遍 —— 上一次 teardown 若被开窗打断
         // （连续快开快关），旧窗视图可能残留在入口容器上（alpha 0 的入场窗尤其看不见、
         // 摸不着、也不报错），新窗一盖上去就是一块黑。这里开窗前统一清扫。
-        enforceSingleMainWindow(reason: "开窗清扫 \(bundleID)")
+        enforceSingleMainWindow(reason: "开窗清扫 \(bundleID)", incomingBundleID: bundleID)
 
         // V0.2.50（AevonDockColumnV250）：目标 App 正在停靠列里 → 不重新开窗，
         // 直接把它装回主窗（同一个 presenter，画面不中断）。
@@ -626,6 +631,24 @@ enum AevonWindowManager {
             }
         }
 
+        // V0.3.24（AevonOpenSingleFlightV324，用户 Aevon(98) #3「主悬浮窗有概率黑屏，
+        // 并且同时出现两个黑屏的主悬浮窗」）：**开窗单飞**。
+        //
+        // 病根：open() 从入口到 `currentView = windowView` 之间隔着 asyncAfter（场景快门）
+        // 与场景准备。这段窗口里 `currentBundleID` 仍是旧值/nil，若再触发一次开窗
+        //（圆盘连点两个图标、呼盘后立刻再呼、图标双击），两次 open 都会走到创建视图那一拍，
+        // host 上就出现两扇窗：后者覆盖 currentView，前者变野窗；两扇又各自持一个 presenter
+        // 去抢同一个 FBScene —— 谁都拿不到远程层，于是「两个黑屏的主悬浮窗」。
+        //
+        // Stheno 对照：SCFloatingSceneManager 有 __sessionsByBundleID / __hostingScenePointers
+        // / __hostingSceneIdentifiers 三张表 + sc_reconcileSingleActiveWindowKeepingSession:
+        // / sc_enforceFloatingWindowLimit / sc_evictOldestSessionForIncomingWindowIfNeeded，
+        // 语义就是「后到者作废先到者」。这里用单调 token 等价实现：每次真正要建窗时自增，
+        // 闭包里对不上就是过期链，一律中止（不改任何状态、不建视图）。
+        openingToken &+= 1
+        let myToken = openingToken
+        openingBundleID = bundleID
+
         // 等待场景就绪后再承载
         // ── V0.2.95（AevonSceneFastGateV295）：0.2.49 的固定 0.15s 保守延迟退役 ──
         // Aevon(72) 六次开窗全部白付这 0.15s：走到这里之前「场景已就绪」poll 已经
@@ -638,6 +661,13 @@ enum AevonWindowManager {
         let gateDelay: TimeInterval = gateScene != nil ? 0 : 0.15
         AevonLog.info("[窗口] 开窗快门：\(bundleID) 场景\(gateScene != nil ? "已就绪 → 0 延迟直通" : "未到 → 0.15s 兜底延迟")（AevonSceneFastGateV295）")
         DispatchQueue.main.asyncAfter(deadline: .now() + gateDelay) {
+            // V0.3.24（AevonOpenSingleFlightV324）：过期链一律中止（后一次开窗已接管）
+            guard myToken == openingToken else {
+                AevonLog.info("[窗口] 开窗链已过期（\(bundleID) token \(myToken)≠\(openingToken)）"
+                    + "→ 中止，不建视图（AevonOpenSingleFlightV324）")
+                completion?(false)
+                return
+            }
             var scene = AevonSceneHelper.scene(for: bundleID)
             if scene == nil, let sid = sceneID {
                 scene = AevonSceneHelper.scene(for: sid)
@@ -1089,6 +1119,13 @@ enum AevonWindowManager {
                 + "crossfade 到活画面 + 0.965→1.0 弹簧 0.34s"
                 + "（AevonFloatTransitionV264 AevonEntryRevealV265 AevonRevealOnceV277）")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak windowView] in
+                // V0.3.24（AevonOpenSingleFlightV324）：这条兜底也必须过单飞闸 ——
+                // 两次开窗交错时，先到的那条会在 1.3s 后把**已被新链取代**的窗显出来。
+                guard myToken == openingToken else {
+                    AevonLog.info("[窗口] 兜底显窗跳过（\(bundleID) 开窗链已过期）"
+                        + "（AevonOpenSingleFlightV324）")
+                    return
+                }
                 // V0.2.79（AevonSwitchTxnV279）：兜底显窗也要过事务闸门 ——
                 // 用户在 1.3 秒内把窗关掉的话，这条闭包以前会把**已经关掉的窗**又显出来。
                 guard AevonSwitchCoordinator.shared.isAlive(switchTxn) else {
@@ -1381,6 +1418,10 @@ enum AevonWindowManager {
     private static var coveredFullscreenBundleID = ""
 
     static func close(bundleID: String, releaseOnly: Bool = false) {
+        // V0.3.24（AevonOpenSingleFlightV324）：关窗即作废所有在途开窗链 ——
+        // 否则 0.6~1.3s 后到达的兜底闭包会把刚关掉的窗又建出来（叠加成两个黑窗）。
+        openingToken &+= 1
+        openingBundleID = nil
         // V0.2.50（AevonDockColumnV250）：停靠小窗有自己的关闭路径（主窗变量不指向它）
         if currentBundleID != bundleID, dockedViews.contains(where: { $0.bundleID == bundleID }) {
             closeDocked(bundleID: bundleID, reason: "用户关闭停靠小窗")
@@ -1688,27 +1729,49 @@ enum AevonWindowManager {
     /// 降级失败就会留下第三只窗：它既不响应点击（不是 currentView），也不在停靠列里
     /// （不会重排），用户看到「多个主悬浮窗且无法关闭」。这里按身份做一次清扫，
     /// 与降级成功与否无关 —— 只要谁是野的就关谁。
-    static func enforceSingleMainWindow(reason: String) {
+    static func enforceSingleMainWindow(reason: String, incomingBundleID: String? = nil) {
         guard let host = AevonEntryHost.floatHost else { return }
         let views = host.subviews.compactMap { $0 as? AevonWindowView }
-        // V0.2.66（AevonCleanSlateV266）：单个「孤儿窗」也算 —— 上一扇窗 teardown
-        // 被打断时视图可能残留在容器上（currentView / dockedViews 都已为空），只留
-        // 一个视图虽然不构成「多窗」，但同样是一块看不见的黑底。开窗清扫把这种也收掉。
-        let orphanSingle = views.count == 1 && currentView == nil && dockedViews.isEmpty
-        guard views.count > 1 || orphanSingle else { return }
+        guard !views.isEmpty else { return }
+        /* V0.3.24（AevonOpenDedupV324）：判据从「currentView / dockedViews 名单」改成
+         * **按 bundleID 判定**。旧写法的致命处在于它拿状态做真相源，而野窗之所以是野窗，
+         * 恰恰因为 currentView 已经漂移（指向后来那扇窗）—— 用漂移后的名单清扫，等于
+         * 保护错对象、留下真野窗（用户看到的「两个黑屏主悬浮窗」）。
+         * 现在：① 与本次开窗同 bundleID 的视图**无论谁是 currentView** 一律清掉；
+         *      ② 既不是主窗、也不在停靠列的孤儿照旧清掉；
+         *      ③ 清主窗时同步把 currentView/currentBundleID 置空，避免 open 误判「已在浮窗里」。 */
+        /* 只有「同目标 App 在 host 上**不止一扇**」时才算重复。
+         * 单扇且就是主窗 → 不动它（这条 open 会走「已在浮窗里 → 置顶」，保持既有行为；
+         * 若在这里拆掉，同一 App 再点一次就会变成「拆了重建」= 白闪一下 + 重新加载）。 */
+        let incomingCount = incomingBundleID.map { id in views.filter { $0.bundleID == id }.count } ?? 0
         var removed = 0
+        var removedDocked = false
         for view in views {
-            if let main = currentView, view === main { continue }
-            if dockedViews.contains(where: { $0 === view }) { continue }
-            AevonLog.warn("[窗口] 发现野窗 \(view.bundleID)（既不是主窗也不在停靠列）→ 收掉"
-                + "（\(reason)）（AevonDockNoOrphanV262）")
+            let isMain = (currentView === view)
+            let isDocked = dockedViews.contains(where: { $0 === view })
+            let duplicatesIncoming = (incomingCount > 1 && view.bundleID == incomingBundleID)
+            let orphan = !isMain && !isDocked
+            guard duplicatesIncoming || orphan else { continue }
+            if isMain {
+                currentView = nil
+                currentBundleID = nil
+            }
+            if isDocked {
+                dockedViews.removeAll { $0 === view }
+                removedDocked = true
+            }
+            AevonLog.warn("[窗口] 清理重复/野窗 \(view.bundleID)"
+                + "（主窗=\(isMain ? "是" : "否") 停靠=\(isDocked ? "是" : "否") "
+                + "同目标=\(duplicatesIncoming ? "是" : "否")）→ 收掉"
+                + "（\(reason)）（AevonDockNoOrphanV262 AevonCleanSlateV266 AevonOpenDedupV324）")
             view.teardown()
             view.removeFromSuperview()
             removed += 1
         }
         if removed > 0 {
-            AevonLog.info("[窗口] 单窗清扫完成：收掉 \(removed) 只野窗（\(reason)）"
-                + "（AevonDockNoOrphanV262 AevonCleanSlateV266）")
+            AevonLog.info("[窗口] 单窗清扫完成：收掉 \(removed) 扇（\(reason)）"
+                + "（AevonDockNoOrphanV262 AevonCleanSlateV266 AevonOpenDedupV324）")
+            if removedDocked { publishDockStages() }
         }
     }
 

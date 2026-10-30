@@ -2054,3 +2054,62 @@ __attribute__((used)) static const char AevonSceneGateV318Marker[] = "AevonScene
  * 本版：AevonSpring 按 ω0 = 2π/response、k = ω0²、c = 2ζω0 换算成 UIKit 物理参数，
  * 五处共用一条 ζ 谱；划过改成单个 UIViewPropertyAnimator + 停在当前值重发（连续弹道）。 */
 __attribute__((used)) static const char AevonSpringUnifyV318Marker[] = "AevonSpringUnifyV318";
+
+/* ── V0.3.24（用户 Aevon(98) 三项：底边穿透 / 回桌面模糊 / 双黑窗）──────────────
+ * 本版把「底边双击关闭」整体换成**上滑关闭终止手势**。理由不是手感，是竞态：
+ * 双击第 2 击一落指就 close()，而 close 第一拍把存活心跳写 0；同一根手指由
+ * backboardd **异步双投**给 App 进程，App 侧要看心跳才整根丢弃 —— 谁先到决定吞不吞，
+ * 所以「有概率触发 App 内操作」。上滑把关窗推到**抬手**，手指存续期间浮窗一直活着。
+ * Stheno 对照：`SCFloatingContainerView.__bottomLikeTouchRegions` 挂
+ * `sc_addTerminationGestureToRegion:`，判据 `sc_shouldCloseForBottomUpwardFlick:`；
+ * 移动在 `__allEdgeTouchRegions` —— 底边本来就不承担移动。 */
+
+/* V0.3.24（AevonBottomFlickV324）：底边上滑 = 关闭（落指只登记候选，抬手才执行）。
+ * 判据两条必居其一：位移 ≥40pt，或 24pt / 180ms 的快甩；方向占优 ×1.2。
+ * 视图侧另有速度 700pt/s 兜底（UIPanGestureRecognizer 才有 velocity，全局通道没有）。 */
+__attribute__((used)) static const char AevonBottomFlickV324Marker[] = "AevonBottomFlickV324";
+
+/* V0.3.24（AevonSharpCacheGateV324）：**缓存帧入库闸** + 历史清晰基线 + 撤帧门槛改绝对量。
+ * 用户报「回桌面时悬浮窗的内容会从定格模糊变为清晰的实时画面」。三处实证：
+ *   ①`scheduleSnapshotRecapture` 直接写缓存，只过「8×8 明暗差」和「五点不全黑」，
+ *     没有清晰度校验 —— 0.6s 定时很容易落在转场/降级瞬间，抓到系统低清表面；
+ *   ②`installDarkFreeze` 的撤帧门槛是 `base × 0.72`，base 取**当次盖帧图**的清晰度：
+ *     盖帧图模糊 → base 低 → 门槛跟着低 → 早撤 → 露出仍在重排的画面（自洽陷阱）；
+ *   ③缓存与现场都取不到时直接不盖帧，用户全程看系统低清快照。
+ * 现在：入库过 `sharpBaseline × 0.85` 的闸；基线取同窗历史**最大值**（模糊帧抬不高它）；
+ * 撤帧门槛 `max(base × 0.72, baseline × 0.75)`，base 不可信时直接用 `baseline × 0.75`。
+ * Stheno 对照：`SCStartupCoverView` 的封面是启动图，天然不会模糊 —— Aevon 没有 owned
+ * 场景，抹不掉系统低清这一层，能做的是「用可信的清晰定格盖住它」。 */
+__attribute__((used)) static const char AevonSharpCacheGateV324Marker[] = "AevonSharpCacheGateV324";
+
+/* V0.3.24（AevonSharpPrimeV324）：开窗定稿那一拍**强制抓一张可信帧**（alpha=0 用户无感），
+ * 抓不到就 0.4s 重试、上限 3 次 —— 保证盖帧永远不会因为「没有可用图」而缺席。 */
+__attribute__((used)) static const char AevonSharpPrimeV324Marker[] = "AevonSharpPrimeV324";
+
+/* V0.3.24（AevonOpenSingleFlightV324）：**开窗单飞**。open() 从入口到
+ * `currentView = windowView` 之间隔着 asyncAfter 与场景准备，这段里 currentBundleID
+ * 仍是旧值/nil；再触发一次开窗（圆盘连点两个图标 / 呼盘后立刻再呼 / 图标双击）就会
+ * 两次都走到建视图那一拍 —— 后者覆盖 currentView，前者变野窗。用单调 token 让后到者
+ * 作废先到者，所有异步节点首句对 token。Stheno 对照：`sc_evictOldestSessionForIncomingWindowIfNeeded`。 */
+__attribute__((used)) static const char AevonOpenSingleFlightV324Marker[] = "AevonOpenSingleFlightV324";
+
+/* V0.3.24（AevonOpenDedupV324）：开窗清扫的判据从「currentView / dockedViews 名单」
+ * 改成**按 bundleID**。旧写法的致命处是拿状态做真相源 —— 野窗之所以是野窗，恰恰因为
+ * currentView 已经漂移（指向后来那扇），用漂移后的名单清扫等于保护错对象、留下真野窗。
+ * 只有「同目标 App 在 host 上不止一扇」才算重复（单扇主窗不动，保持「已在浮窗里 → 置顶」）。 */
+__attribute__((used)) static const char AevonOpenDedupV324Marker[] = "AevonOpenDedupV324";
+
+/* V0.3.24（AevonSceneOwnedV324）：**同一 FBScene 在本进程只允许一个呈现者**。
+ * 这是「两个黑屏主悬浮窗」的结构性堵口：两个 presenter 呈现同一个 FBScene 时谁都拿不到
+ * 远程层，两扇一起黑。`AevonSceneHost.init` 现在先抢占用，抢不到直接返回 nil（fail-closed），
+ * 第二扇窗根本建不出来；失败路径与 invalidate 都会释放，30s 不续期可被接管。
+ * Stheno 对照：`__sessionsByBundleID` / `__hostingScenePointers` / `__hostingSceneIdentifiers`
+ * 三张表 + `sc_sessionForBundleIdentifier:` —— 它的「一个场景一个会话」是**表约束**，不是时序运气。 */
+__attribute__((used)) static const char AevonSceneOwnedV324Marker[] = "AevonSceneOwnedV324";
+
+/* V0.3.24（AevonPresenterRebuildV324）：presenter 自动重建（救单窗黑屏的最后一档）。
+ * 已有的救援只有「重申前台」与「定格自愈」，两者都假定 presenter 还活着。但远程层连接
+ * 断了以后写多少次 fg 都不会有画面（cs 恒 ≠2）—— 只能手动关开。这一档直接换一个 presenter，
+ * 每窗上限 1 次，且只在「曾经有过画面」时触发（首次加载慢不算死）。
+ * Stheno 对照：`sc_failSession:error:` / `sc_finalizeSession:` —— 会话失败有明确收尾。 */
+__attribute__((used)) static const char AevonPresenterRebuildV324Marker[] = "AevonPresenterRebuildV324";

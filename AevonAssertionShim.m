@@ -1021,7 +1021,8 @@ __attribute__((used)) static const char AevonMissReasonV219Marker[] = "AevonMiss
  *   AevonFloat53V221             = 内容区比例固定 5:3 + min 等比 letterbox（内容完整可见，绝不裁切）
  *   AevonFloatBarLongPressV221   = 底/左/右边条改「长按 0.3s 拖动移动」（pan 通道）
  *   AevonFloatBarHoldV221        = 全局通道边条长按裁决（0.3s 达成才拖动，提前跑远=放弃）
- *   AevonFloatBottomDblCloseV221 = 底边双击 = 关闭浮窗（✕ 保留）
+ *   AevonFloatBottomDblCloseV221 = 底边双击 = 关闭浮窗（✕ 0.3.24 退役：底边改上滑关闭，
+ *                                  标记继续收容在这里，CI 历史串只加不能改）
  *   AevonRestoreDefaultV101      = 退休收容：顶部双击恢复默认随顶部手势区移除（CI 历史串只加不能改）
  * ────────────────────────────────────────────────────────────────── */
 __attribute__((used)) static const char AevonFloat53V221Marker[] = "AevonFloat53V221";

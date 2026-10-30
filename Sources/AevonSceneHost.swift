@@ -54,10 +54,15 @@ final class AevonSceneHost {
     private(set) var hasContent = false
 
     private var presenter: AnyObject?
-    private let presentationView: UIView
+    /// V0.3.24（AevonPresenterRebuildV324）：改成 var —— 重建 presenter 时要整块换掉
+    private var presentationView: UIView
     private var probeTimer: Timer?
     private var ticks = 0
     private var invalidated = false
+    /// V0.3.24（AevonSceneOwnedV324）：本窗在 AevonSceneOwnership 里的占用令牌
+    private var ownershipToken: UUID?
+    /// V0.3.24（AevonPresenterRebuildV324）：本窗重建过几次（上限 1，防反复重建抖动）
+    private var rebuildCount = 0
     /// V0.2.32（AevonForegroundProbeV232）：假首帧只记一次，避免刷屏
     private var fakeAliveLogged = false
     /// V0.2.51（AevonDouyinWarmupV251）：画布预热期截止时刻（0 = 无预热）。
@@ -68,6 +73,18 @@ final class AevonSceneHost {
     init?(scene: AnyObject, sceneID: String, bundleID: String,
           isSelfBuilt: Bool = false, mainResized: Bool = false,
           canvasWarmupDelay: TimeInterval = 0) {
+        /* V0.3.24（AevonSceneOwnedV324）：先抢场景占用，抢不到就不建第二扇。
+         * 这一层是「两个黑屏主悬浮窗」的结构性堵口 —— 两个 presenter 呈现同一个 FBScene
+         * 时谁都拿不到远程层，两扇一起黑；有了这张表，第二扇窗根本建不出来。 */
+        guard let owned = AevonSceneOwnership.claim(sceneID: sceneID, bundleID: bundleID) else {
+            AevonLog.warn("[场景] \(bundleID) 的场景 \(sceneID) 已有呈现者 → 放弃建第二扇窗"
+                + "（AevonSceneOwnedV324）")
+            return nil
+        }
+        /* 失败路径必须把占用还回去：failable init 里 `return nil` 不会走 deinit，
+         * 不还的话这张表会把该场景占满 30 秒（stale 兜底才放行）—— 等于一次
+         * 「presenter 创建失败」就让这个 App 半分钟内开不了窗。 */
+        self.ownershipToken = owned
         self.isSelfBuilt = isSelfBuilt
         self.mainResized = mainResized
         self.canvasWarmupDeadline = canvasWarmupDelay > 0 ? CACurrentMediaTime() + canvasWarmupDelay : 0
@@ -77,12 +94,14 @@ final class AevonSceneHost {
         // 垫片返回 ObjC id，桥接过来是 Any；统一按 AnyObject 持有
         guard let created = AevonPresenterCreate(scene, identifier) as AnyObject? else {
             AevonLog.warn("[场景] 无法为 \(bundleID) 创建 presenter（uiPresentationManager 不可用）")
+            AevonSceneOwnership.release(sceneID: sceneID, token: owned)
             return nil
         }
         let presenter: AnyObject = created
         guard let view = AevonPresenterView(presenter) as? UIView else {
             AevonPresenterDestroy(presenter)
             AevonLog.warn("[场景] presenter 没有 presentationView，放弃承载")
+            AevonSceneOwnership.release(sceneID: sceneID, token: owned)
             return nil
         }
 
@@ -136,6 +155,10 @@ final class AevonSceneHost {
     private func probe() {
         guard !invalidated else { return }
         ticks += 1
+        // V0.3.24（AevonSceneOwnedV324）：0.5s 一拍续期，让占用表知道这扇窗还活着
+        if let token = ownershipToken {
+            AevonSceneOwnership.renew(sceneID: sceneID, token: token)
+        }
 
         if !hasContent && contentLooksAlive() && !contentReallyAlive() && !fakeAliveLogged {
             fakeAliveLogged = true
@@ -241,6 +264,11 @@ final class AevonSceneHost {
     func invalidate() {
         guard !invalidated else { return }
         invalidated = true
+        // V0.3.24（AevonSceneOwnedV324）：释放场景占用，让同一 App 之后还能再开窗
+        if let token = ownershipToken {
+            AevonSceneOwnership.release(sceneID: sceneID, token: token)
+            ownershipToken = nil
+        }
         onFirstContent = nil
         let screen = UIScreen.main.bounds.size
         // V0.2.42（AevonMainSceneResizeV242）：S2 必须还原主场景画布 ——
@@ -658,6 +686,54 @@ final class AevonSceneHost {
         guard !invalidated else { return }
         container.isUserInteractionEnabled = enabled
         presentationView.isUserInteractionEnabled = enabled
+    }
+
+    /* V0.3.24（AevonPresenterRebuildV324，用户 Aevon(98) #3「主悬浮窗有概率黑屏」+ 确认要
+     * 「presenter 自动重建」这一档兜底）：
+     *
+     * 已有的救援手段只有「重申前台」（AevonSceneHelper.setForeground）与「定格自愈」——
+     * 两者都假定 presenter 还活着，只是场景被系统置后台。但 presenter 本身也可能死：
+     * 远程层连接断了以后，写多少次 fg 都不会有画面（cs 恒 ≠2），用户看到的就是一扇
+     * 黑窗，只能手动关掉重开。
+     *
+     * 这一档直接换一个 presenter（先 invalidate 旧的，再 create 新的），保留容器与几何，
+     * 相当于「不关窗的关窗重开」。纪律：
+     *   · 每窗上限 1 次（反复重建 = 反复黑闪，比黑着更糟）；
+     *   · 只在「曾经有过画面」（hasContent/hadContent）时触发 —— 首次加载慢不算死；
+     *   · 重建后立刻重申一次前台（新 presenter 不会自己抢前台）。
+     * Stheno 对照：SCFloatingSceneManager 的 sc_failSession:error: / sc_finalizeSession: /
+     * sc_handoffActiveSessionFromClosingSession: —— 它的会话失败有明确收尾与交接对象，
+     * 不是无限重申。 */
+    @discardableResult
+    func rebuildPresenter(reason: String) -> Bool {
+        guard !invalidated, rebuildCount < 1 else { return false }
+        rebuildCount += 1
+        AevonLog.warn("[场景] presenter 重建（第 \(rebuildCount) 次，\(reason)，\(bundleID)）"
+            + "→ 释放旧呈现者后新建（AevonPresenterRebuildV324）")
+        let host = container
+        let oldSize = presentationView.bounds.size
+        teardownPresenter()
+        let identifier = "Aevon-\(bundleID)-r\(UUID().uuidString.prefix(8))"
+        guard let created = AevonPresenterCreate(scene, identifier) as AnyObject?,
+              let fresh = AevonPresenterView(created) as? UIView else {
+            AevonLog.warn("[场景] presenter 重建失败：无法创建新呈现者（\(bundleID)）"
+                + "（AevonPresenterRebuildV324）")
+            return false
+        }
+        presenter = created
+        presentationView = fresh
+        fresh.frame = host.bounds
+        fresh.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        fresh.isUserInteractionEnabled = true
+        host.addSubview(fresh)
+        hasContent = false
+        ticks = 0
+        AevonSceneHelper.setForeground(scene, true, reason: "重建后重申前台", force: true)
+        startSyncing()
+        AevonLog.info("[场景] presenter 已重建（旧视图 \(Int(oldSize.width))x\(Int(oldSize.height))"
+            + " → 新视图 \(Int(fresh.bounds.width))x\(Int(fresh.bounds.height))，已重申前台）"
+            + "（AevonPresenterRebuildV324）")
+        return true
     }
 
     private func teardownPresenter() {

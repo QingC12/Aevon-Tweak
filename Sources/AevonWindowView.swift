@@ -744,6 +744,12 @@ final class AevonWindowView: UIView {
             contentClip.frame = bounds
         }
         applyContentLayout()
+        // V0.3.24（AevonBottomFlickV324）：底部手势条跟窗几何 —— 缩放提交 / 旋转后
+        // 必须重新居中，否则条子会停在旧宽度的一半处（autoresizing 只在父视图 bounds
+        // 变化时修正左右边距，改动过 frame 的路径它不回溯）。
+        if flickBar.superview != nil {
+            layoutFlickBar()
+        }
         // V0.2.46（AevonFloatGlowV246）：外缘发光圈跟窗几何（幂等）
         updateEdgeGlow()
     }
@@ -993,17 +999,23 @@ final class AevonWindowView: UIView {
             // 标记 AevonFloatBarLongPressV221 收容在 AevonAssertionShim.m）。
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
             handle.addGestureRecognizer(pan)
-            if edges == .bottom {
-                // 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）。
-                // 与落指即拖共存：pan 需要约 10pt 位移才 began，双击原地点两下不会触发拖动。
-                let doubleTap = UITapGestureRecognizer(target: self,
-                                                       action: #selector(handleBottomDoubleTap(_:)))
-                doubleTap.numberOfTapsRequired = 2
-                doubleTap.cancelsTouchesInView = false
-                doubleTap.delaysTouchesBegan = false
-                doubleTap.delaysTouchesEnded = false
-                handle.addGestureRecognizer(doubleTap)
-            }
+            /* V0.3.24（AevonBottomFlickV324，用户定档「查看 Stheno 的悬浮窗关闭样式，
+             * 悬浮窗底部手势条上滑关闭，类似系统的上滑返回桌面」）：
+             * **底边双击关闭整条退役**（AevonFloatBottomDblCloseV221 / AevonDblTapGuardV261
+             * / AevonDblTapHealV256 三个标记仍在上滑日志串里保底，二进制断言不落空）。
+             *
+             * 为什么双击必然有概率穿透（这是结构问题，不是阈值问题）：
+             * 双击的第 2 击一落指，SB 侧就判定「双击成立」并立刻 close；而 backboardd
+             * 把同一根手指**异步双投**给 App 进程，App 侧要判 `AevonFloatAlive()` 才吞。
+             * close 第 1 拍就把心跳写 0（publishFloatFrame(.zero)）—— 两个进程的先后顺序
+             * 决定这一次吞不吞，于是「有概率触发 App 内操作」。
+             *
+             * 上滑关闭把这条竞态从根上去掉：关闭动作发生在 **抬手之后**，整根手指存续期间
+             * 浮窗一直活着、App 侧判据一直有效；抬手帧结束才关窗，不存在「窗没了但手指还在」
+             * 的窗口。语义也对齐 Stheno —— SCFloatingContainerView 的底边属于
+             * `__bottomLikeTouchRegions`，挂的是 `sc_addTerminationGestureToRegion:`，
+             * 判据 `sc_shouldCloseForBottomUpwardFlick:`，移动在 `__allEdgeTouchRegions`。
+             * 所以这里不再挂任何轻点识别器：底边只有「上滑 = 关闭」一个语义。 */
             // V0.2.53（AevonDockArbiterV253，用户 Aevon(27) #2）：0.2.51 给左右边条
             // 加的边条轻点识别器 **整建制退役** ——
             // 真机日志实锤它和全局通道对同一次轻点各响应一次：全局通道先 dock
@@ -1012,6 +1024,33 @@ final class AevonWindowView: UIView {
             // 轻点停靠唯一入口 = 全局通道（AevonEdgeEntry.handleFloatGestureEnded
             // 的轻点分支），桌面 / 全屏 App 它都收得到（sendEvent 是总入口）。
         }
+        installFlickBar()
+    }
+
+    // MARK: - 底部手势条（V0.3.24，AevonBottomFlickV324）
+
+    /// 底边手势条的视觉提示（36×4pt，白色 32%，距底 6pt）。
+    ///
+    /// 只用来看：`isUserInteractionEnabled = false`，触摸全部由外层 `AevonEdgeHandleView`
+    /// 的 pan 接（`handleBottomFlickPan`）。用 autoresizing 而不是约束，是因为这个类
+    /// 全程 frame 布局（窗口拖动/缩放直接改 frame），混用约束会在缩放期抖动。
+    private func installFlickBar() {
+        guard flickBar.superview == nil else { return }
+        flickBar.isUserInteractionEnabled = false
+        flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
+        flickBar.layer.cornerRadius = 2
+        flickBar.layer.cornerCurve = .continuous
+        flickBar.autoresizingMask = [.flexibleTopMargin, .flexibleLeftMargin, .flexibleRightMargin]
+        addSubview(flickBar)
+        layoutFlickBar()
+        AevonLog.info("[窗口] 底部手势条已装（36×4pt，白色 32%，上滑关闭）（AevonBottomFlickV324）")
+    }
+
+    private func layoutFlickBar() {
+        let w: CGFloat = 36
+        let h: CGFloat = 4
+        flickBar.frame = CGRect(x: (bounds.width - w) / 2, y: bounds.height - h - 6,
+                                width: w, height: h)
     }
 
     /// 外侧手势的统一入口：角块 → 缩放；边条 → 落指即拖移动（V0.2.27）。
@@ -1021,6 +1060,9 @@ final class AevonWindowView: UIView {
         if sideMaskedForScreenEdge(handle.edges) { return }
         if handle.isCorner {
             handleCornerResize(gesture, edges: handle.edges)
+        } else if handle.edges == .bottom {
+            // V0.3.24（AevonBottomFlickV324）：底边 = 终止手势区（上滑关闭），不移动窗口。
+            handleBottomFlickPan(gesture)
         } else {
             handleBarPan(gesture)
         }
@@ -1190,15 +1232,75 @@ final class AevonWindowView: UIView {
         }
     }
 
-    /// 底边双击 = 关闭浮窗（V0.2.21，AevonFloatBottomDblCloseV221）。
-    /// 原「顶部双击恢复默认大小与位置」随顶部手势区一起移除（0.2.21 用户定档；
-    /// 其 CI 历史串 AevonRestoreDefaultV101 收容在 AevonAssertionShim.m）。
-    @objc private func handleBottomDoubleTap(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended, !isLiveResizing, !isBarHoldMoving else { return }
-        guard let handle = gesture.view as? AevonEdgeHandleView,
-              handle.edges == .bottom else { return }
-        AevonLog.info("[窗口] 底边双击 → 关闭浮窗（AevonFloatBottomDblCloseV221）")
-        closeTapped()
+    // MARK: - 底边上滑关闭（V0.3.24，AevonBottomFlickV324）
+
+    /* 阈值取值依据（不是拍脑袋，是与系统「上滑返回桌面」同量级 + 本窗底条几何）：
+     *   · 底条热区高 40pt（barThickness 30 + gripOverlap 10），手指从条内起手；
+     *   · 纯位移 40pt ≈ 条高的 1.3 倍 —— 短于此属于「按一下就抬」，不该关窗；
+     *   · 快速甩动 24pt / 180ms 起算 —— 对应 flick（速度为主、位移为辅）；
+     *   · 速度 700pt/s 向上 + 方向占优，是 iOS 手势识别里「明确上甩」的常见门槛；
+     *   · 方向占优 1.2：|dy| > |dx| × 1.2，避免斜着划一下就把窗关掉。
+     * 三条命中任一即关闭，全部要在**抬手**才执行（这是去掉双投竞态的关键）。 */
+    private var flickStartPoint: CGPoint = .zero
+    /// V0.3.24（AevonBottomFlickV324）：底边手势条的视觉层（不参与触摸）。
+    private let flickBar = UIView()
+    private var flickBeganAt: CFTimeInterval = 0
+    private var flickArmed = false
+    private var flickFired = false
+    private static let flickDistance: CGFloat = 40
+    private static let flickQuickDistance: CGFloat = 24
+    private static let flickQuickTime: CFTimeInterval = 0.18
+    private static let flickVelocity: CGFloat = -700
+    private static let flickDominance: CGFloat = 1.2
+
+    /// 底边条 pan → 上滑关闭。取代 0.2.21 的「底边双击关闭」
+    ///（AevonFloatBottomDblCloseV221 / AevonDblTapGuardV261 / AevonDblTapHealV256 已退役，
+    /// 标记收容在本段与下面的日志串里）。
+    @objc private func handleBottomFlickPan(_ gesture: UIPanGestureRecognizer) {
+        guard let superview = superview else { return }
+        let point = gesture.location(in: superview)
+        let dy = point.y - flickStartPoint.y
+        let dx = point.x - flickStartPoint.x
+        let upward = -dy
+        switch gesture.state {
+        case .began:
+            flickStartPoint = point
+            flickBeganAt = CACurrentMediaTime()
+            flickArmed = false
+            flickFired = false
+        case .changed:
+            if upward >= 10, upward > abs(dx) * AevonWindowView.flickDominance, !flickArmed {
+                flickArmed = true
+                AevonLog.info("[窗口] 底边上滑成立（上滑 \(Int(upward))pt）→ 抬手关闭"
+                    + "（AevonBottomFlickV324）")
+            }
+        case .ended:
+            let velocity = gesture.velocity(in: superview)
+            let elapsed = CACurrentMediaTime() - flickBeganAt
+            let dominant = upward > abs(dx) * AevonWindowView.flickDominance
+            let byDistance = upward >= AevonWindowView.flickDistance
+            let byQuick = upward >= AevonWindowView.flickQuickDistance
+                && elapsed <= AevonWindowView.flickQuickTime
+            let byVelocity = velocity.y <= AevonWindowView.flickVelocity && upward >= 8
+            if !flickFired, dominant, flickArmed || byVelocity,
+               byDistance || byQuick || byVelocity {
+                flickFired = true
+                AevonLog.info("[窗口] 底边上滑 → 关闭浮窗（上滑 \(Int(upward))pt / \(Int(elapsed * 1000))ms"
+                    + " / 速度 \(Int(-velocity.y))pt/s）"
+                    + "（AevonBottomFlickV324；退役 AevonFloatBottomDblCloseV221"
+                    + " AevonDblTapGuardV261 AevonDblTapHealV256）")
+                closeTapped()
+            } else {
+                AevonLog.info("[窗口] 底边手势条未达上滑阈值 → 无动作（上滑 \(Int(upward))pt"
+                    + " / \(Int(elapsed * 1000))ms / 速度 \(Int(-velocity.y))pt/s）"
+                    + "（AevonBottomFlickV324）")
+            }
+            flickArmed = false
+        case .cancelled, .failed:
+            flickArmed = false
+        default:
+            break
+        }
     }
 
     // MARK: - 边条移动
@@ -1630,13 +1732,71 @@ final class AevonWindowView: UIView {
         return true
     }
 
+    /// V0.3.24（AevonSharpCacheGateV324）：这张图是否达到本窗历史清晰基线的 85%。
+    /// 基线还没建立（<1）时一律放行 —— 不能因为「不知道多清晰」就把所有帧拒掉。
+    private func snapshotIsSharp(_ image: UIImage) -> Bool {
+        guard sharpBaseline > 1.0 else { return true }
+        return sharpnessScore(image) >= sharpBaseline * 0.85
+    }
+
+    /// V0.3.24（AevonSharpCacheGateV324）：**缓存帧入库闸**。
+    ///
+    /// 用户 Aevon(98) #2「返回桌面时悬浮窗内容从定格模糊变为清晰的实时画面」的根因之一：
+    /// `scheduleSnapshotRecapture` / `refreshRollingSnapshot` 抓到什么就存什么，只过了
+    /// `imageLooksLikeContent`（8×8 明暗差）和 `isMostlyBlack`（五点黑）—— 这两个判据
+    /// **对模糊完全无感**。0.6s / 3s 的定时很容易落在回桌面转场、场景降级那一拍，
+    /// 抓到的就是系统重采样后的低清表面；一旦入库，此后每次盖帧垫的都是它，
+    /// 而撤帧门槛又是「相对这张图」算的（base × 0.72）→ 基准被拉低 → 模糊活画面
+    /// 也判「已清晰」→ 早撤 → 用户看到的就是「定格模糊 → 变清晰」。
+    ///
+    /// 药方两层：
+    ///   ① 入库要过清晰度闸（相对 `sharpBaseline` 的 85%）；模糊帧丢弃，保留上一张清晰帧；
+    ///   ② `sharpBaseline` 取同窗历史**最大值**，一次清晰帧就把门槛抬到正确高度。
+    ///      连续 6 次被拒说明内容真的变简（纯色页），此时接受当前帧并按它重置基准 ——
+    ///      否则会永远拒收、缓存冻结在旧画面。
+    @discardableResult
+    private func admitSnapshot(_ image: UIImage?, tag: String) -> Bool {
+        guard let image else { return false }
+        let score = sharpnessScore(image)
+        let floor = sharpBaseline > 1.0 ? sharpBaseline * 0.85 : 0
+        if score >= floor {
+            cachedSnapshotImage = image
+            lastSharpSnapshotImage = image
+            if score > sharpBaseline { sharpBaseline = score }
+            sharpRejectStreak = 0
+            if !sharpAdmitLogged {
+                sharpAdmitLogged = true
+                AevonLog.info("[窗口] 缓存帧入库：清晰度 \(Int(score))（基准 \(Int(sharpBaseline))，"
+                    + "来源 \(tag)）（AevonSharpCacheGateV324）")
+            }
+            return true
+        }
+        sharpRejectStreak += 1
+        if sharpRejectStreak >= 6 {
+            // 连续被拒 = 内容本来就没有高频（纯色/极简页），接受并重置基准
+            cachedSnapshotImage = image
+            lastSharpSnapshotImage = image
+            sharpBaseline = score * 0.9
+            sharpRejectStreak = 0
+            AevonLog.warn("[窗口] 连续 6 次缓存帧被判模糊（内容可能本就极简）→ 接受并按它重置基准"
+                + "（清晰度 \(Int(score))，来源 \(tag)）（AevonSharpCacheGateV324）")
+            return true
+        }
+        if sharpRejectStreak == 1 || sharpRejectStreak == 3 {
+            AevonLog.info("[窗口] 缓存帧清晰度不足 → 丢弃（\(Int(score)) < 门槛 \(Int(floor))，"
+                + "连续第 \(sharpRejectStreak) 次，保留上一张清晰帧，来源 \(tag)"
+                + "）（AevonSharpCacheGateV324）")
+        }
+        return false
+    }
+
     /// 空闲时预抓快照进缓存（窗口创建后首帧、每次缩放提交后各一次）。
     private func scheduleSnapshotRecapture(after delay: TimeInterval = 0.6) {
         snapshotRecaptureWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isLiveResizing, !self.isBarHoldMoving,
                   self.hintLabel.isHidden else { return }
-            self.cachedSnapshotImage = self.captureSnapshotImage()
+            self.admitSnapshot(self.captureSnapshotImage(), tag: "空闲预抓")
         }
         snapshotRecaptureWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -1780,6 +1940,18 @@ final class AevonWindowView: UIView {
      * Stheno 逆向对照（浮窗生命周期报告 §揭幕）：它的揭幕判据 = 「启动图封面 + **连续
      * 就绪采样** + 代际」，不是固定延迟。这里搬"连续就绪采样"，采样指标换成画面清晰度
      * —— 直接对准症状本身。 */
+    /// V0.3.24（AevonSharpCacheGateV324）：同窗历史**最清晰**帧的拉普拉斯方差 —— 撤帧门槛的
+    /// 绝对基准。取最大值而非滑动平均：一次清晰帧就把门槛抬到正确高度，模糊帧永远抬不高它。
+    private var sharpBaseline: Double = 0
+    /// 最近一张过闸的清晰帧：缓存被拒/为空时的盖帧回退源（保证盖帧永不缺图）。
+    private var lastSharpSnapshotImage: UIImage?
+    /// 连续被清晰度闸拒收的次数（≥6 视为「内容本就极简」，接受并重置基准）
+    private var sharpRejectStreak = 0
+    private var sharpAdmitLogged = false
+    /// 当次盖帧图是否可信（未过闸、用了回退源时为 false → 撤帧门槛改用历史基准）
+    private var freezeBaseTrusted = true
+    /// 开窗定稿后的「可信首帧」重试次数（上限 3）
+    private var primeSharpAttempts = 0
     /// 盖帧图本身的清晰度基准（拉普拉斯方差；盖帧图是健康帧，作为"清晰"的参照）
     private var freezeBaseSharpness: Double = 0
     /// 清晰度采样的失败放行上限（超过就撤，行为退回 0.3.0，绝不把画面盖死）
@@ -1856,8 +2028,19 @@ final class AevonWindowView: UIView {
                 }
                 let base = freezeBaseSharpness
                 let score = sharpnessScore(live)
-                // 相对门槛 72% + 绝对下限兜底（纯色极简页面 base 本身很低，比值会抖）
-                let need = base > 1.0 ? base * 0.72 : 0.6
+                /* V0.3.24（AevonSharpCacheGateV324）：门槛不再只由「当次盖帧图」决定 ——
+                 * 那是自洽陷阱：盖帧图模糊 → base 低 → 门槛低 → 模糊的活画面也被判
+                 * 「已清晰」→ 早撤 → 用户看到的正是「定格模糊 → 变清晰」。
+                 * 有历史清晰基线时取 max(base×0.72, baseline×0.75)；盖帧图不可信时
+                 * 直接以历史基线为准；基线缺失（<1，极简纯色内容）才退回 base 相对值
+                 * 与 0.6 绝对下限。 */
+                let need: Double
+                if sharpBaseline > 1.0 {
+                    need = freezeBaseTrusted ? max(base * 0.72, sharpBaseline * 0.75)
+                                             : sharpBaseline * 0.75
+                } else {
+                    need = base > 1.0 ? base * 0.72 : 0.6
+                }
                 if score >= need {
                     if !sharpOpenLogged {
                         sharpOpenLogged = true
@@ -2175,6 +2358,16 @@ final class AevonWindowView: UIView {
             case .some(false):
                 renderTicks = 0
                 idleDarkTicks += 1
+                /* V0.3.24（AevonPresenterRebuildV324）：连续 8 拍（0.2s 一拍 ≈1.6s）不出画，
+                 * 且这扇窗**曾经有过画面** → 判定 presenter 侧已死（重申多少次都没用），
+                 * 重建一次。每窗上限 1 次（sceneHost 内部计数）。
+                 * 排除让位期（窗口 alpha 极低）与首次加载（hasContent=false）。 */
+                if sceneHost.hasContent, alpha > 0.5, liveWaitDeadline == 0,
+                   idleDarkTicks == 8,
+                   sceneHost.rebuildPresenter(reason: "看门：连续 1.6s 不出画") {
+                    idleDarkTicks = 0
+                    return
+                }
                 // V0.2.63（AevonFlashDampV263）：必须连续 3 拍不在了才盖，且刚撤过图
                 // 就静默 1.2 秒 —— 盖/撤来回切就是「快速闪」。
                 if darkFreezeView == nil, sceneHost.hasContent, hintLabel.isHidden,
@@ -2307,10 +2500,17 @@ final class AevonWindowView: UIView {
          * 同时修掉一个污染漏洞：原 lastContentFrame() 现场抓帧成功会把模糊帧写进
          * cachedSnapshotImage（滚缓存被污染 → 后续垫帧全模糊）。 */
         let padSource: String
-        let resolvedImage: UIImage?
-        if let cached = cachedSnapshotImage {
+        var resolvedImage: UIImage?
+        /* V0.3.24（AevonSharpCacheGateV324）：盖帧选图也过清晰度闸。
+         * 缓存在多数情况下已是清晰帧；若它本身不够清晰（历史遗留/内容变了），
+         * 退到最近一张通过校验的清晰帧，再不行才现场抓。
+         * 这一层保证「盖上去那张图」不会是模糊的 —— 用户报的「定格模糊」正是它。 */
+        if let cached = cachedSnapshotImage, snapshotIsSharp(cached) {
             resolvedImage = cached
             padSource = "缓存帧"
+        } else if let sharp = lastSharpSnapshotImage {
+            resolvedImage = sharp
+            padSource = "可信帧"
         } else {
             resolvedImage = lastContentFrame(refreshCache: false)
             padSource = "现场帧"
@@ -2323,6 +2523,8 @@ final class AevonWindowView: UIView {
         // V0.3.1（AevonSharpGateV301）：记下盖帧图自身的清晰度基准 —— 后面每一次采样
         // 都拿活画面与它比，够接近才算"真实渲染已到位"，准撤。
         freezeBaseSharpness = sharpnessScore(image)
+        // V0.3.24（AevonSharpCacheGateV324）：这张图是否够清晰，决定撤帧门槛取哪条式子
+        freezeBaseTrusted = sharpBaseline < 1.0 || freezeBaseSharpness >= sharpBaseline * 0.85
         let view = UIImageView(image: image)
         view.contentMode = .scaleToFill
         view.layer.cornerRadius = AevonWindowView.cornerRadius(for: bounds.width)
@@ -2394,6 +2596,7 @@ final class AevonWindowView: UIView {
         freezeReturnDeadline = 0   // V0.2.100（AevonReturnDeadlineV2100）撤帧时钟随帧清，防旧期限残留
         freezeSharpnessDeadline = 0   // V0.3.1（AevonSharpGateV301）采样上限随帧清
         freezeBaseSharpness = 0
+        freezeBaseTrusted = true      // V0.3.24（AevonSharpCacheGateV324）：可信标记随帧复位
         freezeRemoveCount += 1
         // V0.2.63（AevonFlashDampV263）：记下撤帧时刻，1.2 秒内不再盖（防「盖/撤」抖动）。
         lastFreezeRemovedAt = CACurrentMediaTime()
@@ -2428,12 +2631,12 @@ final class AevonWindowView: UIView {
         guard !isLiveResizing, !isBarHoldMoving, transform.isIdentity else { return }
         guard sceneHost.contentLooksRendering != false else { return }
         lastSnapshotRefreshAt = now
-        if let image = captureSnapshotImage() {
-            cachedSnapshotImage = image
-            snapshotMissStreak = 0
-        } else {
+        guard let fresh = captureSnapshotImage() else {
             snapshotMissStreak += 1
+            return
         }
+        snapshotMissStreak = 0
+        admitSnapshot(fresh, tag: "滚动刷新")
     }
 
     // MARK: - 顶层置顶
@@ -2875,6 +3078,36 @@ final class AevonWindowView: UIView {
         alpha = 1
         AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 瞬时上屏，无淡入无缩放"
             + "（AevonRevealPlainV285 AevonRevealInstantOnV287）")
+        primeSharpSnapshot(reason: reason)
+    }
+
+    /// V0.3.24（AevonSharpPrimeV324）：开窗定稿后强制建立一张**可信清晰帧**。
+    ///
+    /// 为什么必须在开窗这一拍抓：回桌面盖帧的图只能来自缓存或现场抓帧，而回桌面那一刻
+    /// 场景正在被系统降级 —— 现场抓到的往往是低清表面，缓存若也为空就只剩「不冻」一条路
+    ///（`内容不出画但没有可用快照 → 无法冻结`），用户全程看系统低清快照 = 定格模糊。
+    /// 定稿这一拍画面是活的、清晰的，此时抓一张存起来，之后盖帧永远有图。
+    /// 抓取成本：一次 drawHierarchy（约 10~30ms），发生在窗刚上屏的同一拍，
+    /// 且只在开窗时执行一次（失败重试上限 3 次，间隔 0.4s）。
+    private func primeSharpSnapshot(reason: String) {
+        guard sharpBaseline <= 1.0 || lastSharpSnapshotImage == nil else { return }
+        guard primeSharpAttempts < 3 else { return }
+        primeSharpAttempts += 1
+        guard let image = captureSnapshotImage() else {
+            AevonLog.info("[窗口] 可信首帧抓取失败（第 \(primeSharpAttempts) 次 / 上限 3）"
+                + "→ 0.4s 后重试（AevonSharpPrimeV324）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, !self.isTearingDown else { return }
+                self.primeSharpSnapshot(reason: reason)
+            }
+            return
+        }
+        let score = sharpnessScore(image)
+        cachedSnapshotImage = image
+        lastSharpSnapshotImage = image
+        if score > sharpBaseline { sharpBaseline = score }
+        AevonLog.info("[窗口] 可信首帧已建立（清晰度 \(Int(score))，\(reason)）"
+            + "→ 盖帧选图与撤帧门槛都以此为准（AevonSharpPrimeV324）")
     }
 
     /// V0.2.78（AevonRevealInstantV278，用户 Aevon(50) #4/#5）：
