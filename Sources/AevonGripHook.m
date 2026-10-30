@@ -294,6 +294,8 @@ static CFTimeInterval gAevonOwnSummonStamp = 0;
 /* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
 extern void AevonGripOwnLegKick(void);
+/* V0.3.12：认领入口的前置声明（定义在自建识别器之后；Swift 侧用 silgen_name 直链符号）。 */
+extern void AevonGripOwnLegClaim(void);
 /* V0.3.11：类型值取证也在 AevonGripLegObserve 里触发（那时边沿识别器实例就在手上）。 */
 static void AevonOwnProbeGestureType(id recog, const char *cn);
 static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
@@ -1046,7 +1048,7 @@ static id AevonOwnLookupManager(void) {
                 if (inst != nil) { found = inst; break; }
             }
         } else {
-            AevonGripOwnLog("census", @"_UISystemGestureManager 类不存在（UIKitCore 已加载但没这个类）");
+            AevonGripOwnLog("census", "_UISystemGestureManager 类不存在（UIKitCore 已加载但没这个类）");
         }
     }
     /* ① SB 侧单例：17.3.1 上类存在，但此前普查「无候选方法」——
