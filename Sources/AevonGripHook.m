@@ -2007,10 +2007,30 @@ __attribute__((used)) static const char AevonGifHoverV322Marker[] = "AevonGifHov
  * GPU 开销又开回来。抬起的图标同时 `zPosition = 1000` 画在邻居上面。 */
 __attribute__((used)) static const char AevonGifHaloV322Marker[] = "AevonGifHaloV322";
 
-/* V0.3.22（AevonGifEntranceV322）：展开入场去掉过冲。
- * 录屏里图标从召唤点飞出来、边飞边长大，一次都没有放大过头再缩回去；
- * 0.3.20/0.3.21 的 1.06 过冲在 21 个图标同时入场时会让盘面「嗡」一下。 */
-__attribute__((used)) static const char AevonGifEntranceV322Marker[] = "AevonGifEntranceV322";
+/* V0.3.23（AevonRingUnfoldV323）：圆盘「从一点长成一个圆」—— 进度驱动的径向展开。
+ *
+ * 用户给的 Stheno 录屏逐帧量出来的事实：整簇图标**先叠在同一个点上**，然后一起
+ * 向外铺开、边铺边长大，铺开全程「间距 ÷ 图标尺寸」几乎不变 —— 也就是最终布局的
+ * 一个等比缩小版在持续放大。所以半径与图标缩放**共用同一个标量 s**，21 个图标
+ * 之间没有任何相位差（0.3.22 之前是「同时弹射 + 按 index 错峰 0.018s」，不是这个形态）。
+ *
+ * 进度 = max(时间曲线, 拖动曲线)：手指划得快长得快（用户要的「跟手」），
+ * 手指停住也会在 0.55s 内自己长完，永远不会卡在半个盘上。
+ * 曲线是 smoothstep（两端导数为 0），没有过冲 —— 21 个图标同时过冲会让盘面「嗡」一下。 */
+__attribute__((used)) static const char AevonRingUnfoldV323Marker[] = "AevonRingUnfoldV323";
+
+/* V0.3.23（AevonRingIcon40V323）：图标 35 → **40pt**，环径整套跟着放。
+ * 弧间距 42 → 46、内圈基准 60 → 64、径向步进 39 → 44、自适应系数 0.83 → 0.86。
+ * 21 个 App（8/13）实测：半径 60/99 → **64/108**，最外缘 116.5 → 128。
+ * 内圈 64 是物理下限（圆心盘 39 + 半图标 20 + 5pt 间隙），再小 40pt 图标会压到中心盘。 */
+__attribute__((used)) static const char AevonRingIcon40V323Marker[] = "AevonRingIcon40V323";
+
+/* V0.3.23（AevonHubPanelV323）：中心盘与外圈图标**刻意做成两种东西**。
+ * 用户：「中心的面板图标和外圈的图标存在一些差异」。
+ * 外圈 = 40pt 原生 App 图标 + 白晕 + 逐图标阴影；中心 = 玻璃面板（两层同心盘、
+ * 连续圆角、更亮底面）+ 52pt 34% 圆角的方形按钮 —— 没有白晕、没有图标阴影，
+ * 不会被误读成「第 22 个 App」。 */
+__attribute__((used)) static const char AevonHubPanelV323Marker[] = "AevonHubPanelV323";
 
 /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指。
  * 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，

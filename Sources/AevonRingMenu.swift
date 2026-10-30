@@ -44,7 +44,6 @@ final class AevonRingIcon: UIView {
      * 落地里带**一记余弹**（用户点名要的），但一定会结束。 */
     private enum HoverMotion {
         case idle
-        case entrance
         case rise
         case land
     }
@@ -233,33 +232,9 @@ final class AevonRingIcon: UIView {
         case .land:
             return AevonHoverKeyframes.sample(AevonHoverKeyframes.landKeys, at: elapsed,
                                               from: hoverMotionFrom)
-        case .entrance:
-            return AevonHoverKeyframes.sample(AevonHoverKeyframes.entranceKeys, at: elapsed,
-                                              from: hoverMotionFrom)
         case .idle:
             return hoverLifted ? AevonHoverKeyframes.lifted : .ground
         }
-    }
-
-    /// 入场：0.34 → 0.82 → 0.958 → 0.994 → 1.00，260ms，带 `delay` 错峰。
-    ///
-    /// V0.3.22（AevonGifEntranceV322）：去掉 0.3.20 那版的 1.06 过冲。
-    /// GIF 里图标从召唤点飞出来、边飞边长大，**一次都没有放大过头再缩回去**；
-    /// 21 个图标同时过冲会让整个盘面「嗡」一下，那个震感是负资产。
-    func playHoverEntrance(after delay: TimeInterval) {
-        let anim = AevonHoverKeyframes.animation(AevonHoverKeyframes.entranceKeys,
-                                                 from: .init(lift: 0, scale: 0.34),
-                                                 style: .entrance)
-        anim.beginTime = CACurrentMediaTime() + delay
-        // 延时期间必须显示第一帧（0.34），否则会先以终点（1.0）露一帧再「缩小重来」
-        anim.fillMode = .both
-        layer.transform = CATransform3DIdentity
-        layer.removeAnimation(forKey: AevonRingIcon.hoverKey)
-        layer.add(anim, forKey: AevonRingIcon.hoverKey)
-        hoverMotion = .entrance
-        hoverMotionStart = anim.beginTime
-        hoverMotionFrom = .init(lift: 0, scale: 0.34)
-        hoverLifted = false
     }
 
     /// 被划过：**100ms 抬到 `hoverLift` 并停住**（GIF 的「跳上去」）。
@@ -378,18 +353,19 @@ final class AevonRingIcon: UIView {
 final class AevonRingMenu: UIView {
     private static var current: AevonRingMenu?
 
-    /* V0.3.21（AevonRingIcon35V321）：图标 40 → **35pt**（用户 Aevon(97) 定档）。
+    /* V0.3.23（AevonRingIcon40V323）：图标 35 → **40pt**（用户本轮要求）。
      *
-     * 连同 `radii(forCounts:)` 的环距与基准一起收：
-     *   弧间距 46 → 42、内圈基准 62 → 60、相邻圈径向步进 44 → 39，
-     *   自适应系数 0.78 → 0.83（保证 35pt 能被撑满，而不是被 0.78 算成 32）。
-     * 21 个 App（8/13）实测结果：半径 62/106 → **60/99**，图标 38 → **35**，
-     * 最外缘 126 → 116.5 —— 整体更紧，中心盘反而没变（37.5，见 layoutHub 的自适应式）。
+     * 0.3.21 为了收紧盘面把图标收到 35，现在要放大回来，环径必须**一起**放：
+     *   弧间距 42 → 46、内圈基准 60 → 64、相邻圈径向步进 39 → 44、
+     *   自适应系数 0.83 → 0.86（40 / 46 ≈ 0.87 是「图标刚好不互相碰到」的上限，
+     *   0.86 留 0.5pt 余量；取 0.83 会把 46pt 弧间距算成 38.2，40pt 图标撑不满）。
+     * 21 个 App（8/13）实测：半径 60/99 → **64/108**，最外缘 116.5 → **128**。
      *
-     * ⛔ 内圈 60 已经贴到物理下限：圆心半径 24 + 图标半径 17.5 + 18pt 间隙 = 59.5。
-     * 再小图标就会压到中心底盘上（0.2.10 那版「中心图标被盖住」就是这么来的）。 */
-    private static let iconSize: CGFloat = 35
-    private static let centerSize: CGFloat = 48
+     * ⛔ 内圈 64 也是物理下限：圆心盘半径 39 + 图标半径 20 + 5pt 间隙 = 64。
+     * 再小 40pt 图标就会压到中心盘上（0.2.10 那版「中心图标被盖住」就是这么来的）。
+     * `layoutHub` 里的底盘半径是按内圈半径反算的，改这里它会自己缩，不用手调。 */
+    private static let iconSize: CGFloat = 40
+    private static let centerSize: CGFloat = 52
     /// 命中半径系数
     private static let hitFactor: CGFloat = 0.95
     /* V0.3.19（AevonHoverTrailV319）：命中滞回。
@@ -656,6 +632,20 @@ final class AevonRingMenu: UIView {
 
     private var presentedAt: CFTimeInterval = 0
 
+    // MARK: - V0.3.23（AevonRingUnfoldV323）：展开进度
+    //
+    // 整个「长成圆盘」只由**一个标量**驱动，见 AevonRingUnfold 的文件头。
+    // 存成字段而不是局部变量，是因为拖动回调要写它（`unfoldDragProgress`），
+    // 而逐帧步进在读它 —— 两个入口都必须看到同一份进度。
+    private var unfoldLink: CADisplayLink?
+    /// 当前铺开到哪（0 = 全叠在圆心，1 = 完全展开）
+    private var unfoldProgress: CGFloat = 1
+    /// 拖动贡献的进度（只增不减，防止手指回撤时盘面往回收）
+    private var unfoldDragProgress: CGFloat = 0
+    private var unfoldStartedAt: CFTimeInterval = 0
+    /// 召唤点 —— 拖动曲线的原点。圆盘是**从手指召唤它的那个点**长出来的。
+    private var unfoldOrigin: CGPoint?
+
     /// V0.2.69（AevonRingIdleFixV269）：圆盘视图与把手上还有没有活跃触摸。
     /// 静默看门狗的「ended 真漏发」判据 —— 手指物理在屏上时 UIKit 一定把
     /// touch 挂在命中视图（圆盘全屏视图 / 把手控件）上，查得到就不是漏发。
@@ -694,18 +684,26 @@ final class AevonRingMenu: UIView {
         trackLayer.lineWidth = 1.5
         layer.addSublayer(trackLayer)
 
-        // V0.2.10（AevonRingHubV210）：圆心底盘（两层同心圆，纯图层，不参与触摸）
+        /* V0.2.10（AevonRingHubV210）：圆心底盘（两层同心圆，纯图层，不参与触摸）
+         * V0.3.23（AevonHubPanelV323）：**中心盘与外圈图标刻意做成两种东西** ——
+         *   外圈 = 40pt 原生 App 图标 + 白晕 + 逐图标阴影（一个个「物件」）；
+         *   中心 = 无图标语义的**玻璃面板**：两层同心盘（层 + 内孔）、连续圆角、
+         *          更亮的底面、更细的描边，再叠一层面板里的圆角方「按钮」。
+         * 用户要的「中心的面板图标和外圈的图标存在一些差异」就是这条：
+         * 外圈是 App，中心是「面板入口」，视觉语言必须不一样，否则会被当成第 22 个 App。 */
         hubPlate.isUserInteractionEnabled = false
-        hubPlate.backgroundColor = UIColor(white: 1.0, alpha: 0.07)
+        hubPlate.backgroundColor = UIColor(white: 1.0, alpha: 0.10)
         hubPlate.layer.borderWidth = 1.0
-        hubPlate.layer.borderColor = UIColor(white: 1.0, alpha: 0.13).cgColor
+        hubPlate.layer.borderColor = UIColor(white: 1.0, alpha: 0.16).cgColor
+        hubPlate.layer.cornerCurve = .continuous
         hubPlate.layer.zPosition = 0
         addSubview(hubPlate)
 
         hubInner.isUserInteractionEnabled = false
-        hubInner.backgroundColor = UIColor(white: 1.0, alpha: 0.05)
+        hubInner.backgroundColor = UIColor(white: 1.0, alpha: 0.06)
         hubInner.layer.borderWidth = 1.0
-        hubInner.layer.borderColor = UIColor(white: 1.0, alpha: 0.10).cgColor
+        hubInner.layer.borderColor = UIColor(white: 1.0, alpha: 0.12).cgColor
+        hubInner.layer.cornerCurve = .continuous
         hubInner.layer.zPosition = 0
         addSubview(hubInner)
 
@@ -716,8 +714,13 @@ final class AevonRingMenu: UIView {
         centerButton.frame = CGRect(x: 0, y: 0, width: AevonRingMenu.centerSize, height: AevonRingMenu.centerSize)
         // V0.2.10（AevonRingHubV210）：填充改渐变（底色交给 CAGradientLayer，按钮自身透明）
         centerButton.backgroundColor = .clear
-        centerButton.layer.cornerRadius = AevonRingMenu.centerSize / 2
-        centerGradient.cornerRadius = AevonRingMenu.centerSize / 2
+        /* V0.3.23（AevonHubPanelV323）：圆心从「圆」改成**圆角更大的方面板**。
+         * 外圈图标是 26% 圆角的 App 图标，这里是 34% —— 同为方形但更圆、更大（52pt），
+         * 加上它没有白晕、没有图标阴影，一眼就能分出「这是面板入口，不是 App」。 */
+        centerButton.layer.cornerRadius = AevonRingMenu.centerSize * 0.34
+        centerButton.layer.cornerCurve = .continuous
+        centerGradient.cornerRadius = AevonRingMenu.centerSize * 0.34
+        centerGradient.cornerCurve = .continuous
         centerGradient.startPoint = CGPoint(x: 0.18, y: 0.02)
         centerGradient.endPoint = CGPoint(x: 0.82, y: 1.0)
         centerGradient.colors = [
@@ -726,13 +729,13 @@ final class AevonRingMenu: UIView {
         ]
         centerButton.layer.insertSublayer(centerGradient, at: 0)
         centerButton.layer.shadowColor = UIColor.black.cgColor
-        centerButton.layer.shadowOpacity = 0.45
-        centerButton.layer.shadowRadius = 12
-        centerButton.layer.shadowOffset = CGSize(width: 0, height: 3)
+        centerButton.layer.shadowOpacity = 0.40
+        centerButton.layer.shadowRadius = 14
+        centerButton.layer.shadowOffset = CGSize(width: 0, height: 4)
         // 圆心图标：四宫格（表示「应用列表 / 面板」）
         // V0.2.11（AevonRingGlyphTopV211）：图标不再挂在按钮上（UIButton 的 imageView 层级
         // 由 UIKit 决定，蓝色渐变一插入就可能压住它）—— 改成独立视图，zPosition 最高。
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 21, weight: .semibold)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 23, weight: .semibold)
         if let symbol = UIImage(systemName: "square.grid.2x2.fill", withConfiguration: symbolConfig) {
             centerGlyph.image = symbol
             centerGlyph.tintColor = .white
@@ -761,6 +764,8 @@ final class AevonRingMenu: UIView {
         centerHoldTimer?.invalidate()
         displayLink?.invalidate()
         displayLink = nil
+        unfoldLink?.invalidate()
+        unfoldLink = nil
     }
 
     // MARK: - 几何
@@ -783,10 +788,12 @@ final class AevonRingMenu: UIView {
     ///   内层半径 = 底盘半径 − 6，至少 30。
     /// 一圈布局（内圈半径更大）时自动放大，多圈挤压时自动缩小，永远不与图标相交。
     private func layoutHub() {
-        let innerRadius = ringRadii.first ?? 60
+        let innerRadius = ringRadii.first ?? 64
         let iconHalf = (icons.first.map { $0.bounds.width } ?? AevonRingMenu.iconSize) / 2
         let plateRadius = min(46, max(35, innerRadius - iconHalf - 5))
-        let innerHole = max(30, plateRadius - 6)
+        // V0.3.23：内孔从「盘半径 − 6」放开到「− 8」—— 40pt 图标时盘半径 39，
+        // 内孔 31 刚好把 52pt 的中心按钮（半对角 26.2）完整留在里面，不压到环上。
+        let innerHole = max(30, plateRadius - 8)
 
         hubPlate.bounds = CGRect(x: 0, y: 0, width: plateRadius * 2, height: plateRadius * 2)
         hubPlate.center = ringCenter
@@ -796,7 +803,7 @@ final class AevonRingMenu: UIView {
         hubInner.center = ringCenter
         hubInner.layer.cornerRadius = innerHole
 
-        let glyphSide: CGFloat = 22
+        let glyphSide: CGFloat = 24
         centerGlyph.frame = CGRect(x: 0, y: 0, width: glyphSide, height: glyphSide)
         centerGlyph.center = ringCenter
     }
@@ -819,18 +826,19 @@ final class AevonRingMenu: UIView {
     /// 上限压到 maxRadius（不顶屏幕边）。
     ///
     /// V0.3.21（AevonRingIcon35V321）：46 / 62 / 44 三个数一起收到 **42 / 60 / 39**，
-    /// 与图标 35pt 配套。39 = 35 + 4pt 径向间隙，42 = 35 + 7pt 弧上间隙。
+    /// V0.3.23（AevonRingIcon40V323）：与图标 40pt 配套。
+    /// 44 = 40 + 4pt 径向间隙，46 = 40 + 6pt 弧上间隙，内圈 64 = 圆心盘 39 + 20 + 5。
     private func radii(forCounts counts: [Int]) -> [CGFloat] {
         guard !counts.isEmpty else { return [] }
-        let spacing: CGFloat = 42
-        let inner: CGFloat = 60
+        let spacing: CGFloat = 46
+        let inner: CGFloat = 64
         let limit = maxRadius
         var result: [CGFloat] = []
         var previous: CGFloat = 0
         for (index, count) in counts.enumerated() {
-            let base = inner + 39 * CGFloat(index)
+            let base = inner + 44 * CGFloat(index)
             var r = max(base, spacing * CGFloat(count) / (2 * .pi))
-            r = max(r, previous + 39)
+            r = max(r, previous + 44)
             r = min(r, limit)
             result.append(r)
             previous = r
@@ -897,12 +905,13 @@ final class AevonRingMenu: UIView {
             let step = 360 / CGFloat(max(count, 1))
             // 相邻圈错开半个步进：图标不会在上下方向连成一条直线，视觉更自然
             let offset: CGFloat = (ringIndex % 2 == 1) ? step / 2 : 0
-            // V0.0.31（AevonRingIcon35V321）：图标大小自适应 —— 按本圈弧间距缩放，
-            // 挤的时候自动变小、疏的时候最多到 `iconSize`（35pt，0.3.21 从 40 收下来）。
-            // 系数 0.78 → 0.83：0.78 会把 47pt 的弧间距算成 36.7 → 再被 35 截到 35，
-            // 内圈 8 个时仍然只有 32.8，撑不满 35。0.83 让「疏」的那一圈真的能到 35。
+            // V0.3.23（AevonRingIcon40V323）：图标大小自适应 —— 按本圈弧间距缩放，
+            // 挤的时候自动变小、疏的时候最多到 `iconSize`（40pt）。
+            // 系数 0.83 → 0.86：40 / 46 ≈ 0.87 是「刚好不互相碰到」的上限，0.86 留 0.5pt 余量。
+            // 疏圈（内圈 8 个 / R 64 → 弧间距 50.3）算 43.2 → 被 40 截住，
+            // 也就是内圈永远满尺寸 40，只有挤到弧间距 < 46 的圈才会缩。
             let arcSpacing = 2 * CGFloat.pi * radius / CGFloat(max(count, 1))
-            let iconSize = min(AevonRingMenu.iconSize, max(28, arcSpacing * 0.83))
+            let iconSize = min(AevonRingMenu.iconSize, max(28, arcSpacing * 0.86))
             for i in 0..<count {
                 guard cursor < bundleIDs.count else { break }
                 let bundleID = bundleIDs[cursor]
@@ -927,7 +936,7 @@ final class AevonRingMenu: UIView {
         // V0.0.26：屏幕上不再有任何提示文字（圆心 / 底部都没有）
         let radiiText = ringRadii.map { String(Int($0)) }.joined(separator: "/")
         let countsText = ringCounts.map(String.init).joined(separator: "/")
-        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，图标 \(Int(icons.first?.bounds.width ?? 0))pt / 间距 42pt 恒定 / 内圈贴中心 60 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 弹簧出入场 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35 AevonRingGlyphTopV211 AevonRingHubFitV211 AevonRingIcon35V321 AevonHoverJumpV321）")
+        AevonLog.info("[圆盘] 已展开（\(icons.count) 个 App，\(ringCounts.count) 圈，每圈 \(countsText) 个，半径 \(radiiText)，圆心 \(Int(ringCenter.x)),\(Int(ringCenter.y))，图标 \(Int(icons.first?.bounds.width ?? 0))pt / 间距 46pt 恒定 / 内圈贴中心 64 / 方形图标自适应 / 位置固定记忆 / 速度弹簧跟手 / 进度驱动展开 / 状态位共享内存）（AevonRingFullCircle AevonRingMultiRing AevonRingNativeIconV22 AevonRingAnchor75V21 AevonRingLayoutFitV23 AevonRingCenterTextFreeV24 AevonRingNoLabelV25 AevonRingNoHintV26 AevonRingInnerTightV28 AevonRingHoldRotateV28 AevonRingTwoModeV28 AevonRingDenseV29 AevonRingSpringV30 AevonRingDampV30 AevonRingSquareV31 AevonRingAutoSizeV31 AevonRingPinnedV31 AevonRingSpringV33 AevonNotifyRingV34 AevonRingHopV35 AevonRingGlyphTopV211 AevonRingHubFitV211 AevonRingIcon35V321 AevonHoverJumpV321 AevonGifHoverV322 AevonGifHaloV322 AevonGifEntranceV322 AevonRingIcon40V323 AevonRingUnfoldV323 AevonHubPanelV323）")
     }
 
     private func drawRingTracks() {
@@ -1008,66 +1017,112 @@ final class AevonRingMenu: UIView {
 
     // MARK: - 动画
 
+    /* V0.3.23（AevonRingUnfoldV323）：入场改成**一个进度标量驱动的径向展开**。
+     *
+     * 0.3.22 及以前是「21 个图标各起一条位置弹簧 + 一条缩放入场关键帧，按 index 错峰
+     * 0.018s」—— 那是「同时弹射、逐个落地」。用户给的新录屏不是这样：
+     *
+     *   录屏 f58~f100：整簇图标**先叠在同一个点上**，然后一起向外铺开、边铺边长大，
+     *   铺开过程中「间距 ÷ 图标尺寸」几乎不变 —— 也就是**最终圆盘的一个等比缩小版
+     *   在持续放大**。它既不是「图标不动、半径拉开」，也不是「先长大再飞出去」。
+     *
+     * 所以这里只留一个标量 `progress`（见 AevonRingUnfold）：
+     *
+     *     半径 = 目标半径 · s(p)     图标缩放 = s(p)     α = α(p)
+     *
+     * 三条曲线共用一个 s，等比关系天然成立，21 个图标之间也没有任何相位差 ——
+     * 录屏里那一簇是**整体**长的，不是一个个长的。
+     *
+     * 进度 = max(时间曲线, 拖动曲线)：手指划得快就长得快（用户要的「跟手」），
+     * 手指停住也会在 0.55s 内自己长完（不会卡在半个盘）。
+     */
     private func animateIn() {
+        // 遮罩单独一条淡入：它和盘面几何无关，跟着 progress 走只会让背景忽明忽暗
         dimView.alpha = 0
-        trackLayer.opacity = 0
-        centerButton.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
-        centerButton.alpha = 0
-        centerGlyph.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
-        centerGlyph.alpha = 0
-        // V0.2.10（AevonRingHubV210）：底盘比按钮早一点淡入、放大到位，视觉上「按钮从盘里长出来」
-        hubPlate.alpha = 0
-        hubInner.alpha = 0
-        hubPlate.transform = CGAffineTransform(scaleX: 0.55, y: 0.55)
-        hubInner.transform = CGAffineTransform(scaleX: 0.70, y: 0.70)
+        UIView.animate(withDuration: 0.18, animations: { self.dimView.alpha = 1 })
 
-        UIView.animate(withDuration: 0.16, animations: {
-            self.dimView.alpha = 1
-            self.centerButton.alpha = 1
-            self.centerButton.transform = .identity
-            self.centerGlyph.alpha = 1
-            self.centerGlyph.transform = .identity
-        })
-        UIView.animate(withDuration: 0.26, delay: 0.02, options: [.curveEaseOut], animations: {
-            self.hubPlate.alpha = 1
-            self.hubInner.alpha = 1
-            self.hubPlate.transform = .identity
-            self.hubInner.transform = .identity
-        }, completion: nil)
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0
-        fade.toValue = 1
-        fade.duration = 0.26
-        trackLayer.add(fade, forKey: "fade")
-        trackLayer.opacity = 1
+        unfoldDragProgress = 0
+        unfoldProgress = 0
+        unfoldStartedAt = CACurrentMediaTime()
+        applyUnfold(0)
+        startUnfold()
+    }
 
-        // V0.0.30（AevonRingSpringV30）：图标从圆心「弹射」到各自轨道。
-        // V0.3.20（AevonKeyframeHoverV320，性能包 P5）：**缩放**从 `UIViewPropertyAnimator`
-        // 搬进关键帧引擎（0.30 → 1.06 过冲 → 0.975 → 1.00，520ms）。
-        // 为什么非搬不可：划过动画也写 `layer.transform`，两个动画同时驱动同一个属性
-        // 时 UIKit 的行为不保证 —— 呼盘后立刻划过会有一跳。现在 `layer.transform`
-        // 只有 keyframe 引擎一个主人（入场 / 升起 / 落地共用一把键 `aevonHover`）。
-        // 位置（center）与 alpha 仍走弹簧，两者与 transform 不冲突。
-        /* V0.3.22（AevonGifEntranceV322）：位置弹簧 0.50 → **0.36**。
-         * GIF 里缩放 260ms 到位、位移也差不多同时停下（约 270ms）；
-         * 原来 0.50 的位置弹簧要走 ~480ms，图标会「先长到原大、再慢慢飘到位置」，
-         * 两段节奏是错开的。0.36 让它和缩放同一条时间线收尾。 */
-        let spring = AevonSpring.params(response: 0.36,
-                                        dampingFraction: hoverZ,
-                                        initialVelocity: CGVector(dx: 0.25, dy: 0.25))
+    /// 按进度铺一次盘面。逐帧调用（21 个图标 × position/transform/alpha），
+    /// 都是属性直写，不做动画重建 —— 0.3.19 那种「每帧重建 5 条弹道」才是丢帧源。
+    private func applyUnfold(_ progress: CGFloat) {
+        let s = AevonRingUnfold.scale(at: progress)
+        let a = AevonRingUnfold.alpha(at: progress)
+        let hub = AevonRingUnfold.hubScale(at: progress)
+        let track = AevonRingUnfold.ease(progress)
+
+        trackLayer.opacity = Float(track)
         for (index, icon) in icons.enumerated() {
-            let target = icon.center
-            icon.center = ringCenter
-            icon.alpha = 0
-            let delay = 0.02 + 0.018 * Double(index)
-            icon.playHoverEntrance(after: delay)
-            let animator = UIViewPropertyAnimator(duration: 1.0, timingParameters: spring)
-            animator.addAnimations {
-                icon.alpha = 1
-                icon.center = target
-            }
-            animator.startAnimation(afterDelay: delay)
+            guard index < iconRadii.count, index < iconBaseAngles.count else { continue }
+            let radians = (iconBaseAngles[index] + rotation) * .pi / 180
+            // 半径与尺寸同乘 s ⇒ 整簇是目标布局的等比缩小版（录屏里就是这样）
+            let radius = iconRadii[index] * s
+            icon.center = CGPoint(x: ringCenter.x + radius * cos(radians),
+                                  y: ringCenter.y + radius * sin(radians))
+            icon.layer.transform = CATransform3DMakeScale(s, s, 1)
+            icon.alpha = a
         }
+        hubPlate.transform = CGAffineTransform(scaleX: hub, y: hub)
+        hubInner.transform = CGAffineTransform(scaleX: hub, y: hub)
+        centerButton.transform = CGAffineTransform(scaleX: hub, y: hub)
+        centerGlyph.transform = CGAffineTransform(scaleX: hub, y: hub)
+        hubPlate.alpha = a
+        hubInner.alpha = a
+        centerButton.alpha = a
+        centerGlyph.alpha = a
+    }
+
+    private func startUnfold() {
+        unfoldLink?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(stepUnfold))
+        link.add(to: .main, forMode: .common)
+        unfoldLink = link
+    }
+
+    private func stopUnfold() {
+        unfoldLink?.invalidate()
+        unfoldLink = nil
+    }
+
+    @objc private func stepUnfold() {
+        let elapsed = CACurrentMediaTime() - unfoldStartedAt
+        let byTime = AevonRingUnfold.clamp(CGFloat(elapsed / AevonRingUnfold.duration))
+        // 只增不减：两条曲线取 max，拖动停下不会让盘面往回缩
+        let target = max(byTime, unfoldDragProgress)
+        if target > unfoldProgress {
+            unfoldProgress = target
+            applyUnfold(unfoldProgress)
+        }
+        if unfoldProgress >= 0.999 {
+            finishUnfold()
+        }
+    }
+
+    /// 落定：把姿态写回**精确值**（逐帧累乘会留 0.001 级误差，收尾要一抹干净），
+    /// 然后兑现展开期间记下的划过（`applyHover` 在展开期间只记录不下发）。
+    private func finishUnfold() {
+        stopUnfold()
+        unfoldProgress = 1
+        trackLayer.opacity = 1
+        for icon in icons {
+            icon.layer.transform = CATransform3DIdentity
+            icon.alpha = 1
+        }
+        layoutIcons()
+        hubPlate.transform = .identity
+        hubInner.transform = .identity
+        centerButton.transform = .identity
+        centerGlyph.transform = .identity
+        hubPlate.alpha = 1
+        hubInner.alpha = 1
+        centerButton.alpha = 1
+        centerGlyph.alpha = 1
+        applyHover()
     }
 
     /// V0.2.88（AevonRingDismissInstantV288）：选中开窗路径必须**瞬时收起**。
@@ -1091,6 +1146,10 @@ final class AevonRingMenu: UIView {
         cancelCenterHold()
         clearPointer()
         stopDamping()
+        // V0.3.23：展开到一半就收起 —— 逐帧步进必须先停，否则它会把收到的图标
+        // 又按进度摆回盘面，盖掉下面的收拢动画。
+        stopUnfold()
+        unfoldProgress = 1
         /* V0.3.20（AevonKeyframeHoverV320）：先把划过关键帧**整体摘掉**再让「吸附回圆心」
          * 接管 transform。关键帧是 `fillMode: .forwards`，只清状态不摘动画的话，
          * 下面 `icon.transform = scale(0.1)` 会被在途动画盖住 —— 图标就不往圆心收了。 */
@@ -1151,6 +1210,9 @@ final class AevonRingMenu: UIView {
 
     /// 圆盘被呼出时立刻调用，`point` 是窗口坐标。
     func beginRemoteTracking(at point: CGPoint, source: String) {
+        /* V0.3.23（AevonRingUnfoldV323）：这个点就是「圆盘从哪儿长出来」的原点。
+         * 拖动曲线用它算位移 —— 手指从边缘往里划，划得越远盘长得越开。 */
+        unfoldOrigin = point
         handlePointerBegan(at: point, source: source)
     }
 
@@ -1230,6 +1292,8 @@ final class AevonRingMenu: UIView {
         pointerAngle = angle(from: ringCenter, to: point)
         pointerLastEventAt = now
         isFingerDown = true
+        // V0.3.23：没有 `beginRemoteTracking` 的召唤路径（窗口侧 / 识别器侧）也要有原点
+        if unfoldOrigin == nil { unfoldOrigin = point }
         pointerEverInsideRing = isInsideRingArea(point)
         // 新手指落下来，重新允许「按住圆心 1 秒」切换模式
         centerHoldSuppressed = false
@@ -1265,6 +1329,14 @@ final class AevonRingMenu: UIView {
         pointerLastEventAt = CACurrentMediaTime()
         isFingerDown = true
         if isInsideRingArea(point) { pointerEverInsideRing = true }
+        /* V0.3.23（AevonRingUnfoldV323）：**跟手**。
+         * 拖动曲线只增不减（`max`）—— 手指往回撤时盘面不会跟着缩，
+         * 否则「划过头再修一下」会让 21 个图标整体往回抽，比不跟手更难看。 */
+        if unfoldProgress < 1, let origin = unfoldOrigin {
+            let travelled = hypot(point.x - origin.x, point.y - origin.y)
+            let byDrag = AevonRingUnfold.dragProgress(distance: travelled)
+            if byDrag > unfoldDragProgress { unfoldDragProgress = byDrag }
+        }
 
         let currentAngle = angle(from: ringCenter, to: point)
         var delta = currentAngle - pointerAngle
@@ -1593,6 +1665,11 @@ final class AevonRingMenu: UIView {
     /// —— 波峰自然往前走。而且**每个图标都一定会落地**（`landHover` 是 250ms 定长
     /// 关键帧，带一记余弹），不存在挂在空中。
     private func applyHover() {
+        /* V0.3.23（AevonRingUnfoldV323）：展开期间**只记录、不下发**。
+         * 图标此刻的缩放由 `applyUnfold` 独占 `layer.transform`，划过关键帧再来写它
+         * 就会打架（抬起 46pt 的图标带着 0.4 的缩放飞出去）。
+         * 展开结束的 `finishUnfold` 会再调一次这里，把期间记下的那一笔兑现。 */
+        guard unfoldProgress >= 1 else { return }
         for item in icons {
             let want = (item === hoveredIcon)
             guard want != item.hoverLifted else { continue }

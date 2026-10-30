@@ -79,7 +79,6 @@ struct AevonHoverSample {
 enum AevonHoverStyle {
     case rise
     case land
-    case entrance
 }
 
 enum AevonHoverKeyframes {
@@ -114,23 +113,8 @@ enum AevonHoverKeyframes {
         AevonHoverKey(t: 0.170, lift: 0.0, scale: 1.000),
     ]
 
-    /// 展开入场：**0.34 → 1.00，260ms，无过冲**。
-    ///
-    /// GIF 里图标是从召唤点「飞出来」的：先被检出时只有终态的 0.83 大、离落点 54px，
-    /// 之后边飞边长大，约 270ms 到位，**全程没有一次放大过头再缩小**。
-    /// 0.3.20/0.3.21 那版是 0.30 → 1.06 → 0.975 → 1.00，那个 1.06 的过冲在 21 个图标
-    /// 同时入场时会让盘面「嗡」一下 —— 去掉。
-    static let entranceKeys: [AevonHoverKey] = [
-        AevonHoverKey(t: 0.000, lift: 0, scale: 0.34),
-        AevonHoverKey(t: 0.090, lift: 0, scale: 0.82),
-        AevonHoverKey(t: 0.170, lift: 0, scale: 0.958),
-        AevonHoverKey(t: 0.230, lift: 0, scale: 0.994),
-        AevonHoverKey(t: 0.260, lift: 0, scale: 1.000),
-    ]
-
     static var riseDuration: CFTimeInterval { CFTimeInterval(riseKeys[riseKeys.count - 1].t) }
     static var landDuration: CFTimeInterval { CFTimeInterval(landKeys[landKeys.count - 1].t) }
-    static var entranceDuration: CFTimeInterval { CFTimeInterval(entranceKeys[entranceKeys.count - 1].t) }
 
     /// 高亮稳态（划过之后停住的样子）——**就是 `riseKeys` 的末帧**。
     ///
@@ -240,7 +224,7 @@ enum AevonHoverKeyframes {
         let easeBoth = CAMediaTimingFunction(name: .easeInEaseOut)
         guard count > 0 else { return [] }
         switch style {
-        case .rise, .land, .entrance:
+        case .rise, .land:
             return Array(repeating: easeBoth, count: count)
         }
     }

@@ -5050,7 +5050,7 @@ jobs:
           [ -s "$KF" ] || { echo "::error::V0.3.20 缺 Sources/AevonHoverKeyframes.swift（定长关键帧引擎）"; exit 1; }
 
           # ① 引擎骨架
-          for sym in 'static let riseKeys' 'static let landKeys' 'static let entranceKeys' \
+          for sym in 'static let riseKeys' 'static let landKeys' \
                      'static func sample(' 'static func animation(' 'func transform3D()'; do
             grep -q "$sym" "$KF" \
               || { echo "::error::V0.3.20 AevonHoverKeyframes 缺 $sym"; exit 1; }
@@ -5065,7 +5065,7 @@ jobs:
           #    land **8 帧（170ms，单调沉回 0）**、entrance **5 帧（260ms，无过冲）**。
           #    0.3.21 的 7/3/4 是「冲上去 32pt 再砸回地面」，已被 Aevon(97) 判为「原地抖动」。
           awk '
-            /static let (riseKeys|landKeys|entranceKeys)/ { tbl=$3; n=0; prev=-1; mono=1; next }
+            /static let (riseKeys|landKeys)/ { tbl=$3; n=0; prev=-1; mono=1; next }
             tbl != "" && /AevonHoverKey\(t:/ {
               n++
               v=$0
@@ -5076,7 +5076,7 @@ jobs:
               prev = v
             }
             tbl != "" && /^    \]/ {
-              want = (tbl == "riseKeys:" ? 6 : (tbl == "landKeys:" ? 8 : 5))
+              want = (tbl == "riseKeys:" ? 6 : 8)
               if (n != want) { printf "::error::V0.3.22 %s 关键帧数 %d（应 %d）\n", tbl, n, want; bad=1 }
               if (!mono) { printf "::error::V0.3.22 %s 的 t 不是「首帧 0 + 严格递增」\n", tbl; bad=1 }
               tbl = ""
@@ -5090,7 +5090,7 @@ jobs:
 
           # ③ 图标侧：只有 rise / land / reset / entrance 四个入口
           for fn in 'func riseHover()' 'func landHover()' 'func resetHover(snap: Bool = true)' \
-                    'func playHoverEntrance(after delay: TimeInterval)' 'func hoverSample()'; do
+                    'func hoverSample()' 'func applyUnfold(' 'func finishUnfold()'; do
             grep -q "$fn" "$RM" \
               || { echo "::error::V0.3.20 AevonRingIcon 缺 $fn"; exit 1; }
           done
@@ -5138,7 +5138,7 @@ jobs:
           # 跳起然后回落」+「修复自建腿 enable 96 秒 202 次」。
           # 帧率那一半 0.3.20 已经满分（119.8fps / 最大间隔 35.9ms / >16.7ms 只有 2 帧），
           # 本版只解决三件事：波形（单峰起跳）、矩阵顺序（平移被 sy 放大）、设置链路空转。
-          echo "── V0.3.21/V0.3.22: 跳上去停住 + 白晕 + 图标 35pt + 设置变更门控 ──"
+          echo "── V0.3.21/V0.3.22/V0.3.23: 跳上去停住 + 白晕 + 图标 40pt + 进度展开 + 设置门控 ──"
 
           # ①②③ 关键帧：矩阵顺序 / 单峰起跳波形 / 时长上限 —— 一次解析完。
           #    ⛔ 不许用 `grep -o 't: [0-9.]*'` 取值：`lift: ` 里也含 `t: `，取出来的是 lift
@@ -5218,43 +5218,26 @@ jobs:
           if land_ms < 150.0 or land_ms > 200.0:
               err("V0.3.22 land 时长 %.0fms，应 150~200ms（GIF 235ms，这里压缩到防积压）" % land_ms)
 
-          # ③b 入场：单调放大到 1.00、**不许有过冲**（GIF 一次都没有冲过头再缩回去）。
-          i = src.find("static let entranceKeys")
-          if i < 0:
-              err("V0.3.22 找不到 entranceKeys")
-          eseg = src[i:src.find("\n    ]", i)]
-          escale = [float(s) for s in re.findall(r"scale: ([\d.]+)\)", eseg)]
-          if len(escale) < 4:
-              err("V0.3.22 entranceKeys 只解析到 %d 帧" % len(escale))
-          for a, b in zip(escale, escale[1:]):
-              if b <= a:
-                  err("V0.3.22 entrance 必须严格单调放大（%.3f → %.3f）" % (a, b))
-          if max(escale) > 1.0001:
-              err("V0.3.22 entrance 峰值 %.3f > 1.0 —— 过冲会在 21 个图标同时入场时让盘面「嗡」一下" % max(escale))
-          if abs(escale[-1] - 1.0) > 0.001:
-              err("V0.3.22 entrance 末帧不是 1.0")
-          etms = [float(t) for t in re.findall(r"AevonHoverKey\(t: ([\d.]+)", eseg)]
-          if etms and etms[-1] > 0.3001:
-              err("V0.3.22 entrance 时长 %.0fms > 300ms（GIF 约 270ms 到位）" % (etms[-1] * 1000))
-
           print("V0.3.22 关键帧: Concat(Scale, Translation) / 起跳 %.1fpt·%0.fms 单调 / "
-                "回落 %.0fms 单调 / 入场 %d 帧无过冲 %.0fms / 全程等比 ✓"
-                % (peak, raise_ms, land_ms, len(escale), (etms[-1] * 1000 if etms else 0)))
+                "回落 %.0fms 单调 / 全程等比 ✓"
+                % (peak, raise_ms, land_ms))
           PYEOF
 
-          # ④ 图标 35pt + 环距参数（42 / 60 / 39 / 0.83）—— 用户 Aevon(97) 定档
-          grep -qF 'private static let iconSize: CGFloat = 35' "$RM" \
-            || { echo "::error::V0.3.21 图标不是 35pt（用户 Aevon(97) 定档 40 → 35）"; exit 1; }
-          grep -qF 'let spacing: CGFloat = 42' "$RM" \
-            || { echo "::error::V0.3.21 弧间距基准不是 42pt"; exit 1; }
-          grep -qF 'let inner: CGFloat = 60' "$RM" \
-            || { echo "::error::V0.3.21 内圈基准不是 60（物理下限 59.5，再小会压到中心底盘）"; exit 1; }
-          grep -qF 'let base = inner + 39 * CGFloat(index)' "$RM" \
-            || { echo "::error::V0.3.21 相邻圈径向步进不是 39pt（= 图标 35 + 4pt 间隙）"; exit 1; }
-          grep -qF 'arcSpacing * 0.83' "$RM" \
-            || { echo "::error::V0.3.21 自适应系数不是 0.83（0.78 会把 47pt 弧间距算成 36.7，撑不满 35pt）"; exit 1; }
-          grep -qF '间距 42pt 恒定 / 内圈贴中心 60' "$RM" \
-            || { echo "::error::V0.3.21 展开日志串没跟着改（间距 46 / 内圈 62 是旧几何）"; exit 1; }
+          # ④ 图标 40pt + 环距参数（46 / 64 / 44 / 0.86）—— V0.3.23（AevonRingIcon40V323）
+          #    ⛔ 五个数必须一起动：只放大图标不放环径，21 个图标会互相压住；
+          #      只放环径不放大图标，盘会散掉。CI 把五个常量 + 日志串钉在一起查。
+          grep -qF 'private static let iconSize: CGFloat = 40' "$RM" \
+            || { echo "::error::V0.3.23 图标不是 40pt（用户本轮要求 35 → 40）"; exit 1; }
+          grep -qF 'let spacing: CGFloat = 46' "$RM" \
+            || { echo "::error::V0.3.23 弧间距基准不是 46pt（= 图标 40 + 6pt 弧上间隙）"; exit 1; }
+          grep -qF 'let inner: CGFloat = 64' "$RM" \
+            || { echo "::error::V0.3.23 内圈基准不是 64（物理下限：圆心盘 39 + 20 + 5）"; exit 1; }
+          grep -qF 'let base = inner + 44 * CGFloat(index)' "$RM" \
+            || { echo "::error::V0.3.23 相邻圈径向步进不是 44pt（= 图标 40 + 4pt 圈间间隙）"; exit 1; }
+          grep -qF 'arcSpacing * 0.86' "$RM" \
+            || { echo "::error::V0.3.23 自适应系数不是 0.86（40/46≈0.87 是上限，0.83 会把 46 算成 38.2）"; exit 1; }
+          grep -qF '间距 46pt 恒定 / 内圈贴中心 64' "$RM" \
+            || { echo "::error::V0.3.23 展开日志串没跟着改（间距 46 / 内圈 64）"; exit 1; }
 
           # ⑤ 设置变更门控三处 —— 用户 Aevon(96) 的 202 次/96 秒
           #    ⛔ 三处都必须「值没变就先返回」，缺一处就还是一帧一次空转。
@@ -5274,7 +5257,8 @@ jobs:
 
           # ⑥ 三个新标记必须进主库（`used` 纯 ASCII C 串）
           for m321 in AevonHoverJumpV321 AevonRingIcon35V321 AevonPrefsGateV321 \
-                      AevonGifHoverV322 AevonGifHaloV322 AevonGifEntranceV322; do
+                      AevonGifHoverV322 AevonGifHaloV322 \
+                      AevonRingUnfoldV323 AevonRingIcon40V323 AevonHubPanelV323; do
             grep -q "$m321" "$GITHUB_WORKSPACE/Sources/AevonGripHook.m" \
               || { echo "::error::V0.3.21 源码缺标记 $m321"; exit 1; }
             strings "$MDYL" | grep -q "$m321" \
@@ -5303,7 +5287,61 @@ jobs:
           grep -qF "static let hoverScale: CGFloat = 1.25" "$RM" \
             || { echo "::error::V0.3.22 hoverScale 不是 1.25（GIF 量出来正好 1.25）"; exit 1; }
           
-          echo "V0.3.22 校验: 跳上去停住（46pt/100ms）+ 170ms 单调回落 + 白色柔光底盘 + zPosition 置顶 + 入场无过冲 + 全程等比 ✓"
+          # ⑧ 展开：**一个标量驱动的径向展开**（V0.3.23 / AevonRingUnfoldV323）
+          #    录屏事实：整簇图标先叠在同一个点，然后一起铺开、边铺边长大，
+          #    「间距 ÷ 图标尺寸」全程不变 ⇒ 最终布局的等比缩小版在放大。
+          #    ⛔ 因此半径与图标缩放必须共用同一个 s；写成两条独立曲线就会走形。
+          UF="$GITHUB_WORKSPACE/Sources/AevonRingUnfold.swift"
+          [ -s "$UF" ] || { echo "::error::V0.3.23 缺 Sources/AevonRingUnfold.swift（展开引擎）"; exit 1; }
+          for sym in 'static let duration' 'static let minScale' 'static let dragDistance' \
+                     'static func scale(at' 'static func dragProgress(distance' 'static func ease('; do
+            grep -q "$sym" "$UF" || { echo "::error::V0.3.23 AevonRingUnfold 缺 $sym"; exit 1; }
+          done
+          grep -qF 'Sources/AevonRingUnfold.swift' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::V0.3.23 Makefile 没加新文件（显式清单，不会自动收）"; exit 1; }
+          # 全局重新定义会静默丢一个 → 展开曲线就只作用在一处
+          [ "$(grep -c 'static func scale(at progress: CGFloat)' "$UF")" -eq 1 ] \
+            || { echo "::error::V0.3.23 scale(at:) 定义不唯一"; exit 1; }
+
+          # ⑨ 盘面按进度摆：半径与缩放共用 s（这两行是等比的判据）
+          grep -qF 'let radius = iconRadii[index] * s' "$RM" \
+            || { echo "::error::V0.3.23 半径没乘以展开标量（图标只长大、不铺开）"; exit 1; }
+          grep -qF 'CATransform3DMakeScale(s, s, 1)' "$RM" \
+            || { echo "::error::V0.3.23 图标缩放没走展开标量（与半径不同源 = 不等比）"; exit 1; }
+          grep -qF 'let s = AevonRingUnfold.scale(at: progress)' "$RM" \
+            || { echo "::error::V0.3.23 applyUnfold 没从 AevonRingUnfold 取标量"; exit 1; }
+          grep -qF 'let target = max(byTime, unfoldDragProgress)' "$RM" \
+            || { echo "::error::V0.3.23 进度不是「时间 / 拖动取 max」（手指停住会卡在半个盘）"; exit 1; }
+          grep -qF 'if byDrag > unfoldDragProgress { unfoldDragProgress = byDrag }' "$RM" \
+            || { echo "::error::V0.3.23 拖动没接到进度上（用户要的「跟手」就是这一行）"; exit 1; }
+          grep -qF 'unfoldOrigin = point' "$RM" \
+            || { echo "::error::V0.3.23 没有记召唤点（拖动曲线的原点）"; exit 1; }
+          grep -qF 'guard unfoldProgress >= 1 else { return }' "$RM" \
+            || { echo "::error::V0.3.23 展开期间没挡住划过关键帧（两个动画抢 layer.transform）"; exit 1; }
+          #    反向：入场不许再退回「每图标一条弹簧」
+          if sed -n '/private func animateIn()/,/private func applyUnfold/p' "$RM" | grep -q 'UIViewPropertyAnimator'; then
+            echo "::error::V0.3.23 animateIn 里还有逐图标弹簧 —— 那是「同时弹射、逐个落地」，不是录屏的「整体铺开」"; exit 1
+          fi
+          grep -qF 'if target > unfoldProgress {' "$RM" \
+            || { echo "::error::V0.3.23 进度不是只增不减（直接赋值），拖动回撤时盘面会往回缩"; exit 1; }
+          #    反向：entranceKeys / playHoverEntrance 必须已退役，不许留下第二个 transform 主人
+          if grep -q 'static let entranceKeys' "$KF"; then
+            echo "::error::V0.3.23 entranceKeys 还在 —— 入场已由展开引擎接管，留着就是两套并行的入场"; exit 1
+          fi
+          if grep -q 'func playHoverEntrance' "$RM"; then
+            echo "::error::V0.3.23 playHoverEntrance 还在（死代码，且和 applyUnfold 抢 layer.transform）"; exit 1
+          fi
+
+          # ⑩ 中心面板与外圈图标**两种视觉语言**（AevonHubPanelV323）
+          grep -qF 'private static let centerSize: CGFloat = 52' "$RM" \
+            || { echo "::error::V0.3.23 中心面板不是 52pt（要比 40pt 图标明显大一圈）"; exit 1; }
+          grep -qF 'centerButton.layer.cornerRadius = AevonRingMenu.centerSize * 0.34' "$RM" \
+            || { echo "::error::V0.3.23 中心按钮不是 34% 圆角的方面板（与 26% 图标的视觉语言没拉开）"; exit 1; }
+          grep -qF 'centerButton.layer.cornerCurve = .continuous' "$RM" \
+            || { echo "::error::V0.3.23 中心面板没开连续圆角（大圆角在 iOS 上会显形）"; exit 1; }
+
+          echo "V0.3.22 校验: 跳上去停住（46pt/100ms）+ 170ms 单调回落 + 白色柔光底盘 + zPosition 置顶 + 全程等比 ✓"
+          echo "V0.3.23 校验: 进度驱动径向展开（等比铺开 / 拖动跟手 / 时间兜底）+ 图标 40pt 环径重算 + 中心面板差异化 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
