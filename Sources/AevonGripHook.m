@@ -771,7 +771,7 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
 #pragma mark - 系统手势管理器取证（白名单，不枚举）
 
 /// 只对**已知方法名**做探测 —— 0.2.72 的 SIGTRAP 就是全类表枚举炸的，
-/// 这里一次 class_copyMethodList 都没有。
+/// 这里一次全类表枚举都没有（连那个 API 名都不写：注释也会命中 CI 的防回退断言）。
 static void AevonOwnProbeSels(Class cls, NSString *tag) {
     if (cls == Nil) { return; }
     NSArray<NSString *> *names = @[
