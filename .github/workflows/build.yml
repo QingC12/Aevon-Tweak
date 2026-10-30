@@ -5478,7 +5478,7 @@ jobs:
           # ③ B3：回桌面完全不盖定格帧（AevonNoFreezeV325）
           strings "$MYD25" | grep -q 'AevonNoFreezeV325' \
             || { echo "::error::V0.3.25 主库缺标记 AevonNoFreezeV325"; exit 1; }
-          grep -qF 'static let freezeDisabled = true' "$WV" \
+          grep -qF 'static var freezeDisabled = true' "$WV" \
             || { echo "::error::V0.3.25 盖帧总闸没关（B3 要求完全不盖）"; exit 1; }
           grep -qF 'if AevonWindowView.freezeDisabled {' "$WV" \
             || { echo "::error::V0.3.25 installDarkFreeze 没过总闸"; exit 1; }

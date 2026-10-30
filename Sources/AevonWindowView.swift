@@ -1997,7 +1997,7 @@ final class AevonWindowView: UIView {
     /// `installDarkFreeze` / `installTransitionFreeze` 的入口闸，同时停掉三处抓帧
     /// （空闲预抓 / 滚动刷新 / 可信首帧）—— 不盖帧就没有消费方，抓帧只是热路径白烧。
     /// 改回 `false` 即整条回退到 0.3.24 的盖帧行为（代码与判据全部保留）。
-    static let freezeDisabled = true
+    static var freezeDisabled = true
     /// 「盖帧已停用」日志只打前 3 条，避免每次内容掉出画刷一行
     private static var freezeSkipLogCount = 0
     /// V0.3.24（AevonSharpCacheGateV324）：同窗历史**最清晰**帧的拉普拉斯方差 —— 撤帧门槛的
