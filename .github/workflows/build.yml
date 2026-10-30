@@ -142,6 +142,12 @@ jobs:
           # V0.2.83：AevonShroudOnTopV282 随遮罩整体退役（见 0.2.83 校验块），
           # 二进制 must 列表改用 AevonNoShroudV283 —— 它证明「不再截图、不再盖遮罩」这一版
           # 的代码真的被编进去了（而不是只改了注释）。
+          # V0.3.3 反转：AevonGripIntentV297 已整条退役（全 App 卡屏真凶，见 V0.3.3 校验①），
+          # 从 must 清单移除 —— 它的名字只剩注释里的历史说明，**注释不进二进制**，
+          # 留着这一项 strings 必然查不到 = 每次构建必红。退役事实改由
+          # AevonGripIntentRetireV303 承载（清单末尾）。
+          # 注意：注释绝不能插在 `for m in ...` 的续行列表中间 —— `\` 续行 + `#` 会把
+          # 后面的标记一起吃掉（本节踩过）。
           for m in AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
                    AevonYieldAlphaV282 AevonNoShroudV283 AevonCrashPCV283 \
                    AevonLayerNilSafeV283 AevonFgGuardRetireV283 \
@@ -160,13 +166,14 @@ jobs:
                    AevonRevealOrderFixV294 AevonQuietRevealV294 \
                    AevonCapSkipV295 AevonSceneFastGateV295 \
                    AevonProbeSceneV296 AevonScenePollFastV296 \
-                   AevonGripIntentV297 AevonQuietRefreezeV297 \
+                   AevonQuietRefreezeV297 \
                    AevonCacheFreezeV298 AevonDeskNoReviveV298 AevonStuckRescueV298 \
                    AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299 \
                    AevonReturnDeadlineV2100 AevonSuspendDelayV2100 \
                    AevonKickThrottleV300 AevonFreezeIndepWinV300 AevonGripProbe2V300 \
                    AevonSharpGateV301 AevonKickSkipV301 AevonGripProbe3V301 \
-                   AevonTouchRouteV302 AevonGripProbe4V302; do
+                   AevonTouchRouteV302 AevonGripProbe4V302 \
+                   AevonGripIntentRetireV303 AevonGripBandNarrowV303; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -2047,8 +2054,11 @@ jobs:
           # ③ 圆盘入口改成可见把手（PullOver 逆向：空白盲带上没有「既拦住又没拦」的中间态）
           grep -q 'final class AevonRingGripView: UIView' "$W/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.50 圆盘把手没落地"; exit 1; }
-          grep -q 'hitOutsetX: CGFloat = 40' "$W/Sources/AevonRingGrip.swift" \
-            || { echo "::error::0.2.50 把手命中区没外扩（摸起来会很难触发）"; exit 1; }
+          # V0.3.3 反转（AevonGripBandNarrowV303）：命中带 40 → 12pt（用户定档方案 C）。
+          grep -q 'hitOutsetX: CGFloat = 12' "$W/Sources/AevonRingGrip.swift" \
+            || { echo "::error::V0.3.3 把手命中带没收窄到 12pt（误吞面仍是 46pt）"; exit 1; }
+          grep -q 'outsetX = 12.0' "$W/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::V0.3.3 App 侧命中带没跟 SB 侧同步（两侧不一致必出鬼）"; exit 1; }
           grep -q 'AevonRingGrip.installIfNeeded' "$W/Sources/AevonEntryHost.swift" \
             || { echo "::error::0.2.50 把手没装到入口容器"; exit 1; }
           grep -q 'AevonRingGrip.setVisible(true)' "$W/Sources/AevonRingMenu.swift" \
@@ -4052,17 +4062,25 @@ jobs:
           # ── V0.2.97 校验（Aevon(74)：T1 意图吞咽 + S-A 静默重抓）──
           EE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
           WV="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
-          # ①意图吞咽登记：moved 分支 dx<-6 未达阈值登记吞咽
-          grep -q 'gripIntentSwallowID = touchID' "$EE" \
-            && grep -q 'AevonGripIntentV297' "$EE" \
-            || { echo "::error::0.2.97 缺把手左滑意图吞咽（AevonGripIntentV297）"; exit 1; }
-          # ②吞层分支：登记的指纹 moved/ended 全吞，deadline 过期 fail-open 清零
-          SW=$(awk '/if gripIntentSwallowID != 0, touchID == gripIntentSwallowID \{/,/^\        \}/' "$EE" | grep -c 'return true' || true)
-          if [ "${SW:-0}" -ge 1 ]; then
-            echo "V0.2.97 校验①: 意图吞咽登记+吞层分支在位(区间命中=$SW) ✓"
-          else
-            echo "::error::0.2.97 吞层分支缺 return true（吞层不生效，实测命中=$SW）"; exit 1
+          # ①V0.3.3 反转（AevonGripIntentRetireV303）：0.2.97 的「把手左滑意图吞咽」
+          # **整条退役**。用户 Aevon(81) 实锤它是全 App 卡屏真凶（began 已投给 App、
+          # 中途吞掉 moved/ended = 一根永不结束的 UITouch = UIScrollView 触摸延迟队列
+          # 永久挂起 = App 完全无响应）。判据用**调用形态**（变量名/赋值语句），
+          # 不用标记名 —— 标记名以历史说明的形式留在注释里（收容），grep 会误判。
+          if grep -q 'gripIntentSwallowID' "$EE"; then
+            echo "::error::V0.3.3 意图吞咽变量仍在（AevonGripIntentRetireV303 要求整条删净）"
+            exit 1
           fi
+          if grep -q 'gripIntentSwallowUntil' "$EE"; then
+            echo "::error::V0.3.3 意图吞咽 deadline 仍在（半路改吞必然死锁）"
+            exit 1
+          fi
+          # 防回退网：短滑必须走「全放行」——moved 分支里 dx<-6 的吞段不许回来。
+          if sed -n '/case .moved:/,/case .ended:/p' "$EE" | grep -q 'dx < -6'; then
+            echo "::error::V0.3.3 moved 分支又出现 dx<-6 的吞段（卡屏必然复发）"
+            exit 1
+          fi
+          echo "V0.3.3 校验①: 意图吞咽整条退役（变量/deadline/dx<-6 吞段 三查全清）✓"
           # ③V0.2.100 反转：静默重抓退役（从模糊表面抓帧=死路），AevonQuietRefreezeV297
           # 标记收容进盖帧日志串；重抓代码必须已删净。
           grep -q 'AevonQuietRefreezeV297' "$WV" \
@@ -4213,6 +4231,43 @@ jobs:
             && grep -q 'AevonGripOrigGlobalSetStatePub' "$GH" \
             || { echo "::error::0.3.2 事件投递链类普查不完整（AevonGripProbe4V302）"; exit 1; }
           echo "V0.3.2 校验②: 事件投递链类普查 + 全局 setState: 补探（零钩子、零行为改变）✓"
+
+          # ── V0.3.3 校验（Aevon(81)：全 App 卡屏真凶 = 两条「中途吞触摸」）────────────
+          # 用户原话：「不是只有抖音会卡屏，是所有的应用都会卡屏。触发圆盘手势、滑动手势条
+          # 但不要让圆盘出现（滑动距离短时），然后全屏应用必然会卡住，无法操作。」
+          # 根因①（SB 侧）：AevonGripIntentV297 —— began 已投给 App，中途吞 moved/ended。
+          # 根因②（App 侧）：AevonRingSwallow2V271 的整进程 return —— 圆盘一开，已在屏的
+          #   手指失去 moved/ended。两条都制造「有 began 无 ended」→ UIScrollView 触摸延迟
+          #   队列永久挂起 → App 完全无响应。
+          # 上面「V0.3.3 校验①」已查根因①删净；这里查根因②整根认领 + 命中带收窄。
+          APPSIDE="$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"
+          # ②整根认领：圆盘在屏时只在 began 帧登记，绝不再整进程 return
+          grep -q 'AevonRingOwnV303' "$APPSIDE" \
+            && grep -q 'BOOL ringActive = AevonRingActiveNow();' "$APPSIDE" \
+            && grep -q '圆盘在屏 → 落指整根不投递' "$APPSIDE" \
+            || { echo "::error::V0.3.3 圆盘吞法没改成 begun 整根认领（AevonRingOwnV303）"; exit 1; }
+          # 防回退网：AevonWindowSendEventSwizzled 里不许再有「ringActive 就整段 return」的旧形态。
+          # 判据用调用形态而不是标记名（0.2.100 教训：`! grep 标记名` 会命中注释里的旧名字）。
+          if sed -n '/static void AevonWindowSendEventSwizzled/,/^static void AevonGripSwallowInstall/p' "$APPSIDE" \
+               | grep -q 'if (AevonRingActiveNow()) {'; then
+            echo "::error::V0.3.3 旧的「圆盘在屏整进程 return」回来了（卡屏必然复发）"
+            exit 1
+          fi
+          echo "V0.3.3 校验②: App 侧圆盘吞法 = begun 帧整根认领（旧整进程 return 已删净）✓"
+          # ③命中带收窄两侧同步（SB 12pt / App 12pt），且标记进了两个二进制
+          #   注意：本 step 里 $DYLIB / $APP_DYLIB 未定义（那是「校验产物」step 的局部变量），
+          #   这里必须自己 find，否则 strings "" 空跑 → 必然红。
+          MDYL="$(find . -name 'Aevon.dylib' -path '*DynamicLibraries*' | head -n1)"
+          ADYL="$(find . -name 'AevonApp.dylib' | head -n1)"
+          [ -n "$MDYL" ] || { echo "::error::V0.3.3 找不到 Aevon.dylib"; exit 1; }
+          [ -n "$ADYL" ] || { echo "::error::V0.3.3 找不到 AevonApp.dylib"; exit 1; }
+          strings "$MDYL" | grep -q 'AevonGripIntentRetireV303' \
+            && strings "$MDYL" | grep -q 'AevonGripBandNarrowV303' \
+            || { echo "::error::V0.3.3 主库缺退役/收窄标记"; exit 1; }
+          strings "$ADYL" | grep -q 'AevonRingOwnV303' \
+            && strings "$ADYL" | grep -q 'AevonGripBandNarrowV303' \
+            || { echo "::error::V0.3.3 App 侧 dylib 缺标记（AevonRingOwnV303 / BandNarrow）"; exit 1; }
+          echo "V0.3.3 校验③: 主库+App 侧标记双在位（退役/收窄/整根认领）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

@@ -24,7 +24,7 @@ import UIKit
 /// V0.2.59（AevonGripCustomV259，用户 Aevon(33) #3）：
 ///   · 形状从「34pt 圆角块 + 图标」改成**贴边小短竖条**（宽 5pt × 高可调）；
 ///   · 位置（从底部起的百分比）与长度（pt）进设置页，**实时生效**（prefschanged）；
-///   · 命中区依旧向屏幕内侧外扩 40pt、上下各 14pt —— 可点性不因竖条变窄而缩水。
+///   · 命中区向屏幕内侧外扩 12pt、上下各 14pt（V0.3.3 从 40pt 收窄，理由见 hitOutsetX）。
 final class AevonRingGripView: UIView {
     /// V0.2.69（AevonRingIdleFixV269）：把手上活跃触摸计数 —— 圆盘静默看门狗的
     /// 「ended 真漏发」实判（touches 家族是 UIKit 硬通道，不会漏）。
@@ -47,8 +47,18 @@ final class AevonRingGripView: UIView {
 
     /// 竖条视觉宽度（pt）。贴屏幕右缘。
     static let barWidth: CGFloat = 5
-    /// 命中区外扩：向屏幕内侧 40pt、上下各 14pt（0.2.50 定档，不变）
-    static let hitOutsetX: CGFloat = 40
+    /* 命中区外扩：向屏幕内侧 **12pt**、上下各 14pt。
+     *
+     * V0.3.3（AevonGripBandNarrowV303，用户 Aevon(81) 定档「方案 C：整根认领 + 收窄命中带」）：
+     * 内侧 40 → 12pt。0.2.50 定的 40pt 是为了「好按」，但它把命中带铺到了抖音右栏
+     * 评论/收藏按钮上（按钮中心距右缘约 30~50pt），逼得 0.2.61/0.2.77 在 App 侧写
+     * 一堆「tap 豁免」补丁，还间接养出了 0.2.97 那条致命的「中途改吞」。
+     *
+     * Stheno 的 `GestureBorderWidth` 本来就是一条窄带（用户原话「我们在探针 Stheno 同款
+     * 手势，它不会和抖音冲突」）。收窄到 12pt 后：呼盘手势仍然贴右手拇指自然位置，
+     * 而右缘 12pt 之外的点击（几乎全部按钮）彻底不接触 → 误吞面从 46×92pt 缩到 17×92pt。
+     * **App 侧 AevonAppSide.m 的 outsetX 必须与此同步**（两侧不一致 = 一侧吞一侧不吞）。 */
+    static let hitOutsetX: CGFloat = 12
     static let hitOutsetY: CGFloat = 14
     /// 长度可调区间（pt）与默认值
     static let lenMin: CGFloat = 36
@@ -138,7 +148,7 @@ final class AevonRingGripView: UIView {
                               height: len)
     }
 
-    /// 命中区 = handle 的 frame（竖条向内扩 40pt、上下各扩 14pt）。
+    /// 命中区 = handle 的 frame（竖条向内扩 12pt、上下各扩 14pt；V0.3.3 收窄）。
     private var hitRect: CGRect {
         return handle.frame
     }
@@ -412,7 +422,8 @@ enum AevonRingGrip {
             + "命中区向外扩 \(Int(AevonRingGripView.hitOutsetX))pt，把手外一律不拦，"
             + "识别器挂在真实控件上，全屏宿主零识别器）"
             + "（AevonRingGripV250 AevonRingGripV255 AevonGripCustomV259"
-            + " AevonGripSwipeOnlyV260 AevonGripFrontV260）")
+            + " AevonGripSwipeOnlyV260 AevonGripFrontV260"
+            + " AevonGripBandNarrowV303 AevonGripIntentRetireV303）")
     }
 
     /// V0.2.59（AevonGripCustomV259）：设置页改了 GripY / GripLen → 实时重排。

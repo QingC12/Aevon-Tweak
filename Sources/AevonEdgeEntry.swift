@@ -121,10 +121,19 @@ enum AevonEdgeEntry {
     // 所以把手滑动必须在 sendEvent 这条总入口上也判一次 —— 和浮窗边条同一条通路。
     // 纪律：只观察、不吞（铁律：不在别人的触摸上做吞咽），呼盘后由圆盘自己接管。
     private static var gripSwipeTouchID: UInt = 0
-    /// V0.2.97（AevonGripIntentV297）：把手「左滑意图吞咽」登记——意图明确（dx<-6）但
-    /// 未达呼盘阈值的手指，剩余序列（moved/ended）整根吞掉，防半截左滑泄漏给 App。
-    private static var gripIntentSwallowID: UInt = 0
-    private static var gripIntentSwallowUntil: CFTimeInterval = 0
+    /* V0.3.3（AevonGripIntentRetireV303，用户 Aevon(81)「不是只有抖音会卡屏，是所有的
+     * 应用都会卡屏。触发圆盘手势、滑动手势条但不要让圆盘出现（滑动距离短时），然后
+     * 全屏应用必然会卡住，无法操作」）：**AevonGripIntentV297 整条退役**（标记
+     * AevonGripIntentV297 收容进本段说明与 V0.3.3 日志串里）。
+     *
+     * 0.2.97 那次「左滑意图吞咽」是**方向性错误**，也是 0.2.97~0.3.2 十一版卡屏的真凶：
+     * 落指时 began 已经真实投给 App（backboardd 双投，见 0.2.63 注释），只吞后面的
+     * moved/ended = App 拿到一根**永远不结束的 UITouch**。UIScrollView 的触摸延迟队列
+     * 会一直等这根手指收尾 → 后续所有触摸被 delay → 整个 App 无响应（= 用户看到的卡屏）。
+     * 抖音没被注入，它吃的正是这条；注入的 App 吃的是 App 侧那条（AevonRingSwallow2V271）。
+     *
+     * 铁律（V0.3.3 定档）：**一根手指的归属只在 began 那一帧决定，整根一致。**
+     * 任何「began 放行、中途改吞」的写法都必然制造死锁，一律禁止。 */
     /// V0.2.63（AevonGripBusyV263）→ **V0.2.87（AevonGripBusyRetireV287）整条退役**：
     /// 「把手占用」广播（AevonNotifySetGripBusy）让被覆盖进程关交互 —— 0.2.86 已把
     /// App 侧接收链退役（AevonGripRetireV286：0.6→2.5s 续排 99 次占 3 次真解除=纯亏），
@@ -350,8 +359,14 @@ enum AevonEdgeEntry {
             // V0.2.99（AevonGripThreshV299，用户 Aevon(76)「无法呼出圆盘」）：呼盘阈值
             // -14→-8pt。Aevon(76) 日志实锤：39 次候选仅 9 次呼出（23%），21 次被意图
             // 吞咽拦下——用户滑动幅度集中在 -6~-13pt，-14pt 阈值之外全没收。降阈值后
-            // 主力滑动区间全部可呼出，意图吞咽带收窄到 -6~-8（2pt，泄漏面同步变小）。
+            // 主力滑动区间全部可呼出。
             // 纵向抖动容忍 ≤40pt 不变。
+            // V0.3.3（AevonGripIntentRetireV303）：原 dx<-6 的「意图吞咽」分支整段删除
+            //（理由见 gripSwipeTouchID 声明处）。短滑**一律全放行**：App 收到完整
+            // began→moved→ended，手势簿记正常收尾，结构上不再可能死锁。
+            // 代价（已知并接受）：未达阈值的半截左滑会留在 App 里（抖音可能误暂停 /
+            // 半进博主主页）。这是「完全不能用」与「偶发误触发」之间的取舍，用户定档
+            // 先消灭卡屏。
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
                 let dx = point.x - gripSwipeStart.x
                 let dy = point.y - gripSwipeStart.y
@@ -365,28 +380,6 @@ enum AevonEdgeEntry {
                             + "（AevonGripSwipeGlobalV260 AevonGripThreshV299）")
                         presentRing(source: "ringgrip")
                     }
-                } else if dx < -6, abs(dy) < 40 {
-                    /* V0.2.97（AevonGripIntentV297，用户 Aevon(74)「滑动圆盘触发条时会让
-                     * 抖音视频停止播放（不是点击状态的暂停）。然后有时还会触发左滑打开
-                     * 视频博主的主页。卡屏就是在进入视频博主主页时，但是没有完全进入时
-                     * 卡屏」）：**左滑意图吞咽**。0.2.77 把手候选「只登记不吞（点击放行）」
-                     * 的代价在 0.2.87 占用广播退役后彻底暴露：began 真实投递给了 App
-                     *（0.2.63 注释实锤），而未达 14pt 呼盘阈值的半截左滑整根放行 =
-                     * App 收到一次右缘起始的左滑 = 误暂停 / 半触发「左滑进博主主页」
-                     * 转场；转场进行中再被下一根触摸打断 = 卡屏（Aevon(74) 实锤路径）。
-                     * 修法：dx < -6（左滑意图明确）但未达阈值 → 登记吞掉这根手指的
-                     * moved/ended。**ended 也吞**（0.2.89 孤儿帧纪律同源：序列从中间
-                     * 开始吞就必须吞到底，半途放行 = App 收 began+ended = 假点击 =
-                     * 视频暂停，正是要消灭的东西）；App 的手势簿记等 touch 超时自然
-                     * 清理（= 手势失败 = 什么都不触发 = 隔离成功）。deadline 3 秒
-                     * fail-open 防永久挂起。原地轻点（<6pt）照常放行——0.2.77 的
-                     * 右栏按钮收益完整保留；右滑 / 竖直滑动（抖音上下滑切视频）
-                     * 照常放行。 */
-                    gripIntentSwallowID = touchID
-                    gripIntentSwallowUntil = CACurrentMediaTime() + 3.0
-                    gripSwipeTouchID = 0
-                    AevonLog.warn("[圆盘] 把手左滑意图 \(Int(dx))pt（未达呼盘阈值）→ 吞掉剩余序列（防泄漏给 App）"
-                        + "（AevonGripIntentV297）")
                 } else if hypot(dx, dy) > 60 {
                     gripSwipeTouchID = 0
                 }
@@ -597,21 +590,11 @@ enum AevonEdgeEntry {
                 return true
             }
         }
-        // V0.2.97（AevonGripIntentV297）：把手左滑意图吞咽——moved/ended 全吞到抬手
-        //（ended 也吞：半途放行 = App 收 began+ended 假点击 = 误暂停）。deadline 过期
-        // fail-open 清零放行，绝不永久挂起。0.2.89 孤儿帧纪律：登记在序列完结前不清零。
-        if gripIntentSwallowID != 0, touchID == gripIntentSwallowID {
-            if CACurrentMediaTime() > gripIntentSwallowUntil {
-                gripIntentSwallowID = 0
-                gripIntentSwallowUntil = 0
-            } else {
-                if phase == 3 || phase == 4 {
-                    gripIntentSwallowID = 0
-                    gripIntentSwallowUntil = 0
-                }
-                return true
-            }
-        }
+        // V0.3.3（AevonGripIntentRetireV303）：原「把手左滑意图吞咽」整段删除。
+        // 那一段是「began 放行、中途改吞」，制造了一根永不结束的 UITouch →
+        // UIScrollView 触摸延迟队列永久挂起 → 全 App 卡屏（用户 Aevon(81) 实锤复现
+        // 方式：滑动手势条但滑动距离短、圆盘不出现 → 全屏应用必然卡住）。
+        // 铁律：一根手指的归属只在 began 那一帧决定，整根一致。
         // V0.2.58（AevonGripFeedCleanV258）：把手收养指纹全程放行 ——
         // began 已投递 UIKit 的触摸，剩下的帧必须补全投递，绝不再半路吞。
         // 这根手指的触摸窗口恒为入口窗口，投递只到把手识别器，不可能误伤系统。

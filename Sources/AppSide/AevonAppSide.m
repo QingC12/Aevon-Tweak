@@ -1830,7 +1830,8 @@ static void AevonScreenFitInstall(void) {
  * （began 就不投递，App 永远没见过它），绝不中途改判 —— 铁律「began 已投递 UIKit
  * 的触摸不许再改吞」仍然成立，因为这里连 began 都不给。
  *
- * 命中区与把手视图严格同源：右缘 5pt 竖条 + 向内 40pt、上下各 14pt；
+ * 命中区与把手视图严格同源：右缘 5pt 竖条 + 向内 12pt、上下各 14pt（V0.3.3 从 40pt
+ * 收窄，见 AevonGripBandNarrowV303）；
  * 位置 = 屏高 ×(1 - GripY/100)，长度 = GripLen（夹 36~120）。参数每 2 秒最多读一次。
  *
  * 两条安全闸（这条 hook 跑在**别人 App 的进程里**，误伤比不生效更糟）：
@@ -1937,7 +1938,10 @@ static void AevonGripRefreshCache(void) {
     if (len > 120) { len = 120; }
     CGSize screen = gAevonRealScreen;
     if (screen.width < 100 || screen.height < 200) { return; }
-    const double barWidth = 5.0, outsetX = 40.0, outsetY = 14.0;
+    /* V0.3.3（AevonGripBandNarrowV303）：outsetX 40 → 12，与 SB 侧
+     * AevonRingGrip.swift 的 hitOutsetX 严格同步（两侧不一致 = 一侧吞一侧不吞，
+     * 就是 0.2.61~0.2.84 反复出现的「吞不掉/误吞」那一类鬼）。 */
+    const double barWidth = 5.0, outsetX = 12.0, outsetY = 14.0;
     double cy = screen.height * (1.0 - ratio / 100.0);
     double hitW = barWidth + outsetX;
     double hitH = len + outsetY * 2.0;
@@ -2348,6 +2352,10 @@ __attribute__((used)) static const char AevonGripSwallowWinV262Marker[] = "Aevon
  * 设置时刻 CLOCK_MONOTONIC 秒，30 秒新鲜度防 SB 崩溃后位没清把 App 吞哑）。
  */
 __attribute__((used)) static const char AevonRingSwallow2V271Marker[] = "AevonRingSwallow2V271";
+/* V0.3.3（AevonRingOwnV303）：圆盘在屏时的吞法从「整进程 return」改成「began 帧
+ * 认领整根」—— 标记必须进二进制（中文 @"…" 串编成 UTF-16，strings 查不到）。 */
+__attribute__((used)) static const char AevonRingOwnV303Marker[] = "AevonRingOwnV303";
+__attribute__((used)) static const char AevonGripBandNarrowV303AppMarker[] = "AevonGripBandNarrowV303";
 
 static int gAevonRingZoneToken = -1;
 
@@ -2370,21 +2378,27 @@ static IMP gAevonWinSendEventOrig;
 
 static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
     @try {
-        /* V0.2.71（AevonRingSwallow2V271）：圆盘在屏 → 本进程整根不投递。
-         * 已登记的吞咽钥匙在抬手时顺手清掉（防集合滞留）。 */
-        if (AevonRingActiveNow()) {
-            NSSet *ringTouches = [event allTouches];
-            for (UITouch *t in ringTouches) {
-                if (t.phase == UITouchPhaseEnded || t.phase == UITouchPhaseCancelled) {
-                    [gAevonSwallowedTouches removeObject:
-                        [NSValue valueWithPointer:(__bridge const void *)t]];
-                }
-            }
-            return;
-        }
         UIWindow *win = (UIWindow *)self;
         NSSet *touches = [event allTouches];
         if (touches.count > 0) {
+            /* V0.3.3（AevonRingOwnV303，用户 Aevon(81)「不是只有抖音会卡屏，是所有的
+             * 应用都会卡屏……滑动距离短时，全屏应用必然会卡住，无法操作」）：
+             *
+             * 0.2.71（AevonRingSwallow2V271）在这里写的是「圆盘在屏 → 整个 sendEvent
+             * 直接 return」。那个写法有一个**结构性死锁**：手指落把手时 App 已经收到
+             * began（backboardd 双投），用户一左滑呼出圆盘，bit39 翻 1，App 后续每一帧
+             * 都被这个 return 吞掉 —— App 手里那根 UITouch 永远等不到 ended，
+             * UIScrollView 的触摸延迟队列就一直挂着，**整个 App 无响应**。
+             * 注入的 App 全中（微信 / QQ / 酷安 / Filza），这才是「所有应用都卡」的真身。
+             *
+             * 现在改成**整根认领**：圆盘在屏时只在 **began 那一帧**把钥匙登记进
+             * gAevonSwallowedTouches，其余帧由下面统一的集合判定吞掉。
+             * 效果与旧写法等价（圆盘期间落的手指整根不投递），但**圆盘出现之前就已经
+             * began 的手指永远不进集合**，它的 moved/ended 照常投递 → 死锁消失。
+             *
+             * 铁律（V0.3.3 定档）：一根手指的归属只在 began 那一帧决定，整根一致；
+             * 任何「began 放行、中途改吞」都是死锁。 */
+            BOOL ringActive = AevonRingActiveNow();
             /* 命中区缓存在第一次触摸时可能还没算过 —— 这里先刷一次再说（每 2 秒最多
              * 读一次偏好，代价可忽略），否则「刚开 App 的第一下滑把手」永远不吞。 */
             AevonGripRefreshCache();
@@ -2395,6 +2409,13 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
             for (UITouch *touch in touches) {
                 NSValue *key = [NSValue valueWithPointer:(__bridge const void *)touch];
                 if (touch.phase == UITouchPhaseBegan) {
+                    if (ringActive) {
+                        /* 圆盘在屏：began 这一帧登记，整根不投递给 App（等价旧行为，
+                         * 但不再吞「圆盘出现前就已 began 的根」）。 */
+                        [gAevonSwallowedTouches addObject:key];
+                        AevonAppLog(@"[App侧] 圆盘在屏 → 落指整根不投递（began 帧认领，"
+                                    @"不吞已在屏的手指）（AevonRingOwnV303）");
+                    } else {
                     CGPoint p = [touch locationInView:win];
                     AevonGripRefreshCache();
                     BOOL inRect = !CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(gAevonGripRect, p);
@@ -2509,6 +2530,9 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                         AevonKeyboardVisible() ? @"是" : @"否");
                         }
                     }
+                    }
+                    /* ↑ 关闭 V0.3.3 的 else {（AevonRingOwnV303：非圆盘在屏才走原来的
+                     * 浮窗边带 / 把手区几何判定；圆盘在屏已在上面的 began 分支认领）。 */
                 }
                 BOOL swallowed = [gAevonSwallowedTouches containsObject:key];
                 if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
@@ -2570,9 +2594,9 @@ static void AevonGripSwallowInstall(void) {
         }
         gAevonSendEventOrig = method_getImplementation(m);
         method_setImplementation(m, (IMP)AevonSendEventSwizzled);
-        AevonAppLog(@"[App侧] 已接管 -[UIApplication sendEvent:]：把手命中区（右缘竖条 + 内 40pt /"
+        AevonAppLog(@"[App侧] 已接管 -[UIApplication sendEvent:]：把手命中区（右缘竖条 + 内 12pt /"
                     @"上下各 14pt）内的触摸整根丢弃，全屏 App 里滑把手不再带动 App 内滑动"
-                    @"（AevonGripSwallowV261）");
+                    @"（AevonGripSwallowV261 AevonGripBandNarrowV303）");
     } @catch (NSException *exception) {
         AevonAppLog(@"[App侧] 把手吞咽安装失败：%@（AevonGripSwallowV261）",
                     exception.reason ?: @"未知");
