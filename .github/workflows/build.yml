@@ -1988,8 +1988,10 @@ jobs:
           grep -q 'CATransaction.setDisableActions(true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 发光圈仍有隐式动画（缩放时边缘会抖）"; exit 1; }
           # ⑨⑩ 关窗要等画布还原走完再挂起
-          grep -q 'scheduleSleep(bundleID: bundleID, after: 0.75)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.49 关窗立刻挂起（还原抖动没执行 → 再开窗断层/全屏黑）"; exit 1; }
+          # V0.2.100 反转（AevonSuspendDelayV2100）：0.75 → 2.05（+1.0s 行为规避实验，
+          # cs=2 卡屏现场实锤：App 刚恢复整屏就被挂起诱发进程内死锁）
+          grep -q 'scheduleSleep(bundleID: bundleID, after: 2.05)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.100 关窗挂起延迟没到位（应 2.05，AevonSuspendDelayV2100）"; exit 1; }
           grep -q 'cancelPendingSleep(bundleID: bundleID)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.49 重开窗没撤销待挂起（浮窗里的 App 会被挂起）"; exit 1; }
           echo "V0.2.49 校验: 屏幕贴合画布（分享面板/视频重排）+ 1pt 光晕 + 进出场动画 + 强制重排 + 解锁守卫 + 0.2s 撤帧 + SpringBoard 熄屏压制 + 缩放禁隐式动画 + 关窗等还原 已就位"
@@ -2107,8 +2109,9 @@ jobs:
             || { echo "::error::0.2.50 贴合翻转后没敲窗口重排（进程留着按 737 排的残局）"; exit 1; }
           grep -q 'AevonAppFitRelayoutV250' "$W/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.50 缺 App 侧重排标记"; exit 1; }
-          grep -q 'scheduleSleep(bundleID: bundleID, after: 1.05)' "$W/Sources/AevonWindowManager.swift" \
-            || { echo "::error::0.2.50 关窗挂起早于画布还原（再全屏打开必黑）"; exit 1; }
+          # V0.2.100 反转（AevonSuspendDelayV2100）：1.05 → 2.05（+1.0s，语义不变：挂起晚于画布还原）
+          grep -q 'scheduleSleep(bundleID: bundleID, after: 2.05)' "$W/Sources/AevonWindowManager.swift" \
+            || { echo "::error::0.2.100 关窗挂起早于画布还原（应 2.05，AevonSuspendDelayV2100）"; exit 1; }
           grep -q 'AevonFloatRestoreV250' "$W/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.50 缺关窗收尾重写整屏画布标记"; exit 1; }
           # ⑨ 九个 V250 标记一个都不能少（产物字节复检靠它们认版本）
