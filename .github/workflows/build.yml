@@ -5366,16 +5366,16 @@ jobs:
           #    __bottomLikeTouchRegions + sc_addTerminationGestureToRegion: 模型
           strings "$MYD" | grep -q 'AevonBottomFlickV324' \
             || { echo "::error::V0.3.24 主库缺标记 AevonBottomFlickV324（底边上滑关闭没编进去）"; exit 1; }
-          grep -qF 'func handleBottomFlickPan' "$WV" \
-            || { echo "::error::V0.3.24 缺少底部上滑关闭手势"; exit 1; }
-          grep -qF 'flickDistance: CGFloat = 40' "$WV" \
-            || { echo "::error::V0.3.24 上滑位移阈值不是 40pt"; exit 1; }
-          grep -qF 'floatFlickDistance: CGFloat = 40' "$EE" \
-            || { echo "::error::V0.3.24 全局通道与视图侧的上滑阈值不同源"; exit 1; }
-          grep -qF 'floatFlickCandidate = true' "$EE" \
-            || { echo "::error::V0.3.24 全局通道没登记上滑候选"; exit 1; }
-          grep -qF '底边上滑 → 关闭浮窗（上滑' "$EE" \
-            || { echo "::error::V0.3.24 关窗必须发生在抬手（ended），否则 App 侧双投竞态会回来"; exit 1; }
+          grep -qF 'func handleTerminationPress' "$WV" \
+            || { echo "::error::V0.3.24/V0.3.25 缺少底边长按（关闭预备态）手势"; exit 1; }
+          grep -qF 'terminationLift: CGFloat = 24' "$WV" \
+            || { echo "::error::V0.3.24/V0.3.25 上移门槛不是 24pt（Stheno sc_shouldCloseForBottomUpwardFlick:）"; exit 1; }
+          grep -qF 'floatTermLift: CGFloat = 24' "$EE" \
+            || { echo "::error::V0.3.24/V0.3.25 全局通道与视图侧的上移门槛不同源"; exit 1; }
+          grep -qF 'floatTermCandidate = true' "$EE" \
+            || { echo "::error::V0.3.24/V0.3.25 全局通道没登记底边长按候选"; exit 1; }
+          grep -qF '底边上甩 → 关闭浮窗（上移' "$EE" \
+            || { echo "::error::V0.3.24/V0.3.25 关窗必须发生在抬手（ended），否则 App 侧双投竞态会回来"; exit 1; }
           #    反向：双击关闭不许回潮
           if grep -v '^[[:space:]]*//' "$WV" | grep -q 'numberOfTapsRequired = 2'; then
             echo "::error::V0.3.24 底边双击关闭不许回潮（已改上滑，AevonBottomFlickV324）"; exit 1
@@ -5430,6 +5430,65 @@ jobs:
             || { echo "::error::V0.3.24 看门没触发 presenter 重建"; exit 1; }
 
           echo "V0.3.24 校验: 底边上滑关闭（抬手执行，取代双击）+ 盖帧清晰度闸/历史基线/可信首帧 + 开窗单飞/场景占用/presenter 重建 ✓"
+
+          # ── V0.3.25 校验（Aevon(99)：底边移动+长按上甩关闭 / 回桌面完全不盖帧）─────
+          # 本段自己定位主库（0.3.24 栽过「复用上游 step 局部变量 → strings: can't open file」）
+          MYD25="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
+          [ -n "$MYD25" ] && [ -f "$MYD25" ] || { echo "::error::V0.3.25 定位不到主库 dylib"; exit 1; }
+
+          # ① 底边双功能：移动 + 长按后上甩关闭（AevonBottomSplitV325）
+          for s in AevonBottomSplitV325 AevonTermHoldV325 AevonTermLiftV325 AevonTermVelV325; do
+            strings "$MYD25" | grep -q "$s" \
+              || { echo "::error::V0.3.25 主库缺标记 $s"; exit 1; }
+          done
+          #    Stheno 逐参数：0.4s / 12pt / 24pt / 260pt·s⁻¹ / 1.35 锥角
+          for k in 'terminationHold: TimeInterval = 0.4' 'terminationSlop: CGFloat = 12' \
+                   'terminationLift: CGFloat = 24' 'terminationVelocity: CGFloat = 260' \
+                   'terminationCone: CGFloat = 1.35'; do
+            grep -qF "$k" "$WV" \
+              || { echo "::error::V0.3.25 视图侧缺常量 $k（与 Stheno sc_addTerminationGestureToRegion: / sc_shouldCloseForBottomUpwardFlick: 不一致）"; exit 1; }
+          done
+          #    ⛔ 底边必须回到移动路径：handleOutsidePan 里不许再按 edges 单独分流
+          if sed -n '/@objc private func handleOutsidePan/,/^    }/p' "$WV" | grep -q 'edges == .bottom'; then
+            echo "::error::V0.3.25 底边又被从移动路径里摘出去了（用户要求底部能移动）"; exit 1
+          fi
+          #    ⛔ 长按预备态成立后 pan 不许移动窗口（否则关闭前先被拖走 24pt）
+          grep -qF 'guard !terminationArmed else { return }' "$WV" \
+            || { echo "::error::V0.3.25 长按预备态没拦住 pan（按住 0.4s 后还会移动窗口）"; exit 1; }
+          grep -qF 'frame = terminationHoldFrame' "$WV" \
+            || { echo "::error::V0.3.25 关闭前没回位（Stheno sc_applyRestoredFrame: 同义）"; exit 1; }
+          #    ⛔ 0.3.24 的「底边只关闭」模型不许回潮
+          if grep -v '^[[:space:]]*//' "$WV" | grep -q 'func handleBottomFlickPan'; then
+            echo "::error::V0.3.25 handleBottomFlickPan 回潮（底边会失去移动，AevonBottomSplitV325）"; exit 1
+          fi
+          # ② 全局通道同源判据（全屏 App 时视图侧收不到触摸，只能靠它）
+          for k in 'floatTermHold: CFTimeInterval = 0.4' 'floatTermSlop: CGFloat = 12' \
+                   'floatTermLift: CGFloat = 24' 'floatTermVelocity: CGFloat = 260' \
+                   'floatTermCone: CGFloat = 1.35'; do
+            grep -qF "$k" "$EE" \
+              || { echo "::error::V0.3.25 全局通道缺常量 $k（与视图侧不同源）"; exit 1; }
+          done
+          grep -qF 'floatTermCandidate = true' "$EE" \
+            || { echo "::error::V0.3.25 全局通道没登记底边长按候选"; exit 1; }
+          grep -qF 'win.grabCancel()' "$EE" \
+            || { echo "::error::V0.3.25 全局通道进预备态没回位"; exit 1; }
+          if grep -v '^[[:space:]]*//' "$EE" | grep -q 'floatFlickCandidate = true'; then
+            echo "::error::V0.3.25 全局通道又回到「底边只关闭」（吞住整根手指、不移动）"; exit 1
+          fi
+          # ③ B3：回桌面完全不盖定格帧（AevonNoFreezeV325）
+          strings "$MYD25" | grep -q 'AevonNoFreezeV325' \
+            || { echo "::error::V0.3.25 主库缺标记 AevonNoFreezeV325"; exit 1; }
+          grep -qF 'static let freezeDisabled = true' "$WV" \
+            || { echo "::error::V0.3.25 盖帧总闸没关（B3 要求完全不盖）"; exit 1; }
+          grep -qF 'if AevonWindowView.freezeDisabled {' "$WV" \
+            || { echo "::error::V0.3.25 installDarkFreeze 没过总闸"; exit 1; }
+          #    三处抓帧也必须停（不盖帧就没有消费方，热路径白烧）
+          for k in 'func scheduleSnapshotRecapture' 'func refreshRollingSnapshot' 'func primeSharpSnapshot(reason: String)'; do
+            sed -n "/$k/,/^    }/p" "$WV" | grep -q 'freezeDisabled' \
+              || { echo "::error::V0.3.25 $k 还在抓帧（B3 下无人消费）"; exit 1; }
+          done
+
+          echo "V0.3.25 校验: 底边移动+长按0.4s上甩关闭（Stheno 同参数）+ 回桌面完全不盖帧（B3）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

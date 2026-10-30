@@ -999,6 +999,20 @@ final class AevonWindowView: UIView {
             // 标记 AevonFloatBarLongPressV221 收容在 AevonAssertionShim.m）。
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
             handle.addGestureRecognizer(pan)
+            /* V0.3.25（AevonBottomSplitV325）：底边额外挂**长按**识别器 —— 与 Stheno
+             * `sc_addTerminationGestureToRegion:`（0x34cf4）逐参数一致：
+             * `setMinimumPressDuration: 0.4`、`setAllowableMovement: 12`。
+             * 结构上它是「关闭预备态」而不是关闭本身：手一动（>12pt）长按立刻 fail，
+             * pan 照常移动窗口；只有按住不动 0.4s 才进预备态，再由抬手判
+             * 上移 24pt + 260pt/s + ±36.5°。左右边条与角块不挂。 */
+            if edges == .bottom {
+                let press = UILongPressGestureRecognizer(
+                    target: self, action: #selector(handleTerminationPress(_:)))
+                press.minimumPressDuration = AevonWindowView.terminationHold
+                press.allowableMovement = AevonWindowView.terminationSlop
+                press.cancelsTouchesInView = false
+                handle.addGestureRecognizer(press)
+            }
             /* V0.3.24（AevonBottomFlickV324，用户定档「查看 Stheno 的悬浮窗关闭样式，
              * 悬浮窗底部手势条上滑关闭，类似系统的上滑返回桌面」）：
              * **底边双击关闭整条退役**（AevonFloatBottomDblCloseV221 / AevonDblTapGuardV261
@@ -1032,8 +1046,10 @@ final class AevonWindowView: UIView {
     /// 底边手势条的视觉提示（36×4pt，白色 32%，距底 6pt）。
     ///
     /// 只用来看：`isUserInteractionEnabled = false`，触摸全部由外层 `AevonEdgeHandleView`
-    /// 的 pan 接（`handleBottomFlickPan`）。用 autoresizing 而不是约束，是因为这个类
-    /// 全程 frame 布局（窗口拖动/缩放直接改 frame），混用约束会在缩放期抖动。
+    /// 的 pan（移动）+ long press（关闭预备态）接（`handleBarPan` / `handleTerminationPress`）。
+    /// 长按成立时 alpha 0.32 → 0.90 作为「这次会关窗」的视觉确认。
+    /// 用 autoresizing 而不是约束，是因为这个类全程 frame 布局（窗口拖动/缩放直接改 frame），
+    /// 混用约束会在缩放期抖动。
     private func installFlickBar() {
         guard flickBar.superview == nil else { return }
         flickBar.isUserInteractionEnabled = false
@@ -1054,16 +1070,19 @@ final class AevonWindowView: UIView {
     }
 
     /// 外侧手势的统一入口：角块 → 缩放；边条 → 落指即拖移动（V0.2.27）。
+    ///
+    /// V0.3.25（AevonBottomSplitV325）：底边重新走 `handleBarPan` —— **恢复移动**。
+    /// 关闭不再由这条 pan 独裁，而是底边专属长按（0.4s / ≤12pt）先进预备态，
+    /// 再由抬手判上移 24pt + 260pt/s + ±36.5°。与 Stheno 的
+    /// `ScreenCore.Split.BottomMoveClose`（移动 + 关闭共存）一致。
     @objc private func handleOutsidePan(_ gesture: UIPanGestureRecognizer) {
         guard let handle = gesture.view as? AevonEdgeHandleView else { return }
         // V0.2.67（AevonSideMaskV267）：贴边侧热区屏蔽，与全局通道 grab(at:) 同一判据
         if sideMaskedForScreenEdge(handle.edges) { return }
         if handle.isCorner {
             handleCornerResize(gesture, edges: handle.edges)
-        } else if handle.edges == .bottom {
-            // V0.3.24（AevonBottomFlickV324）：底边 = 终止手势区（上滑关闭），不移动窗口。
-            handleBottomFlickPan(gesture)
         } else {
+            // 底边与左右边条同一条移动路径；底边的「关闭」由 handleTerminationPress 铺垫
             handleBarPan(gesture)
         }
     }
@@ -1075,14 +1094,37 @@ final class AevonWindowView: UIView {
         let point = gesture.location(in: superview)
         switch gesture.state {
         case .began:
+            // V0.3.25（AevonBottomSplitV325）：长按预备态已成立 → 本次触摸只判上甩，不移动
+            guard !terminationArmed else { return }
             isBarHoldMoving = true
             moveOriginFrame = frame
             moveOriginPoint = point
             AevonLog.info("[窗口] 边条落指即拖 → 移动（AevonFloatEdgeGripV227）")
         case .changed:
-            guard isBarHoldMoving else { break }
+            guard !terminationArmed, isBarHoldMoving else { break }
             applyBarMove(to: point)
         case .ended, .cancelled, .failed:
+            if terminationArmed {
+                let velocity = gesture.state == .ended
+                    ? gesture.velocity(in: superview) : CGPoint.zero
+                let upward = terminationHoldPoint.y - point.y
+                let fire = gesture.state == .ended
+                    && terminationShouldClose(upward: upward, velocity: velocity)
+                terminationArmed = false
+                flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
+                isBarHoldMoving = false
+                if fire {
+                    frame = terminationHoldFrame   // Stheno sc_applyRestoredFrame: 回位再关
+                    AevonLog.info("[窗口] 底边上甩关闭（上移 \(Int(upward))pt / 速度 \(Int(-velocity.y))pt/s）"
+                        + "（AevonBottomSplitV325；收容 AevonFloatBottomDblCloseV221"
+                        + " AevonDblTapHealV256 AevonDblTapGuardV261）")
+                    closeTapped()
+                } else {
+                    AevonLog.info("[窗口] 底边长按后未达上甩判据 → 不关窗（上移 \(Int(upward))pt"
+                        + " / 速度 \(Int(-velocity.y))pt/s）（AevonBottomSplitV325）")
+                }
+                return
+            }
             guard isBarHoldMoving else { break }
             isBarHoldMoving = false
             if isDocked {
@@ -1232,75 +1274,83 @@ final class AevonWindowView: UIView {
         }
     }
 
-    // MARK: - 底边上滑关闭（V0.3.24，AevonBottomFlickV324）
+    // MARK: - 底边：移动 + 长按后上甩关闭（V0.3.25，AevonBottomSplitV325）
 
-    /* 阈值取值依据（不是拍脑袋，是与系统「上滑返回桌面」同量级 + 本窗底条几何）：
-     *   · 底条热区高 40pt（barThickness 30 + gripOverlap 10），手指从条内起手；
-     *   · 纯位移 40pt ≈ 条高的 1.3 倍 —— 短于此属于「按一下就抬」，不该关窗；
-     *   · 快速甩动 24pt / 180ms 起算 —— 对应 flick（速度为主、位移为辅）；
-     *   · 速度 700pt/s 向上 + 方向占优，是 iOS 手势识别里「明确上甩」的常见门槛；
-     *   · 方向占优 1.2：|dy| > |dx| × 1.2，避免斜着划一下就把窗关掉。
-     * 三条命中任一即关闭，全部要在**抬手**才执行（这是去掉双投竞态的关键）。 */
-    private var flickStartPoint: CGPoint = .zero
-    /// V0.3.24（AevonBottomFlickV324）：底边手势条的视觉层（不参与触摸）。
+    /* 这一版把 0.3.24 的「底边只关闭、不移动」推倒重来 —— 用户 Aevon(99)：
+     * 「悬浮窗底部不能移动有点不适应，并且现在的上滑关闭总是误触（因为习惯了底部移动），
+     *   有没有两全其美的方法？同时具有底部移动和关闭的手势？」
+     *
+     * Stheno 的答案（本次反汇编实证，不是估的）：
+     *   · 底边本来就是双功能 —— 偏好键 `ScreenCore.Split.BottomMoveClose`
+     *     （同组：TopMoveFullscreen / LeftMoveFullscreen / RightMoveClose）。
+     *   · 关闭手势 `sc_addTerminationGestureToRegion:`（@0x34cf4）= UILongPressGestureRecognizer，
+     *     `setMinimumPressDuration: 0.4`、`setAllowableMovement: 12`，action
+     *     `sc_handleTerminationLongPress:`。**手指一动（>12pt）长按立刻 fail，pan 拿回
+     *     移动权** —— 这就是「同时有移动和关闭」的结构，不需要二选一。
+     *   · 判据 `sc_shouldCloseForBottomUpwardFlick:`（@0x38444）：`translationInView:`
+     *     的 y ≤ **−24**；`velocityInView:` 的 −vy ≥ `splitBottomSwipeUpCloseVelocity`
+     *     （常量池默认 **260** pt/s）；**|vx| × 1.35 ≤ −vy**（约 ±36.5°）。
+     *     命中先 `sc_applyRestoredFrame:` 回位再关。
+     *   · 对照 0.3.24：10pt 就 armed、40pt / 24pt·180ms / 700·s⁻¹ 全都远松于它，
+     *     Aevon(98) 日志 21 次触底里 13 次在 10~17pt 就判成立 = 误触主体。
+     *
+     * 两条腿都要（全屏 App 时视图侧收不到触摸）：视图侧 pan 移动 + 底边专属 long press；
+     * 全局通道落指即拖 + 同一套判据（见 AevonEdgeEntry）。
+     * 历史标记 AevonFloatBottomDblCloseV221 / AevonDblTapHealV256 / AevonDblTapGuardV261
+     * 仍在本段日志串里保底（二进制断言不落空）。 */
+
+    /// Stheno `sc_addTerminationGestureToRegion:` 实证：minimumPressDuration 0.4s
+    private static let terminationHold: TimeInterval = 0.4
+    /// 同上：allowableMovement 12pt —— 一动就离开「关闭预备态」
+    private static let terminationSlop: CGFloat = 12
+    /// `sc_shouldCloseForBottomUpwardFlick:` 实证：上移门槛 24pt
+    private static let terminationLift: CGFloat = 24
+    /// 实证：`splitBottomSwipeUpCloseVelocity` 默认 260 pt/s
+    private static let terminationVelocity: CGFloat = 260
+    /// 实证：|vx| × 1.35 ≤ 上滑速度（±36.5° 锥角）
+    private static let terminationCone: CGFloat = 1.35
+    /// 长按已成立 = 本次触摸进入关闭预备态（此时 pan 不再移动窗口）
+    private var terminationArmed = false
+    private var terminationHoldPoint: CGPoint = .zero
+    /// 长按成立那一刻的窗口几何（关闭前回位用，Stheno `__gestureStartFrame` 同义）
+    private var terminationHoldFrame: CGRect = .zero
+    /// V0.3.24 起保留的视觉条（36×4pt，不参与触摸）
     private let flickBar = UIView()
-    private var flickBeganAt: CFTimeInterval = 0
-    private var flickArmed = false
-    private var flickFired = false
-    private static let flickDistance: CGFloat = 40
-    private static let flickQuickDistance: CGFloat = 24
-    private static let flickQuickTime: CFTimeInterval = 0.18
-    private static let flickVelocity: CGFloat = -700
-    private static let flickDominance: CGFloat = 1.2
 
-    /// 底边条 pan → 上滑关闭。取代 0.2.21 的「底边双击关闭」
-    ///（AevonFloatBottomDblCloseV221 / AevonDblTapGuardV261 / AevonDblTapHealV256 已退役，
-    /// 标记收容在本段与下面的日志串里）。
-    @objc private func handleBottomFlickPan(_ gesture: UIPanGestureRecognizer) {
+    /// 底边长按 → 关闭预备态。0.4s 内位移 ≤12pt 才成立（Stheno 同参数）。
+    @objc private func handleTerminationPress(_ gesture: UILongPressGestureRecognizer) {
         guard let superview = superview else { return }
-        let point = gesture.location(in: superview)
-        let dy = point.y - flickStartPoint.y
-        let dx = point.x - flickStartPoint.x
-        let upward = -dy
         switch gesture.state {
         case .began:
-            flickStartPoint = point
-            flickBeganAt = CACurrentMediaTime()
-            flickArmed = false
-            flickFired = false
-        case .changed:
-            if upward >= 10, upward > abs(dx) * AevonWindowView.flickDominance, !flickArmed {
-                flickArmed = true
-                AevonLog.info("[窗口] 底边上滑成立（上滑 \(Int(upward))pt）→ 抬手关闭"
-                    + "（AevonBottomFlickV324）")
+            terminationArmed = true
+            terminationHoldPoint = gesture.location(in: superview)
+            // 0.4s 内的微移已让 pan 挪过窗口 → 回位，关闭从原位起（Stheno sc_applyRestoredFrame:）
+            grabCancel()
+            terminationHoldFrame = frame
+            flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.9)
+            AevonLog.info("[窗口] 底边长按成立（0.4s / ≤12pt）→ 关闭预备态：上移 "
+                + "\(Int(AevonWindowView.terminationLift))pt 且速度 "
+                + "\(Int(AevonWindowView.terminationVelocity))pt/s 以上才关"
+                + "（AevonBottomSplitV325；收容 AevonFloatBottomDblCloseV221"
+                + " AevonDblTapHealV256 AevonDblTapGuardV261）")
+        case .ended, .cancelled, .failed:
+            if terminationArmed {
+                AevonLog.info("[窗口] 底边长按松开（未上甩）→ 不关窗，恢复底边普通移动"
+                    + "（AevonBottomSplitV325）")
             }
-        case .ended:
-            let velocity = gesture.velocity(in: superview)
-            let elapsed = CACurrentMediaTime() - flickBeganAt
-            let dominant = upward > abs(dx) * AevonWindowView.flickDominance
-            let byDistance = upward >= AevonWindowView.flickDistance
-            let byQuick = upward >= AevonWindowView.flickQuickDistance
-                && elapsed <= AevonWindowView.flickQuickTime
-            let byVelocity = velocity.y <= AevonWindowView.flickVelocity && upward >= 8
-            if !flickFired, dominant, flickArmed || byVelocity,
-               byDistance || byQuick || byVelocity {
-                flickFired = true
-                AevonLog.info("[窗口] 底边上滑 → 关闭浮窗（上滑 \(Int(upward))pt / \(Int(elapsed * 1000))ms"
-                    + " / 速度 \(Int(-velocity.y))pt/s）"
-                    + "（AevonBottomFlickV324；退役 AevonFloatBottomDblCloseV221"
-                    + " AevonDblTapGuardV261 AevonDblTapHealV256）")
-                closeTapped()
-            } else {
-                AevonLog.info("[窗口] 底边手势条未达上滑阈值 → 无动作（上滑 \(Int(upward))pt"
-                    + " / \(Int(elapsed * 1000))ms / 速度 \(Int(-velocity.y))pt/s）"
-                    + "（AevonBottomFlickV324）")
-            }
-            flickArmed = false
-        case .cancelled, .failed:
-            flickArmed = false
+            terminationArmed = false
+            flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
         default:
             break
         }
+    }
+
+    /// 底边抬手判据（Stheno `sc_shouldCloseForBottomUpwardFlick:` 三条同时成立）。
+    private func terminationShouldClose(upward: CGFloat, velocity: CGPoint) -> Bool {
+        guard upward >= AevonWindowView.terminationLift else { return false }
+        let rise = -velocity.y
+        guard rise >= AevonWindowView.terminationVelocity else { return false }
+        return abs(velocity.x) * AevonWindowView.terminationCone <= rise
     }
 
     // MARK: - 边条移动
@@ -1792,6 +1842,8 @@ final class AevonWindowView: UIView {
 
     /// 空闲时预抓快照进缓存（窗口创建后首帧、每次缩放提交后各一次）。
     private func scheduleSnapshotRecapture(after delay: TimeInterval = 0.6) {
+        // V0.3.25（AevonNoFreezeV325）：B3 不盖帧 ⇒ 预抓也没有消费方，直接不抓（省热路径开销）
+        guard !AevonWindowView.freezeDisabled else { return }
         snapshotRecaptureWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isLiveResizing, !self.isBarHoldMoving,
@@ -1940,6 +1992,14 @@ final class AevonWindowView: UIView {
      * Stheno 逆向对照（浮窗生命周期报告 §揭幕）：它的揭幕判据 = 「启动图封面 + **连续
      * 就绪采样** + 代际」，不是固定延迟。这里搬"连续就绪采样"，采样指标换成画面清晰度
      * —— 直接对准症状本身。 */
+    /// V0.3.25（AevonNoFreezeV325）：**B3 —— 回桌面完全不盖定格帧（完全按 Stheno）。**
+    ///
+    /// `installDarkFreeze` / `installTransitionFreeze` 的入口闸，同时停掉三处抓帧
+    /// （空闲预抓 / 滚动刷新 / 可信首帧）—— 不盖帧就没有消费方，抓帧只是热路径白烧。
+    /// 改回 `false` 即整条回退到 0.3.24 的盖帧行为（代码与判据全部保留）。
+    static let freezeDisabled = true
+    /// 「盖帧已停用」日志只打前 3 条，避免每次内容掉出画刷一行
+    private static var freezeSkipLogCount = 0
     /// V0.3.24（AevonSharpCacheGateV324）：同窗历史**最清晰**帧的拉普拉斯方差 —— 撤帧门槛的
     /// 绝对基准。取最大值而非滑动平均：一次清晰帧就把门槛抬到正确高度，模糊帧永远抬不高它。
     private var sharpBaseline: Double = 0
@@ -2464,6 +2524,28 @@ final class AevonWindowView: UIView {
     /// 现在只接受「有明显明暗差异」的图（见 `imageLooksLikeContent`），
     /// 空壳一律不盖：宁可让真实画面自己回来，也不盖一张假的。
     private func installDarkFreeze(reason: String) {
+        /* V0.3.25（AevonNoFreezeV325）：**B3 —— 回桌面完全不盖帧，完全按 Stheno。**
+         *
+         * Stheno 的 SCFloatingContainerView 从不抓实时截图盖帧：它只有冷启动期的
+         * `SCStartupCoverView`（UIImageView + 启动图/最后一张显示图），内容就绪判据
+         * `sc_hostedContentIsReadyInHostView:`（layer 子树里有 CALayerHost、宽高 >1pt、
+         * KVC `contextId` 非 0、KVC `hasBeenCommitted` == YES）连续 2 拍成立才
+         * `sc_revealHostedContentForHostView:` 一次性揭示；之后回桌面也不盖任何东西。
+         *
+         * 我们 0.2.47 起那一整套「定格帧」是给黑屏兜底的，但它同时是
+         * 「先模糊 → 再变清晰」的唯一来源：盖上去的是一张缓存帧（可能低清 / 空白，
+         * Aevon(98) 日志 20:41:32 实测 `可信首帧已建立（清晰度 1）`），0.9s 保护期后
+         * 撤帧露出实时画面 —— 用户读到的就是「糊一下再清」。
+         * 用户 0.3.24 后定档 B3：整条停用。不抓帧、不盖帧、不压帧。
+         * 代价（已告知）：回桌面那 0.3~0.5s 浮窗里没有画面。 */
+        if AevonWindowView.freezeDisabled {
+            if AevonWindowView.freezeSkipLogCount < 3 {
+                AevonWindowView.freezeSkipLogCount += 1
+                AevonLog.info("[窗口] 盖帧已停用（B3：完全按 Stheno，不盖定格帧）→ 跳过（\(reason)）"
+                    + "（AevonNoFreezeV325）")
+            }
+            return
+        }
         guard darkFreezeView == nil, hintLabel.isHidden, !isTearingDown else { return }
         // V0.2.100（AevonReturnDeadlineV2100，用户确认方案 F，Stheno SCWSNativeFullRequest
         // .returnDeadline 同构）：盖帧起挂 1.2s 固定撤帧保护期 —— 期内任何撤帧路径一律
@@ -2624,6 +2706,8 @@ final class AevonWindowView: UIView {
     /// 抓不到就退避：远程表面抓取可能恒为透明（0.2.26 已记录的兜底路径），
     /// 连续 3 次失败说明这台设备上抓不出快照 → 间隔放到 30 秒，别白烧 CPU。
     private func refreshRollingSnapshot() {
+        // V0.3.25（AevonNoFreezeV325）：B3 不盖帧 ⇒ 滚动刷新没有消费方
+        guard !AevonWindowView.freezeDisabled else { return }
         let now = CACurrentMediaTime()
         let interval: TimeInterval = snapshotMissStreak >= 3 ? 30.0 : 3.0
         guard now - lastSnapshotRefreshAt >= interval else { return }
@@ -3090,6 +3174,9 @@ final class AevonWindowView: UIView {
     /// 抓取成本：一次 drawHierarchy（约 10~30ms），发生在窗刚上屏的同一拍，
     /// 且只在开窗时执行一次（失败重试上限 3 次，间隔 0.4s）。
     private func primeSharpSnapshot(reason: String) {
+        // V0.3.25（AevonNoFreezeV325）：B3 不盖帧 ⇒ 可信首帧无人消费（0.3.24 的那套
+        // 「空白帧被当基准」问题也随之消失：根本不抓）
+        guard !AevonWindowView.freezeDisabled else { return }
         guard sharpBaseline <= 1.0 || lastSharpSnapshotImage == nil else { return }
         guard primeSharpAttempts < 3 else { return }
         primeSharpAttempts += 1

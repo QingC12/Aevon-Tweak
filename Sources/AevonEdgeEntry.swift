@@ -92,17 +92,24 @@ enum AevonEdgeEntry {
     private static var floatBarHoldDeadline: CFTimeInterval = 0
     private static let floatBarHoldDelay: CFTimeInterval = 0
     private static let floatBarHoldRadius: CGFloat = 18
-    /// V0.3.24（AevonBottomFlickV324）：底边上滑关闭的状态（取代底边双击）。
-    /// 判据与视图侧 `AevonWindowView.handleBottomFlickPan` 同口径，只是这里拿不到
-    /// UIPanGestureRecognizer 的速度，用「位移 + 耗时」等价换算（24pt/180ms）。
-    private static var floatFlickCandidate = false
-    private static var floatFlickArmed = false
-    private static var floatFlickStart: CGPoint = .zero
-    private static var floatFlickBeganAt: CFTimeInterval = 0
-    private static let floatFlickDistance: CGFloat = 40
-    private static let floatFlickQuickDistance: CGFloat = 24
-    private static let floatFlickQuickTime: CFTimeInterval = 0.18
-    private static let floatFlickDominance: CGFloat = 1.2
+    /// V0.3.25（AevonBottomSplitV325）：底边「移动 + 长按后上甩关闭」的状态。
+    ///
+    /// Stheno 实证（ScreenCore.dylib `sc_addTerminationGestureToRegion:` 0x34cf4 /
+    /// `sc_shouldCloseForBottomUpwardFlick:` 0x38444）：底边属于
+    /// `ScreenCore.Split.BottomMoveClose` —— **移动和关闭共存**；关闭手势是
+    /// UILongPressGestureRecognizer（0.4s / 12pt），手一动就 fail 让 pan 拿回移动权。
+    /// 全局通道拿不到 UIGestureRecognizer 的 velocity，速度用「最后一段位移 / 耗时」换算。
+    private static var floatTermCandidate = false
+    private static var floatTermArmed = false
+    private static var floatTermBeganAt: CFTimeInterval = 0
+    private static var floatTermPoint: CGPoint = .zero
+    private static var floatTermLastPoint: CGPoint = .zero
+    private static var floatTermLastAt: CFTimeInterval = 0
+    private static let floatTermHold: CFTimeInterval = 0.4
+    private static let floatTermSlop: CGFloat = 12
+    private static let floatTermLift: CGFloat = 24
+    private static let floatTermVelocity: CGFloat = 260
+    private static let floatTermCone: CGFloat = 1.35
 
     /* V0.3.24（AevonBottomFlickV324）：双击候选三件套（floatLastTapAt / floatLastTapPoint
      * / floatLastTapWindow）与两个常量（floatDoubleTapGap / floatDoubleTapRadius）整体退役。
@@ -729,19 +736,23 @@ enum AevonEdgeEntry {
          *
          * 历史标记 AevonFloatBottomDblCloseV221 / AevonDblTapHealV256 / AevonDblTapGuardV261
          * 在抬手日志串里保底（二进制断言不落空）。 */
+        /* V0.3.25（AevonBottomSplitV325，用户 Aevon(99)「底部要能移动，又要能关」）：
+         * 底边不再独占「上滑关闭」，回到 Stheno 的 `ScreenCore.Split.BottomMoveClose`
+         * 结构 —— **落指即拖（移动） + 按住 0.4s 不动进关闭预备态**。
+         * 这里只登记长按候选，移动交给下面的统一 `.bar` 路径（与左右边条同一条）。 */
         if case .bar(.bottom) = hit.grab {
-            floatTouchID = touchID
-            floatWindow = hit.window
-            floatGrab = hit.grab
-            floatDeadline = now + floatDragLimit
-            lastFloatMovedAt = now          // V0.2.55：began 也算在场，丢 ended 时自愈有锚
-            floatFlickCandidate = true
-            floatFlickArmed = false
-            floatFlickStart = point
-            floatFlickBeganAt = now
-            AevonLog.info("[窗口] 底边手势条落指（\(Int(point.x)),\(Int(point.y))）→ 上滑关闭候选"
-                + "（AevonBottomFlickV324）")
-            return true
+            floatTermCandidate = true
+            floatTermArmed = false
+            floatTermBeganAt = now
+            floatTermPoint = point
+            floatTermLastPoint = point
+            floatTermLastAt = now
+            AevonLog.info("[窗口] 底边落指（\(Int(point.x)),\(Int(point.y))）→ 可移动；"
+                + "按住 0.4s 不动后上甩 \(Int(AevonEdgeEntry.floatTermLift))pt 才关闭"
+                + "（AevonBottomSplitV325）")
+        } else {
+            floatTermCandidate = false
+            floatTermArmed = false
         }
 
         floatTouchID = touchID
@@ -781,24 +792,25 @@ enum AevonEdgeEntry {
             return false
         }
         lastFloatMovedAt = now
-        /* V0.3.24（AevonBottomFlickV324）：底边上滑 —— 吞住整根手指，只记「上滑成立」。
-         * 关窗留到抬手（ended），这样这根手指存续期间浮窗一直活着，App 侧的
-         * 矩形 + 心跳判据全程有效，不会出现「窗没了但手指还在」的双投漏帧。 */
-        if floatFlickCandidate {
-            let dy = point.y - floatFlickStart.y
-            let dx = point.x - floatFlickStart.x
-            let upward = -dy
-            floatDeadline = now + floatDragLimit
-            if upward >= 10, upward > abs(dx) * floatFlickDominance {
-                if !floatFlickArmed {
-                    floatFlickArmed = true
-                    AevonLog.info("[窗口] 底边上滑成立（上滑 \(Int(upward))pt）→ 抬手关闭（全局通道）"
-                        + "（AevonBottomFlickV324）")
-                }
-            } else if dy > 12, !floatFlickArmed {
-                // 明显向下滑 = 不是关闭手势，也不是移动（底边不承担移动）
-                floatFlickCandidate = false
+        /* V0.3.25（AevonBottomSplitV325）：底边长按预备态。
+         * 0.4s 内累计位移 ≤12pt 才成立（Stheno `setMinimumPressDuration: 0.4` /
+         * `setAllowableMovement: 12` 同参数）；成立即回位并**停止移动**，此后只判上甩。
+         * 一动（>12pt）就不成立 —— pan 继续移动窗口，这就是「移动与关闭共存」。 */
+        if floatTermCandidate, !floatTermArmed {
+            let held = now - floatTermBeganAt
+            let moved = hypot(point.x - floatTermPoint.x, point.y - floatTermPoint.y)
+            if held >= AevonEdgeEntry.floatTermHold, moved <= AevonEdgeEntry.floatTermSlop {
+                floatTermArmed = true
+                win.grabCancel()
+                AevonLog.info("[窗口] 底边长按成立（全局通道 0.4s / ≤12pt）→ 关闭预备态："
+                    + "上移 \(Int(AevonEdgeEntry.floatTermLift))pt 且速度 "
+                    + "\(Int(AevonEdgeEntry.floatTermVelocity))pt/s 以上才关（AevonBottomSplitV325）")
             }
+        }
+        if floatTermArmed {
+            floatTermLastPoint = point
+            floatTermLastAt = now
+            floatDeadline = now + floatDragLimit
             return true
         }
         if floatBarPending {
@@ -833,39 +845,45 @@ enum AevonEdgeEntry {
                                                cancelled: Bool) -> Bool {
         guard floatTouchID != 0, touchID == floatTouchID else { return false }
         let win = floatWindow
-        /* V0.3.24（AevonBottomFlickV324）：上滑关闭在**抬手**执行。
-         * 两条路径必居其一：位移 ≥40pt，或 24pt/180ms 的快甩。方向必须占优（×1.2）。
-         * 未达阈值 = 无动作（底边不再有「轻点/双击」语义，避免误关）。 */
-        if floatFlickCandidate {
-            let dy = point.y - floatFlickStart.y
-            let dx = point.x - floatFlickStart.x
-            let upward = -dy
-            let elapsed = CACurrentMediaTime() - floatFlickBeganAt
-            let dominant = upward > abs(dx) * floatFlickDominance
-            let byDistance = upward >= floatFlickDistance
-            let byQuick = upward >= floatFlickQuickDistance && elapsed <= floatFlickQuickTime
-            let fire = !cancelled && dominant && floatFlickArmed && (byDistance || byQuick)
-            floatFlickCandidate = false
-            floatFlickArmed = false
-            clearFloatGesture()
-            if fire, let w = win {
-                AevonLog.info("[窗口] 底边上滑 → 关闭浮窗（上滑 \(Int(upward))pt / \(Int(elapsed * 1000))ms，"
-                    + "自愈锚点已登记）"
-                    + "（AevonBottomFlickV324；退役 AevonFloatBottomDblCloseV221"
-                    + " AevonDblTapHealV256 AevonDblTapGuardV261）")
-                AevonWindowManager.close(bundleID: w.bundleID)
-            } else {
-                AevonLog.info("[窗口] 底边手势条未达上滑阈值 → 无动作（上滑 \(Int(upward))pt"
-                    + " / \(Int(elapsed * 1000))ms / 方向占优=\(dominant ? "是" : "否")）"
-                    + "（AevonBottomFlickV324）")
+        /* V0.3.25（AevonBottomSplitV325）：底边在**抬手**收口。
+         * 三种结局：①没进预备态 = 普通移动，走下面的 grabEnd；
+         * ②进了预备态但没上甩 = 回位、不关窗；③进了预备态且命中判据 = 关窗。
+         * 判据与视图侧 `terminationShouldClose` 同源（Stheno `sc_shouldCloseForBottomUpwardFlick:`）：
+         * 上移 ≥24pt、上滑速度 ≥260pt/s、|vx| × 1.35 ≤ 上滑速度。 */
+        if floatTermCandidate {
+            let now = CACurrentMediaTime()
+            let upward = floatTermPoint.y - point.y
+            let dt = min(max(now - floatTermLastAt, 0.016), 0.08)
+            let rise = (floatTermLastPoint.y - point.y) / dt
+            let vx = (point.x - floatTermLastPoint.x) / dt
+            let armed = floatTermArmed
+            floatTermCandidate = false
+            floatTermArmed = false
+            if armed {
+                clearFloatGesture()
+                let fire = !cancelled
+                    && upward >= AevonEdgeEntry.floatTermLift
+                    && rise >= AevonEdgeEntry.floatTermVelocity
+                    && abs(vx) * AevonEdgeEntry.floatTermCone <= rise
+                if fire, let w = win {
+                    AevonLog.info("[窗口] 底边上甩 → 关闭浮窗（上移 \(Int(upward))pt / "
+                        + "速度 \(Int(rise))pt/s）"
+                        + "（AevonBottomSplitV325；收容 AevonFloatBottomDblCloseV221"
+                        + " AevonDblTapHealV256 AevonDblTapGuardV261）")
+                    AevonWindowManager.close(bundleID: w.bundleID)
+                } else {
+                    AevonLog.info("[窗口] 底边长按后未达上甩判据 → 不关窗（上移 \(Int(upward))pt"
+                        + " / 速度 \(Int(rise))pt/s）（AevonBottomSplitV325）")
+                    win?.grabCancel()
+                }
+                return true
             }
-            return true
+            // 没进预备态：这次是普通移动/轻点，落回下面的通用收口
         }
         if floatBarPending {
             floatBarPending = false
             /* 边条上的轻点（没有拖动）：左右缘 = 停靠 / 装回（AevonDockTapV251）；
-             * 底边没有轻点语义 —— 底边落指一律走上面的上滑终止手势分支（V0.3.24），
-             * 这里的 .bottom 情形不可达，只留一条日志便于对账。 */
+             * 底边轻点 = 无动作（V0.3.25 起底边既能移动也能关闭，但轻点本身不承载语义）。 */
             if !cancelled, let grab = floatGrab, case .bar(let edges) = grab, win != nil {
                 if edges == .left || edges == .right {
                     let side: AevonDockSide = edges == .left ? .left : .right
@@ -876,7 +894,8 @@ enum AevonEdgeEntry {
                         _ = AevonWindowManager.dockCurrent(side: side)
                     }
                 } else {
-                    AevonLog.info("[窗口] 底边轻点无动作（底边只有上滑关闭语义）（AevonBottomFlickV324）")
+                    AevonLog.info("[窗口] 底边轻点无动作（底边可移动、按住 0.4s 后上甩才关闭）"
+                        + "（AevonBottomSplitV325）")
                 }
             }
             clearFloatGesture()
@@ -904,10 +923,10 @@ enum AevonEdgeEntry {
         floatBarPending = false
         floatBarHoldDeadline = 0
         lastFloatMovedAt = 0
-        // V0.3.24（AevonBottomFlickV324）：上滑状态随手势一起清（丢 ended 时不残留）
-        floatFlickCandidate = false
-        floatFlickArmed = false
-        floatFlickBeganAt = 0
+        // V0.3.25（AevonBottomSplitV325）：底边长按/预备态随手势一起清（丢 ended 时不残留）
+        floatTermCandidate = false
+        floatTermArmed = false
+        floatTermBeganAt = 0
     }
 
     /// V0.2.57（AevonZombieSealV257）：把一根「began 已被本通道吞掉」的触摸封印到抬手。

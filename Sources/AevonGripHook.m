@@ -2113,3 +2113,30 @@ __attribute__((used)) static const char AevonSceneOwnedV324Marker[] = "AevonScen
  * 每窗上限 1 次，且只在「曾经有过画面」时触发（首次加载慢不算死）。
  * Stheno 对照：`sc_failSession:error:` / `sc_finalizeSession:` —— 会话失败有明确收尾。 */
 __attribute__((used)) static const char AevonPresenterRebuildV324Marker[] = "AevonPresenterRebuildV324";
+
+/* V0.3.25（AevonBottomSplitV325）：**底边 = 移动 + 长按后上甩关闭**（用户 Aevon(99)
+ * 「底部不能移动有点不适应，上滑关闭又总误触，有没有两全其美的方法」）。
+ * Stheno 实证（ScreenCore.dylib）：
+ *   · 偏好键 `ScreenCore.Split.BottomMoveClose` —— 底边本来就是「移动 + 关闭」共存；
+ *   · `sc_addTerminationGestureToRegion:` @0x34cf4 = UILongPressGestureRecognizer，
+ *     `setMinimumPressDuration: 0.4`、`setAllowableMovement: 12` —— 一动（>12pt）长按
+ *     立刻 fail，pan 拿回移动权，于是「移动」和「关闭」不需要二选一；
+ *   · `sc_shouldCloseForBottomUpwardFlick:` @0x38444 判据：translation.y ≤ −24、
+ *     −velocity.y ≥ 260pt/s（`splitBottomSwipeUpCloseVelocity` 默认）、|vx|×1.35 ≤ −vy。
+ * 0.3.24 的 10pt / 40pt / 700·s⁻¹ 全部退役（Aevon(98) 日志 21 次触底里 13 次
+ * 在 10~17pt 就成立 = 误触主体）。 */
+__attribute__((used)) static const char AevonBottomSplitV325Marker[] = "AevonBottomSplitV325";
+__attribute__((used)) static const char AevonTermHoldV325Marker[] = "AevonTermHoldV325";
+__attribute__((used)) static const char AevonTermLiftV325Marker[] = "AevonTermLiftV325";
+__attribute__((used)) static const char AevonTermVelV325Marker[] = "AevonTermVelV325";
+
+/* V0.3.25（AevonNoFreezeV325）：**B3 —— 回桌面完全不盖定格帧，完全按 Stheno。**
+ * Stheno 从不抓实时截图盖帧：它只有 `SCStartupCoverView`（UIImageView + 启动图/最后
+ * 显示图），内容就绪判据 `sc_hostedContentIsReadyInHostView:`（layer 子树有 CALayerHost、
+ * 宽高 >1pt、KVC `contextId` 非 0、KVC `hasBeenCommitted` == YES）连续 2 拍成立才
+ * `sc_revealHostedContentForHostView:` 揭示一次；之后回桌面不盖任何东西。
+ * 我们那套定格帧是黑屏兜底，但同时是「先模糊 → 再变清晰」的唯一来源（Aevon(98)
+ * 日志 20:41:32 实测 `可信首帧（清晰度 1）`：空白帧被当基准 → 闸门塌到 1 → 盖上去
+ * 就是一张糊图，0.9s 后撤掉才是实时画面）。用户定档：整条停用。
+ * 代价（已告知）：回桌面那 0.3~0.5s 窗内没有画面。 */
+__attribute__((used)) static const char AevonNoFreezeV325Marker[] = "AevonNoFreezeV325";
