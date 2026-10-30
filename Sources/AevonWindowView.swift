@@ -1752,7 +1752,7 @@ final class AevonWindowView: UIView {
     private var darkFreezeImage: UIImage?
     /// 让位期比对只做一次（0.2.65 教训：drawHierarchy 强迫重绘 = 闪，绝不逐拍抓）。
     private var frameMatchTried = false
-    /* V0.2.94~0.2.99 的「转场静默」几何采样（revealQuietTicks/guardQuietTicks 等）已于
+    /* V0.2.94~0.2.99 的「转场静默」几何采样（旧静默拍数/几何基线变量组）已于
      * V0.2.100 整体退役 —— Aevon(77) 实锤：几何静止 ≠ 画面清晰（静止时活表面仍是被
      * 切换器重采样后的模糊帧），且「静默重抓」从模糊表面抓回来的还是模糊帧。 */
     /* V0.2.100（AevonReturnDeadlineV2100，用户 Aevon(77)「按 Stheno 无模糊段是独立窗口的
