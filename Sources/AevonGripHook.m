@@ -878,11 +878,15 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
                                               userInfo:nil
                                                repeats:NO];
     CGSize scr2 = [UIScreen mainScreen].bounds.size;
+    /* V0.3.15（AevonOwnLogAsciiV315）：`%s` 只传纯 ASCII —— 原来这里塞的是中文 C 字符串，
+     * `stringWithFormat:` 的 `%s` 按非 UTF-8 解释，写进日志就成了
+     * 「ËæπÁºòÂÄôÈÄâÔºåËµ∞‰∏•Ê†ºÂà§ÊçÆ」这种二次编码乱码，level 1 / level 2 分不出来，
+     * 整篇日志的判据价值掉一半（Aevon(92) 就是这样）。中文一律走 @"…" + %@。 */
     NSString *hd = [NSString stringWithFormat:
-                    @"落点 x=%.0f y=%.0f（离右缘 %.0fpt，%s）→ 扣住触摸，等左滑达阈值"
+                    @"落点 x=%.0f y=%.0f（离右缘 %.0fpt，%@）→ 扣住触摸，等左滑达阈值"
                     "（App 此时收不到 began）",
                     p.x, p.y, scr2.width - p.x,
-                    _ownStrict ? "边缘候选，走严格判据" : "贴边落点"];
+                    _ownStrict ? @"L2 strict 边缘候选" : @"L1 flush 贴边落点"];
     AevonGripOwnLog("hold", hd.UTF8String);
 }
 
@@ -910,11 +914,22 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
      *   · 贴边落点（level 1）：上面的宽松判据原样保留 —— 落点本来就压在右缘，
      *     左滑 8pt 就是明确意图，不必再额外刁难；
      *   · 边缘候选（level 2）：落点离右缘 5~40pt，可能是抖音进度条、也可能是想呼盘
-     *     但落偏的手指。所以**只认近似纯水平的左滑**（|dy| ≤ 6），并且一旦看清
-     *     「不是左滑」（右移 / 纵向 ≥12）立刻还回去，不等 0.28s 闸。 */
+     *     但落偏的手指。所以只认近似纯水平的左滑，并且一旦看清「不是左滑」
+     *     （右移 / 纵向 ≥12）立刻还回去，不等 0.28s 闸。
+     *
+     * V0.3.15（AevonStrictAngleV315）：严格判据从「绝对 |dy| ≤ 6」改成**角度式**。
+     * 依据 Aevon(92) 日志的 6 次 strict 放行：
+     *   · dx=-99 dy=13（离右缘 9pt）—— 角度只有 7.5°，明明是明确的大左滑，却被
+     *     「|dy|=13 > 6」判成「不纯水平」放掉了 —— 用户会觉得「明明划了很长却呼不出来」；
+     *   · dx=-34 dy=13（离右缘 37pt）—— 角度 21°，这个才是真该放行的进度条拖动。
+     * 一个绝对阈值同时要判这两件事是判不了的：短滑的 ±6pt 是抖动，长滑的 13pt 才是方向。
+     * 现在两条取或：短滑看绝对量（|dy| ≤ 6，样本太短角度不可靠），长滑看锥形
+     * （|dy| ≤ |dx| × 0.25 ≈ 14°）。上面那两例分别是「认」和「放」，恰好都对了。 */
     BOOL horizontal = (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy));
     if (_ownStrict) {
-        if (horizontal && fabs((double)dy) <= 6.0) {
+        double adx = fabs((double)dx);
+        double ady = fabs((double)dy);
+        if (horizontal && (ady <= 6.0 || ady <= adx * 0.25)) {
             _ownSummoned = YES;
             [_ownBail invalidate];
             _ownBail = nil;
@@ -1710,3 +1725,16 @@ __attribute__((used)) static const char AevonOwnGateV313Marker[] = "AevonOwnGate
  *   · padRect（+35pt）：边缘候选 → 先扣一帧，只有近似纯水平左滑才认，否则立刻还回去。
  * 两段式让「贴边就触发」和「右下角横向拖动不受影响」同时成立。 */
 __attribute__((used)) static const char AevonEdgePadV314Marker[] = "AevonEdgePadV314";
+
+/* V0.3.15（AevonGripHardcodeV315）：默认开启的呼出手势开关全部写进代码、设置页不再显示。
+ * 具体三条：GripOwnLeg（自建识别器腿）恒开、GripSystemYield（把手让路）恒开、
+ * GripHookProbe（取证深度）与 GripScope（右缘整条）UI 移除（代码仍读，默认 false）。
+ * 依据：这三条在 0.3.7 / 0.3.10 / 0.3.12 都已实证转正，留开关只剩「把唯一通路关掉
+ * 然后以为插件坏了」这一个用途。GripHandleHidden 反过来从二级页提到一级页 ——
+ * 它是用户真的会来回拨的（想看见边、想看不见边），留在二级页找不到。 */
+__attribute__((used)) static const char AevonGripHardcodeV315Marker[] = "AevonGripHardcodeV315";
+__attribute__((used)) static const char AevonHandleTopV315Marker[] = "AevonHandleTopV315";
+__attribute__((used)) static const char AevonSliderLiveV315Marker[] = "AevonSliderLiveV315";
+__attribute__((used)) static const char AevonZoneH35V315Marker[] = "AevonZoneH35V315";
+__attribute__((used)) static const char AevonStrictAngleV315Marker[] = "AevonStrictAngleV315";
+__attribute__((used)) static const char AevonOwnLogAsciiV315Marker[] = "AevonOwnLogAsciiV315";

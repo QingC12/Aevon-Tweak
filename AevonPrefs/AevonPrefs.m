@@ -375,9 +375,18 @@ static NSArray *AevonBuildFallback(id target) {
      * 历史标记 AevonProbeV107 / AevonProbeDefaultOffV217 仍收容在 AevonAssertionShim.m。 */
 
     id groupDetail = AevonNewGroup(@"圆盘把手",
-                                   @"把手的位置 / 长短在独立页里调（AevonGripPageV261）。");
+                                   @"呼出区大小在独立页里调（AevonGripPageV261）。");
     if (groupDetail != nil) [result addObject:groupDetail];
-    id gripButton = AevonNewSpecifier(@"把手位置 / 长度调整",
+    /* V0.3.15（AevonGripHardcodeV315）：把手显隐从二级页提到一级 —— 这是用户真会来回拨的
+     * 一个开关（想看见边 / 想看不见边），放在二级页里根本找不到。
+     * 原一级页那三个默认开启的呼出手势开关（GripOwnLeg / GripSystemYield / GripHookProbe）
+     * 已改为代码内固定，这里不再出现。 */
+    id sHide = AevonNewSwitch(@"隐藏把手", target, @"GripHandleHidden", @YES);
+    if (sHide != nil) [result addObject:sHide];
+    id groupHide = AevonNewGroup(@" ", @"打开（默认）：右缘不画那根小竖条，跟 Stheno 一样。"
+                                      @"万一两只识别器都没装上，把手会自己显形，不会彻底没有入口。");
+    if (groupHide != nil) [result addObject:groupHide];
+    id gripButton = AevonNewSpecifier(@"呼出区大小调整",
                                       target,
                                       NSSelectorFromString(@"aevonOpenGrip"),
                                       nil,
@@ -911,15 +920,45 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)aevonSliderValueChanged:(UISlider *)slider {
     id spec = nil;
     NSString *key = [self aevonKeyForSlider:slider specifier:&spec];
+    /* 先记住手指当前位置 —— refresh 之后要靠它把滑块压回来 */
+    const float fingerValue = slider.value;
     if (key.length > 0) {
         CFStringRef domain = (__bridge CFStringRef)AevonPrefsDomain;
         CFPreferencesSetAppValue((__bridge CFStringRef)key,
-                                 (__bridge CFPropertyListRef)@(slider.value),
+                                 (__bridge CFPropertyListRef)@(fingerValue),
                                  domain);
         CFPreferencesAppSynchronize(domain);
         /* 数值标签跟着手指走（不然只有滑块在动、数字不动） */
-        AevonSetProperty(spec, @(slider.value), @"default");
+        AevonSetProperty(spec, @(fingerValue), @"default");
     }
+    /*
+     * V0.3.15（AevonSliderLiveV315）：拖动时**每一帧**都让 PSSliderCell 重画一次
+     * 右侧的数值标签 —— 只改 specifier 的 default 是不够的：PSSliderCell 的
+     * 文本是在 -refreshCellContentsWithSpecifier: 里一次性写进 UILabel 的，
+     * 不调这个方法，数字就停在按下时的旧值，直到松手/重进页面才跳过去。
+     * 用户 Aevon(93) 要的就是「拖着滑条，数字和位置一起实时走」。
+     *
+     * ⛔ refresh 会把滑块位置按 specifier 重设一遍（aevonSyncSlider 里踩过这个坑：
+     * 「refresh 可能又把滑块设回旧值」），所以刷完必须把手指的值再压回去一次，
+     * 否则滑块会在拖动过程中被拽回、手感变成一顿一顿的。
+     * ⛔ 只用 @try 包住，失败就退回「只有松手才更新」的旧行为，绝不让它炸设置页。
+     */
+    UITableViewCell *cell = (UITableViewCell *)slider.superview;
+    while (cell != nil && ![cell isKindOfClass:[UITableViewCell class]]) {
+        cell = (UITableViewCell *)cell.superview;
+    }
+    if (spec != nil && cell != nil
+        && [cell respondsToSelector:@selector(refreshCellContentsWithSpecifier:)]) {
+        @try {
+            [cell performSelector:@selector(refreshCellContentsWithSpecifier:) withObject:spec];
+        } @catch (NSException *exception) {
+        }
+    }
+    /* 把手指的值压回滑块 —— 必须在 refresh 之后，顺序不能反 */
+    if (fabsf(slider.value - fingerValue) > 0.0001f) {
+        [slider setValue:fingerValue animated:NO];
+    }
+    slider.continuous = YES;
     /* 拖动时每帧都会走到这里：写偏好不节流，但跨进程通知限到 ~30ms 一次，
      * 免得 SpringBoard 被通知洪水拖慢（视觉上仍然跟手）。 */
     static CFTimeInterval lastPost = 0;
@@ -1069,24 +1108,32 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 #pragma mark - V0.2.61：二级「圆盘把手」页（滑条专用，滑条不挂 ⓘ）
 
-/* Grip.plist 读不到时的代码兜底：两条滑条 + 分组说明，数值与 plist 完全一致 */
+/* Grip.plist 读不到时的代码兜底：两条滑条 + 分组说明，数值与 plist 完全一致。
+ *
+ * V0.3.15（AevonGripHardcodeV315）：整段重写。原来的兜底还在用 0.3.8 的三滑条
+ * （GripY / GripLen / GripWidth）—— 那三个 key 在 0.3.13 就随「右缘底部百分比矩形」
+ * 一起退役了，bandRect 一个都不再读。也就是说这不是「兜底」，是三条**拨了没反应**
+ * 的死滑条：一旦 Grip.plist 读失败（roothide 下 bundle 路径会变），用户看到的是一个
+ * 完全失效的设置页。现在跟 plist 一一对应：高度 35%（15~50）、宽度 5pt（1~60）。 */
 static NSArray *AevonBuildFallbackGrip(id target) {
     NSMutableArray *result = [NSMutableArray array];
 
-    id group = AevonNewGroup(@"圆盘把手外观",
-                             @"把手是贴屏幕右缘的小短竖条（宽 5pt）。可点热区向屏幕内侧延伸约 40pt、"
-                             @"上下各多出 14pt，手指不必精确按在竖条上。两个滑条都即时生效，不用注销。");
+    id group = AevonNewGroup(@"呼出区域大小",
+                             @"呼出区 = 贴着右缘的一条窄带，从底部往上 35% 高度。"
+                             @"两个滑条拖动即时生效，数值与位置实时跟着手指走。"
+                             @"把手显隐在一级菜单。");
     if (group != nil) [result addObject:group];
 
-    id y = AevonNewSlider(@"位置：从底部起 %", target, @"GripY", 10.0, 90.0, 30.0);
-    if (y != nil) [result addObject:y];
-    id groupY = AevonNewGroup(@" ", @"10 = 贴近屏幕底部，90 = 贴近顶部；默认 30（单手最顺手）。");
-    if (groupY != nil) [result addObject:groupY];
+    id h = AevonNewSlider(@"区域高度：屏高 %", target, @"GripZoneH", 15.0, 50.0, 35.0);
+    if (h != nil) [result addObject:h];
+    id groupH = AevonNewGroup(@" ", @"从屏幕底部往上算。35 = 默认（约 326pt 高）。");
+    if (groupH != nil) [result addObject:groupH];
 
-    id len = AevonNewSlider(@"长度：pt", target, @"GripLen", 36.0, 120.0, 64.0);
-    if (len != nil) [result addObject:len];
-    id groupLen = AevonNewGroup(@" ", @"36 = 很短的一条，120 = 接近一根手指高度；默认 64。");
-    if (groupLen != nil) [result addObject:groupLen];
+    id w = AevonNewSlider(@"区域宽度：pt", target, @"GripZoneW", 1.0, 60.0, 5.0);
+    if (w != nil) [result addObject:w];
+    id groupW = AevonNewGroup(@" ", @"贴着右边缘向内算，单位 pt。5 = 默认（只认真正贴边的手指）；"
+                                @"调大到 20~30 更容易划中，但会开始抢右缘附近的横向操作。");
+    if (groupW != nil) [result addObject:groupW];
 
     return result.count > 0 ? result : nil;
 }

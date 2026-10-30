@@ -10,9 +10,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>呼出区域（占屏幕的比例）</string>
+			<string>呼出区域大小</string>
 			<key>footerText</key>
-			<string>0.3.14 起（AevonEdgePadV314）：呼出区 = **贴着右缘的一条窄带**，不再是 0.3.13 那块 25% 宽的矩形。默认 5pt ≈「手指贴着右边」，底部往上 30% 高度内向左滑就呼出圆盘。收窄之后，抖音底部进度条、右下角点赞/评论/分享这些按钮的横向拖动不再被抢。宽度别设成 0：滑条最小是 1，实测 5 附近最接近「贴边」的自然落点。</string>
+			<string>0.3.15：呼出区 = 贴着右缘的一条窄带，从底部往上 35% 高度。两个滑条拖动即时生效，数值与位置实时跟着手指走。把手显隐在一级菜单。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -24,7 +24,7 @@
 			<key>key</key>
 			<string>GripZoneH</string>
 			<key>default</key>
-			<real>30</real>
+			<real>35</real>
 			<key>min</key>
 			<real>15</real>
 			<key>max</key>
@@ -36,7 +36,7 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>从屏幕底部往上算。30 = 默认（约 280pt 高，单手拇指自然覆盖的右下角）；调大才会往屏幕中部延伸。</string>
+			<string>从屏幕底部往上算。35 = 默认（约 326pt 高）；调大才会往屏幕中部延伸，调小则只认更靠近底部的那一段。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -60,47 +60,7 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>贴着屏幕右边缘向内算，单位 pt（不随屏幕大小变）。5 = 默认（只认真正贴边的手指）；调大到 20~30 更容易划中，但会开始抢右缘附近的横向操作。落点稍微偏内（最多 +35pt）时不会直接判死：先扣住一帧，只有近似纯水平左滑才呼盘，否则立刻还给 App。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>label</key>
-			<string>隐藏把手（推荐）</string>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>GripHandleHidden</string>
-			<key>default</key>
-			<true/>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
-			<key>footerText</key>
-			<string>打开（默认）：右缘不再画那根小竖条，呼盘完全靠系统手势管线里的识别器 —— 和 Stheno 一样没有显形把手。关掉：竖条会出现在呼出区里，方便你看清区域位置。安全阀：如果两只识别器都没装上，把手会自己显形，不会让你彻底没有入口。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>label</key>
-			<string>右缘整条都能呼（不推荐）</string>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>GripScope</string>
-			<key>default</key>
-			<false/>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
-			<key>footerText</key>
-			<string>「右缘整条都能呼」关着（推荐）：只有上面那块区域能呼出圆盘，区域外的右缘滑动正常交给 App。打开：右缘任意高度左滑都呼盘，等于 0.3.7 的行为，会和侧滑返回插件冲突。只有当你发现区域怎么调都呼不出来时才需要打开。</string>
+			<string>贴着右边缘向内算，单位 pt。5 = 默认（只认真正贴边的手指）；调大到 20~30 更容易划中，但会开始抢右缘附近的横向操作。</string>
 		</dict>
 	</array>
 </dict>

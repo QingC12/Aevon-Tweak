@@ -137,7 +137,10 @@ enum AevonBootstrap {
         exName = nil
         exReason = nil
         AevonTryExecute({
-            AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: true),
+            // V0.3.15（AevonGripHardcodeV315）：第一参从「读 GripOwnLeg」改成常量 true。
+            // 用户 Aevon(93) 定档：默认开启的呼出手势开关写进代码、设置页不再显示。
+            // 第二参 GripHookProbe 仍读偏好 —— 只控制取证深度，UI 已移除（恒 false）。
+            AevonGripOwnLegEnable(true,
                                   AevonPrefs.bool("GripHookProbe", default: false))
         }, &exName, &exReason)
         if let name = exName {

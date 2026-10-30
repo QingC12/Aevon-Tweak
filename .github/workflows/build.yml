@@ -181,7 +181,9 @@ jobs:
                    AevonOwnLegTypeV311 AevonOwnSuppressV311 \
                    AevonOwnClaimV312 AevonOwnIvarV312 AevonOwnUIKitMgrV312 \
                    AevonGripZoneV313 AevonHandleHideV313 AevonOwnGateV313 \
-                   AevonEdgePadV314; do
+                   AevonEdgePadV314 AevonGripHardcodeV315 AevonHandleTopV315 \
+                   AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 \
+                   AevonOwnLogAsciiV315; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -792,12 +794,21 @@ jobs:
             || { echo "::error::Grip.plist 缺少 GripZoneH 滑条（区域高度不可调）"; exit 1; }
           plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripZoneW' \
             || { echo "::error::Grip.plist 缺少 GripZoneW 滑条（区域宽度不可调）"; exit 1; }
-          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripScope' \
-            || { echo "::error::Grip.plist 缺少 GripScope 开关（右缘整条兜底没了）"; exit 1; }
-          # V0.3.13（AevonHandleHideV313）：隐藏把手开关必须在位（默认开 = Stheno 同款无显形边缘）
-          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripHandleHidden' \
-            || { echo "::error::Grip.plist 缺少 GripHandleHidden 开关（把手藏不起来）"; exit 1; }
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];ok=(len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==30.0 and len(s)==1 and s[0].get('default') is False and len(x)==1 and x[0].get('default') is True);print('V0.3.13/14 Grip.plist: 宽度 5pt/1~60 + 高度 30%/15~50 + 隐藏把手默认开 + GripScope 默认关 ✓' if ok else '::error::V0.3.13 Grip.plist 区域量程/默认值不符（应 25%/10~40、30%/15~50、隐藏默认开、GripScope 默认关）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
+          # V0.3.15（AevonGripHardcodeV315）反转：GripScope（右缘整条）从设置页移除 ——
+          # 它与 0.3.14「贴边窄带」方向相反，留着只会让用户误开成整条。
+          if plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripScope'; then
+            echo "::error::Grip.plist 又出现 GripScope（0.3.15 已移除该退路开关）"
+            exit 1
+          fi
+          # V0.3.15（AevonHandleTopV315）：隐藏把手提到**一级菜单** —— 它是用户真会来回拨的开关，
+          # 埋在二级页里找不到。二级页不许再有，一级页必须有。
+          if plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripHandleHidden'; then
+            echo "::error::Grip.plist 还有 GripHandleHidden（0.3.15 起该开关在一级 Root.plist）"
+            exit 1
+          fi
+          plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'GripHandleHidden' \
+            || { echo "::error::Root.plist 缺少 GripHandleHidden（隐藏把手没提到一级页）"; exit 1; }
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];ok=(len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15 Grip.plist: 宽度 5pt/1~60 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15 Grip.plist 量程不符（应 5pt/1~60、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
             || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
@@ -1121,7 +1132,9 @@ jobs:
           # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势）→ 5 个改 6 个。
           # V0.3.7（AevonYieldDefaultV307）：该项默认值 false → true（转正，不再是 A/B 档）。
           # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）→ 6 个改 7 个。
-          [ "$ROOT_SW" -eq 7 ] || { echo "::error::一级页开关数不是 7（实际 $ROOT_SW）—— 0.3.9 清单：Enabled/RingGripEnabled/GripHookProbe/GripSystemYield/GripOwnLeg/LogEnabled/CrashGuard"; exit 1; }
+          # V0.3.15（AevonGripHardcodeV315）：7 → 5。GripHookProbe / GripSystemYield / GripOwnLeg
+          # 三个默认开启的呼出手势开关全部写进代码、从设置页移除；GripHandleHidden 从二级页提上来。
+          [ "$ROOT_SW" -eq 5 ] || { echo "::error::一级页开关数不是 5（实际 $ROOT_SW）—— 0.3.15 清单：Enabled/RingGripEnabled/GripHandleHidden/LogEnabled/CrashGuard"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
           # V0.2.58（AevonGripToggleV258）反转：+RingGripEnabled（隔离实验开关）
@@ -1129,7 +1142,7 @@ jobs:
           # V0.2.99（AevonGripProbeV299）：+GripHookProbe（方案 A 灰度探测开关，默认关）
           # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势，0.3.7 起默认开）
           # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）
-          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHookProbe,GripSystemYield,GripOwnLeg,LogEnabled,CrashGuard" ] \
+          [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHandleHidden,LogEnabled,CrashGuard" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
           grep -q 'AevonPrefs.bool("Enabled", default: true)' "$GITHUB_WORKSPACE/Sources/Aevon.swift" \
@@ -4159,8 +4172,13 @@ jobs:
           grep -q 'Sources/AevonGripHook.m' "$MF" \
             && grep -q 'AevonGripHookProbeInstall' "$BH" \
             && grep -q 'installGripProbeIfNeeded' "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
-            && grep -q 'GripHookProbe' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
             || { echo "::error::0.2.99 探测骨架接线不完整"; exit 1; }
+          # V0.3.15（AevonGripHardcodeV315）反转：GripHookProbe 只控制取证深度，对普通用户毫无作用，
+          # 已从设置页移除（代码仍读该键，默认 false = 探针不装）。这里守「UI 不许再出现」。
+          if grep -q 'GripHookProbe' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
+            echo "::error::Root.plist 又出现 GripHookProbe（0.3.15 已从设置页移除）"
+            exit 1
+          fi
           echo "V0.2.99 校验②: SBGrabberTongue 探测骨架（默认关灰度）已接线 ✓"
           # ③ V0.3.1 反转：撤帧闸从「1.2s 固定 deadline」升级为「0.9s 最短保护 + 清晰度采样」
           QT=$(grep -c 'guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WV")
@@ -4343,10 +4361,8 @@ jobs:
           # ── V0.3.5 校验（Aevon(83) 定档「方案 A：探针升级 + 让路开关」）──
           # 前提数据（Aevon(83) 日志）：系统腿已装、认领 18 条、呼盘成功 3 次，但 60 次
           # 呼盘里只占 3/60；那 3 次落点全在把手竖条之外 → 把手腿在场时系统腿抢不到。
-          # ①让路开关：读 GripSystemYield + 两条 hitTest 让路 + 设置变更实时生效
-          # 0.3.7 转正：默认值 false → true（断言在下方 ⑥ 已同步反转）
           RG="$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"
-          grep -q 'AevonPrefs.bool("GripSystemYield", default: true)' "$RG" \
+          grep -q 'let want = true' "$RG" \
             && grep -q 'guard !yieldMode else { return false }' "$RG" \
             && grep -q 'guard !yieldMode else { return nil }' "$RG" \
             && grep -q 'func applyYieldMode()' "$RG" \
@@ -4371,8 +4387,8 @@ jobs:
           # ⑤达阈值那条路必须自己报 done，不能再落进「未达阈值」结局（否则数据全错）
           grep -q 'self.reported = YES;    // 达阈值这条路自己负责呼盘' "$GH" \
             || { echo "::error::V0.3.5 达阈值路径没标 reported（会重复报成未达阈值）"; exit 1; }
-          # ⑥设置页开关在位且默认开（0.3.7 转正：Aevon(85) 实测 33/33 全胜）
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==1 and h[0].get('default') is True);print('V0.3.5 设置开关: GripSystemYield 在位且默认开 ✓' if ok else '::error::V0.3.5 Root.plist 缺 GripSystemYield 开关或默认不是开（实测命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+          # ⑥V0.3.15 反转：设置页**不许**再有 GripSystemYield（已写死为常量）
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 设置页: GripSystemYield 已移除（代码恒开）✓' if ok else '::error::V0.3.15 Root.plist 还有 GripSystemYield（应与代码一起移除，命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑦标记进主库二进制
           strings "$MDYL" | grep -q 'AevonGripYieldV305' \
             && strings "$MDYL" | grep -q 'AevonGripLegOutcomeV305' \
@@ -4418,17 +4434,17 @@ jobs:
           # （__RESTRICT、Aevon 无注入）；「手指落在把手上」0 条、「（全局通道）」0 条、
           # 「不在右缘 24pt 内」0 条、0 崩溃、0 错误。→ 判据全部达成，转正为默认开。
           # ①Swift 默认值必须是 true（转正的唯一实质改动）
-          grep -q 'AevonPrefs.bool("GripSystemYield", default: true)' "$RG" \
+          grep -q 'let want = true' "$RG" \
             || { echo "::error::V0.3.7 让路默认值没转正（还是 false）"; exit 1; }
           # ②防回退网：源码不许再出现 default: false 的旧形态
-          if grep -q 'AevonPrefs.bool("GripSystemYield", default: false)' "$RG"; then
-            echo "::error::V0.3.7 让路默认值回退成 false（Aevon(85) 33/33 全胜后不该再默认关）"
+          if grep -q 'AevonPrefs.bool("GripSystemYield"' "$RG"; then
+            echo "::error::V0.3.15 让路又变回读偏好（已写死常量 true，设置页无此开关）"
             exit 1
           fi
           # ③Root.plist 默认值必须是 true（与 Swift 严格同侧，两侧不一致 = 设置页显示与实际相反）
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==1 and h[0].get('default') is True);print('V0.3.7 设置开关: 默认已转正 ✓' if ok else '::error::V0.3.7 Root.plist 的 GripSystemYield 默认不是 true');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 设置页: 已移除 ✓' if ok else '::error::V0.3.15 Root.plist 的 GripSystemYield 应已移除');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ④label 不许再挂「实验」字样（转正后仍标实验会误导用户以为是 A/B 档）
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];lab=(h[0].get('label') or '') if h else '';ok=bool(h) and ('\u5b9e\u9a8c' not in lab);print('V0.3.7 switch label: %s ok'%lab if ok else '::error::V0.3.7 switch label still contains experiment word or missing');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 switch: removed ok' if ok else '::error::V0.3.15 switch GripSystemYield should be removed');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑤转正标记进主库二进制
           strings "$MDYL" | grep -q 'AevonYieldDefaultV307' \
             || { echo "::error::V0.3.7 主库缺让路转正标记"; exit 1; }
@@ -4502,11 +4518,11 @@ jobs:
             || { echo "::error::V0.3.9 注册前没做签名自检（参数个数不符会破坏调用约定）"; exit 1; }
           # ⑥桥接头声明在位（Swift 启动时才调得到开关）
           grep -q 'AevonGripOwnLegEnable' "$OWNB" \
-            && grep -q 'AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: true)' \
+          && grep -q 'AevonGripOwnLegEnable(true,' \
                  "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
             || { echo "::error::V0.3.9 桥接声明或启动调用缺失（0.3.10 起默认值必须是 true）"; exit 1; }
-          # ⑦开关默认值 —— 0.3.10 转正：默认开（Aevon(88)：默认关时自建腿一行没跑）
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripOwnLeg'];ok=(len(h)==1 and h[0].get('default') is True);print('V0.3.9/0.3.10 设置开关: GripOwnLeg 在位且默认开 ✓' if ok else '::error::V0.3.10 Root.plist 缺 GripOwnLeg 或默认不是开（命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+          # ⑦V0.3.15 反转：设置页不许再有 GripOwnLeg（代码已写死 true）
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripOwnLeg'];ok=(len(h)==0);print('V0.3.15 设置页: GripOwnLeg 已移除（代码恒开）✓' if ok else '::error::V0.3.15 Root.plist 还有 GripOwnLeg（代码已写死 true，命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑧标记进主库二进制
           strings "$MDYL" | grep -q 'AevonGripOwnLegV309' \
             || { echo "::error::V0.3.9 主库缺自建识别器腿标记"; exit 1; }
@@ -4665,10 +4681,13 @@ jobs:
             && grep -q 'if pad.width > 0, x >= pad.minX { return 2 }' "$OWNE" \
             && grep -q '@_cdecl("AevonGripOwnHitLevel")' "$OWNE" \
             || { echo "::error::V0.3.14 缺三段式落点判定（贴边/边缘候选/带外）"; exit 1; }
-          # ②边缘候选必须走严格判据：|dy| <= 6 才认，右移或纵向 ≥12 立刻还回去
-          grep -q 'if (horizontal && fabs((double)dy) <= 6.0)' "$OWNM" \
+          # ②边缘候选必须走严格判据，右移或纵向 ≥12 立刻还回去
+          #   V0.3.15（AevonStrictAngleV315）把判据从绝对 |dy|<=6 改成角度式，
+          #   所以这里锚主结构（_ownStrict 分支 + ady/adx 两个绝对值）而不是具体阈值。
+          grep -q 'if (_ownStrict) {' "$OWNM" \
+            && grep -q 'double ady = fabs((double)dy);' "$OWNM" \
             && grep -q 'if (dx > 0.0 || fabs((double)dy) >= 12.0)' "$OWNM" \
-            || { echo "::error::V0.3.14 边缘候选缺严格判据（抖音进度条会被抢）"; exit 1; }
+            || { echo "::error::V0.3.14/15 边缘候选缺严格判据（抖音进度条会被抢）"; exit 1; }
           # ③贴边落点仍走宽松判据（BOOL horizontal 那条），且纵向让路仍在它之后
           grep -q 'if (horizontal) {' "$OWNM" \
             || { echo "::error::V0.3.14 贴边落点的宽松判据丢了（贴边也呼不出来）"; exit 1; }
@@ -4688,6 +4707,48 @@ jobs:
           strings "$MDYL" | grep -q 'AevonEdgePadV314' \
             || { echo "::error::V0.3.14 主库缺贴边+暂扣标记"; exit 1; }
           echo "V0.3.14 校验: 贴边窄带（5pt 默认，可调 1~60）+ 暂扣段严格判据 + App 侧吞带拆净（浮窗边带保留）✓"
+
+          # ── V0.3.15 校验（Aevon(93)：呼出手势写死 + 隐藏把手提到一级 + 滑条实时 + 高度 35%）──
+          # 用户原话：「将设置中的默认开启的呼出手势开关选项添加到代码中，不再显示开关选项（并且
+          # 移除没有使用的开关选项）。然后把默认隐藏把手开关移动到一级菜单中，并且保证所有的滑条
+          # 滑动时都能实时显示和更新位置。最后把触发圆盘区域的默认高度改为右边缘从底部向上计算 35%。」
+          # ①呼出手势写死：源码里不许再读这两个偏好
+          if grep -rn 'GripOwnLeg", default' "$GITHUB_WORKSPACE/Sources/" >/dev/null 2>&1; then
+            echo "::error::V0.3.15 GripOwnLeg 又变回读偏好（已写死常量 true，设置页无此开关）"
+            exit 1
+          fi
+          if grep -rn 'AevonPrefs.bool("GripSystemYield"' "$GITHUB_WORKSPACE/Sources/" >/dev/null 2>&1; then
+            echo "::error::V0.3.15 GripSystemYield 又变回读偏好（已写死常量 true）"
+            exit 1
+          fi
+          # ②启动与偏好变更两处都必须传常量 true
+          grep -q 'AevonGripOwnLegEnable(true,' "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
+            || { echo "::error::V0.3.15 启动时没把自建腿写成恒开"; exit 1; }
+          grep -q 'AevonGripOwnLegEnable(true,' "$EE" \
+            || { echo "::error::V0.3.15 prefschanged 里没把自建腿写成恒开"; exit 1; }
+          # ③严格判据角度式：短滑看绝对量、长滑看 14 度锥形
+          #   Aevon(92) 那 6 次 strict 放行里，dx=-99/dy=13 的角度只有 7.5 度，却在绝对阈值下被放掉。
+          grep -q 'ady <= 6.0 || ady <= adx \* 0.25' "$OWNM" \
+            || { echo "::error::V0.3.15 边缘候选还是绝对 |dy|<=6（大左滑会被误放：dx=-99/dy=13）"; exit 1; }
+          # ④日志：hold 行的 level 标识必须走 %@（%s 只许接 ASCII，否则 MacRoman 二次编码变乱码）
+          grep -q 'L2 strict 边缘候选' "$OWNM" \
+            && grep -q 'L1 flush 贴边落点' "$OWNM" \
+            || { echo "::error::V0.3.15 hold 日志的 level 标识没改 %@（中文 C 串会二次编码成乱码）"; exit 1; }
+          # ⑤高度默认 35%（plist 由本文件上方的量程断言守）
+          grep -q 'static let zoneHDefault: CGFloat = 35' "$RG" \
+            || { echo "::error::V0.3.15 zoneHDefault 不是 35"; exit 1; }
+          # ⑥滑条拖动实时刷新：函数体内必须刷 cell 并压实手指值
+          APM="$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m"
+          sed -n '/- (void)aevonSliderValueChanged:/,/^}/p' "$APM" | grep -q 'refreshCellContentsWithSpecifier:' \
+            || { echo "::error::V0.3.15 滑条拖动时没刷 cell（右侧数值标签不会跟手指走）"; exit 1; }
+          sed -n '/- (void)aevonSliderValueChanged:/,/^}/p' "$APM" | grep -q 'fingerValue' \
+            || { echo "::error::V0.3.15 滑条拖动时没记住并压回手指值（refresh 会把滑块拽回旧值）"; exit 1; }
+          # ⑦标记进主库二进制
+          for mk in AevonGripHardcodeV315 AevonHandleTopV315 AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 AevonOwnLogAsciiV315; do
+            strings "$MDYL" | grep -q "$mk" \
+              || { echo "::error::V0.3.15 主库缺标记 $mk"; exit 1; }
+          done
+          echo "V0.3.15 校验: 呼出手势写死（一级页 5 开关）+ 隐藏把手提一级 + 高度 35% + 滑条拖动实时刷新 + 严格判据角度化 + 日志去乱码 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

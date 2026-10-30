@@ -111,13 +111,18 @@ final class AevonRingGripView: UIView {
      * 那一整片代价直接消失。但不能真的 0：判据是 `x >= 屏宽 - w`，w=0 就要求
      * 触摸点精确等于屏宽，物理上永远命中不了。5pt ≈ 手指压边时的自然落点。
      *
-     * 纵向仍是百分比（用户的「底部 30% 高度」是比例语义，换机型手感一致）。 */
+     * 纵向仍是百分比（用户的「底部 30% 高度」是比例语义，换机型手感一致）。
+     *
+     * V0.3.15（AevonZoneH35V315）：纵向默认 30% → **35%**（用户 Aevon(93) 定的）。
+     * 「从右边缘底部向上计算 35%」—— 语义没变，仍然是 `y = 屏高 - h`（贴底往上量），
+     * 只是把默认那一段加高 5 个百分点（iPhone 15 Pro Max 上 280pt → 326pt），
+     * 让用户在底部区域稍高一点的位置也能贴着边呼出来。量程 15~50 不变。 */
     static let zoneWMin: CGFloat = 1
     static let zoneWMax: CGFloat = 60
     static let zoneWDefault: CGFloat = 5
     static let zoneHMin: CGFloat = 15
     static let zoneHMax: CGFloat = 50
-    static let zoneHDefault: CGFloat = 30
+    static let zoneHDefault: CGFloat = 35
 
     /* V0.3.14（AevonEdgePadV314）：暂扣区在「贴边宽」之外额外给的容差（pt）。
      *
@@ -194,12 +199,13 @@ final class AevonRingGripView: UIView {
     /// V0.3.5（AevonGripYieldV305）：读偏好并切换让路状态。
     /// 设置页改完会走 Darwin 通知 → `AevonRingGrip.refreshFromPrefs()` → 这里，**实时生效**。
     func applyYieldMode() {
-        // V0.3.7（AevonYieldDefaultV307）：默认值 false → true（转正）。
-        // 依据 Aevon(85)：让路开启的 67 秒里 33 次呼盘 33 次全由系统识别器腿完成
-        // （前台全在抖音 com.ss.iphone.ugc.Aweme —— __RESTRICT、Aevon 无注入），
-        // 「手指落在把手上」0 条、「（全局通道）」0 条、「不在右缘」0 条、0 崩溃。
-        // 这就是 Stheno 的架构：只骑系统识别器，Aevon 一根手指都不碰。
-        let want = AevonPrefs.bool("GripSystemYield", default: true)
+        // V0.3.15（AevonGripHardcodeV315）：**恒开，不再读设置页。**
+        // 用户 Aevon(93) 定档：默认开启的呼出手势开关一律写进代码、不再给开关 ——
+        // 让路在 0.3.7 就转正了（Aevon(85)：让路开启的 67 秒里 33 次呼盘 33 次全由系统
+        // 识别器腿完成，前台全在抖音 com.ss.iphone.ugc.Aweme，Aevon 根本没注入），
+        // 开关留着只会让用户把一条已经验证过的通路关掉、然后以为插件坏了。
+        // 想改行为请改这一行常量，不要再加回设置项。
+        let want = true
         // V0.3.6（AevonGripYieldDeepV306）：静态镜像无条件对齐（哪怕状态没变），
         // 这样把手实例被销毁重建后不会留下过期值。
         AevonRingGrip.yieldActive = want

@@ -39,7 +39,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>呼盘入口：贴着右缘、底部 30% 高度内向左滑 8pt 即可呼出圆盘。宽度与高度在下面调。</string>
+			<string>呼盘入口：贴着右缘、从底部往上 35% 高度内向左滑 8pt 即可呼出圆盘。宽度与高度在下面调。</string>
 			<key>label</key>
 			<string>圆盘呼出区</string>
 		</dict>
@@ -61,43 +61,17 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>infoText</key>
-			<string>实验（0.2.99，方案 A 灰度第一步）：探测系统「抓手舌」(SBGrabberTongue) 的触摸，为下一版把呼出主通道换成 Stheno 同款系统手势取数据。本版只观察、不改任何行为，呼出照旧走把手通道。打开后注销生效；若出现异常关掉即可。默认关。</string>
-			<key>key</key>
-			<string>GripHookProbe</string>
-			<key>label</key>
-			<string>抓手舌探测（实验）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
 			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>infoText</key>
-			<string>推荐开启（0.3.7 转正）：右缘的呼盘手势全部由 iOS 系统边沿手势识别器接管，Aevon 不干预、不吞手指 —— 这就是 Stheno 的做法。0.3.6 实测在抖音（未注入的 App）里 33 次呼盘 33 次成功。关掉则退回「把手为主、系统腿补充」的旧路径。立即生效，不用注销。若开启后某些界面呼不出圆盘，关掉即可回退。</string>
+			<string>默认开（0.3.15 起固定开启，不再提供开关）。把把手的视觉竖条藏起来 —— 右缘什么都不显示，跟 Stheno 一样只有「看不见的边」。功能一点没少：贴着右缘、底部 35% 高度内向左滑照样呼出圆盘。
+
+安全阀：万一自建识别器与系统识别器都没装配成功，把手会自动显形，不会让你彻底没有入口。立即生效，不用注销。</string>
 			<key>key</key>
-			<string>GripSystemYield</string>
+			<string>GripHandleHidden</string>
 			<key>label</key>
-			<string>右缘呼盘交给系统手势（推荐）</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>infoText</key>
-			<string>推荐打开（0.3.10 起默认开）：Aevon 自己造一个手势识别器、注册进系统手势管线接管右缘，落指那一刻就决定这根手指收不收 —— 收下的手指 App 连「按下」都收不到，所以呼圆盘时 App 不会再跟着滑一下。这是 Stheno 的做法，也是目前唯一能覆盖抖音、QQ、桌面（都装不进 Aevon 的 App 侧）的机制。它属于会改动触摸派发的动刀：如果右缘出现点不动、滑不动（尤其输入框、右缘按钮），把这个开关关掉即可，立即生效不用注销。若注册没成功，Aevon 会自动退回原来的系统识别器方案，不会比之前更差。</string>
-			<key>key</key>
-			<string>GripOwnLeg</string>
-			<key>label</key>
-			<string>自建手势接管右缘（零跟手 · 推荐）</string>
+			<string>隐藏把手</string>
 		</dict>
 		<dict>
 			<key>action</key>
@@ -105,7 +79,7 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>呼出区大小 / 把手显隐</string>
+			<string>呼出区大小调整</string>
 		</dict>
 		<dict>
 			<key>cell</key>
