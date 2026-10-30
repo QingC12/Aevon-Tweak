@@ -84,20 +84,6 @@ final class AevonRingGripView: UIView {
     /// 还是「认领了但比把手慢」，只有让把手闭嘴才能测出来。
     private var yieldMode = false
 
-    /// V0.3.6（AevonGripYieldDeepV306）：让路状态的**静态镜像**。
-    ///
-    /// Aevon(84) 日志实锤 0.3.5 的让路开关无效：开关开着（`11:53:58.120 把手让路模式已开`）
-    /// 之后仍有 **37 次「把手左滑 → 呼出圆盘（全局通道）」**。原因是 0.3.5 只摘了可视控件层
-    /// （`point(inside:)` / `hitTest` / pan），而真正的主力是 **SpringBoard 侧 sendEvent 的
-    /// 全局通道** —— 它走 `AevonGrip.hitTestScreenPoint`，根本不看视图层有没有交互。
-    /// 现场铁证：`11:54:27.741 手指落在把手上 (420,695)` → `.778 全局通道呼盘`（比系统腿早 40ms）
-    /// → `.801 系统腿认领` → `.803 达阈值但被拦 原因=圆盘已开`。
-    ///
-    /// 这个镜像就是那个收口点：`hitTestScreenPoint` 让路时直接返回 false，SB 侧的
-    /// 「把手候选登记」与「左滑呼盘」同时失效，一处改动覆盖两条代码路径。
-    /// 由 `applyYieldMode()` 同步（构造 + 偏好变更各一次），**不进触摸热路径、零 IPC**。
-    static var yieldActive = false
-
     var onSummon: ((String) -> Void)?
 
     override init(frame: CGRect) {
@@ -148,7 +134,7 @@ final class AevonRingGripView: UIView {
         let want = AevonPrefs.bool("GripSystemYield", default: false)
         // V0.3.6（AevonGripYieldDeepV306）：静态镜像无条件对齐（哪怕状态没变），
         // 这样把手实例被销毁重建后不会留下过期值。
-        AevonRingGripView.yieldActive = want
+        AevonRingGrip.yieldActive = want
         guard want != yieldMode else { return }
         yieldMode = want
         if want {
@@ -299,6 +285,22 @@ enum AevonRingGrip {
 
     /// 键盘在屏中（现场检测 + Darwin 通知双通道驱动，SB 侧只读）。
     static var keyboardSuppressed = false
+
+    /// V0.3.6（AevonGripYieldDeepV306）：让路状态的**静态镜像**（SB 侧通道的收口点）。
+    ///
+    /// Aevon(84) 日志实锤 0.3.5 的让路开关无效：开关开着（`11:53:58.120 把手让路模式已开`）
+    /// 之后仍有 **37 次「把手左滑 → 呼出圆盘（全局通道）」**。原因是 0.3.5 只摘了可视控件层
+    /// （`point(inside:)` / `hitTest` / pan），而真正的主力是 **SpringBoard 侧 sendEvent 的
+    /// 全局通道** —— 它走 `AevonRingGrip.hitTestScreenPoint`，根本不看视图层有没有交互。
+    /// 现场铁证：`11:54:27.741 手指落在把手上 (420,695)` → `.778 全局通道呼盘`（比系统腿早 40ms）
+    /// → `.801 系统腿认领` → `.803 达阈值但被拦 原因=圆盘已开`。
+    ///
+    /// 这个镜像就是那个收口点：`hitTestScreenPoint` 让路时直接返回 false，SB 侧的
+    /// 「把手候选登记」与「左滑呼盘」同时失效，一处改动覆盖两条代码路径。
+    /// 由 `AevonRingGripView.applyYieldMode()` 同步（构造 + 偏好变更各一次），
+    /// **不进触摸热路径、零 IPC**。
+    static var yieldActive = false
+
     private static var kbObserversInstalled = false
     private static var kbSenseAt: CFTimeInterval = 0
     private static var kbLastVisible = false   // V0.2.70：在屏日志只在状态切换时打

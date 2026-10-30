@@ -369,7 +369,7 @@ enum AevonEdgeEntry {
             // 先消灭卡屏。
             // V0.3.6（AevonGripYieldDeepV306）：让路模式下即使 gripSwipeTouchID 还有
             // 残留（开关是在呼盘手势进行中打开的），这半截手指也不再呼盘 —— 右缘归系统腿。
-            if !AevonRingGripView.yieldActive,
+            if !AevonRingGrip.yieldActive,
                gripSwipeTouchID != 0, touchID == gripSwipeTouchID {
                 let dx = point.x - gripSwipeStart.x
                 let dy = point.y - gripSwipeStart.y

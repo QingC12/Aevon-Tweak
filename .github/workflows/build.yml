@@ -4358,10 +4358,10 @@ jobs:
           # ①收口：hitTestScreenPoint 必须读静态让路镜像（SB 侧全局通道唯一入口）
           grep -q 'static var yieldActive = false' "$RG" \
             && grep -q 'guard !yieldActive else { return false }' "$RG" \
-            && grep -q 'AevonRingGripView.yieldActive = want' "$RG" \
+            && grep -q 'AevonRingGrip.yieldActive = want' "$RG" \
             || { echo "::error::V0.3.6 让路没接到 hitTestScreenPoint（SB 侧全局通道照样呼盘）"; exit 1; }
           # ②moved 呼盘分支也要让路（防止开关在呼盘手势进行中被打开时残留半截手指）
-          grep -q 'if !AevonRingGripView.yieldActive,' "$EE" \
+          grep -q 'if !AevonRingGrip.yieldActive,' "$EE" \
             || { echo "::error::V0.3.6 moved 呼盘分支缺让路判断"; exit 1; }
           # ③右缘判据必须用 began 起点：ObjC 传 startX + Swift 收 startX + 判据读 edgeRef
           grep -q 'extern void AevonGripSystemSummon(double x, double y, double startX, const char \*cls)' "$GH" \
