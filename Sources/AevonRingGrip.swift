@@ -131,7 +131,12 @@ final class AevonRingGripView: UIView {
     /// V0.3.5（AevonGripYieldV305）：读偏好并切换让路状态。
     /// 设置页改完会走 Darwin 通知 → `AevonRingGrip.refreshFromPrefs()` → 这里，**实时生效**。
     func applyYieldMode() {
-        let want = AevonPrefs.bool("GripSystemYield", default: false)
+        // V0.3.7（AevonYieldDefaultV307）：默认值 false → true（转正）。
+        // 依据 Aevon(85)：让路开启的 67 秒里 33 次呼盘 33 次全由系统识别器腿完成
+        // （前台全在抖音 com.ss.iphone.ugc.Aweme —— __RESTRICT、Aevon 无注入），
+        // 「手指落在把手上」0 条、「（全局通道）」0 条、「不在右缘」0 条、0 崩溃。
+        // 这就是 Stheno 的架构：只骑系统识别器，Aevon 一根手指都不碰。
+        let want = AevonPrefs.bool("GripSystemYield", default: true)
         // V0.3.6（AevonGripYieldDeepV306）：静态镜像无条件对齐（哪怕状态没变），
         // 这样把手实例被销毁重建后不会留下过期值。
         AevonRingGrip.yieldActive = want

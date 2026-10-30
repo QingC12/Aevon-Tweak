@@ -598,3 +598,12 @@ BOOL AevonGripHookProbeInstall(void) {
         return NO;
     }
 }
+
+/* V0.3.7（AevonYieldDefaultV307）：让路模式转正 —— GripSystemYield 默认值
+ * false → true，SB 侧把手默认不接触摸，右缘呼盘全部交给系统边沿识别器。
+ * 依据 Aevon(85)：让路开启的 67 秒里 33 次呼盘 33 次全由系统识别器腿完成
+ * （前台全在抖音 com.ss.iphone.ugc.Aweme —— __RESTRICT、Aevon 无注入），
+ * 「手指落在把手上」0 条、「（全局通道）」0 条、「不在右缘」0 条、0 崩溃。
+ * 这就是 Stheno 的架构：只骑系统识别器，Aevon 一根手指都不碰。
+ * 标记必须是纯 ASCII 且带 used —— 注释永不进二进制，App 侧标记同理。 */
+__attribute__((used)) static const char AevonYieldDefaultV307Marker[] = "AevonYieldDefaultV307";

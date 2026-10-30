@@ -75,15 +75,15 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<false/>
+			<true/>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>infoText</key>
-			<string>实验（0.3.5，让路 A/B）：打开后把手完全不接触摸，右缘的手指全部交给系统边沿手势识别器接收 —— 也就是让系统手势接管呼盘。关着时是「把手为主、系统腿补充」。打开后立即生效（不用注销）。如果打开后呼不出圆盘，说明系统那只识别器在你的系统版本上接不住右缘手势，关掉即可。默认关。</string>
+			<string>推荐开启（0.3.7 转正）：右缘的呼盘手势全部由 iOS 系统边沿手势识别器接管，Aevon 不干预、不吞手指 —— 这就是 Stheno 的做法。0.3.6 实测在抖音（未注入的 App）里 33 次呼盘 33 次成功。关掉则退回「把手为主、系统腿补充」的旧路径。立即生效，不用注销。若开启后某些界面呼不出圆盘，关掉即可回退。</string>
 			<key>key</key>
 			<string>GripSystemYield</string>
 			<key>label</key>
-			<string>把手让路给系统手势（实验）</string>
+			<string>右缘呼盘交给系统手势（推荐）</string>
 		</dict>
 		<dict>
 			<key>action</key>
