@@ -1085,7 +1085,12 @@ enum AevonEdgeEntry {
             + " → 左滑 \(Int(max(0, startX - x)))pt）："
             + "触摸从落指第一帧就被扣住，App 收不到 began"
             + "（AevonGripOwnLegV309）")
-        presentRing(source: "system")
+        /* V0.3.17（AevonOwnFeedV317）：来源名从 `"system"` 改成 `"ownleg"`。
+         * `"system"` 这个字符串从 0.1.13 起就没有活着的喂料方（见 `claimPointer`
+         * 上方的账），绑上去等于开局先认一个哑巴当指针 —— 0.12 秒盲区就是从这来的。
+         * `"ownleg"` 是**真的有喂料方**的名字（`ownLegMove`），所以第一帧 moved
+         * 就能直接对上，不必等交换闸。 */
+        presentRing(source: "ownleg")
     }
 
     /// V0.3.16（AevonOwnLiftV316）：自建腿抬手 —— **圆盘的权威终点信号**。
@@ -1098,6 +1103,16 @@ enum AevonEdgeEntry {
     /// `cancelled = true` 也按抬手处理：对这根 touch 而言，被系统摘链意味着
     /// UIKit 不会再给它派任何帧，和离屏等价。这与 0.2.18「取消 ≠ 抬手」不冲突 ——
     /// 那条讲的是「喂料通道不投了、手指还压着」，讲的是通道，不是识别器。
+    /// V0.3.17（AevonOwnFeedV317）：自建腿每帧喂盘 —— ObjC 侧 `-touchesMoved:` 里调用。
+    ///
+    /// `authoritative: true` 的含义与 `remoteLift` 完全一致：坐标来自**持有这根手指的
+    /// 识别器**，与手指一对一，不需要「原通道已静默」的旁证，因此不过 `claimPointer`
+    /// 的 0.12 秒交换闸。圆盘已经收起时 `presented` 为 nil，这只是一次空调用。
+    static func ownLegMove(x: CGFloat, y: CGFloat) {
+        guard let ring = AevonRingMenu.presented else { return }
+        ring.remoteMoved(to: CGPoint(x: x, y: y), source: "ownleg", authoritative: true)
+    }
+
     static func ownLegLift(x: CGFloat, y: CGFloat, cancelled: Bool) {
         guard let ring = AevonRingMenu.presented else { return }
         ring.remoteLift(at: CGPoint(x: x, y: y), source: "ownleg")
@@ -1352,6 +1367,17 @@ public func AevonGripOwnSummon(_ x: Double, _ y: Double,
 @_cdecl("AevonGripOwnLift")
 public func AevonGripOwnLift(_ x: Double, _ y: Double, _ cancelled: Int32) {
     AevonEdgeEntry.ownLegLift(x: CGFloat(x), y: CGFloat(y), cancelled: cancelled != 0)
+}
+
+/// V0.3.17（AevonOwnFeedV317）：自建腿**每帧**喂盘。
+///
+/// 与 `AevonGripOwnSummon` / `AevonGripOwnLift` 是同一根手指的三段：起（召唤）、
+/// 中（每帧坐标）、终（抬手）。以前「中」这一段缺着，圆盘只能等 SB 全局通道；
+/// 而全局通道在每次展开后的前 0.12 秒必盲、被 `.cancelled` 打死之后本周期不许复活
+/// —— Aevon(94) 的 11 次「一条移动帧都没收到」就是这么来的。
+@_cdecl("AevonGripOwnMove")
+public func AevonGripOwnMove(_ x: Double, _ y: Double) {
+    AevonEdgeEntry.ownLegMove(x: CGFloat(x), y: CGFloat(y))
 }
 
 /// V0.3.9（AevonGripOwnLegV309）：自建腿的取证/结局日志桥（类普查、挂载、放行原因）。

@@ -183,7 +183,8 @@ jobs:
                    AevonGripZoneV313 AevonHandleHideV313 AevonOwnGateV313 \
                    AevonEdgePadV314 AevonGripHardcodeV315 AevonHandleTopV315 \
                    AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 \
-                   AevonOwnLogAsciiV315 AevonOwnLiftV316; do
+                   AevonOwnLogAsciiV315 AevonOwnLiftV316 \
+                   AevonOwnFeedV317 AevonHoverTrackV317; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -4804,6 +4805,54 @@ jobs:
           strings "$MDYL" | grep -q 'AevonOwnLiftV316' \
             || { echo "::error::V0.3.16 主库缺标记 AevonOwnLiftV316"; exit 1; }
           echo "V0.3.16 校验: 自建腿活到抬手（召唤不置 Ended + -reset 清标记）+ AevonGripOwnLift 双路 + 权威抬手绕开 0.12s 交换闸 + 被拒留痕 + 看门狗未动 ✓"
+
+          # ── V0.3.17 校验（AevonOwnFeedV317）：自建识别器腿每帧喂盘 ──
+          # ①召唤成功后 touchesMoved 必须先喂盘，再考虑状态判据（顺序反了等于没喂）
+          MOVED_SEG="$(sed -n '/^- (void)touchesMoved:/,/^- (void)touchesEnded:/p' "$OWNM")"
+          echo "$MOVED_SEG" | grep -q 'AevonGripOwnMove(' \
+            || { echo "::error::V0.3.17 touchesMoved 没有喂盘（圆盘又只能等 SB 全局通道，0.12s 盲区回来）"; exit 1; }
+          FEED_LN=$(echo "$MOVED_SEG" | grep -n 'AevonGripOwnMove(' | head -n1 | cut -d: -f1)
+          POSS_LN=$(echo "$MOVED_SEG" | grep -n 'UIGestureRecognizerStatePossible' | head -n1 | cut -d: -f1)
+          { [ -n "$FEED_LN" ] && [ -n "$POSS_LN" ] && [ "$FEED_LN" -lt "$POSS_LN" ]; } \
+            || { echo "::error::V0.3.17 喂盘排在状态判据之后（Possible 之外的帧被 return 掉，等于没喂）"; exit 1; }
+          # ②只认召唤那根手指
+          echo "$MOVED_SEG" | grep -q '_ownTouch != nil && t != _ownTouch' \
+            || { echo "::error::V0.3.17 喂盘没做手指归属校验（别的手指会挪圆盘指针）"; exit 1; }
+          # ③桥两端齐备
+          grep -q 'extern void AevonGripOwnMove' "$OWNM" \
+            || { echo "::error::V0.3.17 ObjC 侧缺 AevonGripOwnMove 声明"; exit 1; }
+          grep -q '@_cdecl("AevonGripOwnMove")' "$EE" \
+            || { echo "::error::V0.3.17 Swift 侧缺 AevonGripOwnMove 桥"; exit 1; }
+          grep -q 'ring.remoteMoved(to: CGPoint(x: x, y: y), source: "ownleg", authoritative: true)' "$EE" \
+            || { echo "::error::V0.3.17 ownLegMove 没走权威路径（坐标仍会被 0.12s 交换闸吞掉）"; exit 1; }
+          # ④来源名必须绑到真有喂料方的那条通道
+          grep -q 'presentRing(source: "ownleg")' "$EE" \
+            || { echo "::error::V0.3.17 自建腿呼盘仍绑 system（这一版 system 没有任何活着的喂料方）"; exit 1; }
+          SYS_CNT=$(grep -c 'presentRing(source: "system")' "$EE" || true)
+          [ "$SYS_CNT" -eq 1 ] \
+            || { echo "::error::V0.3.17 presentRing(source: system) 应只剩系统腿那 1 处，实为 $SYS_CNT"; exit 1; }
+          # ⑤moved 也要有权威通道，且换通道必须重设角度基线（否则指针一动圆盘就转）
+          grep -q 'private func handlePointerMoved(to point: CGPoint, source: String,' "$RM" \
+            || { echo "::error::V0.3.17 handlePointerMoved 缺 authoritative 参数"; exit 1; }
+          sed -n '/private func handlePointerMoved/,/let currentAngle/p' "$RM" | grep -q 'pointerAngle = angle(from: ringCenter, to: point)' \
+            || { echo "::error::V0.3.17 权威喂料换通道时没重设角度基线（会被算成一次旋转）"; exit 1; }
+          AUTH_CNT=$(grep -c 'authoritative: Bool = false' "$RM" || true)
+          [ "$AUTH_CNT" -ge 2 ] \
+            || { echo "::error::V0.3.17 moved 与 ended 应各有一条 authoritative 声明，实为 $AUTH_CNT"; exit 1; }
+          # ⑥划过日志（本版唯一验收判据：分不清「没喂到」与「喂到了没高亮」）
+          grep -q '划过' "$RM" \
+            || { echo "::error::V0.3.17 缺「划过」取证日志"; exit 1; }
+          grep -q 'AevonHoverTrackV317' "$RM" \
+            || { echo "::error::V0.3.17 缺标记 AevonHoverTrackV317"; exit 1; }
+          # ⑦看门狗照旧不动（本版不碰「收不收」，只碰「看不看得见手指」）
+          grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$RM" \
+            || { echo "::error::V0.3.17 看门狗 0.8s 被动了（会回归 0.2.69「按住不动圆盘自己收」）"; exit 1; }
+          # ⑧标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonOwnFeedV317' \
+            || { echo "::error::V0.3.17 主库缺标记 AevonOwnFeedV317"; exit 1; }
+          strings "$MDYL" | grep -q 'AevonHoverTrackV317' \
+            || { echo "::error::V0.3.17 主库缺标记 AevonHoverTrackV317"; exit 1; }
+          echo "V0.3.17 校验: 自建腿每帧喂盘（召唤后先喂再判状态 + 只认本指）+ 来源改 ownleg + 权威 moved 换通道重设基线 + 划过留痕 + 看门狗未动 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

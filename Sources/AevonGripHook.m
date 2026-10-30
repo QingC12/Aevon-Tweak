@@ -709,6 +709,17 @@ extern void AevonGripOwnSummon(double x, double y, double startX, double startY)
 /// V0.3.16（AevonOwnLiftV316）：自建腿抬手回调 —— 召唤成功后这根手指的**终点**。
 /// 第三个参数：0 = touchesEnded（正常抬手），1 = touchesCancelled（被系统摘链）。
 extern void AevonGripOwnLift(double x, double y, int32_t cancelled);
+/// V0.3.17（AevonOwnFeedV317）：自建腿**每帧**喂盘 —— 召唤成功后这根手指的坐标。
+///
+/// 为什么必须是识别器自己喂：Aevon(94) 的 11 次看门狗日志里，「最后落点」与
+/// 「呼盘那一刻的落点」**逐条相等**（383/392/408/415/410/404…），意味着圆盘从
+/// 展开到被收，一条移动帧都没收到。而圆盘唯一还活着的喂料方是 SB `sendEvent`
+/// 的全局通道，它要先过 `claimPointer` 的 0.12 秒交换闸（每周期开头必盲），
+/// 之后还可能被任一帧 `.cancelled` 把 `globalTouchID` 清掉、且本周期内不许复活
+/// （`appEdgePointerAdopted` 只在圆盘收起时清）→ 这一整次就永久静默。
+/// 识别器与手指是一对一的，坐标直接从识别器拿，不需要任何通道旁证。
+/// Stheno 同构：`-sc_handleArcPan:` → `-sc_pointForGestureRecognizer:` → `-sc_updateSelectionAtPoint:`。
+extern void AevonGripOwnMove(double x, double y);
 extern void AevonGripOwnLog(const char *kind, const char *detail);
 
 /* 全局状态（gAevonOwnLegEnabled / gAevonOwnGesture …）定义在前置区 —— 见
@@ -759,6 +770,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     NSTimer *_ownBail;
     CFTimeInterval _ownStartStamp;   // V0.3.11：落指时刻（0.9s 总上限的基准）
     int _ownMovedFrames;             // V0.3.11：本手势收到的 moved 帧数（判「注册到底生效没有」）
+    int _ownFeedFrames;              // V0.3.17：召唤成功后喂给圆盘的 moved 帧数（>1 = 喂料真的在跑）
     NSTimer *_ownHold;               // V0.3.12：认领后的兜底放行（手指不抬手也不会卡住）
     BOOL _ownStrict;                 // V0.3.14：边缘候选（非贴边）→ 首帧 moved 用严格判据
     CGPoint _ownHit;                 // V0.3.14：began 落点（日志与严格判据都用它）
@@ -809,6 +821,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     _ownStrict = NO;
     _ownTouch = nil;
     _ownMovedFrames = 0;
+    _ownFeedFrames = 0;
     _ownStartStamp = 0;
     /* `_ownStart` 归零不是洁癖：万一有「上根手指的 moved 落到新会话里」的怪帧，
      * dx 会变成一个大正数，`dx <= -8` 判据直接不成立，比留着旧起点安全。 */
@@ -943,6 +956,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     _ownStrict = (level == 2);
     _ownSummoned = NO;
     _ownMovedFrames = 0;
+    _ownFeedFrames = 0;
     _ownStartStamp = CACurrentMediaTime();
     [_ownBail invalidate];
     _ownBail = [NSTimer scheduledTimerWithTimeInterval:0.28
@@ -964,8 +978,24 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    if (self.state != UIGestureRecognizerStatePossible || _ownSummoned) { return; }
     UITouch *t = touches.anyObject;
+    /* V0.3.17（AevonOwnFeedV317）：召唤成功之后，这个识别器仍然持有这根手指 ——
+     * 它收到的每一帧 moved 直接喂给圆盘，圆盘不再依赖 SB 全局通道。
+     *
+     * 顺序不能反：先判 `_ownSummoned`（召唤后仍要喂），再判状态（Possible 才做判据）。
+     * 只认 `_ownTouch` —— 别的手指即便落到识别器上报的集合里，也不许拿它的坐标去
+     * 挪圆盘的指针（那会导致「手指 A 抬手、判定用的是手指 B 的位置」）。
+     * 热路径：只读一个坐标、过一次 C 函数调用，不 hitTest、不读 prefs。 */
+    if (_ownSummoned) {
+        if (_ownTouch != nil && t != _ownTouch) { return; }
+        if (t != nil) {
+            CGPoint q = [t locationInView:nil];
+            _ownFeedFrames++;
+            AevonGripOwnMove((double)q.x, (double)q.y);
+        }
+        return;
+    }
+    if (self.state != UIGestureRecognizerStatePossible) { return; }
     CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
     CGFloat dx = p.x - _ownStart.x;
     CGFloat dy = p.y - _ownStart.y;
@@ -1052,6 +1082,13 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
         _ownHold = nil;
         UITouch *t0 = touches.anyObject;
         CGPoint p0 = (t0 != nil) ? [t0 locationInView:nil] : _ownStart;
+        /* V0.3.17（AevonOwnFeedV317）：把本轮喂了几帧写进日志 —— 这是「喂料通道到底
+         * 有没有在跑」的唯一直接判据。`0` = 招手之后识别器再没收到任何 moved（= 喂料
+         * 这条路本身不成立，得改走全局通道）；`1~3` = 手指在手势展开前后就不动了，
+         * 那是用户动作、不是 bug；`>3` = 正常喂料。 */
+        NSString *feed = [NSString stringWithFormat:
+                          @"本轮喂盘 %d 帧 moved", _ownFeedFrames];
+        AevonGripOwnLog("lift", feed.UTF8String);
         self.state = UIGestureRecognizerStateEnded;
         AevonGripOwnLift((double)p0.x, (double)p0.y, 0);
         return;
@@ -1840,3 +1877,19 @@ __attribute__((used)) static const char AevonOwnLogAsciiV315Marker[] = "AevonOwn
  * Stheno 同构：SCArcGestureRecognizer（__trackingActive + __resetHandler）
  * → SCArcGestureCoordinator -sc_finishTracking → -sc_dismissAnimated:。 */
 __attribute__((used)) static const char AevonOwnLiftV316Marker[] = "AevonOwnLiftV316";
+
+/* V0.3.17（AevonOwnFeedV317）：自建识别器腿**每帧喂盘**。
+ * 依据 Aevon(94) 桌面段 28 次展开：11 次被 1.0s 看门狗收、16 次「抬手未选中」、
+ * 只有 1 次真的选中。那 11 次的「最后落点」与「呼盘那一刻的落点」逐条相等
+ * （383/392/408/415/410/404…）—— 圆盘从展开到被收，一条移动帧都没收到，
+ * 所以既没有划过动画、也没有高亮，抬手自然判成「盘外」。
+ *
+ * 圆盘原先唯一活着的喂料方是 SB `sendEvent` 的全局通道，它有两道必杀：
+ *   ① 每次展开后的前 0.12 秒被 `claimPointer` 的交换闸挡住（9 次成功交接全部
+ *      落在 120/123/124/128ms，正好是 `pointerHandoffInterval`）；
+ *   ② 任何一帧 `.cancelled` 都会把 `globalTouchID` 清零，而 `appEdgePointerAdopted`
+ *      只在圆盘收起时才清 → 本周期内不许重新收养 → 之后每一帧都被静默 `return`。
+ * 本版让持有这根手指的识别器直接把坐标喂给圆盘（`AevonGripOwnMove`），
+ * 两条都不再成立。Stheno 同构：`-sc_handleArcPan:` → `-sc_pointForGestureRecognizer:`
+ * → `-sc_updateSelectionAtPoint:`，它的圆盘从不经过任何旁路通道。 */
+__attribute__((used)) static const char AevonOwnFeedV317Marker[] = "AevonOwnFeedV317";

@@ -777,8 +777,8 @@ final class AevonRingMenu: UIView {
         handlePointerBegan(at: point, source: source)
     }
 
-    func remoteMoved(to point: CGPoint, source: String) {
-        handlePointerMoved(to: point, source: source)
+    func remoteMoved(to point: CGPoint, source: String, authoritative: Bool = false) {
+        handlePointerMoved(to: point, source: source, authoritative: authoritative)
     }
 
     func remoteEnded(at point: CGPoint, source: String) {
@@ -864,9 +864,26 @@ final class AevonRingMenu: UIView {
         updateCenterHold(at: point)
     }
 
-    private func handlePointerMoved(to point: CGPoint, source: String) {
+    private func handlePointerMoved(to point: CGPoint, source: String,
+                                    authoritative: Bool = false) {
         guard AevonRingMenu.current === self, !isDismissing else { return }
-        guard claimPointer(source: source, at: point) else { return }
+        if authoritative {
+            /* V0.3.17（AevonOwnFeedV317）：权威喂料 —— 坐标来自**持有这根手指的识别器**。
+             *
+             * 为什么可以不过交换闸：`claimPointer` 的 0.12 秒静默要求是给「两根手指经
+             * 两条喂料通道换车道」用的。识别器与手指一对一，它报的坐标不需要旁证。
+             * Aevon(94) 里 9 次成功交接时刻全部落在 120/123/124/128ms —— 正好是那道闸，
+             * 也就是说每次展开都必然先盲 0.12 秒；手指在这段时间里停下，这一次就永久失明。
+             *
+             * 通道名变了要重设角度基线：两条通道报的坐标有差值，不重设会被算成一次
+             * 旋转（指针轻轻一动圆盘就转一下）。 */
+            if pointerSource != source {
+                pointerSource = source
+                pointerAngle = angle(from: ringCenter, to: point)
+            }
+        } else {
+            guard claimPointer(source: source, at: point) else { return }
+        }
         pointerPoint = point
         pointerLastEventAt = CACurrentMediaTime()
         isFingerDown = true
@@ -1150,7 +1167,29 @@ final class AevonRingMenu: UIView {
     ///
     /// V0.0.25 起**屏幕上不再出现任何文字**——选中只靠放大 + 蓝色描边 + 蓝色光晕，
     /// 旋转模式下则完全不选中（`rotating` 时调用方只传 nil）。
+    /// V0.3.17（AevonHoverTrackV317）：当前高亮的 App。
+    ///
+    /// 单独存一份而不是「问图标自己」，是因为这里要判的是**状态切换**：`setHovered`
+    /// 每帧都会调一次，只有真的换了一个图标才是用户看得见的「划过」。
+    private var hoveredBundleID = ""
+
     private func setHovered(_ icon: AevonRingIcon?) {
+        let newID = icon?.bundleID ?? ""
+        if newID != hoveredBundleID {
+            hoveredBundleID = newID
+            /* V0.3.17（AevonHoverTrackV317）：只在**高亮真的换了**时打一条。
+             * 这条日志是本版唯一的验收判据 —— 上一份日志分不清「移动帧到了但没高亮」
+             * 和「移动帧根本没到」，因为两者在日志上都只剩一片空白。现在：
+             * 有「划过 X」= 喂料与高亮都通了；只有「喂盘 N 帧」没有「划过」= 帧到了
+             * 但坐标永远落在图标外（那是几何/命中问题，不是喂料问题）。 */
+            if let icon = icon {
+                let d = distanceToCenter(pointerPoint)
+                var a = angle(from: ringCenter, to: pointerPoint).truncatingRemainder(dividingBy: 360)
+                if a < 0 { a += 360 }
+                AevonLog.info("[圆盘] 划过 \(icon.displayName)（离圆心 \(Int(d))pt，角度 \(Int(a))°）"
+                    + "→ 高亮 + 跳跃（AevonHoverTrackV317）")
+            }
+        }
         for item in icons {
             let on = (item === icon)
             item.setHighlighted(on)
