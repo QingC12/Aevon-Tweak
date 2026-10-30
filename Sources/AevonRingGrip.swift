@@ -1,5 +1,12 @@
 import UIKit
 
+/* V0.3.13（AevonHandleHideV313）：把手隐藏的 fail-open 判据 —— 两条腿都没就绪时强制显形。
+ * ObjC 侧用 int 版导出（BOOL 的跨语言返回 ABI 不保证一致）。 */
+@_silgen_name("AevonGripOwnLegReadyInt")
+func aevonOwnLegReadyFlag() -> Int32
+@_silgen_name("AevonGripSystemLegReadyInt")
+func aevonSystemLegReadyFlag() -> Int32
+
 /// 圆盘呼出把手（V0.2.50，AevonRingGripV250；V0.2.55 物理化重构 AevonRingGripV255；
 /// V0.2.59 竖条化 + 自定义 AevonGripCustomV259）。
 ///
@@ -83,6 +90,24 @@ final class AevonRingGripView: UIView {
     static let ratioMin: CGFloat = 0.10
     static let ratioMax: CGFloat = 0.90
     static let ratioDefault: CGFloat = 0.30
+
+    /* V0.3.13（AevonGripZoneV313）：触发区改成**右缘底部的百分比矩形**。
+     *
+     * 用户 Aevon(92) 定的几何：「右边缘底部向上的 30% 高度，宽度是贴近右边缘的 25%，
+     * 在这个区域内都可以呼出圆盘」= (屏宽×75% ~ 屏宽) × (屏高×70% ~ 屏高)。
+     *
+     * 为什么必须换掉「中心 GripY + 长度 GripLen + 宽度 GripWidth」那套：
+     * Aevon(91) 的 28 次 hold **全部有结局**，纵向闸 0 次、0.28s 超时闸 0 次 ——
+     * 逻辑层一个洞都没有，剩下的漏出口**只剩几何边界**（横向只有 24pt 宽，
+     * 手指偏 1~2mm 就落进 pass，App 把整根手指吃掉 = 用户说的「很小的几率」）。
+     *
+     * 用百分比而不是 pt：换机型还是同一个手感，用户也不必再算数值。 */
+    static let zoneWMin: CGFloat = 10
+    static let zoneWMax: CGFloat = 40
+    static let zoneWDefault: CGFloat = 25
+    static let zoneHMin: CGFloat = 15
+    static let zoneHMax: CGFloat = 50
+    static let zoneHDefault: CGFloat = 30
 
     /// 命中与手势的承载视图（V0.2.55）：frame = 命中区，识别器都挂在它上面。
     private let handle = UIView()
@@ -179,50 +204,30 @@ final class AevonRingGripView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    // MARK: - 自定义参数（V0.2.59，AevonGripCustomV259）
+    // MARK: - 自定义参数（V0.2.59 AevonGripCustomV259 → V0.3.13 区域模型）
 
-    /// 位置（从屏幕底部起的高度比例）。读偏好 GripY（10–90，默认 30）。
-    private var bottomRatio: CGFloat {
-        let raw = CGFloat(AevonPrefs.double("GripY", default: 30))
-        let clamped = min(max(raw / 100.0, AevonRingGripView.ratioMin), AevonRingGripView.ratioMax)
-        return clamped
-    }
-
-    /// 竖条长度（pt）。读偏好 GripLen（36–400，默认 64）。V0.3.8：上限 120→400。
-    private var barLength: CGFloat {
-        let raw = CGFloat(AevonPrefs.double("GripLen", default: 64))
-        return min(max(raw, AevonRingGripView.lenMin), AevonRingGripView.lenMax)
-    }
-
-    /// 命中带总宽（pt）。读偏好 GripWidth（12–60，默认 24）。
-    /// V0.3.8（AevonGripZoneV308）：下限取 `barWidth + hitOutsetX`（17pt），
-    /// 保证再怎么调也不会比 0.3.3 定的 12pt 外扩更窄。
-    private var hitWidth: CGFloat {
-        let raw = CGFloat(AevonPrefs.double("GripWidth", default: 24))
-        let clamped = min(max(raw, AevonRingGripView.widthMin), AevonRingGripView.widthMax)
-        return max(clamped, AevonRingGripView.barWidth + AevonRingGripView.hitOutsetX)
-    }
+    /* V0.3.13（AevonGripZoneV313）：`bottomRatio` / `barLength` / `hitWidth` 三个
+     * 读 GripY / GripLen / GripWidth 的属性整体退役 —— 几何唯一来源改成
+     * `AevonRingGrip.bandRect()`（百分比区域）。留在文件里只会让人以为还有第二个
+     * 权威算法，而两侧不一致正是 0.2.61~0.2.84 那串鬼的根。 */
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let len = barLength
-        let w = AevonRingGripView.barWidth
-        // 命中区：竖条中心纵向 = 屏幕底部 bottomRatio 处；横向宽度取偏好 GripWidth
-        let cy = bounds.height * (1.0 - bottomRatio)
-        let hitW = hitWidth
-        let hitH = len + AevonRingGripView.hitOutsetY * 2
-        handle.frame = CGRect(x: bounds.width - hitW,
-                              y: cy - hitH / 2,
-                              width: hitW,
-                              height: hitH)
-        // 竖条贴 handle 右缘（= 贴屏幕右缘），纵向以命中区中心居中
-        visual.frame = CGRect(x: handle.bounds.width - w,
+        let zone = AevonRingGrip.bandRect(screenW: bounds.width, screenH: bounds.height)
+        guard zone.width > 0, zone.height > 0 else { return }
+        // handle = 整个触发区（显形时 point(inside:)/hitTest 与全局通道都靠它）
+        handle.frame = CGRect(x: zone.minX, y: zone.minY,
+                              width: zone.width, height: zone.height)
+        // 视觉竖条：只在 fail-open 显形的那一刻可见，取区域内居中、贴右缘的一小段
+        let len = min(max(zone.height * 0.4, AevonRingGripView.lenMin), 96.0)
+        visual.frame = CGRect(x: handle.bounds.width - AevonRingGripView.barWidth,
                               y: (handle.bounds.height - len) / 2,
-                              width: w,
+                              width: AevonRingGripView.barWidth,
                               height: len)
     }
 
-    /// 命中区 = handle 的 frame（竖条向内扩 12pt、上下各扩 14pt；V0.3.3 收窄）。
+    /// 命中区 = handle 的 frame = 整个呼出区（V0.3.13 起为右缘底部百分比矩形；
+    /// 0.3.3~0.3.12 是 17×92 的窄带，再早是 46×92）。
     private var hitRect: CGRect {
         return handle.frame
     }
@@ -330,28 +335,31 @@ enum AevonRingGrip {
     /// **不进触摸热路径、零 IPC**。
     static var yieldActive = false
 
-    /* V0.3.8（AevonGripZoneV308）：触发带几何的**唯一权威算法**。
+    /* V0.3.13（AevonGripZoneV313）：触发几何的**唯一权威算法** —— 右缘底部百分比矩形。
      *
-     * 用户 Aevon(86)：换成系统手势后「整个右侧都会触发圆盘，还会和左滑返回插件冲突」——
-     * 根因不是缺能力，是系统腿判据写死成 `startX >= screen.width - 24`，**y 一个字节都没判**，
-     * 于是右缘任意高度左滑都呼盘。这里把几何收成一条带：横向 GripWidth、纵向
-     * 中心 GripY + 长度 GripLen（上下各 14pt outset + 10pt 余量）。
+     * 历史（为什么不沿用 0.3.8 那套）：0.3.8 把「右缘整条」收成 GripWidth×GripLen 的
+     * 一条带，解决了「整个右侧都触发」，但带子横向只有 24pt。Aevon(91) 实测：
+     * 带内 28 次扣指 **全部有结局**（27 次自建呼盘 + 1 次借腿认领），纵向闸与超时闸
+     * 一次都没 fire，18 次 pass **全部**是「落点不在带内」—— 也就是说唯一漏出去的
+     * 通道就是这道 24pt 的边。用户直接在体验上确认了：「开启后很小的几率触发 App 内操作」。
      *
-     * ⛔ 两侧必须严格同侧（0.2.61~0.2.84 反复踩）：本函数是 SB 侧权威，
-     * `Sources/AppSide/AevonAppSide.m` 的 `AevonGripRefreshCache` 是本函数的 ObjC 镜像，
-     * 读同一组 key、用同一个公式。任何一侧改公式，CI 的 V0.3.8 校验块会红。 */
+     * 现在改成区域：横向 = 屏宽 × GripZoneW%（默认 25），纵向 = 屏高 × GripZoneH%（默认 30，
+     * 贴底）。区域内任意落点都算呼盘，边界一次性退出 100pt 量级。
+     *
+     * ⛔ 两侧同侧纪律（0.2.61~0.2.84 反复踩）：本函数仍是唯一权威。App 侧
+     * `AevonAppSide.m` 的吞带在 0.3.13 已退役（`AevonAppBandRetireV313`）——
+     * 区域扩大到 107×280pt 后，App 侧若跟随式吞指会把 App 右下角一整片按钮全吃掉，
+     * 而实测证明「App 不跟手」100% 由 SB 侧自建腿提供（0.3.12 抖音 27/27）。
+     * 因此不再有镜像公式，CI 的 V0.3.13 块改为断言「App 侧吐带已归零」。 */
     static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect {
         guard screenW >= 100, screenH >= 200 else { return .zero }
-        let rawW = CGFloat(AevonPrefs.double("GripWidth", default: 24))
-        let w = max(min(max(rawW, AevonRingGripView.widthMin), AevonRingGripView.widthMax),
-                    AevonRingGripView.barWidth + AevonRingGripView.hitOutsetX)
-        let rawLen = CGFloat(AevonPrefs.double("GripLen", default: 64))
-        let len = min(max(rawLen, AevonRingGripView.lenMin), AevonRingGripView.lenMax)
-        let rawRatio = CGFloat(AevonPrefs.double("GripY", default: 30)) / 100.0
-        let ratio = min(max(rawRatio, AevonRingGripView.ratioMin), AevonRingGripView.ratioMax)
-        let cy = screenH * (1.0 - ratio)
-        let h = len + (AevonRingGripView.hitOutsetY + AevonRingGripView.bandPadY) * 2
-        return CGRect(x: screenW - w, y: cy - h / 2, width: w, height: h)
+        let rawW = CGFloat(AevonPrefs.double("GripZoneW", default: Double(zoneWDefault)))
+        let wPct = min(max(rawW, zoneWMin), zoneWMax)
+        let rawH = CGFloat(AevonPrefs.double("GripZoneH", default: Double(zoneHDefault)))
+        let hPct = min(max(rawH, zoneHMin), zoneHMax)
+        let w = screenW * wPct / 100.0
+        let h = screenH * hPct / 100.0
+        return CGRect(x: screenW - w, y: screenH - h, width: w, height: h)
     }
 
     /// V0.3.8（AevonGripZoneV308）：触发范围模式。
@@ -540,16 +548,17 @@ enum AevonRingGrip {
             AevonRingGrip.setVisible(false)
             AevonEdgeEntry.presentRing(source: source)
         }
-        view.alpha = 0.85
+        view.alpha = AevonRingGripView.gripShownAlpha   // V0.3.13：隐藏开关在装窗这一刻就生效
         guard AevonEntryHost.attachOverlay(view) else { return }
         grip = view
         installKbObserversIfNeeded()
-        AevonLog.info("[圆盘] 右缘把手已就位（V0.2.59 起为贴边小短竖条，位置/长度可在设置页调，"
-            + "命中区向外扩 \(Int(AevonRingGripView.hitOutsetX))pt，把手外一律不拦，"
-            + "识别器挂在真实控件上，全屏宿主零识别器）"
+        AevonLog.info("[圆盘] 右缘呼出区已就位（V0.3.13 起为右缘底部百分比矩形，宽高可在设置页调，"
+            + "把手默认隐藏：alpha=\(String(format: "%.2f", view.alpha))），"
+            + "呼盘靠系统手势管线里的识别器，全屏宿主零识别器"
             + "（AevonRingGripV250 AevonRingGripV255 AevonGripCustomV259"
             + " AevonGripSwipeOnlyV260 AevonGripFrontV260"
-            + " AevonGripBandNarrowV303 AevonGripIntentRetireV303）")
+            + " AevonGripBandNarrowV303 AevonGripIntentRetireV303"
+            + " AevonGripZoneV313 AevonHandleHideV313）")
     }
 
     /// V0.2.59（AevonGripCustomV259）：设置页改了 GripY / GripLen → 实时重排。
@@ -559,6 +568,11 @@ enum AevonRingGrip {
         guard let grip = grip, grip.superview != nil else { return }
         // V0.3.5（AevonGripYieldV305）：让路开关实时切换（Darwin 通知已通到这条路）
         grip.applyYieldMode()
+        /* V0.3.13（AevonHandleHideV313）：隐藏开关也在这条路上实时生效 ——
+         * 设成「按开关状态恢复」的那一处口径：圆盘没展开、键盘没在屏才允许显形。 */
+        let shouldShow = !keyboardSuppressed && AevonRingMenu.presented == nil
+            && AevonPrefs.bool("RingGripEnabled", default: true)
+        grip.alpha = shouldShow ? AevonRingGripView.gripShownAlpha : AevonRingGripView.gripHiddenAlpha
         grip.setNeedsLayout()
         grip.layoutIfNeeded()
     }
@@ -588,8 +602,26 @@ enum AevonRingGrip {
     /// 而 `AevonTouchHook` 的 sendEvent 钩子手里还握着同一个指针（0.2.82 注释里写的就是
     /// 这个 use-after-free，当时只修了浮窗那一半，把手这两处漏了）。
     /// alpha < 0.02 的视图不参与 hitTest，视觉与触摸语义等价，但**不 cancel 已在屏的手指**。
-    private static let gripHiddenAlpha: CGFloat = 0
-    private static let gripShownAlpha: CGFloat = 0.85
+    static let gripHiddenAlpha: CGFloat = 0
+    private static let gripVisibleAlpha: CGFloat = 0.85
+
+    /* V0.3.13（AevonHandleHideV313）：把手可以**整体隐藏**（偏好 GripHandleHidden，默认开）。
+     *
+     * 用户 Aevon(92)：「Stheno 的边缘并没有显形的把手」—— 要同款。现在呼盘 100% 由
+     * SB 侧自建识别器腿提供（0.3.12 抖音 27/27），把手对呼盘已经零贡献。
+     *
+     * 走的是同一套 alpha 通道（0.2.85 铁律：藏一律用 alpha，禁 isHidden —— isHidden 会
+     * 让 UIKit 立刻 cancel 在屏手指并摘掉 UITouch，是 use-after-free 的老窝）。于是
+     * `point(inside:)` / `hitTest` / `containsScreenPoint` / `hitTestScreenPoint` 里
+     * 现成的 `alpha < 0.02` 判据全部自动让路，一个额外分支都不用加。
+     *
+     * fail-open：自建腿与借腿**都没就绪**时强制显形 —— 那种状态下没有任何识别器能呼盘，
+     * 把手是最后一条命，再藏起来用户就彻底没有入口了。 */
+    static var gripShownAlpha: CGFloat {
+        guard AevonPrefs.bool("GripHandleHidden", default: true) else { return gripVisibleAlpha }
+        let handsOn = aevonOwnLegReadyFlag() != 0 || aevonSystemLegReadyFlag() != 0
+        return handsOn ? gripHiddenAlpha : gripVisibleAlpha
+    }
 
     /// 当前是否「对外不见」（隐藏或全透明）。命中判定统一走这个。
     private static func gripIsEffectivelyHidden(_ view: UIView) -> Bool {

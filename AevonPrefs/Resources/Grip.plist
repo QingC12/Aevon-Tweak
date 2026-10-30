@@ -3,32 +3,56 @@
 <plist version="1.0">
 <dict>
 	<key>title</key>
-	<string>圆盘把手</string>
+	<string>圆盘呼出区</string>
 	<key>items</key>
 	<array>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>圆盘把手外观</string>
+			<string>呼出区域（占屏幕的比例）</string>
 			<key>footerText</key>
-			<string>0.2.61 起（AevonGripPageV261）：把手的位置和长度搬到了这个独立页面，一级页只留入口。两个滑条都是拖动即时生效，不用注销。把手是贴屏幕右缘的小短竖条（宽 5pt），但可点热区向屏幕内侧延伸约 40pt、上下各多出 14pt —— 手指不必精确按在竖条上。注意：全屏 App 里从把手开始的那根手指会被整根拦下（不再带着 App 内滑动，比如 QQ 的左滑删除），所以把手热区那一小条位置的普通点击也不会进 App。</string>
+			<string>0.3.13 起（AevonGripZoneV313）：呼出区改成**右缘底部的一块矩形区域**，用屏幕比例来定，换机型手感不变。默认 = 贴右边缘 25% 宽 × 从底部往上 30% 高，在这个区域里任意位置向左滑都能呼出圆盘。两个滑条都是拖动即时生效，不用注销。区域比 0.3.8 那条 24pt 窄带宽得多，这正是「很小的几率触发 App 内操作」的修法 —— 手指偏 1~2mm 也不会落到区外。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>label</key>
-			<string>位置：从底部起 %</string>
+			<string>区域高度：屏高 %</string>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
-			<string>GripY</string>
+			<string>GripZoneH</string>
 			<key>default</key>
 			<real>30</real>
 			<key>min</key>
+			<real>15</real>
+			<key>max</key>
+			<real>50</real>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>从屏幕底部往上算。30 = 默认（约 280pt 高，单手拇指自然覆盖的右下角）；调大才会往屏幕中部延伸。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>label</key>
+			<string>区域宽度：屏宽 %</string>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>key</key>
+			<string>GripZoneW</string>
+			<key>default</key>
+			<real>25</real>
+			<key>min</key>
 			<real>10</real>
 			<key>max</key>
-			<real>90</real>
+			<real>40</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -36,23 +60,19 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>10 = 贴近屏幕底部，90 = 贴近顶部；默认 30（单手最顺手）。</string>
+			<string>贴着屏幕右边缘向内算。25 = 默认（约 107pt 宽）；越小越不容易误碰，但也越容易划不中。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
-			<string>PSSliderCell</string>
+			<string>PSSwitchCell</string>
 			<key>label</key>
-			<string>长度：pt</string>
+			<string>隐藏把手（推荐）</string>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
-			<string>GripLen</string>
+			<string>GripHandleHidden</string>
 			<key>default</key>
-			<real>64</real>
-			<key>min</key>
-			<real>36</real>
-			<key>max</key>
-			<real>400</real>
+			<true/>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -60,31 +80,7 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>36 = 很短的一条，400 = 盖住整条右缘（相当于 0.3.7 的「右侧任意高度都能呼」）；默认 64。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSliderCell</string>
-			<key>label</key>
-			<string>触发宽度：pt</string>
-			<key>defaults</key>
-			<string>com.Aevon</string>
-			<key>key</key>
-			<string>GripWidth</string>
-			<key>default</key>
-			<real>24</real>
-			<key>min</key>
-			<real>12</real>
-			<key>max</key>
-			<real>60</real>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
-			<key>footerText</key>
-			<string>从屏幕右缘向内算。24 = 默认（0.3.7 的体感）；越小越不容易误碰，但越难划中；最小 17（把手自身宽度，再小没有意义）。</string>
+			<string>打开（默认）：右缘不再画那根小竖条，呼盘完全靠系统手势管线里的识别器 —— 和 Stheno 一样没有显形把手。关掉：竖条会出现在呼出区里，方便你看清区域位置。安全阀：如果两只识别器都没装上，把手会自己显形，不会让你彻底没有入口。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -104,7 +100,7 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>「右缘整条都能呼」关着（推荐）：只有把手那一条带能呼出圆盘，带外的右缘左滑归侧滑返回插件 —— 这就是「不跟左滑返回插件抢手势」。打开：右缘任意高度左滑都呼盘，等于 0.3.7 的行为，会和侧滑返回插件冲突。只有当你发现把手带怎么调都呼不出来时才需要打开。</string>
+			<string>「右缘整条都能呼」关着（推荐）：只有上面那块区域能呼出圆盘，区域外的右缘滑动正常交给 App。打开：右缘任意高度左滑都呼盘，等于 0.3.7 的行为，会和侧滑返回插件冲突。只有当你发现区域怎么调都呼不出来时才需要打开。</string>
 		</dict>
 	</array>
 </dict>

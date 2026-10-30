@@ -39,9 +39,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>呼盘唯一入口：把手上左滑 8pt（0.2.99 起，之前 14pt——0.2.98 实测 23% 成功率，主力滑动 -8~-13pt 够不到旧阈值）。位置与长短在下面单独调。</string>
+			<string>呼盘入口（0.3.13 起）：右缘底部那块矩形区域内，任意位置向左滑 8pt 即可呼出圆盘。区域默认 = 贴右边缘 25% 宽 × 从底部往上 30% 高，大小与把手显隐在下面单独调。</string>
 			<key>label</key>
-			<string>圆盘把手</string>
+			<string>圆盘呼出区</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -105,7 +105,7 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>把手位置 / 长度调整</string>
+			<string>呼出区大小 / 把手显隐</string>
 		</dict>
 		<dict>
 			<key>cell</key>

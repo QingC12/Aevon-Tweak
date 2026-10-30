@@ -709,6 +709,35 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
 /* 全局状态（gAevonOwnLegEnabled / gAevonOwnGesture …）定义在前置区 —— 见
  * AevonGripLegObserve 上方的说明，别挪回这里。 */
 
+#pragma mark - 放行原因分桶（V0.3.13）
+
+/* V0.3.13（AevonOwnGateV313）：放行原因**四分类 + 坐标 + 限流**。
+ *
+ * 为什么必须分类：Aevon(91) 那 18 条 pass 全是同一句话「落点不在把手带内」，
+ * 一个字都没有落点坐标 —— 于是「很小的几率触发 App 内操作」到底有几次、每次差几 pt，
+ * 全都只能靠猜。现在四类分开计数（带外 / 纵向 / 超时 / 抬手），带坐标，
+ * 每类只打前 6 条，剩下的只累加不刷日志。 */
+enum {
+    AevonOwnPassBand = 0,   // 落点不在呼出区（唯一真正会「漏给 App」的一类）
+    AevonOwnPassVert,       // 纵向为主 → 让给滚动/翻页
+    AevonOwnPassBail,       // 0.28s 内没达阈值
+    AevonOwnPassTap,        // 抬手没左滑
+    AevonOwnPassKindCount
+};
+static NSInteger gAevonOwnPassByKind[AevonOwnPassKindCount];
+
+static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
+    if (bucket < 0 || bucket >= AevonOwnPassKindCount) {
+        AevonGripOwnLog(kind, detail.UTF8String);
+        return;
+    }
+    NSInteger n = ++gAevonOwnPassByKind[bucket];
+    if (n > 6) { return; }
+    NSString *line = [NSString stringWithFormat:@"%@（累计 %ld 条，同类只打前 6 条）",
+                      detail, (long)n];
+    AevonGripOwnLog(kind, line.UTF8String);
+}
+
 #pragma mark - 自建识别器
 
 @interface AevonOwnLegGesture : UIGestureRecognizer
@@ -773,12 +802,13 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
 }
 
 /// 放行（failed）：触摸原样还回去，App 该收什么收什么。
-- (void)ownPass:(const char *)why {
+/// V0.3.13（AevonOwnGateV313）：原因四分类 + 坐标 + 同类限流 6 条（见 AevonOwnPassCount）。
+- (void)ownPass:(const char *)why bucket:(int)bucket detail:(NSString *)detail {
     [_ownBail invalidate];
     _ownBail = nil;
     if (self.state == UIGestureRecognizerStatePossible) {
         self.state = UIGestureRecognizerStateFailed;
-        AevonGripOwnLog("pass", why);
+        AevonOwnPassCount(why, bucket, detail);
     }
 }
 
@@ -787,7 +817,10 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
 /// 慢速滑动不会被误放行；但无论如何 0.9s 必放，绝不会把触摸扣到抬手之后。
 - (void)ownBailFired {
     _ownBail = nil;
-    [self ownPass:"0.28s 内未达阈值 → 放行（AevonNoStuckV309 防扣死）"];
+    NSString *d = [NSString stringWithFormat:
+                   @"0.28s 内未达阈值（本手势 moved 共 %d 帧）→ 放行（AevonNoStuckV309 防扣死）",
+                   _ownMovedFrames];
+    [self ownPass:"pass" bucket:AevonOwnPassBail detail:d];
 }
 
 - (void)ownBailRearm {
@@ -809,7 +842,11 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
     /* 落点判据在**落指那一刻**做 —— 这才是自建腿相对「借识别器」的本质优势：
      * 0.3.8 只能在达阈值之后用后置几何否决，那时 App 已经跟了 8pt 了。 */
     if (AevonGripOwnBandHit((double)p.x, (double)p.y) == 0) {
-        [self ownPass:"落点不在把手带内 → 立刻放行（侧滑返回/边缘滚动不受影响）"];
+        CGSize scr = [UIScreen mainScreen].bounds.size;
+        NSString *d = [NSString stringWithFormat:
+                       @"落点不在呼出区 x=%.0f y=%.0f（屏 %.0fx%.0f）→ 放行"
+                       "（侧滑返回/边缘滚动不受影响）", p.x, p.y, scr.width, scr.height];
+        [self ownPass:"pass" bucket:AevonOwnPassBand detail:d];
         return;
     }
     _ownStart = p;
@@ -822,7 +859,7 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
                                               selector:@selector(ownBailFired)
                                               userInfo:nil
                                                repeats:NO];
-    AevonGripOwnLog("hold", "落点在把手带内 → 扣住触摸，等左滑达阈值（App 此时收不到 began）");
+    AevonGripOwnLog("hold", "落点在呼出区内 → 扣住触摸，等左滑达阈值（App 此时收不到 began）");
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -840,11 +877,17 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
                           @"首帧 moved dx=%.0f dy=%.0f（注册生效 → 系统在派移动帧）", dx, dy];
         AevonGripOwnLog("move", line.UTF8String);
     }
-    if (fabs((double)dy) > 40.0) {
-        [self ownPass:"纵向为主 → 放行（不抢滚动/翻页）"];
-        return;
-    }
-    if (dx <= -8.0) {
+    /* V0.3.13（AevonOwnGateV313）：**先判呼盘、再判纵向**，顺序不能反。
+     *
+     * 触发区从 24pt 窄带扩大成「右缘底部 屏宽25% × 屏高30%」之后，区域里几乎全是 App 的
+     * 正常操作面（抖音右下角按钮、进度条、微信「+」）。原来只在 |dy|>40pt 时让路，
+     * 意味着上下滑要先被扣住 40pt（约 1cm）才还回去 —— 视觉上就是「卡一下再跳」。
+     * 现在只要「纵向分量 ≥12pt 且压过横向」就立刻放行，上下滑第一帧就还回去。
+     *
+     * ⛔ 但呼盘必须先判：真实呼盘是「向左抖一下」，dy 常有 10~15pt 的自然漂移，
+     * 若先判纵向，dx=-10/dy=-13 这种就会被当成滚动放掉 —— 那是把功能判死。
+     * 所以第一判据是「横向达阈值且横向占优」，只有横向不占优时才轮到纵向让路。 */
+    if (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy)) {
         _ownSummoned = YES;
         [_ownBail invalidate];
         _ownBail = nil;
@@ -854,6 +897,18 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
         AevonGripOwnSummon((double)p.x, (double)p.y,
                            (double)_ownStart.x, (double)_ownStart.y);
         self.state = UIGestureRecognizerStateEnded;
+        return;
+    }
+    if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx)) {
+        NSString *d = [NSString stringWithFormat:
+                       @"纵向为主 dx=%.0f dy=%.0f → 放行（不抢滚动/翻页）", dx, dy];
+        [self ownPass:"pass" bucket:AevonOwnPassVert detail:d];
+        return;
+    }
+    if (fabs((double)dy) > 40.0) {
+        NSString *d = [NSString stringWithFormat:
+                       @"纵向超限 dx=%.0f dy=%.0f → 放行（横向占优但纵向太大）", dx, dy];
+        [self ownPass:"pass" bucket:AevonOwnPassVert detail:d];
         return;
     }
     /* 有移动但还没到阈值：把闸往后滚（总上限 0.9s），避免慢速滑动被误放行。 */
@@ -867,7 +922,11 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
     _ownHold = nil;
     if (self.state == UIGestureRecognizerStatePossible) {
         self.state = UIGestureRecognizerStateFailed;
-        AevonGripOwnLog("tap", "点击（没左滑）→ 放行，App 收得到这一下");
+        UITouch *t = touches.anyObject;
+        CGPoint p = (t != nil) ? [t locationInView:nil] : _ownStart;
+        NSString *d = [NSString stringWithFormat:
+                       @"点击（没左滑）→ 放行，App 收得到这一下（落点 x=%.0f y=%.0f）", p.x, p.y];
+        AevonOwnPassCount("tap", AevonOwnPassTap, d);
     } else if (self.state == UIGestureRecognizerStateBegan
                || self.state == UIGestureRecognizerStateChanged) {
         self.state = UIGestureRecognizerStateEnded;
@@ -1481,6 +1540,22 @@ BOOL AevonGripOwnLegReady(void) {
     return gAevonOwnGesture != nil;
 }
 
+/* V0.3.13（AevonHandleHideV313）：给 Swift 的 int 版就绪判据。
+ * BOOL 的跨语言返回 ABI（ObjC 的 signed char / bool vs Swift Bool）不保证一致，
+ * 用 int 直接把这个不确定消掉 —— 把手隐藏的 fail-open 与借腿让路都靠它。
+ *
+ * ⛔ 必须同时要求 `gAevonOwnRegistered`，不能只看识别器对象在不在：
+ * `AevonOwnAttachTo` 那条「挂宿主旁听」的退路也会把 `gAevonOwnGesture` 赋上，
+ * 而 0.3.11 实测旁听拿不到任何 moved 帧（38 hold / 0 moved）——它根本不会呼盘。
+ * 若把它算成「就绪」，借腿就会被让路掉，结果是**完全没有呼盘入口**。 */
+int AevonGripOwnLegReadyInt(void) {
+    return (gAevonOwnGesture != nil && gAevonOwnRegistered) ? 1 : 0;
+}
+
+int AevonGripSystemLegReadyInt(void) {
+    return gAevonLegEnabled ? 1 : 0;
+}
+
 /* V0.3.11（AevonOwnSuppressV311）：自建腿呼盘成功后 0.35s 内，系统腿不再重复呼盘。
  * 两条腿同时活着是刻意的（任何一条失效功能不丢），但同一次手势会有两只识别器
  * 在 20ms 内先后达阈值 —— 之前靠「圆盘已开」拦掉第二条，日志里会多一条
@@ -1559,3 +1634,18 @@ __attribute__((used)) static const char AevonOwnSuppressV311Marker[] = "AevonOwn
 __attribute__((used)) static const char AevonOwnClaimV312Marker[] = "AevonOwnClaimV312";
 __attribute__((used)) static const char AevonOwnIvarV312Marker[] = "AevonOwnIvarV312";
 __attribute__((used)) static const char AevonOwnUIKitMgrV312Marker[] = "AevonOwnUIKitMgrV312";
+
+/* V0.3.13（AevonGripZoneV313 / AevonHandleHideV313 / AevonOwnGateV313）：
+ *
+ * Aevon(91) 把 0.3.12 判成功了：「开启后很小的几率触发 app 内操作，关闭后 100% 触发」。
+ * 日志与之逐条吻合：开关打开的 55 秒里 27 次呼盘 **27/27 全走自建腿**，
+ * 关掉的 7 秒里 3 次 **3/3 全走借腿**；28 次 hold **全部有结局**，
+ * 纵向闸 0 次、0.28s 超时闸 0 次 —— 逻辑层零漏洞，唯一漏出口是 24pt 那条窄边。
+ * 四个改动：
+ *   ① 触发区换成「右缘底部 屏宽25% × 屏高30%」百分比矩形（AevonGripZoneV313）；
+ *   ② 把手可整体隐藏，默认隐藏（AevonHandleHideV313）—— Stheno 同款无显形边缘；
+ *   ③ 纵向判据提前到首帧、且排在呼盘判据之后（AevonOwnGateV313）；
+ *   ④ 借腿降为纯兜底 + App 侧吞带退役（AevonAppBandRetireV313，在 App 侧 dylib）。 */
+__attribute__((used)) static const char AevonGripZoneV313Marker[] = "AevonGripZoneV313";
+__attribute__((used)) static const char AevonHandleHideV313Marker[] = "AevonHandleHideV313";
+__attribute__((used)) static const char AevonOwnGateV313Marker[] = "AevonOwnGateV313";

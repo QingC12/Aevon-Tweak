@@ -950,6 +950,20 @@ enum AevonEdgeEntry {
             legBlocked(cls: cls, reason: "圆盘已开")
             return
         }
+        /* V0.3.13（AevonOwnGateV313）：自建腿已注册 → 借腿**整条退为兜底**，不再呼盘。
+         *
+         * 依据 Aevon(91)：开关打开的 55 秒里 27 次呼盘 **27 次全走自建腿**，
+         * 关掉的 7 秒里 3 次 **3 次全走借腿** —— 两只腿的能力差异已经不需要再共存验证。
+         * 而那 29 条「达阈值但被拦 原因=圆盘已开」说明借腿每次都在自建腿之后到，
+         * 纯粹白算一遍：先跟踪 changed、算满 8pt、再发现圆盘已经开。
+         *
+         * 保留（不删）的理由：自建腿注册依赖 `_UISystemGestureManager`，万一某次
+         * respring 后注册没成，`AevonGripOwnLegReady()` 立刻变 NO，借腿自动全部接回来 ——
+         * 这就是它作为「兜底」的全部职责。 */
+        if AevonGripOwnLegReadyBridge() != 0 {
+            legBlocked(cls: cls, reason: "自建腿已注册（V0.3.13 借腿降为兜底）")
+            return
+        }
         // V0.3.11（AevonOwnSuppressV311）：同一次手势里，自建腿已经在 0.35s 内呼过盘了。
         // 以前靠「圆盘已开」拦第二条，会多打一条「达阈值但被拦」；自建腿接管后这里主动让路。
         let ownAge = AevonGripOwnSummonAge()
@@ -1382,3 +1396,8 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
 /// 自建腿抢先/带外/节流五道守卫 —— ObjC 不知道最终有没有真呼盘，只有这里知道。
 @_silgen_name("AevonGripOwnLegClaim")
 private func AevonGripOwnLegClaimBridge()
+
+/// V0.3.13（AevonOwnGateV313）：自建腿是否已注册（ObjC 侧 `int AevonGripOwnLegReadyInt(void)`）。
+/// 借腿看到它返回非 0 就整条退为兜底 —— 这是 Aevon(91)「27/27 全走自建腿」的直接结论。
+@_silgen_name("AevonGripOwnLegReadyInt")
+private func AevonGripOwnLegReadyBridge() -> Int32

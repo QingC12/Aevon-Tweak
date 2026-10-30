@@ -179,7 +179,8 @@ jobs:
                    AevonGripYieldDeepV306 AevonYieldDefaultV307 AevonGripZoneV308 \
                    AevonGripOwnLegV309 AevonOwnLegRegV310 AevonOwnLegDefaultV310 \
                    AevonOwnLegTypeV311 AevonOwnSuppressV311 \
-                   AevonOwnClaimV312 AevonOwnIvarV312 AevonOwnUIKitMgrV312; do
+                   AevonOwnClaimV312 AevonOwnIvarV312 AevonOwnUIKitMgrV312 \
+                   AevonGripZoneV313 AevonHandleHideV313 AevonOwnGateV313; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -769,15 +770,15 @@ jobs:
           [ "$ROOT_SLIDER_TOTAL" -eq 0 ] \
             || { echo "::error::Root.plist 又出现滑杆（V0.2.61 起把手滑条只在 Grip.plist，实际 $ROOT_SLIDER_TOTAL）"; exit 1; }
           if plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'GripY'; then
-            echo "::error::Root.plist 又出现 GripY/GripLen（把手滑条已搬到 Grip.plist）"
+            echo "::error::Root.plist 又出现 GripY/GripLen（呼出区滑条只在 Grip.plist）"
             exit 1
           fi
-          # Grip.plist：把手页 = 两条滑条 + 各自成组的说明（说明走 footerText，滑条不挂 infoText）
-          [ -s "$ICON_DIR/Grip.plist" ] || { echo "::error::bundle 缺少 Grip.plist（圆盘把手二级页）"; exit 1; }
-          # V0.3.8（AevonGripZoneV308）：+GripWidth（触发带宽度滑条）→ 2 个改 3 个。
+          # Grip.plist：呼出区页 = 两条滑条 + 两个开关（说明一律走 footerText，滑条不挂 infoText）
+          [ -s "$ICON_DIR/Grip.plist" ] || { echo "::error::bundle 缺少 Grip.plist（呼出区二级页）"; exit 1; }
+          # V0.3.13（AevonGripZoneV313）：GripY+GripLen+GripWidth 三滑条 → GripZoneW+GripZoneH 两滑条。
           GRIP_SLIDER_TOTAL=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c 'PSSliderCell' || true)
-          [ "$GRIP_SLIDER_TOTAL" -eq 3 ] \
-            || { echo "::error::Grip.plist 滑杆数不是 3（GripY + GripLen + GripWidth，实际 $GRIP_SLIDER_TOTAL）"; exit 1; }
+          [ "$GRIP_SLIDER_TOTAL" -eq 2 ] \
+            || { echo "::error::Grip.plist 滑杆数不是 2（GripZoneW + GripZoneH，实际 $GRIP_SLIDER_TOTAL）"; exit 1; }
           GRIP_SLIDER_RANGE=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c -e '<key>min</key>' -e '<key>max</key>' || true)
           [ "$GRIP_SLIDER_RANGE" -ge 4 ] \
             || { echo "::error::Grip.plist 滑杆缺 min/max 量程（V0.0.29 护栏：缺量程退化成 0~1）"; exit 1; }
@@ -786,16 +787,16 @@ jobs:
           GRIP_INFO=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c -e '<key>infoText</key>' || true)
           [ "$GRIP_INFO" -eq 0 ] \
             || { echo "::error::Grip.plist 的滑条又挂了 infoText（滑条上不许出现圆圈叹号，说明请用 footerText）"; exit 1; }
-          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripY' \
-            || { echo "::error::Grip.plist 缺少 GripY 滑条"; exit 1; }
-          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripLen' \
-            || { echo "::error::Grip.plist 缺少 GripLen 滑条"; exit 1; }
-          # V0.3.8（AevonGripZoneV308）：触发带宽度滑条 + 触发范围开关必须在位
-          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripWidth' \
-            || { echo "::error::Grip.plist 缺少 GripWidth 滑条（触发带宽度不可调）"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripZoneH' \
+            || { echo "::error::Grip.plist 缺少 GripZoneH 滑条（区域高度不可调）"; exit 1; }
+          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripZoneW' \
+            || { echo "::error::Grip.plist 缺少 GripZoneW 滑条（区域宽度不可调）"; exit 1; }
           plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripScope' \
             || { echo "::error::Grip.plist 缺少 GripScope 开关（右缘整条兜底没了）"; exit 1; }
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripWidth'];s=[i for i in it if i.get('key')=='GripScope'];ok=(len(w)==1 and float(w[0].get('min',0))==12.0 and float(w[0].get('max',0))==60.0 and len(s)==1 and s[0].get('default') is False);print('V0.3.8 Grip.plist: GripWidth 12~60 + GripScope 默认关 ✓' if ok else '::error::V0.3.8 GripWidth 量程不是 12~60 或 GripScope 默认不是关');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
+          # V0.3.13（AevonHandleHideV313）：隐藏把手开关必须在位（默认开 = Stheno 同款无显形边缘）
+          plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripHandleHidden' \
+            || { echo "::error::Grip.plist 缺少 GripHandleHidden 开关（把手藏不起来）"; exit 1; }
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];ok=(len(w)==1 and float(w[0].get('min',0))==10.0 and float(w[0].get('max',0))==40.0 and float(w[0].get('default',0))==25.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==30.0 and len(s)==1 and s[0].get('default') is False and len(x)==1 and x[0].get('default') is True);print('V0.3.13 Grip.plist: 区域 25%/10~40 + 高度 30%/15~50 + 隐藏把手默认开 + GripScope 默认关 ✓' if ok else '::error::V0.3.13 Grip.plist 区域量程/默认值不符（应 25%/10~40、30%/15~50、隐藏默认开、GripScope 默认关）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
             || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
@@ -2435,13 +2436,19 @@ jobs:
           DHC=$(grep -c 'glowRing.isHidden' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" || true)
           [ "$DHC" -ge 2 ] \
             || { echo "::error::0.2.59 停靠光晕隐藏/恢复不完整（实得 $DHC 处）"; exit 1; }
-          # ③把手竖条：贴边竖条宽度常量 + 位置/长度偏好读取 + prefschanged 实时刷新
+          # ③把手竖条：贴边竖条宽度常量 + 区域几何偏好读取 + prefschanged 实时刷新
           grep -q 'static let barWidth: CGFloat = 5' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.59 把手竖条化缺失"; exit 1; }
-          grep -q 'AevonPrefs.double("GripY", default: 30)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
-            || { echo "::error::0.2.59 把手位置自定义缺失"; exit 1; }
-          grep -q 'AevonPrefs.double("GripLen", default: 64)' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
-            || { echo "::error::0.2.59 把手长度自定义缺失"; exit 1; }
+          # V0.3.13（AevonGripZoneV313）反转：位置/长度不再是 GripY/GripLen 两个 pt 值，
+          # 改成区域的百分比宽高（GripZoneW/GripZoneH）。旧断言已随几何模型一起作废。
+          grep -q 'AevonPrefs.double("GripZoneW"' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::V0.3.13 呼出区宽度自定义缺失（GripZoneW）"; exit 1; }
+          grep -q 'AevonPrefs.double("GripZoneH"' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
+            || { echo "::error::V0.3.13 呼出区高度自定义缺失（GripZoneH）"; exit 1; }
+          if grep -q 'AevonPrefs.double("GripY"' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"; then
+            echo "::error::V0.3.13 GripY 读回来了（几何唯一权威必须是 bandRect 的百分比区域）"
+            exit 1
+          fi
           grep -q 'AevonRingGrip.refreshFromPrefs()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::0.2.59 把手 prefschanged 实时刷新缺失"; exit 1; }
           # ④停靠触摸拦截：SB 侧 publish（三个变更点）+ App 侧关交互 + 启动清场 + didBecomeActive 保险丝
@@ -4427,12 +4434,11 @@ jobs:
           # 但落点 y 从 381 一路铺到 722 —— 系统腿判据里根本没有 y，于是「整个右侧都会触发」，
           # 还和侧滑返回插件抢手势。另一组数据：71 次认领里 36 次落点落在 App 侧吞带内
           # （x>=413 且 y 659~750）、35 次在带外 → 正是用户说的「有时带动 App、有时不带动」。
-          # ①SB 侧权威几何函数在位（bandRect 读 GripWidth/GripLen/GripY + 余量）
+          # ①SB 侧权威几何函数在位（V0.3.13 起读 GripZoneW/GripZoneH 百分比区域）
           grep -q 'static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect' "$RG" \
-            && grep -q 'AevonPrefs.double("GripWidth", default: 24)' "$RG" \
-            && grep -q 'static let bandPadY: CGFloat = 10' "$RG" \
-            && grep -q 'static let lenMax: CGFloat = 400' "$RG" \
-            || { echo "::error::V0.3.8 SB 侧缺少触发带几何函数或 GripWidth/余量/lenMax 400"; exit 1; }
+            && grep -q 'AevonPrefs.double("GripZoneW"' "$RG" \
+            && grep -q 'AevonPrefs.double("GripZoneH"' "$RG" \
+            || { echo "::error::V0.3.13 SB 侧缺少触发区几何函数或 GripZoneW/GripZoneH"; exit 1; }
           # ②系统腿判据必须真的用 bandRect，且纵向必须判（防止回退成「右缘整条」）
           grep -q 'let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)' "$EE" \
             && grep -q 'guard edgeRef >= band.minX else' "$EE" \
@@ -4442,11 +4448,12 @@ jobs:
           grep -q 'AevonPrefs.bool("GripScope", default: false)' "$RG" \
             && grep -q 'if !AevonRingGrip.scopeFullEdge {' "$EE" \
             || { echo "::error::V0.3.8 GripScope 兜底开关没接进判据或默认不是关"; exit 1; }
-          # ④App 侧吞带必须与 SB 侧同公式（触发带 ⊂ 吞带 是「呼盘不带动 App」的前提）
-          grep -q 'CFSTR("GripWidth")' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            && grep -q 'if (len > 400) { len = 400; }' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            && grep -q 'bandPadY = 10.0' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::V0.3.8 App 侧吞带没跟读 GripWidth / 没同步 lenMax 400 / 没加 bandPadY"; exit 1; }
+          # ④App 侧吞带（V0.3.13 反转成「已退役」）：几何从 24pt 窄带扩到 107×280pt 后，
+          #   App 侧跟随式吞指会吃掉整个右下角按钮面，而抖音（未注入）实证证明「App 不跟手」
+          #   100% 由 SB 侧自建腿提供 → 吞带整体归零，改守「归零 + 退役标记」。
+          grep -q 'gAevonGripRect = CGRectZero;' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && grep -q 'AevonAppBandRetireV313' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::V0.3.13 App 侧吞带没退役（gAevonGripRect 未归零或缺 AevonAppBandRetireV313）"; exit 1; }
           # ⑤防回退：SB 侧不许再出现写死的右缘 24pt 判据
           if grep -q 'guard edgeRef >= screen.width - 24' "$EE"; then
             echo "::error::V0.3.8 系统腿判据回退成写死 24pt（Aevon(86) 的「整个右侧都触发」）"
@@ -4455,7 +4462,7 @@ jobs:
           # ⑥标记进主库二进制
           strings "$MDYL" | grep -q 'AevonGripZoneV308' \
             || { echo "::error::V0.3.8 主库缺触发区参数化标记"; exit 1; }
-          echo "V0.3.8 校验: 触发带（宽/长/位置可配）+ GripScope 兜底 + 两侧同公式（防回退网在位）✓"
+          echo "V0.3.8/V0.3.13 校验: 触发区走 bandRect（V0.3.13 起为百分比区域）+ GripScope 兜底 + App 吞带已退役（防回退网在位）✓"
 
           # ── V0.3.9 校验（Aevon(87) 定档「方案 A：自建识别器一步到位」）──
           OWNM="$GITHUB_WORKSPACE/Sources/AevonGripHook.m"
@@ -4588,6 +4595,48 @@ jobs:
             && strings "$MDYL" | grep -q 'AevonOwnUIKitMgrV312' \
             || { echo "::error::V0.3.12 主库缺认领/ivar/宿主类修正标记"; exit 1; }
           echo "V0.3.12 校验: 借腿呼盘连带认领 + 装配可升级 + _UISystemGestureManager 真宿主 + ivar 形状取证 ✓"
+
+          # ── V0.3.13 校验（Aevon(91) 判成功 + Aevon(92) 定几何：把手隐藏 + 右缘底部区域）──
+          # 前提数据（Aevon(91)）：开关打开 55s 内 27 次呼盘 27/27 全走自建腿，关掉 7s 内
+          # 3 次 3/3 全走借腿；28 次 hold 全部有结局、纵向闸与超时闸各 0 次 —— 逻辑零漏洞，
+          # 唯一漏出口是 24pt 窄边。用户定几何：「右边缘底部向上 30% 高度，宽度 25%」。
+          # ①几何必须是百分比区域且贴右下（不再读 GripY/GripLen/GripWidth）
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect');j=s.find(chr(10)+'    }',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and j>i and 'GripZoneW' in b and 'GripZoneH' in b and 'screenW * wPct / 100.0' in b and 'screenH * hPct / 100.0' in b and 'x: screenW - w' in b and 'y: screenH - h' in b and 'GripY' not in b and 'GripLen' not in b and 'GripWidth' not in b);print('V0.3.13 触发区 = 右缘底部百分比矩形 ✓' if ok else '::error::V0.3.13 bandRect 不是右缘底部百分比矩形，或函数体里仍在读 GripY/GripLen/GripWidth');sys.exit(0 if ok else 1)" "$RG"
+          # ②把手可隐藏：开关默认开 + alpha 走同一套通道（禁 isHidden）+ 两腿都没就绪时 fail-open 显形
+          grep -q 'AevonPrefs.bool("GripHandleHidden", default: true)' "$RG" \
+            && grep -q 'static var gripShownAlpha' "$RG" \
+            && grep -q 'aevonOwnLegReadyFlag() != 0 || aevonSystemLegReadyFlag() != 0' "$RG" \
+            || { echo "::error::V0.3.13 把手隐藏开关/alpha 计算/fail-open 显形三者不齐"; exit 1; }
+          if grep -q 'grip.isHidden = true' "$RG"; then
+            echo "::error::V0.3.13 藏手又用 isHidden（0.2.85 铁律：isHidden 会 cancel 在屏手指）"
+            exit 1
+          fi
+          # ③释手指顺序：呼盘必须排在纵向让路**之前**（否则 dx=-10/dy=-13 会被当成滚动放掉）
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('if (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy))');b=s.find('if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx))');ok=(a>0 and b>0 and a<b);print('V0.3.13 呼盘判据排在纵向让路之前 ✓' if ok else '::error::V0.3.13 纵向让路跑到了呼盘判据前面（斜向呼盘会被放掉）');sys.exit(0 if ok else 1)" "$OWNM"
+          grep -q 'if (fabs((double)dy) > 40.0)' "$OWNM" \
+            || { echo "::error::V0.3.13 纵向 40pt 兜底闸被删了"; exit 1; }
+          # ④借腿降为纯兜底：自建腿已注册时借腿不许呼盘（Aevon(91)：29 条「达阈值但被拦」全是白算）
+          grep -q 'if AevonGripOwnLegReadyBridge() != 0 {' "$OWNE" \
+            && grep -q '@_silgen_name("AevonGripOwnLegReadyInt")' "$OWNE" \
+            || { echo "::error::V0.3.13 借腿没降为兜底（自建腿 ready 时仍在呼盘）"; exit 1; }
+          # ④b防回退：ready 判据必须同时要求「走的是管理器注册那条路」——
+          # `AevonOwnAttachTo` 的旁听退路也会给 gAevonOwnGesture 赋值，但它一条 moved 都收不到
+          # （0.3.11 实测 38 hold / 0 moved）。若把它算成就绪，借腿被让路 = 完全没有入口。
+          grep -q 'return (gAevonOwnGesture != nil && gAevonOwnRegistered) ? 1 : 0;' "$OWNM" \
+            || { echo "::error::V0.3.13 就绪判据把旁听退路也算成就绪（会让借腿闭嘴导致无入口）"; exit 1; }
+          # ⑤放行四分类探针在位（带外/纵向/超时/抬手）—— 「很小的几率」下一轮要能数出来
+          for k in AevonOwnPassBand AevonOwnPassVert AevonOwnPassBail AevonOwnPassTap; do
+            grep -q "$k" "$OWNM" \
+              || { echo "::error::V0.3.13 放行原因分桶缺 $k"; exit 1; }
+          done
+          # ⑥标记进二进制：主库三条 + App 库一条（吞带退役）
+          strings "$MDYL" | grep -q 'AevonGripZoneV313' \
+            && strings "$MDYL" | grep -q 'AevonHandleHideV313' \
+            && strings "$MDYL" | grep -q 'AevonOwnGateV313' \
+            || { echo "::error::V0.3.13 主库缺区域/隐藏/闸门标记"; exit 1; }
+          strings "$ADYL" | grep -q 'AevonAppBandRetireV313' \
+            || { echo "::error::V0.3.13 App 库缺吞带退役标记"; exit 1; }
+          echo "V0.3.13 校验: 右缘底部百分比区域 + 把手可隐藏（fail-open）+ 纵向首帧让路 + 借腿降兜底 + 放行四分类 + App 吞带退役 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

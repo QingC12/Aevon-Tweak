@@ -1962,7 +1962,28 @@ static void AevonGripRefreshCache(void) {
     double hitW = bandW < (barWidth + outsetX) ? (barWidth + outsetX) : bandW;
     double hitH = len + (outsetY + bandPadY) * 2.0;
     gAevonGripRect = CGRectMake(screen.width - hitW, cy - hitH / 2.0, hitW, hitH);
+
+    /* V0.3.13（AevonAppBandRetireV313）：App 侧吞带**整体退役** —— 上面算完立刻归零。
+     *
+     * 为什么必须退役，而不是让它跟上新的触发区：
+     *   ① 0.3.13 的触发区是「右缘底部 屏宽25% × 屏高30%」≈ 107×280pt。这个面积里
+     *      几乎全是 App 的正常按钮面（抖音点赞/评论/分享、微信右下角「+」、进度条）。
+     *      按 0.3.3 的规则「began 帧整根认领」，跟上去就等于把这一整片点击全部吞掉。
+     *   ② 不跟上去更糟：带子会留在屏幕中部（老几何），落点对不上，变成「误吞又不呼盘」。
+     *   ③ 最关键的事实依据 —— Aevon(85) 的 33 次呼盘 33 次成功全部发生在**抖音**
+     *      （`__RESTRICT`，Aevon 根本注入不进去，本文件的代码在那台机器上从未执行），
+     *      Aevon(91) 更是 27/27 全走 SB 侧自建识别器腿。「呼盘时 App 不跟手」这件事
+     *      100% 由 SB 侧的 `delaysTouchesBegan` 提供，App 侧吞带一直是零贡献。
+     *   ④ 0.3.3 已定档：App 侧「began 放行、中途改吞」是死锁温床。少一条会改触摸归属的
+     *      代码，就少一个卡屏来源。
+     *
+     * 归零是**最小改动面**的退役方式：所有消费点（`AevonPointInGrip`、窗口层 dispatch 里的
+     * `!CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(...)`）都以「矩形非空」为前置，
+     * 这里归零 = 一次性全闭嘴，不必去改那七八处判定。 */
+    gAevonGripRect = CGRectZero;
 }
+
+__attribute__((used)) static const char AevonAppBandRetireV313Marker[] = "AevonAppBandRetireV313";
 
 static BOOL AevonPointInGrip(CGPoint p) {
     AevonGripRefreshCache();
