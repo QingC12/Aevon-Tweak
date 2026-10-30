@@ -706,6 +706,9 @@ extern int AevonGripOwnBandHit(double x, double y);
 /// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选（暂扣）。
 extern int AevonGripOwnHitLevel(double x, double y);
 extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
+/// V0.3.16（AevonOwnLiftV316）：自建腿抬手回调 —— 召唤成功后这根手指的**终点**。
+/// 第三个参数：0 = touchesEnded（正常抬手），1 = touchesCancelled（被系统摘链）。
+extern void AevonGripOwnLift(double x, double y, int32_t cancelled);
 extern void AevonGripOwnLog(const char *kind, const char *detail);
 
 /* 全局状态（gAevonOwnLegEnabled / gAevonOwnGesture …）定义在前置区 —— 见
@@ -759,6 +762,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     NSTimer *_ownHold;               // V0.3.12：认领后的兜底放行（手指不抬手也不会卡住）
     BOOL _ownStrict;                 // V0.3.14：边缘候选（非贴边）→ 首帧 moved 用严格判据
     CGPoint _ownHit;                 // V0.3.14：began 落点（日志与严格判据都用它）
+    __weak UITouch *_ownTouch;       // V0.3.16：召唤那根手指 —— 抬手回调只认它自己
 }
 
 - (instancetype)init {
@@ -777,6 +781,38 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (void)dealloc {
     [_ownBail invalidate];
     [_ownHold invalidate];
+}
+
+/* ---------------------------------------------------------------------------
+ * V0.3.16（AevonOwnLiftV316）：必须自己实现 -reset，否则「活到抬手」会变成永久卡死。
+ *
+ * UIKit 的契约：识别器进入 Ended / Cancelled / Failed 之后会调 `-reset`，把状态
+ * 退回 Possible，下一次触摸才重新开始。0.3.15 及以前召唤完立刻置 Ended + reset，
+ * `_ownSummoned` 由下一根手指的 `touchesBegan` 顺手清掉，所以从没暴露这个问题。
+ *
+ * 本版识别器活到抬手，`_ownSummoned` 要一直保持到那一刻；而 `touchesBegan` 顶部的
+ * 「召唤中的手指还没抬，别的手指不参与」守卫（`if (_ownSummoned) { return; }`）会
+ * 在清标记之前就 return —— 只要漏掉这一处，**第一次呼盘之后自建腿就永久哑火**，
+ * 而且日志上完全看不出来（没有 began、没有 pass、什么都没有）。
+ * 所以清标记只能由 UIKit 的正式生命周期回调来做，不能寄望于下一次 touchesBegan。
+ *
+ * Stheno 的 `SCArcGestureRecognizer` 同样是这个结构：ivar `__trackingActive` +
+ * `__resetHandler`，`-reset` 里回调 coordinator 的 `sc_finishTracking`。
+ * ------------------------------------------------------------------------- */
+- (void)reset {
+    [super reset];
+    [_ownBail invalidate];
+    _ownBail = nil;
+    [_ownHold invalidate];
+    _ownHold = nil;
+    _ownSummoned = NO;
+    _ownStrict = NO;
+    _ownTouch = nil;
+    _ownMovedFrames = 0;
+    _ownStartStamp = 0;
+    /* `_ownStart` 归零不是洁癖：万一有「上根手指的 moved 落到新会话里」的怪帧，
+     * dx 会变成一个大正数，`dx <= -8` 判据直接不成立，比留着旧起点安全。 */
+    _ownStart = CGPointZero;
 }
 
 /* V0.3.12（AevonOwnClaimV312）：借腿赢下仲裁的那一刻，把这根手指正式认领。
@@ -843,7 +879,43 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
                                                repeats:NO];
 }
 
+/* ---------------------------------------------------------------------------
+ * V0.3.16（AevonOwnLiftV316）：召唤成功后**保持 Began 直到抬手**。
+ *
+ * 0.3.15 及以前，两个召唤点都在 `AevonGripOwnSummon(...)` 之后紧跟一句
+ * `self.state = UIGestureRecognizerStateEnded;`。后果是致命的：
+ * 识别器一进 Ended，UIKit 立刻 `-reset`，**这根手指此后再没有任何帧派给它** ——
+ * 于是 `-touchesEnded:` 永远不会被调用，「手指什么时候离开屏幕」这个信息
+ * 在结构上就丢了。
+ *
+ * Aevon(93) 实测 64 次呼盘把代价量出来了：
+ *   · 48 次靠全局通道的 ended 收起（531~1356ms，随用户抬手时机变化，正常）；
+ *   · 16 次靠看门狗收起，时长 **恒定 1003~1008ms** —— 那就是「手指早已离屏，
+ *     圆盘还钉在屏上 1 秒」的全部来源。
+ *
+ * Stheno 的 `SCArcGestureRecognizer` 结构上就是活到抬手：ivar `__trackingActive`
+ * 标记一次追踪会话、`__resetHandler` 在 `-reset` 里回调给 coordinator 的
+ * `sc_finishTracking` → `sc_dismissAnimated:`。本版对齐它：识别器自己就是
+ * 「抬手」的权威来源，不再需要任何静默推断。
+ * ------------------------------------------------------------------------- */
+- (void)ownSummonAtPoint:(CGPoint)p {
+    _ownSummoned = YES;
+    [_ownBail invalidate];
+    _ownBail = nil;
+    [_ownHold invalidate];
+    _ownHold = nil;
+    self.state = UIGestureRecognizerStateBegan;
+    AevonGripOwnSummon((double)p.x, (double)p.y,
+                       (double)_ownStart.x, (double)_ownStart.y);
+    /* 这里**故意不再置 Ended**（见上方注释）：UIKit 会继续把 moved / ended 派进来。 */
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    /* V0.3.16（AevonOwnLiftV316）：召唤过的手指还压在屏上时，**后落下的手指不参与**
+     * 自建腿判定。以前召唤即 Ended、UIKit 立刻 reset，所以不存在这个问题；现在识别器
+     * 活到抬手，第二根手指的 began 会派进来把 _ownStart / _ownSummoned 覆盖掉，
+     * 召唤那根手指抬手时就发不出终点信号（圆盘又回到僵 1 秒）。 */
+    if (_ownSummoned) { return; }
     UITouch *t = touches.anyObject;
     CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
     /* 落点判据在**落指那一刻**做 —— 这才是自建腿相对「借识别器」的本质优势：
@@ -867,6 +939,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     }
     _ownStart = p;
     _ownHit = p;
+    _ownTouch = t;
     _ownStrict = (level == 2);
     _ownSummoned = NO;
     _ownMovedFrames = 0;
@@ -930,15 +1003,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
         double adx = fabs((double)dx);
         double ady = fabs((double)dy);
         if (horizontal && (ady <= 6.0 || ady <= adx * 0.25)) {
-            _ownSummoned = YES;
-            [_ownBail invalidate];
-            _ownBail = nil;
-            [_ownHold invalidate];
-            _ownHold = nil;
-            self.state = UIGestureRecognizerStateBegan;
-            AevonGripOwnSummon((double)p.x, (double)p.y,
-                               (double)_ownStart.x, (double)_ownStart.y);
-            self.state = UIGestureRecognizerStateEnded;
+            [self ownSummonAtPoint:p];
             return;
         }
         if (dx > 0.0 || fabs((double)dy) >= 12.0) {
@@ -954,15 +1019,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
         return;
     }
     if (horizontal) {
-        _ownSummoned = YES;
-        [_ownBail invalidate];
-        _ownBail = nil;
-        [_ownHold invalidate];
-        _ownHold = nil;
-        self.state = UIGestureRecognizerStateBegan;
-        AevonGripOwnSummon((double)p.x, (double)p.y,
-                           (double)_ownStart.x, (double)_ownStart.y);
-        self.state = UIGestureRecognizerStateEnded;
+        [self ownSummonAtPoint:p];
         return;
     }
     if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx)) {
@@ -982,6 +1039,23 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    /* V0.3.16（AevonOwnLiftV316）：召唤过的手指，抬手就是圆盘的**终点信号**。
+     * 以前这条路不存在（召唤即 Ended），圆盘只能靠看门狗，固定多停 1 秒。
+     * 只认召唤那根手指（_ownTouch）；别的手指抬起一律忽略 —— 否则会拿别人的落点
+     * 去判「选中哪个图标」，也会把别人的抬手当成圆盘的终点。
+     * 顺序：先判「是不是我这根」再清定时器，别的手指抬起不许把我们自己的闸清掉。 */
+    if (_ownSummoned) {
+        if (_ownTouch != nil && ![touches containsObject:_ownTouch]) { return; }
+        [_ownBail invalidate];
+        _ownBail = nil;
+        [_ownHold invalidate];
+        _ownHold = nil;
+        UITouch *t0 = touches.anyObject;
+        CGPoint p0 = (t0 != nil) ? [t0 locationInView:nil] : _ownStart;
+        self.state = UIGestureRecognizerStateEnded;
+        AevonGripOwnLift((double)p0.x, (double)p0.y, 0);
+        return;
+    }
     [_ownBail invalidate];
     _ownBail = nil;
     [_ownHold invalidate];
@@ -1000,6 +1074,24 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    /* V0.3.16（AevonOwnLiftV316）：被系统摘链（其它识别器抢走 / App 切后台）对
+     * **这根手指**来说等同于离屏 —— 它不会再有任何帧了。圆盘那条通道（0.2.18）
+     * 严守「取消 ≠ 抬手」，因为那说的是「通道不投了、手指还压着」；而这里是
+     * 识别器级的事实：UIKit 已经不再给这根 touch 派任何帧，留着只会再僵 1 秒。
+     * 第三个参数传 1，日志里能与正常抬手区分开。
+     * 同 touchesEnded：先判「是不是我这根」再清定时器（认领路还有 3s 兜底闸要用）。 */
+    if (_ownSummoned) {
+        if (_ownTouch != nil && ![touches containsObject:_ownTouch]) { return; }
+        [_ownBail invalidate];
+        _ownBail = nil;
+        [_ownHold invalidate];
+        _ownHold = nil;
+        UITouch *t0 = touches.anyObject;
+        CGPoint p0 = (t0 != nil) ? [t0 locationInView:nil] : _ownStart;
+        self.state = UIGestureRecognizerStateCancelled;
+        AevonGripOwnLift((double)p0.x, (double)p0.y, 1);
+        return;
+    }
     [_ownBail invalidate];
     _ownBail = nil;
     [_ownHold invalidate];
@@ -1738,3 +1830,13 @@ __attribute__((used)) static const char AevonSliderLiveV315Marker[] = "AevonSlid
 __attribute__((used)) static const char AevonZoneH35V315Marker[] = "AevonZoneH35V315";
 __attribute__((used)) static const char AevonStrictAngleV315Marker[] = "AevonStrictAngleV315";
 __attribute__((used)) static const char AevonOwnLogAsciiV315Marker[] = "AevonOwnLogAsciiV315";
+
+/* V0.3.16（AevonOwnLiftV316）：自建识别器腿活到抬手。
+ * 依据 Aevon(93) 桌面段 64 次呼盘：48 次抬手即收（531~1356ms），16 次僵在看门狗上
+ * 且时长恒定 1003~1008ms。根因是召唤点紧跟的 `state = Ended` 让 UIKit 立刻 -reset，
+ * 这根手指此后再没有任何帧派给识别器 → 「抬手」信息结构性丢失。
+ * 本版：召唤成功后保持 Began；touchesEnded / touchesCancelled 在 _ownSummoned 时
+ * 调 AevonGripOwnLift → 圆盘走「权威抬手」通道当场收起，不再等 1 秒看门狗。
+ * Stheno 同构：SCArcGestureRecognizer（__trackingActive + __resetHandler）
+ * → SCArcGestureCoordinator -sc_finishTracking → -sc_dismissAnimated:。 */
+__attribute__((used)) static const char AevonOwnLiftV316Marker[] = "AevonOwnLiftV316";

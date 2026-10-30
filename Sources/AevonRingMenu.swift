@@ -180,6 +180,8 @@ final class AevonRingMenu: UIView {
     /// 就再也不投递了（Aevon(102) 里 9 次呼盘全部在 0.1~0.5 秒内 Failed），
     /// 交接必须比这个快，否则圆盘会明显「愣一下」。
     private static let pointerHandoffInterval: CFTimeInterval = 0.12
+    /// V0.3.16（AevonOwnLiftV316）：抬手帧被交换闸拒的日志限流（0.5s 一条）。
+    private static var lastLiftRejectLogAt: CFTimeInterval = 0
     /// 圆心纵向位置（占屏幕高度比例）
     private static let verticalRatio: CGFloat = 0.75
 
@@ -783,6 +785,16 @@ final class AevonRingMenu: UIView {
         handlePointerEnded(at: point, source: source)
     }
 
+    /// V0.3.16（AevonOwnLiftV316）：**权威抬手** —— 来自召唤那根手指所属的识别器。
+    ///
+    /// 与 `remoteEnded` 的唯一差别：不过 `claimPointer` 的「原通道静默 ≥0.12s」交换闸。
+    /// 那道闸是为「指针从一条喂料通道换到另一条」设计的（两条通道报的坐标有差值，
+    /// 必须确认原通道已死才敢抢）。抬手帧不属于这个场景：它就是这根手指的终点，
+    /// 谁先到谁说了算 —— 被闸吞掉只会让圆盘多钉 1 秒。
+    func remoteLift(at point: CGPoint, source: String) {
+        handlePointerEnded(at: point, source: source, authoritative: true)
+    }
+
     func remoteCancelled(source: String) {
         handlePointerCancelled(source: source)
     }
@@ -891,9 +903,32 @@ final class AevonRingMenu: UIView {
     ///   · 抬手时正好在图标上 → 用浮窗打开它；
     ///   · 抬手时在圆心 → 打开应用面板。
     /// 换句话说：**只有抬手这一件事会收起圆盘**（加上选中开窗、圆心面板、三指急救三条显式路径）。
-    private func handlePointerEnded(at point: CGPoint, source: String) {
+    private func handlePointerEnded(at point: CGPoint, source: String,
+                                    authoritative: Bool = false) {
         guard AevonRingMenu.current === self, !isDismissing else { return }
-        guard claimPointer(source: source, at: point) else { return }
+        /* V0.3.16（AevonOwnLiftV316）：`authoritative == true` 只由自建识别器腿的抬手
+         * 回调传入（`remoteLift`）。识别器与手指是一对一的，它报的抬手不需要任何
+         * 「原通道静默时长」旁证 —— 那道 0.12s 闸是给「指针换喂料通道」用的
+         * （两条通道坐标有差值，必须确认原通道已死），抬手帧套上去只会被静默吞掉。
+         * Aevon(93) 的 16 次「圆盘钉住 1 秒」全部落在这一条上。 */
+        if !authoritative {
+            if !claimPointer(source: source, at: point) {
+                /* V0.3.16（AevonOwnLiftV316）：被交换闸拒 = 抬手帧到了但通道没换过来。
+                 * 以前这里是静默 return，Aevon(93) 那 16 次「圆盘钉住 1 秒」在日志上
+                 * 完全空白，分不清到底是「ended 没到」还是「到了被拒」。留这一条，
+                 * 下一份日志一眼可判；限流 0.5s 防刷。 */
+                let now = CACurrentMediaTime()
+                if now - AevonRingMenu.lastLiftRejectLogAt > 0.5 {
+                    AevonRingMenu.lastLiftRejectLogAt = now
+                    let silence = pointerLastEventAt > 0
+                        ? Int((now - pointerLastEventAt) * 1000) : -1
+                    AevonLog.info("[圆盘] 抬手帧被通道交换闸拒（来源 \(source)，"
+                        + "当前指针 \(pointerSource.isEmpty ? "空" : pointerSource)，"
+                        + "静默 \(silence)ms）→ 圆盘只能等看门狗（AevonOwnLiftV316）")
+                }
+                return
+            }
+        }
         cancelCenterHold()
         pointerPoint = point
         if isInsideRingArea(point) { pointerEverInsideRing = true }

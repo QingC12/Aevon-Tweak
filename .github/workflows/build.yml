@@ -183,7 +183,7 @@ jobs:
                    AevonGripZoneV313 AevonHandleHideV313 AevonOwnGateV313 \
                    AevonEdgePadV314 AevonGripHardcodeV315 AevonHandleTopV315 \
                    AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 \
-                   AevonOwnLogAsciiV315; do
+                   AevonOwnLogAsciiV315 AevonOwnLiftV316; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -4749,6 +4749,61 @@ jobs:
               || { echo "::error::V0.3.15 主库缺标记 $mk"; exit 1; }
           done
           echo "V0.3.15 校验: 呼出手势写死（一级页 5 开关）+ 隐藏把手提一级 + 高度 35% + 滑条拖动实时刷新 + 严格判据角度化 + 日志去乱码 ✓"
+
+          # ── V0.3.16 校验（Aevon(94)：自建腿活到抬手，抬手即收圆盘）──
+          # 用户原话：「圆盘出现后，手指移动到右侧边缘时并离开屏幕。圆盘会固定展示大约 1 秒。」
+          # Aevon(93) 桌面段 64 次呼盘实测：48 次抬手即收（531~1356ms），16 次由静默看门狗
+          # 收起且时长恒定 1003~1008ms —— 那 1 秒是时钟，不是手感。
+          # 根因：两个召唤点后面紧跟的 `state = Ended` 让 UIKit 立刻 -reset，这根手指此后再无
+          # 任何帧派给识别器 → -touchesEnded: 永不触发 → 「抬手」信息结构性丢失。
+          # 本版对齐 Stheno SCArcGestureRecognizer（活到抬手 → sc_finishTracking → dismiss）。
+          RM="$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift"
+          # ①召唤体里不许再出现 state = Ended（本版唯一核心：防它被顺手加回去）
+          if sed -n '/- (void)ownSummonAtPoint:/,/^}/p' "$OWNM" | grep -q 'UIGestureRecognizerStateEnded'; then
+            echo "::error::V0.3.16 ownSummonAtPoint 又置 Ended（UIKit 会立刻 reset，抬手事件丢失，圆盘必僵 1 秒）"
+            exit 1
+          fi
+          # ②两个判据分支必须都走统一入口（贴边 + 边缘候选）
+          CNT=$(grep -cF 'ownSummonAtPoint' "$OWNM" || true)
+          [ "$CNT" -ge 3 ] \
+            || { echo "::error::V0.3.16 召唤没有统一走 ownSummonAtPoint（定义 + 贴边 + 边缘候选 共 3 处）"; exit 1; }
+          # ③抬手回调必须三处都在（extern 声明 + ended + cancelled）
+          CNT=$(grep -cF 'AevonGripOwnLift(' "$OWNM" || true)
+          [ "$CNT" -ge 3 ] \
+            || { echo "::error::V0.3.16 AevonGripOwnLift 调用点不足（extern + ended + cancelled 至少 3 处）"; exit 1; }
+          # ④跨语言桥两侧都在
+          grep -q 'AevonGripOwnLift(double x, double y, int32_t cancelled)' "$OWNM" \
+            || { echo "::error::V0.3.16 ObjC 侧没声明 AevonGripOwnLift"; exit 1; }
+          grep -q '@_cdecl("AevonGripOwnLift")' "$EE" \
+            || { echo "::error::V0.3.16 Swift 侧没导出 AevonGripOwnLift"; exit 1; }
+          grep -q 'static func ownLegLift(' "$EE" \
+            || { echo "::error::V0.3.16 缺 ownLegLift 实现"; exit 1; }
+          # ⑤圆盘侧的权威抬手通道（绕开 0.12s 通道交换闸）
+          grep -q 'func remoteLift(at point: CGPoint, source: String)' "$RM" \
+            || { echo "::error::V0.3.16 圆盘缺 remoteLift（抬手还是得等看门狗）"; exit 1; }
+          grep -q 'authoritative: Bool = false' "$RM" \
+            || { echo "::error::V0.3.16 handlePointerEnded 缺 authoritative 参数"; exit 1; }
+          grep -q 'handlePointerEnded(at: point, source: source, authoritative: true)' "$RM" \
+            || { echo "::error::V0.3.16 remoteLift 没走权威路径（抬手仍会被 0.12s 交换闸吞掉）"; exit 1; }
+          # ⑥被闸拒必须留痕（下一份日志要能区分「ended 没到」与「到了被拒」）
+          grep -q '抬手帧被通道交换闸拒' "$RM" \
+            || { echo "::error::V0.3.16 抬手被拒时仍然静默 return（下次又分不清根因）"; exit 1; }
+          # ⑦看门狗参数本版不动（抬手已能当场收；改它们只会把 0.2.69「按住不动自己收」带回来）
+          grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$RM" \
+            || { echo "::error::V0.3.16 看门狗 0.8s 被动了（未验证的改动，会回归「按住不动圆盘自己收」）"; exit 1; }
+          # ⑦.5 识别器必须自己实现 -reset 并清掉 _ownSummoned。
+          #     本版识别器活到抬手，`touchesBegan` 顶部的「召唤中…」守卫会在清标记前
+          #     return —— 少了 -reset，第一次呼盘之后自建腿永久哑火，且日志上一片空白。
+          if ! sed -n '/^- (void)reset {/,/^}/p' "$OWNM" | grep -q '_ownSummoned = NO;'; then
+            echo "::error::V0.3.16 -reset 没清 _ownSummoned（第一次呼盘后自建腿会永久哑火）"
+            exit 1
+          fi
+          sed -n '/^- (void)reset {/,/^}/p' "$OWNM" | grep -q '\[super reset\];' \
+            || { echo "::error::V0.3.16 -reset 没调 [super reset]"; exit 1; }
+          # ⑧标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonOwnLiftV316' \
+            || { echo "::error::V0.3.16 主库缺标记 AevonOwnLiftV316"; exit 1; }
+          echo "V0.3.16 校验: 自建腿活到抬手（召唤不置 Ended + -reset 清标记）+ AevonGripOwnLift 双路 + 权威抬手绕开 0.12s 交换闸 + 被拒留痕 + 看门狗未动 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

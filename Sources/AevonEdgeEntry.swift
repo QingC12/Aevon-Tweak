@@ -1088,6 +1088,28 @@ enum AevonEdgeEntry {
         presentRing(source: "system")
     }
 
+    /// V0.3.16（AevonOwnLiftV316）：自建腿抬手 —— **圆盘的权威终点信号**。
+    ///
+    /// 为什么这条是权威的：它来自**召唤那根手指所属的识别器**，不是任何一条喂料通道。
+    /// 一根手指只属于一个识别器，所以「这条抬手是这根手指的抬手」不需要推理，
+    /// 也就不该再过 `claimPointer` 的 0.12s 通道交换闸（那道闸是给「两根手指换车道」
+    /// 用的，抬手帧套上去只会被静默吞掉 —— Aevon(93) 那 16 次僵住就是这么来的）。
+    ///
+    /// `cancelled = true` 也按抬手处理：对这根 touch 而言，被系统摘链意味着
+    /// UIKit 不会再给它派任何帧，和离屏等价。这与 0.2.18「取消 ≠ 抬手」不冲突 ——
+    /// 那条讲的是「喂料通道不投了、手指还压着」，讲的是通道，不是识别器。
+    static func ownLegLift(x: CGFloat, y: CGFloat, cancelled: Bool) {
+        guard let ring = AevonRingMenu.presented else { return }
+        ring.remoteLift(at: CGPoint(x: x, y: y), source: "ownleg")
+        if cancelled {
+            AevonLog.info("[圆盘] 自建腿被摘链 (x=\(Int(x)),y=\(Int(y))) → 按抬手处理，当场收起"
+                + "（AevonOwnLiftV316）")
+        } else {
+            AevonLog.info("[圆盘] 自建腿抬手 (x=\(Int(x)),y=\(Int(y))) → 当场收起，"
+                + "不再等 1.0s 静默看门狗（AevonOwnLiftV316）")
+        }
+    }
+
     /// 自建腿放行/被拦的记账（限流 1s：`touchesBegan` 是触摸热路径，不许刷日志）。
     private static var ownLegLastLogAt: CFTimeInterval = 0
     static func ownLegBlocked(_ reason: String) {
@@ -1323,6 +1345,13 @@ public func AevonGripOwnSummon(_ x: Double, _ y: Double,
                                _ startX: Double, _ startY: Double) {
     AevonEdgeEntry.ownLegSummon(x: CGFloat(x), y: CGFloat(y),
                                 startX: CGFloat(startX), startY: CGFloat(startY))
+}
+
+/// V0.3.16（AevonOwnLiftV316）：自建腿抬手 —— 召唤成功那根手指的终点信号。
+/// `cancelled` 用 Int32 传（C 的 BOOL 宽度随架构变，不留类型擦边球）。
+@_cdecl("AevonGripOwnLift")
+public func AevonGripOwnLift(_ x: Double, _ y: Double, _ cancelled: Int32) {
+    AevonEdgeEntry.ownLegLift(x: CGFloat(x), y: CGFloat(y), cancelled: cancelled != 0)
 }
 
 /// V0.3.9（AevonGripOwnLegV309）：自建腿的取证/结局日志桥（类普查、挂载、放行原因）。
