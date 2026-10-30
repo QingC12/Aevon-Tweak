@@ -1007,9 +1007,10 @@ enum AevonEdgeEntry {
     /// 返回值：true = 这根手指由自建腿接管（触摸被扣住）；false = 立刻 failed 放行。
     static func ownLegBandHit(x: CGFloat, y: CGFloat) -> Bool {
         guard AevonPrefs.bool("Enabled", default: true) else { return false }
-        // V0.3.9：默认关 —— 自建腿要往系统手势视图上挂识别器，属于会改变触摸派发的动刀，
-        // 必须让用户显式打开才生效（装不上/异常时全程 fail-open 回 0.3.8 的借用腿）。
-        guard AevonPrefs.bool("GripOwnLeg", default: false) else { return false }
+        // V0.3.10（AevonOwnLegDefaultV310）：默认值 false → true（转正）。
+        // 依据 Aevon(88)：默认关着时自建腿一行日志都没有，63 次呼盘 100% 仍走借识别器腿，
+        // 抖音那 24 次全部「恰好 8pt 就呼盘」—— 那 8pt 已经派给 App，所以抖音会露一截作者主页。
+        guard AevonPrefs.bool("GripOwnLeg", default: true) else { return false }
         guard AevonRingMenu.presented == nil else { return false }
         let screen = UIScreen.main.bounds
         let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)
@@ -1348,6 +1349,12 @@ private func aevonPrefsChangedHandler(_ center: CFNotificationCenter?,
         AevonRingStore.refreshFromSettings()
         // V0.2.59（AevonGripCustomV259）：把手位置 / 长度滑条改动 → 竖条实时重排
         AevonRingGrip.refreshFromPrefs()
+        // V0.3.10（AevonOwnLegDefaultV310）：自建识别器腿开关**实时生效**。
+        // 0.3.9 只在 SpringBoard 加载时读一次 —— 用户在设置页打开开关后必须注销
+        // 才起作用（0.3.9 交付说明里那句「立即生效」对这条不成立，是真缺陷）。
+        // 现在走同一条 Darwin 通道，开/关都即时，关掉会顺手把已装识别器摘下来。
+        AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: true),
+                              AevonPrefs.bool("GripHookProbe", default: false))
     }
 }
 

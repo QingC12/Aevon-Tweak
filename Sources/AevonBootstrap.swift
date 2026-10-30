@@ -129,12 +129,15 @@ enum AevonBootstrap {
         }
 
         // V0.3.9（AevonGripOwnLegV309）：自建识别器腿 —— 只有 GripOwnLeg 打开才装配。
-        // 关着时整条腿不存在（等于 0.3.8 的行为）；打开后在**第一次看到系统边沿识别器**时
-        // 装配（那时宿主 UISystemGestureView 就在眼前），拿不到管理器就退回直接挂宿主。
+        // V0.3.10（AevonOwnLegDefaultV310）：**默认转正**（false → true）。依据 Aevon(88)：
+        // 63 次呼盘 100% 仍走借识别器腿（自建腿 0 条日志），抖音 24 次全部恰好 8pt 就呼盘 ——
+        // 那 8pt 已经派给了 App，抖音 feed 是横向分页、8pt 就露出作者主页一截，
+        // 而微信/QQ/B站/酷安的同类泄漏被交互式返回的回弹吃掉了，所以「只有抖音看得见」。
+        // 装配改成主动重试（不等第一次滑动），失败一律 fail-open 回借识别器腿。
         exName = nil
         exReason = nil
         AevonTryExecute({
-            AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: false),
+            AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: true),
                                   AevonPrefs.bool("GripHookProbe", default: false))
         }, &exName, &exReason)
         if let name = exName {

@@ -177,7 +177,7 @@ jobs:
                    AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripProbe5V304 \
                    AevonGripYieldV305 AevonGripLegOutcomeV305 \
                    AevonGripYieldDeepV306 AevonYieldDefaultV307 AevonGripZoneV308 \
-                   AevonGripOwnLegV309; do
+                   AevonGripOwnLegV309 AevonOwnLegRegV310 AevonOwnLegDefaultV310; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -1113,7 +1113,7 @@ jobs:
           # 默认关）→ 4 个改 5 个。
           # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势）→ 5 个改 6 个。
           # V0.3.7（AevonYieldDefaultV307）：该项默认值 false → true（转正，不再是 A/B 档）。
-          # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘，默认关）→ 6 个改 7 个。
+          # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）→ 6 个改 7 个。
           [ "$ROOT_SW" -eq 7 ] || { echo "::error::一级页开关数不是 7（实际 $ROOT_SW）—— 0.3.9 清单：Enabled/RingGripEnabled/GripHookProbe/GripSystemYield/GripOwnLeg/LogEnabled/CrashGuard"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
@@ -1121,7 +1121,7 @@ jobs:
           # V0.2.81（AevonDeadCodeV281）：去掉 ProbeV107（探针已退役，开关是死配置）
           # V0.2.99（AevonGripProbeV299）：+GripHookProbe（方案 A 灰度探测开关，默认关）
           # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势，0.3.7 起默认开）
-          # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘，默认关）
+          # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）
           [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHookProbe,GripSystemYield,GripOwnLeg,LogEnabled,CrashGuard" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
@@ -4477,15 +4477,42 @@ jobs:
             || { echo "::error::V0.3.9 注册前没做签名自检（参数个数不符会破坏调用约定）"; exit 1; }
           # ⑥桥接头声明在位（Swift 启动时才调得到开关）
           grep -q 'AevonGripOwnLegEnable' "$OWNB" \
-            && grep -q 'AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: false)' \
+            && grep -q 'AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: true)' \
                  "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
-            || { echo "::error::V0.3.9 桥接声明或启动调用缺失"; exit 1; }
-          # ⑦开关默认关（会改动触摸派发的动刀，必须用户显式开）
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripOwnLeg'];ok=(len(h)==1 and h[0].get('default') is False);print('V0.3.9 设置开关: GripOwnLeg 在位且默认关 ✓' if ok else '::error::V0.3.9 Root.plist 缺 GripOwnLeg 或默认不是关（命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+            || { echo "::error::V0.3.9 桥接声明或启动调用缺失（0.3.10 起默认值必须是 true）"; exit 1; }
+          # ⑦开关默认值 —— 0.3.10 转正：默认开（Aevon(88)：默认关时自建腿一行没跑）
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripOwnLeg'];ok=(len(h)==1 and h[0].get('default') is True);print('V0.3.9/0.3.10 设置开关: GripOwnLeg 在位且默认开 ✓' if ok else '::error::V0.3.10 Root.plist 缺 GripOwnLeg 或默认不是开（命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑧标记进主库二进制
           strings "$MDYL" | grep -q 'AevonGripOwnLegV309' \
             || { echo "::error::V0.3.9 主库缺自建识别器腿标记"; exit 1; }
           echo "V0.3.9 校验: 自建识别器（落指即判 + 0.1.9 三闸 + 白名单取证 + 默认关）✓"
+
+          # ── V0.3.10 校验（Aevon(88)：自建腿一行没跑 → 真名注册 + 主动装配 + 实时开关 + 转正）──
+          # ①注册候选必须是 Stheno 逆向 strings 实测的真名（两参 toDisplayWithIdentity）
+          [ "$(grep -c 'addGestureRecognizer:toDisplayWithIdentity:' "$OWNM")" -ge 2 ] \
+            || { echo "::error::V0.3.10 两参真名 addGestureRecognizer:toDisplayWithIdentity: 未同时在取证与注册里出现"; exit 1; }
+          # ②两参调用前必须签名 fail-closed（参数个数不符会破坏调用约定，arm64e 直接炸）
+          grep -q "enc\[0\] != 'v' || AevonGripEncArgCount(enc) != 2" "$OWNM" \
+            || { echo "::error::V0.3.10 两参注册前没做签名自检"; exit 1; }
+          # ③装配必须主动重试（0.3.9 只在第一次滑动时装配 → 那一次必然白扔）
+          grep -q 'void AevonGripOwnLegKick(void)' "$OWNM" \
+            && grep -q 'gAevonOwnArmTries >= 15' "$OWNM" \
+            || { echo "::error::V0.3.10 装配重试缺失（AevonGripOwnLegKick / 15 次上限）"; exit 1; }
+          # ④开关必须实时生效（走设置变更 Darwin 通道，不再只在 SpringBoard 加载时读一次）
+          python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("private func aevonPrefsChangedHandler"); ok=(i>=0 and s.find("AevonGripOwnLegEnable",i)>i); print("V0.3.10 自建腿开关实时生效（prefschanged 里重读）✓" if ok else "::error::V0.3.10 开关仍只在启动时读一次（改了必须注销，是 0.3.9 的缺陷）"); sys.exit(0 if ok else 1)' "$OWNE"
+          # ⑤fail-open：宿主旁听只在探针打开时才允许（旁听无仲裁身份，会让打开开关后比之前更差）
+          grep -q 'if (gAevonOwnLegProbeOn && host != nil)' "$OWNM" \
+            || { echo "::error::V0.3.10 宿主旁听没被探针门住（注册失败时会把行为改坏）"; exit 1; }
+          # ⑥防回退：GripOwnLeg 的默认值不许再写回 false
+          if grep -rn 'GripOwnLeg", default: false' "$GITHUB_WORKSPACE/Sources/" >/dev/null 2>&1; then
+            echo "::error::V0.3.10 源码里又出现 GripOwnLeg 默认 false（0.3.10 已转正）"
+            exit 1
+          fi
+          # ⑦标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonOwnLegRegV310' \
+            && strings "$MDYL" | grep -q 'AevonOwnLegDefaultV310' \
+            || { echo "::error::V0.3.10 主库缺自建腿注册/转正标记"; exit 1; }
+          echo "V0.3.10 校验: 真名注册（两参 + 签名自检）+ 主动重试装配 + 开关实时生效 + 旁听门控 + 默认转正 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

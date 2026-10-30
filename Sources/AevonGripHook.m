@@ -252,9 +252,15 @@ static BOOL gAevonOwnRegistered = NO;       // 走的是「管理器注册」那
 static BOOL gAevonOwnManagerTried = NO;
 static BOOL gAevonOwnLegProbeOn = NO;       // GripHookProbe（只控制取证深度）
 static id gAevonOwnGesture = nil;           // 我们自己的识别器实例（ARC 全局强引用）
-static id gAevonOwnManager = nil;           // 系统手势管理器（拿不到就退回直接挂宿主）
+static id gAevonOwnManager = nil;           // 系统手势管理器（拿不到就不装，保持借识别器腿）
+/* V0.3.10（AevonOwnLegRegV310）：装配重试计数 + 取证只打一次。
+ * 0.3.9 的装配只在「第一次看到边沿识别器」时发生 —— 那一次滑动必然白扔，
+ * 而且管理器只找一次，找到不成就永远不装。这里改成主动重试（6s 起每 2s，上限 15 次）。 */
+static int gAevonOwnArmTries = 0;
+static BOOL gAevonOwnCensusLogged = NO;
 /* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
+extern void AevonGripOwnLegKick(void);
 static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
 static BOOL gAevonGlobalHooksInstalled = NO;
 static IMP gAevonOrigPubSetState = NULL;
@@ -774,7 +780,10 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
 /// 这里一次全类表枚举都没有（连那个 API 名都不写：注释也会命中 CI 的防回退断言）。
 static void AevonOwnProbeSels(Class cls, NSString *tag) {
     if (cls == Nil) { return; }
+    /* V0.3.10：装配改成「每 2s 重试一次」，取证只打一轮 —— 不然 15 次重试会刷 15 行。 */
+    if (gAevonOwnCensusLogged) { return; }
     NSArray<NSString *> *names = @[
+        @"addGestureRecognizer:toDisplayWithIdentity:",
         @"addGestureRecognizer:", @"addGestureRecognizer:withType:",
         @"registerGestureRecognizer:", @"registerGestureRecognizer:forType:",
         @"_registerGestureRecognizer:", @"_registerGestureRecognizer:forType:",
@@ -808,27 +817,117 @@ static id AevonOwnLookupManager(void) {
             }
         }
     }
-    /* ② UIKit 私有 manager：对象属性走 KVC（标量才禁 perform，对象安全）。 */
+    /* ② UIKit 私有 manager：对象属性走 KVC（标量才禁 perform，对象安全）。
+     * V0.3.10（AevonOwnLegRegV310）：0.3.9 只问了 UIApplication —— 单一来源，
+     * 拿不到就整条腿放弃。这里补三个来源：UIScreen、前台 UIWindowScene、后台场景。 */
     if (found == nil) {
-        id app = [UIApplication sharedApplication];
-        for (NSString *k in @[@"_systemGestureManager", @"systemGestureManager"]) {
-            @try {
-                id v = [app valueForKey:k];
-                if (v != nil) {
-                    AevonOwnProbeSels([v class], @"UISystemGestureManager");
-                    found = v;
-                    break;
-                }
-            } @catch (NSException *exception) {
+        NSMutableArray *owners = [NSMutableArray array];
+        @try {
+            [owners addObject:[UIApplication sharedApplication]];
+        } @catch (NSException *exception) {
+        }
+        @try {
+            [owners addObject:[UIScreen mainScreen]];
+        } @catch (NSException *exception) {
+        }
+        @try {
+            for (UIScene *s in [[UIApplication sharedApplication] connectedScenes]) {
+                [owners addObject:s];
             }
+        } @catch (NSException *exception) {
+        }
+        for (id owner in owners) {
+            if (owner == nil) { continue; }
+            for (NSString *k in @[@"_systemGestureManager", @"systemGestureManager"]) {
+                @try {
+                    id v = [owner valueForKey:k];
+                    if (v != nil) {
+                        AevonOwnProbeSels([v class], @"UISystemGestureManager");
+                        found = v;
+                        break;
+                    }
+                } @catch (NSException *exception) {
+                }
+            }
+            if (found != nil) { break; }
         }
     }
     return found;
 }
 
-/// 注册：白名单逐个试，签名必须「返回 void + 恰好 1 个 id 参数」，否则不调。
+/// display identity：注册 API 的第二个参数。Stheno 存的是 `__systemDisplayIdentity`，
+/// 来源就是屏幕/场景的 displayIdentity。拿不到就传 nil（让系统自己取主屏）。
+static id AevonOwnDisplayIdentity(void) {
+    NSMutableArray *owners = [NSMutableArray array];
+    @try {
+        [owners addObject:[UIScreen mainScreen]];
+    } @catch (NSException *exception) {
+    }
+    @try {
+        for (UIScene *s in [[UIApplication sharedApplication] connectedScenes]) {
+            [owners addObject:s];
+        }
+    } @catch (NSException *exception) {
+    }
+    for (id owner in owners) {
+        if (owner == nil) { continue; }
+        for (NSString *k in @[@"_displayIdentity", @"displayIdentity"]) {
+            @try {
+                id v = [owner valueForKey:k];
+                if (v != nil) { return v; }
+            } @catch (NSException *exception) {
+            }
+        }
+    }
+    return nil;
+}
+
+/* V0.3.10（AevonOwnLegRegV310）：注册候选换成 **Stheno 逆向 strings 实测的真名**。
+ *
+ * `analysis/screencore/strings_ScreenCore.txt` 里连续三行就是 Stheno 的调用序列：
+ *     662  _UISystemGestureManager
+ *     664  addGestureRecognizer:toDisplayWithIdentity:
+ *     669  SBSystemGestureManager
+ *     671  acquireSystemGestureDisableAssertionForReason:exceptSystemGestureTypes:
+ *
+ * 而 0.3.9 试的三个候选（`addGestureRecognizer:` / `registerGestureRecognizer:`
+ * / `_registerGestureRecognizer:`）**一个都不是真名** —— 所以那一版即使开关打开，
+ * 也必然落到「挂宿主旁听」这条没有仲裁身份的退路。这版先试两参真名。
+ */
+/// 注册：白名单逐个试，签名必须「返回 void + 参数个数与候选一致」，否则不调。
 static BOOL AevonOwnTryRegister(id mgr, UIGestureRecognizer *g) {
     if (mgr == nil || g == nil) { return NO; }
+    /* ①两参真名：addGestureRecognizer:toDisplayWithIdentity:（Stheno 用的就是它） */
+    SEL sel2 = NSSelectorFromString(@"addGestureRecognizer:toDisplayWithIdentity:");
+    if ([mgr respondsToSelector:sel2]) {
+        Method m = class_getInstanceMethod([mgr class], sel2);
+        if (m != NULL) {
+            const char *enc = method_getTypeEncoding(m);
+            if (enc == NULL || enc[0] != 'v' || AevonGripEncArgCount(enc) != 2) {
+                NSString *line = [NSString stringWithFormat:
+                                  @"addGestureRecognizer:toDisplayWithIdentity: 签名不符（%s）→ 不调",
+                                  enc ? enc : "?"];
+                AevonGripOwnLog("register", line.UTF8String);
+            } else {
+                id identity = AevonOwnDisplayIdentity();
+                @try {
+                    ((void (*)(id, SEL, id, id))objc_msgSend)(mgr, sel2, g, identity);
+                    NSString *line = [NSString stringWithFormat:
+                                      @"已用 addGestureRecognizer:toDisplayWithIdentity: 注册进系统手势管理器"
+                                      @"（拿到仲裁身份；identity=%s）",
+                                      identity != nil ? class_getName(object_getClass(identity)) : "nil"];
+                    AevonGripOwnLog("register", line.UTF8String);
+                    return YES;
+                } @catch (NSException *exception) {
+                    NSString *line = [NSString stringWithFormat:
+                                      @"addGestureRecognizer:toDisplayWithIdentity: 抛异常 %@ → 换下一个",
+                                      exception.name];
+                    AevonGripOwnLog("register", line.UTF8String);
+                }
+            }
+        }
+    }
+    /* ②一参写法（留作兜底：部分系统版本上 SBSystemGestureManager 是 addGestureRecognizer:） */
     NSArray<NSString *> *cands = @[@"addGestureRecognizer:",
                                    @"registerGestureRecognizer:",
                                    @"_registerGestureRecognizer:"];
@@ -892,44 +991,102 @@ void AevonGripOwnLegAssertProbe(void) {
 }
 
 /// 装配入口：由 AevonGripLegObserve 在第一次看到边沿识别器时调用（宿主就在眼前）。
-void AevonGripOwnLegArm(UIView *host) {
-    if (!gAevonOwnLegEnabled) { return; }
-    /* 走管理器注册的识别器，view 由系统在合适时机给（可能一直是 nil）—— 不重装。 */
-    if (gAevonOwnRegistered) { return; }
-    if (gAevonOwnGesture != nil) {
-        /* 直接挂宿主的那条路：宿主视图（UISystemGestureView）随场景重建会消失，
-         * 识别器的 view 变 nil 就说明它已经不在任何视图上了 → 重装到新宿主。
-         * 不重装的话「第一次装配之后永远失效」，而这种失效在日志里只会表现为
-         * 「开关开着却毫无反应」，最难查。 */
-        UIGestureRecognizer *cur = (UIGestureRecognizer *)gAevonOwnGesture;
-        if (cur.view != nil) { return; }
-        gAevonOwnGesture = nil;
-    }
-    if (host == nil) { return; }
-    if (gAevonOwnManager == nil && !gAevonOwnManagerTried) {
-        gAevonOwnManagerTried = YES;
-        gAevonOwnManager = AevonOwnLookupManager();
-        if (gAevonOwnManager == nil) {
-            AevonGripOwnLog("manager", "拿不到系统手势管理器 → 退回直接挂宿主视图");
-        }
-    }
+/// 装配一次（不递归、不排定时器）：管理器注册优先，宿主旁听只在探针打开时才做。
+/// 返回 YES 表示这一段已经装好（成功注册 或 探针旁听），NO 表示还可以再试。
+static BOOL AevonOwnTryArmOnce(UIView *host) {
+    if (gAevonOwnRegistered) { return YES; }
+    if (gAevonOwnGesture != nil) { return YES; }
+    /* ①管理器注册 —— 不依赖宿主视图，这是拿仲裁身份的唯一正路 */
+    gAevonOwnManager = AevonOwnLookupManager();
+    gAevonOwnManagerTried = YES;
     if (gAevonOwnManager != nil) {
         AevonOwnLegGesture *g = [[AevonOwnLegGesture alloc] init];
         if (AevonOwnTryRegister(gAevonOwnManager, g)) {
             gAevonOwnGesture = g;
             gAevonOwnRegistered = YES;
-            return;
+            return YES;
         }
     }
-    AevonOwnAttachTo(host);
+    /* ②宿主旁听：**没有仲裁身份**（我们这只不 gate 跨进程派发），日常不启用 ——
+     *    0.3.9 把它当默认退路是错的：注册失败时它会让「打开开关后行为反而更差」。
+     *    只有 GripHookProbe 打开时才挂上做取证。 */
+    if (gAevonOwnLegProbeOn && host != nil) {
+        AevonOwnAttachTo(host);
+        return YES;
+    }
+    return NO;
 }
 
-/// 开关（由 Swift 启动时按 prefs 调；关掉即整条腿不装配）。
+void AevonGripOwnLegArm(UIView *host) {
+    if (!gAevonOwnLegEnabled) { return; }
+    /* 走管理器注册的识别器，view 由系统在合适时机给（可能一直是 nil）—— 不重装。 */
+    if (gAevonOwnRegistered) { return; }
+    if (gAevonOwnGesture != nil) {
+        /* 旁听那条路：宿主视图（UISystemGestureView）随场景重建会消失，
+         * 识别器的 view 变 nil 就说明它已经不在任何视图上了 → 重装到新宿主。 */
+        UIGestureRecognizer *cur = (UIGestureRecognizer *)gAevonOwnGesture;
+        if (cur.view != nil) { return; }
+        gAevonOwnGesture = nil;
+    }
+    AevonOwnTryArmOnce(host);
+}
+
+/* V0.3.10（AevonOwnLegRegV310）：主动装配 —— 不等第一次滑动。
+ *
+ * 0.3.9 的装配只发生在 `AevonGripLegObserve` 里（看到系统边沿识别器状态迁移时），
+ * 也就是说「开关打开后的第一次右缘滑动必然白扔一次」，而管理器也只找一次，
+ * 找不成就永远不装。这里改成：开关一打开就开始试，每 2s 一次、上限 15 次
+ *（约 30s，足够 SpringBoard 把窗口建好），试到就停。
+ * fail-open：全试完仍不成功 → 什么都不挂，行为与 0.3.9 关闭时完全一致。
+ */
+void AevonGripOwnLegKick(void) {
+    if (!gAevonOwnLegEnabled || gAevonOwnRegistered) { return; }
+    if (gAevonOwnArmTries >= 15) { return; }
+    gAevonOwnArmTries++;
+    if (AevonOwnTryArmOnce(nil)) { return; }
+    if (gAevonOwnArmTries >= 15) {
+        AevonGripOwnLog("giveup", "重试 15 次（约 30s）仍未拿到仲裁身份 → 不挂宿主旁听，"
+                                 "保持借识别器腿（AevonOwnLegRegV310 fail-open）");
+        return;
+    }
+    if (gAevonOwnArmTries == 1) {
+        AevonGripOwnLog("kick", "首次装配未成功（管理器或注册方法未命中）→ 每 2s 再试，上限 15 次");
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        AevonGripOwnLegKick();
+    });
+}
+
+/// 开关（由 Swift 启动时按 prefs 调，**设置页改动也会实时调到这里**）。
 void AevonGripOwnLegEnable(BOOL on, BOOL probeOn) {
+    BOOL was = gAevonOwnLegEnabled;
     gAevonOwnLegEnabled = on;
     gAevonOwnLegProbeOn = probeOn;
-    AevonGripOwnLog("enable", on ? "自建识别器腿已启用（等宿主视图出现就装配）"
-                                 : "自建识别器腿关闭（GripOwnLeg = false）");
+    if (on) {
+        if (!was) { gAevonOwnArmTries = 0; }
+        AevonGripOwnLog("enable", "自建识别器腿已启用 → 立即开始装配"
+                                 "（落指即判 + delaysTouchesBegan，AevonOwnLegDefaultV310）");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AevonGripOwnLegKick();
+        });
+    } else {
+        /* 关掉：把已装的识别器摘下来，注册状态清零，允许下次再装。
+         * 靠管理器注册的那只 view 可能恒 nil，摘不掉 → 直接 enabled = NO 让它彻底失活。 */
+        if (gAevonOwnGesture != nil) {
+            UIGestureRecognizer *g = (UIGestureRecognizer *)gAevonOwnGesture;
+            UIView *v = g.view;
+            if (v != nil) {
+                [v removeGestureRecognizer:g];
+            } else {
+                g.enabled = NO;
+            }
+            gAevonOwnGesture = nil;
+        }
+        gAevonOwnRegistered = NO;
+        gAevonOwnArmTries = 0;
+        AevonGripOwnLog("enable", "自建识别器腿关闭（GripOwnLeg = false）：已装识别器摘除，退回借识别器腿");
+    }
 }
 
 /// 状态查询（给 Swift 侧日志/CI 判断用）。
@@ -964,3 +1121,12 @@ __attribute__((used)) static const char AevonGripZoneV308Marker[] = "AevonGripZo
  * 0.1.9 的「只能点不能滑」根因也在此定案：不是 delaysTouchesBegan 有毒，
  * 是当年那个 pan 挂在 App 的 window 上、没有仲裁身份、永远 failed 不了。 */
 __attribute__((used)) static const char AevonGripOwnLegV309Marker[] = "AevonGripOwnLegV309";
+
+/* V0.3.10（AevonOwnLegRegV310）：把 0.3.9 的「猜名字」换成 Stheno 逆向实测的真名。
+ * strings_ScreenCore.txt 的 662/664 行就是 `_UISystemGestureManager` +
+ * `addGestureRecognizer:toDisplayWithIdentity:`；0.3.9 试的三个 1 参候选一个都不是真名，
+ * 所以那一版即使开关打开也必然落到「挂宿主旁听」——而旁听没有仲裁身份、不 gate 跨进程。
+ * 另外两处：①装配改主动重试（6s 起每 2s，上限 15 次），不再等第一次滑动白扔一次；
+ * ②开关改实时生效（走 com.aevon.prefschanged）。默认值同时转正为开。 */
+__attribute__((used)) static const char AevonOwnLegRegV310Marker[] = "AevonOwnLegRegV310";
+__attribute__((used)) static const char AevonOwnLegDefaultV310Marker[] = "AevonOwnLegDefaultV310";
