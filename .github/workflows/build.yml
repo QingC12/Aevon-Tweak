@@ -186,7 +186,8 @@ jobs:
                    AevonOwnLogAsciiV315 AevonOwnLiftV316 \
                    AevonOwnFeedV317 \
                    AevonSceneGateV318 AevonSpringUnifyV318 \
-                   AevonHoverTrailV319; do
+                   AevonKeyframeHoverV320 AevonShadowPathV320 \
+                   AevonSquashStretchV320 AevonFrameProbeV320; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -1188,12 +1189,13 @@ jobs:
             && { echo "::error::hoverSpringDamping 又回来了（V0.3.18 起圆盘全部走 AevonSpring.params，老的 duration+damping+velocity 三件套已退役）"; exit 1; }
           grep -q 'static let hoverSpringVelocity: CGFloat = 3.4' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             && { echo "::error::hoverSpringVelocity 又回来了（V0.3.18 起用 response+dampingFraction，不再有 initialSpringVelocity）"; exit 1; }
-          # V0.3.18（AevonSpringUnifyV318）反转：划过动画改用 response（一个振荡周期）。
-          # V0.3.19（AevonHoverTrailV319）再反转：0.40 → 0.28。
-          #   0.40 / ζ 0.72 的位移曲线是「16ms 走 3%、50ms 走 21%」，而 Aevon(95) 实测
-          #   划过间隔中位数正好 50ms —— 每个图标只抬 2.5pt，眼睛看不见。
-          grep -q 'static let hoverSpringResponse: Double = 0.28' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
-            || { echo "::error::划过弹簧的 response 不是 0.28（V0.3.19：0.40 在 50ms 停留里只走 21%，看不见）"; exit 1; }
+          # V0.3.20（AevonKeyframeHoverV320）反转：划过弹簧的 response 整条退役。
+          #   Aevon(96) 定位到两件事都不在「数值」上，而在模型上：
+          #   ① 余韵按队列下标取振幅、弹簧沉降 0.34~0.63s，而划过间隔只有 72~100ms
+          #      ⇒ 永远走不到目标就被改目标，身后挂一条永不落地的人形扇；
+          #   ② 60 次/秒的 finishAnimation(at: .current) 每次都要取呈现值（渲染服务器往返）。
+          #   现在动画是定长关键帧（Sources/AevonHoverKeyframes.swift），
+          #   所以这条改成「不许再出现」（真正的断言在 V0.3.20 校验块里）。
           # 放大到 1.30 之后，命中判定再拿 frame 就会跟着膨胀 30%，隔壁图标被抢 ——
           # 一律用 bounds（不受 transform 影响）。这条是「放大」带出来的必然副作用。
           if grep -q 'icon\.frame\.width' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift"; then
@@ -4864,16 +4866,16 @@ jobs:
           if grep -qF '划过 \(icon.displayName)' "$RM"; then
             echo "::error::V0.3.19 逐条「划过 X」日志又回来了（会重新把同步文件 I/O 打进触摸热路径）"; exit 1
           fi
-          grep -q 'AevonHoverTrailV319' "$RM" \
-            || { echo "::error::V0.3.19 缺标记 AevonHoverTrailV319"; exit 1; }
+          grep -q 'AevonKeyframeHoverV320' "$RM" \
+            || { echo "::error::V0.3.20 缺标记 AevonKeyframeHoverV320"; exit 1; }
           # ⑦看门狗照旧不动（本版不碰「收不收」，只碰「看不看得见手指」）
           grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$RM" \
             || { echo "::error::V0.3.17 看门狗 0.8s 被动了（会回归 0.2.69「按住不动圆盘自己收」）"; exit 1; }
           # ⑧标记进主库二进制
           strings "$MDYL" | grep -q 'AevonOwnFeedV317' \
             || { echo "::error::V0.3.17 主库缺标记 AevonOwnFeedV317"; exit 1; }
-          strings "$MDYL" | grep -q 'AevonHoverTrailV319' \
-            || { echo "::error::V0.3.19 主库缺标记 AevonHoverTrailV319"; exit 1; }
+          strings "$MDYL" | grep -q 'AevonKeyframeHoverV320' \
+            || { echo "::error::V0.3.20 主库缺标记 AevonKeyframeHoverV320"; exit 1; }
           echo "V0.3.17 校验: 自建腿每帧喂盘（召唤后先喂再判状态 + 只认本指）+ 来源改 ownleg + 权威 moved 换通道重设基线 + 划过留痕 + 看门狗未动 ✓"
 
           # ── V0.3.18 校验（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指 ──
@@ -4927,32 +4929,33 @@ jobs:
           if grep -q 'usingSpringWithDamping:' "$RM"; then
             echo "::error::V0.3.18 圆盘又用回 UIView.animate(usingSpringWithDamping:)（老 API 的 duration ≠ SwiftUI 的 response）"; exit 1
           fi
-          # ②划过 / 入场 / 收起 三处都走 params
+          # ②入场（center+alpha）/ 收起 两处仍走 params。
+          #   V0.3.20（AevonKeyframeHoverV320）反转：划过那一条已整块换成定长关键帧，
+          #   所以这里从 ≥3 降到 ≥2 —— 但**不许降到 1**，那说明收起也被顺手删了。
           PARAM_CNT=$(grep -c 'AevonSpring.params(' "$RM" || true)
-          [ "$PARAM_CNT" -ge 3 ] \
-            || { echo "::error::V0.3.18 AevonSpring.params 只有 $PARAM_CNT 处（应 ≥3：划过 / 入场 / 收起）"; exit 1; }
+          [ "$PARAM_CNT" -ge 2 ] \
+            || { echo "::error::V0.3.20 AevonSpring.params 只有 $PARAM_CNT 处（应 ≥2：入场 / 收起）"; exit 1; }
           grep -q 'AevonSpring.coefficients(response: 0.45, dampingFraction: 0.68)' "$RM" \
             || { echo "::error::V0.3.18 旋转积分器没换到统一 ζ 谱（仍是孤立的 140/16）"; exit 1; }
           if grep -qE 'let stiffness: CGFloat = 140' "$RM"; then
             echo "::error::V0.3.18 旋转积分器还写死 140"; exit 1
           fi
-          # ③弹道归属：V0.3.19（AevonHoverTrailV319）**反转**了 V0.3.18 的做法。
+          # ③弹道归属：V0.3.20（AevonKeyframeHoverV320）**再反转** —— 弹道这个概念本身没了。
           #
-          #   0.3.18 是「整盘一个 animator」：每次高亮切换都 stopAnimation(false) +
-          #   finishAnimation(at: .current)，addAnimations 里重设全部 20 个图标的 transform。
-          #   而 Aevon(95) 实测划过间隔中位数 50ms、p10 只有 9ms —— 等于每 50ms 就有
-          #   20 条在途动画被定格丢弃一次，观感就是发黏、一顿一顿。
+          #   历史：0.3.18 整盘一个 animator（每次切换定格全部 20 个图标的动画）；
+          #        0.3.19 每图标一条弹簧（每次切换重建 5 条，每条 finishAnimation(at: .current)
+          #        取呈现值 = 60 次/秒的渲染服务器往返）；
+          #        0.3.20 只剩两条定长关键帧，挂在 layer 的同一把动画键上。
           #
-          #   现在动画对象挂在图标自己身上：一次切换只有 3~4 个图标振幅变了，
-          #   也就只有 3~4 条弹道被重建，而且每条都带一个指向新目标的初速。
-          grep -q 'var hoverAnimator: UIViewPropertyAnimator?' "$RM" \
-            || { echo "::error::V0.3.19 图标上没有 hoverAnimator（每图标一条弹道是余韵波的前提）"; exit 1; }
-          if grep -q 'private var hoverAnimator: UIViewPropertyAnimator?' "$RM"; then
-            echo "::error::V0.3.19 圆盘上又出现了整盘级 hoverAnimator（20 条在途动画会被整批定格丢弃）"; exit 1
+          #   所以这里断言的是「一个 UIViewPropertyAnimator 都不许出现在图标动画路径里」：
+          #   图标上不许再有 animator 字段，也不许再出现 stopAnimation / finishAnimation。
+          if grep -q 'hoverAnimator' "$RM"; then
+            echo "::error::V0.3.20 图标动画路径上又出现了 hoverAnimator（0.3.20 起只有定长关键帧）"; exit 1
           fi
-          grep -q 'old.stopAnimation(false)' "$RM" \
-            && grep -q 'old.finishAnimation(at: .current)' "$RM" \
-            || { echo "::error::V0.3.19 换弹道前没把旧弹道停在当前值（图层会跳回终点 = 图标瞬移）"; exit 1; }
+          # 注释里会提到这个 API 名字（解释历史），所以先滤掉注释行再判
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$RM" | grep -qE 'finishAnimation\(at: \.current\)'; then
+            echo "::error::V0.3.20 又出现 finishAnimation(at: .current)（要取呈现值 = 渲染服务器往返 = 丢帧）"; exit 1
+          fi
           # ④阻尼只读一次（逐帧读 CFPreferences 是跨进程 IPC）
           grep -q 'menu.hoverZ = AevonSpring.userDampingFraction()' "$RM" \
             || { echo "::error::V0.3.18 present 没缓存 hoverZ（逐帧读 prefs 会拖慢触摸）"; exit 1; }
@@ -4978,25 +4981,27 @@ jobs:
           #   ③ 余韵波：按划过顺序排队，越早划过回得越慢（波往身后铺开）
           #   ④ 命中滞回 + 划过日志改汇总（62 行/秒的同步 I/O 出热路径）
           #
-          # ① 起步速度：初速是 UIKit 物理三参独有的杠杆，SwiftUI spring 没有。
-          grep -q 'static let hoverRiseVelocity: CGFloat = 6.0' "$RM" \
-            || { echo "::error::V0.3.19 升起初速不是 6.0（零初速的弹簧 16ms 只走 6%，划过看不见）"; exit 1; }
-          grep -q 'static let hoverFallVelocity: CGFloat = 3.0' "$RM" \
-            || { echo "::error::V0.3.19 回落初速不是 3.0"; exit 1; }
-          # ② 余韵波三组参数：振幅 / response 放大 / 错峰延迟，必须各 4 拍（等长）
-          grep -q 'static let hoverTrailAmplitudes: \[CGFloat\] = \[1.0, 0.60, 0.32, 0.14\]' "$RM" \
-            || { echo "::error::V0.3.19 余韵振幅不是 4 拍 [1.0, 0.60, 0.32, 0.14]"; exit 1; }
-          grep -q 'static let hoverTrailResponseScale: \[Double\] = \[1.0, 1.25, 1.55, 1.85\]' "$RM" \
-            || { echo "::error::V0.3.19 余韵 response 放大不是 4 拍（越靠后收得越慢 = 波往身后铺开）"; exit 1; }
-          grep -q 'static let hoverTrailDelay: \[TimeInterval\] = \[0, 0.010, 0.020, 0.030\]' "$RM" \
-            || { echo "::error::V0.3.19 余韵错峰延迟不是 4 拍（没有相位差就没有波的传播感）"; exit 1; }
-          grep -q 'func applyHoverWave()' "$RM" \
-            || { echo "::error::V0.3.19 缺 applyHoverWave 下发函数"; exit 1; }
-          grep -qF 'hoverTrail.firstIndex(where: { $0 === item })' "$RM" \
-            || { echo "::error::V0.3.19 余韵波没按划过顺序定位（下标即波的位置）"; exit 1; }
-          # 只有振幅真的变了的图标才重建弹道 —— 每帧全量重发等于把弹簧按回第 0 帧
-          grep -qF 'guard abs(want - item.hoverAmplitude) > 0.001 else { continue }' "$RM" \
-            || { echo "::error::V0.3.19 又在给振幅没变的图标重发动画（每帧全量重发 = 一顿一顿）"; exit 1; }
+          # ① V0.3.20（AevonKeyframeHoverV320）**反转** 0.3.19 的整套弹簧 / 余韵。
+          #
+          #    Aevon(96)：余韵按队列下标取振幅，而实测划过间隔只有 72~100ms、弹簧沉降
+          #    却要 0.34~0.63s ⇒ 每个图标还没走到目标就被改目标，身后形成一条**永不落地
+          #    的人形扇**（用户原话「上一个还在空中」）。而且每图标一条弹道 × 每次切换
+          #    5 个 × 12 次/秒 = 60 次/秒的 finishAnimation(at: .current)，每次都要取
+          #    当前呈现值（渲染服务器往返）—— 这就是「丢帧」。
+          #
+          #    下面这九个标识符在源码里**一个都不许有**（注释也不行，注释已改写）；
+          #    动画全部搬到 Sources/AevonHoverKeyframes.swift 的定长关键帧。
+          for gone in hoverSpringResponse hoverTrailAmplitudes hoverTrailResponseScale \
+                      hoverTrailDelay hoverRiseVelocity hoverFallVelocity \
+                      hoverAnimator hoverAmplitude applyHoverWave; do
+            if grep -q "$gone" "$RM"; then
+              echo "::error::V0.3.20 源码里又出现了 $gone —— 整套弹簧/余韵队已被定长关键帧取代，不许长回来"; exit 1
+            fi
+          done
+          grep -q 'func applyHover()' "$RM" \
+            || { echo "::error::V0.3.20 缺 applyHover（只比目标态的那一个下发函数）"; exit 1; }
+          grep -qF 'guard want != item.hoverLifted else { continue }' "$RM" \
+            || { echo "::error::V0.3.20 applyHover 没有「目标态没变就一个字都不动」的短路"; exit 1; }
           # ③ 命中滞回：必须排在「取候选」之前，否则无人候选的那一帧高亮会灭一下
           grep -q 'private static let hoverHysteresisReach: CGFloat = 1.35' "$RM" \
             || { echo "::error::V0.3.19 滞回扩边不是 1.35"; exit 1; }
@@ -5022,9 +5027,104 @@ jobs:
           [ "$DF_CNT" -eq 1 ] \
             || { echo "::error::V0.3.19 AevonLog 里 DateFormatter() 出现 $DF_CNT 次（只允许 1 次，就是那个单例）"; exit 1; }
           # ⑥ 标记进主库（`used` 纯 ASCII C 串，注释不算）
-          strings "$MDYL" | grep -q 'AevonHoverTrailV319' \
-            || { echo "::error::V0.3.19 主库缺标记 AevonHoverTrailV319"; exit 1; }
-          echo "V0.3.19 校验: 每图标一条弹道 + 指向新目标的初速 + 时间序 4 拍余韵波 + 命中滞回 + 划过日志降载 ✓"
+          strings "$MDYL" | grep -q 'AevonKeyframeHoverV320' \
+            || { echo "::error::V0.3.20 主库缺标记 AevonKeyframeHoverV320"; exit 1; }
+          echo "V0.3.19 校验: 命中滞回（现任优先）+ 划过日志改抬手汇总 + DateFormatter 静态单例 ✓"
+
+          # ── V0.3.20 校验（AevonKeyframeHoverV320）：划过 = 定长关键帧（squash & stretch）──
+          #
+          # 用户 Aevon(96)：「动画依旧不流畅，感觉像是丢帧一样，手指划过时弹起来了，然后手指
+          # 继续划到下一个时，上一个还在空中」，并点名参考 animate__shakeY / animate__rubberBand。
+          #
+          # 定量：6 个展开周期，moved 帧率 103~117fps（事件侧没问题，掉帧在渲染侧），
+          #       划过 7.1~14.4 次/秒（中位间隔 72~100ms）。
+          # 四条对策：
+          #   ① 结构：删掉 4 拍余韵队，每个图标只剩 rise / land 两态（「永不落地的人形扇」消失）
+          #   ② 语言：rise 借 shakeY 的衰减抖动，land 借 rubberBand 的非等比挤压 + 一记余弹
+          #   ③ 引擎：CAKeyframeAnimation + 解析求值接住中途改目标（不碰 presentation()）
+          #   ④ GPU：shadowPath / 固定 shadowRadius / 去掉圆角 mask / 帧率自证
+          KF="$GITHUB_WORKSPACE/Sources/AevonHoverKeyframes.swift"
+          [ -s "$KF" ] || { echo "::error::V0.3.20 缺 Sources/AevonHoverKeyframes.swift（定长关键帧引擎）"; exit 1; }
+
+          # ① 引擎骨架
+          for sym in 'static let riseKeys' 'static let landKeys' 'static let entranceKeys' \
+                     'static func sample(' 'static func animation(' 'func transform3D()'; do
+            grep -q "$sym" "$KF" \
+              || { echo "::error::V0.3.20 AevonHoverKeyframes 缺 $sym"; exit 1; }
+          done
+          grep -q 'keyPath: "transform"' "$KF" \
+            || { echo "::error::V0.3.20 关键帧没挂在 transform 上（挂别的属性拿不到 GPU 合成）"; exit 1; }
+          grep -q 'anim.isRemovedOnCompletion = true' "$KF" \
+            || { echo "::error::V0.3.20 关键帧播完必须摘掉（模型值已是终点；不摘会盖住 dismiss 的 transform）"; exit 1; }
+
+          # ② 关键帧表自洽：帧数 / 首帧为 0 / t 严格递增。
+          #    rise 8 帧（200ms）、land 7 帧（250ms）、entrance 4 帧（520ms）。
+          awk '
+            /static let (riseKeys|landKeys|entranceKeys)/ { tbl=$3; n=0; prev=-1; mono=1; next }
+            tbl != "" && /AevonHoverKey\(t:/ {
+              n++
+              v=$0
+              sub(/.*AevonHoverKey\(t: /, "", v)
+              sub(/,.*/, "", v)
+              if (n == 1 && v+0 != 0) mono=0
+              if (n > 1 && v+0 <= prev+0) mono=0
+              prev = v
+            }
+            tbl != "" && /^    \]/ {
+              want = (tbl == "riseKeys:" ? 8 : (tbl == "landKeys:" ? 7 : 4))
+              if (n != want) { printf "::error::V0.3.20 %s 关键帧数 %d（应 %d）\n", tbl, n, want; bad=1 }
+              if (!mono) { printf "::error::V0.3.20 %s 的 t 不是「首帧 0 + 严格递增」\n", tbl; bad=1 }
+              tbl = ""
+            }
+            END { exit bad }
+          ' "$KF" || exit 1
+          # 停住时的姿态必须由 hoverLift / hoverScale 定，不许在表里另写一个魔数
+          REST_CNT=$(grep -c 'sx: AevonRingMenu.hoverScale, sy: AevonRingMenu.hoverScale' "$KF" || true)
+          [ "$REST_CNT" -eq 2 ] \
+            || { echo "::error::V0.3.20 rise/land 的末帧必须停在 hoverScale（实际 $REST_CNT 处，应 2）"; exit 1; }
+
+          # ③ 图标侧：只有 rise / land / reset / entrance 四个入口
+          for fn in 'func riseHover()' 'func landHover()' 'func resetHover()' \
+                    'func playHoverEntrance(after delay: TimeInterval)' 'func hoverSample()'; do
+            grep -q "$fn" "$RM" \
+              || { echo "::error::V0.3.20 AevonRingIcon 缺 $fn"; exit 1; }
+          done
+          # 中途改目标的接住方式必须是**解析求值**，不许换成 presentation()
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$RM" | grep -q 'presentation()'; then
+            echo "::error::V0.3.20 图标动画路径上出现 presentation()（同步渲染服务器往返 = 丢帧）"; exit 1
+          fi
+          grep -qF 'return hoverLifted ? AevonHoverKeyframes.lifted : .ground' "$RM" \
+            || { echo "::error::V0.3.20 idle 态没回到 lifted / ground（动画结束后姿态会漂）"; exit 1; }
+
+          # ④ GPU 侧（性能包 P1/P2/P3）
+          grep -q 'layer.shadowPath = UIBezierPath(roundedRect: bounds,' "$RM" \
+            || { echo "::error::V0.3.20 图标没设 shadowPath（21 个阴影每帧做 alpha 卷积 = 掉帧）"; exit 1; }
+          grep -q 'static let shadowRadius: CGFloat = 8' "$RM" \
+            || { echo "::error::V0.3.20 阴影半径不是固定 8"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$RM" | grep -q 'shadowRadius = highlighted'; then
+            echo "::error::V0.3.20 划过又在改 shadowRadius（模糊核每帧重算 = 掉帧）"; exit 1
+          fi
+          if grep -vE '^[[:space:]]*(//|\*|/\*)' "$RM" | grep -q 'iconView.layer.cornerRadius'; then
+            echo "::error::V0.3.20 内部图标又挂了圆角 mask（AevonAppIcon 已把圆角烘进位图，这层是白花的离屏通道）"; exit 1
+          fi
+          grep -q 'iconView.clipsToBounds = false' "$RM" \
+            || { echo "::error::V0.3.20 iconView 仍开着 clipsToBounds（圆角 mask 离屏通道）"; exit 1; }
+
+          # ⑤ 帧率自证（性能包 P6）：定义 1 处 + dismiss 调用 1 处
+          FW_CNT=$(grep -c 'flushFrameWatch()' "$RM" || true)
+          [ "$FW_CNT" -eq 2 ] \
+            || { echo "::error::V0.3.20 flushFrameWatch 出现 $FW_CNT 次（应为 2：定义 + dismiss）"; exit 1; }
+          grep -q 'menu.startFrameWatch()' "$RM" \
+            || { echo "::error::V0.3.20 present 没起帧率探针（下一轮又没有硬指标）"; exit 1; }
+          grep -q '本轮帧率 平均' "$RM" \
+            || { echo "::error::V0.3.20 缺「本轮帧率 平均」日志串 —— 下一轮拿不到 fps 硬指标"; exit 1; }
+
+          # ⑥ 标记进主库（`used` 纯 ASCII C 串）
+          for m320 in AevonKeyframeHoverV320 AevonSquashStretchV320 AevonShadowPathV320 AevonFrameProbeV320; do
+            strings "$MDYL" | grep -q "$m320" \
+              || { echo "::error::V0.3.20 主库缺标记 $m320"; exit 1; }
+          done
+          echo "V0.3.20 校验: 定长关键帧（shakeY 抖动 + rubberBand 挤压 + 一记余弹）+ 解析求值接住中途改目标 + shadowPath/去 mask + 帧率自证 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

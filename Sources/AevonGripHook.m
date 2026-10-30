@@ -1917,10 +1917,33 @@ __attribute__((used)) static const char AevonOwnLiftV316Marker[] = "AevonOwnLift
  * → `-sc_updateSelectionAtPoint:`，它的圆盘从不经过任何旁路通道。 */
 __attribute__((used)) static const char AevonOwnFeedV317Marker[] = "AevonOwnFeedV317";
 
-/* V0.3.19（AevonHoverTrailV319）：划过动画改成「每图标一条弹道 + 时间序余韵波」。
- * 标记放在垫片里是为了让 CI 能从 dylib 里 grep 到 —— Swift 那一侧的实现细节
- * 会随编译器优化变形，但这条 ASCII 常量永远在二进制里。 */
-__attribute__((used)) static const char AevonHoverTrailV319Marker[] = "AevonHoverTrailV319";
+/* V0.3.20（AevonKeyframeHoverV320）：划过动画从「每图标一条弹簧」整块换成**定长关键帧**。
+ * 用户 Aevon(96)：「动画依旧不流畅，感觉像是丢帧一样，手指划过时弹起来了，然后手指继续
+ * 划到下一个时，上一个还在空中」。两条根因都在旧的弹簧模型里：
+ *   ① 余韵按队列下标取振幅，而划过间隔只有 72~100ms、弹簧沉降要 0.34~0.63s
+ *      ⇒ 永远走不到目标就被改目标，身后形成永不落地的人形扇；
+ *   ② 60 次/秒的 `finishAnimation(at: .current)` 每次都要取呈现值（渲染服务器往返）。
+ * 现在：`rise`（200ms 抖动+挤压）/ `land`（250ms 触地压扁+一记余弹）两条定长关键帧，
+ * 中途改目标用关键帧解析求值接住，不碰 `presentation()`。 */
+__attribute__((used)) static const char AevonKeyframeHoverV320Marker[] = "AevonKeyframeHoverV320";
+
+/* V0.3.20（AevonSquashStretchV320）：Q 弹的物理来源是 animate__rubberBand 那种**非等比**
+ * 挤压（scaleX 1.34 / scaleY 1.22 交替反向、sx·sy 从 1.34 爬到 1.69 = 1.30²，体积守恒），
+ * 而不是等比放大 —— 等比只会「变大」，永远不会「弹」。抬升轨道则借 animate__shakeY
+ * 的衰减抖动（16.0 → 9.2 → 13.6 → 10.6 → 12.5 → 12.0）。 */
+__attribute__((used)) static const char AevonSquashStretchV320Marker[] = "AevonSquashStretchV320";
+
+/* V0.3.20（AevonShadowPathV320）：21 个图标一直有阴影，而 `shadowPath` 从来没设过 ——
+ * Core Animation 每帧都要对整层 alpha 做卷积生成阴影；划过还把 `shadowRadius` 从 6 改到
+ * 10，等于模糊核每帧重算。再加上 `iconView` 的 `cornerRadius + clipsToBounds` 又各挂一个
+ * 圆角 mask 图层（而 `AevonAppIcon.image` 早就把圆角烘进位图了，这层 mask 是白花的）。
+ * 这是「丢帧」的 GPU 侧那一半：21 个图标 × 2 个离屏通道 × 120Hz。 */
+__attribute__((used)) static const char AevonShadowPathV320Marker[] = "AevonShadowPathV320";
+
+/* V0.3.20（AevonFrameProbeV320）：展开期间挂一条只读 CADisplayLink，收起时打一条
+ * 「平均 fps / 最大帧间隔 / >16.7ms 的帧数」。前三版判断流畅度全靠手感描述，
+ * 这版起有硬指标 —— 下一轮不用再猜「丢帧」是渲染慢还是事件少。 */
+__attribute__((used)) static const char AevonFrameProbeV320Marker[] = "AevonFrameProbeV320";
 
 /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指。
  * 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，
