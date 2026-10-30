@@ -101,13 +101,36 @@ final class AevonRingGripView: UIView {
      * 逻辑层一个洞都没有，剩下的漏出口**只剩几何边界**（横向只有 24pt 宽，
      * 手指偏 1~2mm 就落进 pass，App 把整根手指吃掉 = 用户说的「很小的几率」）。
      *
-     * 用百分比而不是 pt：换机型还是同一个手感，用户也不必再算数值。 */
-    static let zoneWMin: CGFloat = 10
-    static let zoneWMax: CGFloat = 40
-    static let zoneWDefault: CGFloat = 25
+     * 用百分比而不是 pt：换机型还是同一个手感，用户也不必再算数值。
+     *
+     * V0.3.14（AevonEdgePadV314）：横向**改成 pt，默认 5，量程 1~60**。
+     *
+     * 用户 Aevon(93)：「能不能改成只要手指贴着右侧底部 30% 高度中向左滑动时触发，
+     * 而不要任何宽度？」—— 25%（≈107pt）那一大片全是 App 的正常操作面，
+     * 抖音底部进度条、右下角点赞/评论/分享都在里面。收到 5pt 就等于「贴边即触发」，
+     * 那一整片代价直接消失。但不能真的 0：判据是 `x >= 屏宽 - w`，w=0 就要求
+     * 触摸点精确等于屏宽，物理上永远命中不了。5pt ≈ 手指压边时的自然落点。
+     *
+     * 纵向仍是百分比（用户的「底部 30% 高度」是比例语义，换机型手感一致）。 */
+    static let zoneWMin: CGFloat = 1
+    static let zoneWMax: CGFloat = 60
+    static let zoneWDefault: CGFloat = 5
     static let zoneHMin: CGFloat = 15
     static let zoneHMax: CGFloat = 50
     static let zoneHDefault: CGFloat = 30
+
+    /* V0.3.14（AevonEdgePadV314）：暂扣区在「贴边宽」之外额外给的容差（pt）。
+     *
+     * 为什么需要它：贴边宽收到 5pt 后，判据只剩「落点离边缘 5pt 以内」。但实测
+     * （0.3.12 那 18 次「落点不在带内」）说明相当一部分想呼盘的手指落点在内侧
+     * 10~30pt。若一刀切成 5pt，这部分会全部落空 = 呼盘抽奖。
+     *
+     * 于是分两段：
+     *   · bandRect（≤5pt）：贴边落点 —— 宽松判据，左滑 8pt 就呼盘；
+     *   · padRect（≤5+35pt）：边缘候选 —— **先扣住**，首帧 moved 用严格判据
+     *     （必须近似纯水平左滑）决定呼盘还是立刻还回去。
+     * 40pt 之外一个字节都不碰 → 抖音进度条右端之外、点赞/评论/分享按钮零影响。 */
+    static let edgePadPts: CGFloat = 35
 
     /// 命中与手势的承载视图（V0.2.55）：frame = 命中区，识别器都挂在它上面。
     private let handle = UIView()
@@ -215,9 +238,13 @@ final class AevonRingGripView: UIView {
         super.layoutSubviews()
         let zone = AevonRingGrip.bandRect(screenW: bounds.width, screenH: bounds.height)
         guard zone.width > 0, zone.height > 0 else { return }
-        // handle = 整个触发区（显形时 point(inside:)/hitTest 与全局通道都靠它）
-        handle.frame = CGRect(x: zone.minX, y: zone.minY,
-                              width: zone.width, height: zone.height)
+        /* V0.3.14（AevonEdgePadV314）：贴边宽可能只有 5pt，视觉竖条（barWidth 5pt）
+         * 会被挤到 0 宽。handle 只在这一层承载「fail-open 显形时的那条竖条」，
+         * 触摸判据走 bandRect / padRect，与 handle.frame 无关 —— 所以这里取 max(12)。
+         * 平时 alpha=0，这笔加宽一个字都不会被感知。 */
+        let handleW = max(zone.width, AevonRingGripView.barWidth * 2.4)
+        handle.frame = CGRect(x: bounds.width - handleW, y: zone.minY,
+                              width: handleW, height: zone.height)
         // 视觉竖条：只在 fail-open 显形的那一刻可见，取区域内居中、贴右缘的一小段
         let len = min(max(zone.height * 0.4, AevonRingGripView.lenMin), 96.0)
         visual.frame = CGRect(x: handle.bounds.width - AevonRingGripView.barWidth,
@@ -335,7 +362,7 @@ enum AevonRingGrip {
     /// **不进触摸热路径、零 IPC**。
     static var yieldActive = false
 
-    /* V0.3.13（AevonGripZoneV313）：触发几何的**唯一权威算法** —— 右缘底部百分比矩形。
+    /* V0.3.13（AevonGripZoneV313）：触发几何的**唯一权威算法** —— 右缘底部矩形。
      *
      * 历史（为什么不沿用 0.3.8 那套）：0.3.8 把「右缘整条」收成 GripWidth×GripLen 的
      * 一条带，解决了「整个右侧都触发」，但带子横向只有 24pt。Aevon(91) 实测：
@@ -343,27 +370,38 @@ enum AevonRingGrip {
      * 一次都没 fire，18 次 pass **全部**是「落点不在带内」—— 也就是说唯一漏出去的
      * 通道就是这道 24pt 的边。用户直接在体验上确认了：「开启后很小的几率触发 App 内操作」。
      *
-     * 现在改成区域：横向 = 屏宽 × GripZoneW%（默认 25），纵向 = 屏高 × GripZoneH%（默认 30，
-     * 贴底）。区域内任意落点都算呼盘，边界一次性退出 100pt 量级。
+     * V0.3.13 曾把横向拉到 25%（≈107pt）来一次性消灭落偏，代价是抖音底部进度条、
+     * 右下角按钮全在那片区域里。V0.3.14 按用户定档改回「贴边」：横向 pt 值（默认 5），
+     * 纵向仍是屏高百分比（默认 30，贴底）。落偏由 `padRect` 的暂扣段兜住，不靠加宽。
      *
      * ⛔ 两侧同侧纪律（0.2.61~0.2.84 反复踩）：本函数仍是唯一权威。App 侧
-     * `AevonAppSide.m` 的吞带在 0.3.13 已退役（`AevonAppBandRetireV313`）——
-     * 区域扩大到 107×280pt 后，App 侧若跟随式吞指会把 App 右下角一整片按钮全吃掉，
-     * 而实测证明「App 不跟手」100% 由 SB 侧自建腿提供（0.3.12 抖音 27/27）。
-     * 因此不再有镜像公式，CI 的 V0.3.13 块改为断言「App 侧吐带已归零」。 */
+     * `AevonAppSide.m` 的吞带已整体删除（0.3.14 `AevonAppBandPurgeV314`）——
+     * 「App 不跟手」100% 由 SB 侧自建腿提供（0.3.12 抖音 27/27），App 侧零贡献。 */
     static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect {
         guard screenW >= 100, screenH >= 200 else { return .zero }
         // ⛔ 常量在 `AevonRingGripView` 上，本函数属于 `enum AevonRingGrip` —— 必须带前缀
         // （0.3.6 那条老账：静态成员先看宿主类型是谁，别想当然）。
         let rawW = CGFloat(AevonPrefs.double("GripZoneW",
                                              default: Double(AevonRingGripView.zoneWDefault)))
-        let wPct = min(max(rawW, AevonRingGripView.zoneWMin), AevonRingGripView.zoneWMax)
+        let w = min(max(rawW, AevonRingGripView.zoneWMin), AevonRingGripView.zoneWMax)
         let rawH = CGFloat(AevonPrefs.double("GripZoneH",
                                              default: Double(AevonRingGripView.zoneHDefault)))
         let hPct = min(max(rawH, AevonRingGripView.zoneHMin), AevonRingGripView.zoneHMax)
-        let w = screenW * wPct / 100.0
         let h = screenH * hPct / 100.0
         return CGRect(x: screenW - w, y: screenH - h, width: w, height: h)
+    }
+
+    /// V0.3.14（AevonEdgePadV314）：暂扣区 = 贴边宽 + `edgePadPts`，纵向与 `bandRect` 同一条。
+    ///
+    /// 落点在这里但不在 `bandRect` 里 = 「边缘候选」：自建腿先把它扣住（App 收不到 began），
+    /// 首帧 moved 用**严格**判据（近似纯水平左滑）决定呼盘还是立刻还回去。
+    /// 好处是既不漏呼盘，又不会像 0.3.13 那样把 App 右下角一整片按钮的滑动全抢走。
+    static func padRect(screenW: CGFloat, screenH: CGFloat) -> CGRect {
+        let core = bandRect(screenW: screenW, screenH: screenH)
+        guard core.width > 0 else { return .zero }
+        // 上限屏宽一半：GripZoneW 拉到 60 时暂扣区不会横跨半屏以上
+        let w = min(core.width + AevonRingGripView.edgePadPts, screenW * 0.5)
+        return CGRect(x: screenW - w, y: core.minY, width: w, height: core.height)
     }
 
     /// V0.3.8（AevonGripZoneV308）：触发范围模式。

@@ -12,7 +12,7 @@
 			<key>label</key>
 			<string>呼出区域（占屏幕的比例）</string>
 			<key>footerText</key>
-			<string>0.3.13 起（AevonGripZoneV313）：呼出区改成**右缘底部的一块矩形区域**，用屏幕比例来定，换机型手感不变。默认 = 贴右边缘 25% 宽 × 从底部往上 30% 高，在这个区域里任意位置向左滑都能呼出圆盘。两个滑条都是拖动即时生效，不用注销。区域比 0.3.8 那条 24pt 窄带宽得多，这正是「很小的几率触发 App 内操作」的修法 —— 手指偏 1~2mm 也不会落到区外。</string>
+			<string>0.3.14 起（AevonEdgePadV314）：呼出区 = **贴着右缘的一条窄带**，不再是 0.3.13 那块 25% 宽的矩形。默认 5pt ≈「手指贴着右边」，底部往上 30% 高度内向左滑就呼出圆盘。收窄之后，抖音底部进度条、右下角点赞/评论/分享这些按钮的横向拖动不再被抢。宽度别设成 0：滑条最小是 1，实测 5 附近最接近「贴边」的自然落点。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -42,17 +42,17 @@
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>label</key>
-			<string>区域宽度：屏宽 %</string>
+			<string>区域宽度：pt</string>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>GripZoneW</string>
 			<key>default</key>
-			<real>25</real>
+			<real>5</real>
 			<key>min</key>
-			<real>10</real>
+			<real>1</real>
 			<key>max</key>
-			<real>40</real>
+			<real>60</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -60,7 +60,7 @@
 			<key>label</key>
 			<string> </string>
 			<key>footerText</key>
-			<string>贴着屏幕右边缘向内算。25 = 默认（约 107pt 宽）；越小越不容易误碰，但也越容易划不中。</string>
+			<string>贴着屏幕右边缘向内算，单位 pt（不随屏幕大小变）。5 = 默认（只认真正贴边的手指）；调大到 20~30 更容易划中，但会开始抢右缘附近的横向操作。落点稍微偏内（最多 +35pt）时不会直接判死：先扣住一帧，只有近似纯水平左滑才呼盘，否则立刻还给 App。</string>
 		</dict>
 		<dict>
 			<key>cell</key>

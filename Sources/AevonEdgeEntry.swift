@@ -989,14 +989,20 @@ enum AevonEdgeEntry {
             legBlocked(cls: cls, reason: "屏幕尺寸异常")
             return
         }
-        guard edgeRef >= band.minX else {
-            legBlocked(cls: cls, reason: "不在右缘 \(Int(band.width))pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
+        /* V0.3.14（AevonEdgePadV314）：借腿是**兜底**（自建腿就绪时不呼盘），判据用
+         * `padRect`（贴边宽 + 暂扣）而不是 `bandRect` —— 它的职责就是在自建腿没接手时
+         * 把「落点偏内 10~35pt」那颗漏网的手指捞回来。用当前 x 会自杀（左滑天然向左），
+         * 所以一律用 began 起点。 */
+        let edge = AevonRingGrip.padRect(screenW: screen.width, screenH: screen.height)
+        let edgeMinX = edge.width > 0 ? edge.minX : band.minX
+        guard edgeRef >= edgeMinX else {
+            legBlocked(cls: cls, reason: "不在右缘 \(Int(band.width))+\(Int(AevonRingGripView.edgePadPts))pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
             return
         }
         if !AevonRingGrip.scopeFullEdge {
             let yRef = startY > 0 ? startY : y
             guard yRef >= band.minY && yRef <= band.maxY else {
-                legBlocked(cls: cls, reason: "不在把手带内（起点y=\(Int(yRef)) 带=\(Int(band.minY))~\(Int(band.maxY))，GripScope 关着）")
+                legBlocked(cls: cls, reason: "不在底部区内（起点y=\(Int(yRef)) 区=\(Int(band.minY))~\(Int(band.maxY))，GripScope 关着）")
                 return
             }
         }
@@ -1022,28 +1028,35 @@ enum AevonEdgeEntry {
 
     // MARK: - V0.3.9（AevonGripOwnLegV309）：自建识别器腿
 
-    /// 自建腿的落点预判 —— ObjC 侧在 `touchesBegan` 里**同步**调用。
+    /// V0.3.14（AevonEdgePadV314）：自建腿的落点预判分成两段，返回值即「接管等级」。
     ///
-    /// 为什么这一层是架构分水岭：0.3.4~0.3.8 我们是「借」系统的边沿识别器，只能在
-    /// **达阈值之后**用后置几何判据决定要不要呼盘；而自建识别器的
-    /// `delaysTouchesBegan = YES` 是**在落指那一刻**就决定这根手指归不归我。
-    /// 带外的手指连认定都不会发生，直接 failed 把触摸原样还给系统 ——
-    /// 侧滑返回插件、列表边缘滚动、右缘按钮一律不受影响（比几何判据彻底）。
+    /// `0` = 不接管（立刻 failed 放行）；`1` = 贴边落点（宽松判据）；`2` = 边缘候选
+    /// （暂扣，首帧 moved 走严格判据）。ObJC 侧按返回值决定 `_ownStrict`。
     ///
-    /// 返回值：true = 这根手指由自建腿接管（触摸被扣住）；false = 立刻 failed 放行。
-    static func ownLegBandHit(x: CGFloat, y: CGFloat) -> Bool {
-        guard AevonPrefs.bool("Enabled", default: true) else { return false }
+    /// 为什么不再是一个 Bool：0.3.13 把触发区做成 25%（≈107pt）宽，一口气吃掉了
+    /// 抖音底部进度条与右下角按钮。收到 5pt 后又会把「落点偏内 10~30pt」的呼盘全漏掉。
+    /// 两段式把这两个矛盾同时解掉 —— 贴边照旧宽松，偏内先扣一帧再看方向。
+    static func ownLegHitLevel(x: CGFloat, y: CGFloat) -> Int32 {
+        guard AevonPrefs.bool("Enabled", default: true) else { return 0 }
         // V0.3.10（AevonOwnLegDefaultV310）：默认值 false → true（转正）。
         // 依据 Aevon(88)：默认关着时自建腿一行日志都没有，63 次呼盘 100% 仍走借识别器腿，
         // 抖音那 24 次全部「恰好 8pt 就呼盘」—— 那 8pt 已经派给 App，所以抖音会露一截作者主页。
-        guard AevonPrefs.bool("GripOwnLeg", default: true) else { return false }
-        guard AevonRingMenu.presented == nil else { return false }
+        guard AevonPrefs.bool("GripOwnLeg", default: true) else { return 0 }
+        guard AevonRingMenu.presented == nil else { return 0 }
         let screen = UIScreen.main.bounds
-        let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)
-        guard band.width > 0, band.height > 0 else { return false }
-        guard x >= band.minX else { return false }
-        if AevonRingGrip.scopeFullEdge { return true }
-        return y >= band.minY && y <= band.maxY
+        let core = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)
+        guard core.width > 0, core.height > 0 else { return 0 }
+        let inBandY = AevonRingGrip.scopeFullEdge || (y >= core.minY && y <= core.maxY)
+        guard inBandY else { return 0 }
+        if x >= core.minX { return 1 }
+        let pad = AevonRingGrip.padRect(screenW: screen.width, screenH: screen.height)
+        if pad.width > 0, x >= pad.minX { return 2 }
+        return 0
+    }
+
+    /// 兼容入口（`AevonGripOwnBandHit` 仍然只回 0/1）：给「贴边落点」这一档用。
+    static func ownLegBandHit(x: CGFloat, y: CGFloat) -> Bool {
+        return ownLegHitLevel(x: x, y: y) == 1
     }
 
     /// 自建腿呼盘 —— ObjC 侧在 `touchesMoved` 达到阈值那一刻调用。
@@ -1297,6 +1310,12 @@ public func AevonGripLegOutcome(_ cls: UnsafePointer<CChar>?, _ kind: Int32,
 @_cdecl("AevonGripOwnBandHit")
 public func AevonGripOwnBandHit(_ x: Double, _ y: Double) -> Int32 {
     return AevonEdgeEntry.ownLegBandHit(x: CGFloat(x), y: CGFloat(y)) ? 1 : 0
+}
+
+/// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选。
+@_cdecl("AevonGripOwnHitLevel")
+public func AevonGripOwnHitLevel(_ x: Double, _ y: Double) -> Int32 {
+    return AevonEdgeEntry.ownLegHitLevel(x: CGFloat(x), y: CGFloat(y))
 }
 
 /// V0.3.9（AevonGripOwnLegV309）：自建腿呼盘。

@@ -180,7 +180,8 @@ jobs:
                    AevonGripOwnLegV309 AevonOwnLegRegV310 AevonOwnLegDefaultV310 \
                    AevonOwnLegTypeV311 AevonOwnSuppressV311 \
                    AevonOwnClaimV312 AevonOwnIvarV312 AevonOwnUIKitMgrV312 \
-                   AevonGripZoneV313 AevonHandleHideV313 AevonOwnGateV313; do
+                   AevonGripZoneV313 AevonHandleHideV313 AevonOwnGateV313 \
+                   AevonEdgePadV314; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -796,7 +797,7 @@ jobs:
           # V0.3.13（AevonHandleHideV313）：隐藏把手开关必须在位（默认开 = Stheno 同款无显形边缘）
           plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripHandleHidden' \
             || { echo "::error::Grip.plist 缺少 GripHandleHidden 开关（把手藏不起来）"; exit 1; }
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];ok=(len(w)==1 and float(w[0].get('min',0))==10.0 and float(w[0].get('max',0))==40.0 and float(w[0].get('default',0))==25.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==30.0 and len(s)==1 and s[0].get('default') is False and len(x)==1 and x[0].get('default') is True);print('V0.3.13 Grip.plist: 区域 25%/10~40 + 高度 30%/15~50 + 隐藏把手默认开 + GripScope 默认关 ✓' if ok else '::error::V0.3.13 Grip.plist 区域量程/默认值不符（应 25%/10~40、30%/15~50、隐藏默认开、GripScope 默认关）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];ok=(len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==30.0 and len(s)==1 and s[0].get('default') is False and len(x)==1 and x[0].get('default') is True);print('V0.3.13/14 Grip.plist: 宽度 5pt/1~60 + 高度 30%/15~50 + 隐藏把手默认开 + GripScope 默认关 ✓' if ok else '::error::V0.3.13 Grip.plist 区域量程/默认值不符（应 25%/10~40、30%/15~50、隐藏默认开、GripScope 默认关）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
             || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
@@ -4439,21 +4440,28 @@ jobs:
             && grep -q 'AevonPrefs.double("GripZoneW"' "$RG" \
             && grep -q 'AevonPrefs.double("GripZoneH"' "$RG" \
             || { echo "::error::V0.3.13 SB 侧缺少触发区几何函数或 GripZoneW/GripZoneH"; exit 1; }
-          # ②系统腿判据必须真的用 bandRect，且纵向必须判（防止回退成「右缘整条」）
+          # ②系统腿判据必须真的用几何函数，且纵向必须判（防止回退成「右缘整条」）
+          # V0.3.14：横向判据改用 padRect（贴边宽 + 暂扣），纵向仍用 bandRect 的 y 区间
           grep -q 'let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)' "$EE" \
-            && grep -q 'guard edgeRef >= band.minX else' "$EE" \
+            && grep -q 'let edge = AevonRingGrip.padRect(screenW: screen.width, screenH: screen.height)' "$EE" \
+            && grep -q 'guard edgeRef >= edgeMinX else' "$EE" \
             && grep -q 'guard yRef >= band.minY && yRef <= band.maxY else' "$EE" \
-            || { echo "::error::V0.3.8 系统腿判据没走 bandRect 或漏了纵向约束（右缘整条又会触发）"; exit 1; }
+            || { echo "::error::V0.3.8 系统腿判据没走 bandRect/padRect 或漏了纵向约束（右缘整条又会触发）"; exit 1; }
           # ③GripScope 兜底开关必须被读到，且默认关（关 = 只在把手带）
           grep -q 'AevonPrefs.bool("GripScope", default: false)' "$RG" \
             && grep -q 'if !AevonRingGrip.scopeFullEdge {' "$EE" \
             || { echo "::error::V0.3.8 GripScope 兜底开关没接进判据或默认不是关"; exit 1; }
-          # ④App 侧吞带（V0.3.13 反转成「已退役」）：几何从 24pt 窄带扩到 107×280pt 后，
-          #   App 侧跟随式吞指会吃掉整个右下角按钮面，而抖音（未注入）实证证明「App 不跟手」
-          #   100% 由 SB 侧自建腿提供 → 吞带整体归零，改守「归零 + 退役标记」。
-          grep -q 'gAevonGripRect = CGRectZero;' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            && grep -q 'AevonAppBandRetireV313' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
-            || { echo "::error::V0.3.13 App 侧吞带没退役（gAevonGripRect 未归零或缺 AevonAppBandRetireV313）"; exit 1; }
+          # ④App 侧吞带（V0.3.13 归零 → V0.3.14 整段拆净）：与圆盘呼出相关的 App 侧代码
+          #   现在是 0 行。抖音（未注入）实证证明「App 不跟手」100% 由 SB 侧自建腿提供。
+          #   防回退：几何变量名 / 判定函数名一律不许再出现在 App 侧源码里。
+          #   （注释里也不写原名，否则这条 grep 会被自己命中。）
+          if grep -nE '^static (CGRect|CGSize|BOOL|CFTimeInterval) gAevonGrip(Rect|RealScreen|Cached|CacheAt)' \
+               "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"; then
+            echo "::error::V0.3.14 App 侧吞带几何变量又回来了（0.3.14 已整段拆净）"
+            exit 1
+          fi
+          grep -q 'AevonAppBandPurgeV314' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::V0.3.14 App 侧缺拆净标记 AevonAppBandPurgeV314"; exit 1; }
           # ⑤防回退：SB 侧不许再出现写死的右缘 24pt 判据
           if grep -q 'guard edgeRef >= screen.width - 24' "$EE"; then
             echo "::error::V0.3.8 系统腿判据回退成写死 24pt（Aevon(86) 的「整个右侧都触发」）"
@@ -4473,7 +4481,8 @@ jobs:
             && grep -q 'self.cancelsTouchesInView = YES;' "$OWNM" \
             || { echo "::error::V0.3.9 自建识别器缺 delaysTouchesBegan / cancelsTouchesInView"; exit 1; }
           # ②落点判据必须在 touchesBegan 里 —— 这是与 0.3.8「达阈值后才判」的分水岭
-          python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("- (void)touchesBegan:"); j=s.find("AevonGripOwnBandHit",i); k=s.find("- (void)touchesMoved:",i); ok=(i>0 and j>i and (k<0 or j<k)); print("V0.3.9 落点判据在 touchesBegan 内 ✓" if ok else "::error::V0.3.9 落点判据不在 touchesBegan 里（退化成达阈值后才判，App 已跟手）"); sys.exit(0 if ok else 1)' "$OWNM"
+          # V0.3.14：入口从 AevonGripOwnBandHit（0/1）升级成 AevonGripOwnHitLevel（0/1/2）
+          python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("- (void)touchesBegan:"); j=s.find("AevonGripOwnHitLevel",i); k=s.find("- (void)touchesMoved:",i); ok=(i>0 and j>i and (k<0 or j<k)); print("V0.3.9 落点判据在 touchesBegan 内 ✓" if ok else "::error::V0.3.9 落点判据不在 touchesBegan 里（退化成达阈值后才判，App 已跟手）"); sys.exit(0 if ok else 1)' "$OWNM"
           # ③防扣死三闸（0.1.9「只能点不能滑」的复发闸门，一条都不能少）
           grep -q 'scheduledTimerWithTimeInterval:0.28' "$OWNM" \
             && grep -q '纵向为主 → 放行' "$OWNM" \
@@ -4600,8 +4609,13 @@ jobs:
           # 前提数据（Aevon(91)）：开关打开 55s 内 27 次呼盘 27/27 全走自建腿，关掉 7s 内
           # 3 次 3/3 全走借腿；28 次 hold 全部有结局、纵向闸与超时闸各 0 次 —— 逻辑零漏洞，
           # 唯一漏出口是 24pt 窄边。用户定几何：「右边缘底部向上 30% 高度，宽度 25%」。
-          # ①几何必须是百分比区域且贴右下（不再读 GripY/GripLen/GripWidth）
-          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect');j=s.find(chr(10)+'    }',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and j>i and 'GripZoneW' in b and 'GripZoneH' in b and 'screenW * wPct / 100.0' in b and 'screenH * hPct / 100.0' in b and 'x: screenW - w' in b and 'y: screenH - h' in b and 'GripY' not in b and 'GripLen' not in b and 'GripWidth' not in b);print('V0.3.13 触发区 = 右缘底部百分比矩形 ✓' if ok else '::error::V0.3.13 bandRect 不是右缘底部百分比矩形，或函数体里仍在读 GripY/GripLen/GripWidth');sys.exit(0 if ok else 1)" "$RG"
+          # ①几何必须贴右下：横向 GripZoneW **按 pt**（V0.3.14 起，默认 5），纵向 GripZoneH 按屏高 %
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect');j=s.find(chr(10)+'    }',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and j>i and 'GripZoneW' in b and 'GripZoneH' in b and 'screenH * hPct / 100.0' in b and 'x: screenW - w' in b and 'y: screenH - h' in b and 'screenW * wPct' not in b and 'GripY' not in b and 'GripLen' not in b and 'GripWidth' not in b);print('V0.3.13/14 触发区 = 右缘底部矩形（横向 pt、纵向 %）✓' if ok else '::error::bandRect 横向又变回百分比，或函数体里仍在读 GripY/GripLen/GripWidth');sys.exit(0 if ok else 1)" "$RG"
+          # ①b V0.3.14（AevonEdgePadV314）：暂扣区必须存在且比贴边区宽 edgePadPts
+          grep -q 'static func padRect(screenW: CGFloat, screenH: CGFloat) -> CGRect' "$RG" \
+            && grep -q 'core.width + AevonRingGripView.edgePadPts' "$RG" \
+            && grep -q 'static let edgePadPts: CGFloat = 35' "$RG" \
+            || { echo "::error::V0.3.14 缺 padRect / edgePadPts（边缘候选的暂扣段）"; exit 1; }
           # ②把手可隐藏：开关默认开 + alpha 走同一套通道（禁 isHidden）+ 两腿都没就绪时 fail-open 显形
           grep -q 'AevonPrefs.bool("GripHandleHidden", default: true)' "$RG" \
             && grep -q 'static var gripShownAlpha' "$RG" \
@@ -4612,7 +4626,7 @@ jobs:
             exit 1
           fi
           # ③释手指顺序：呼盘必须排在纵向让路**之前**（否则 dx=-10/dy=-13 会被当成滚动放掉）
-          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('if (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy))');b=s.find('if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx))');ok=(a>0 and b>0 and a<b);print('V0.3.13 呼盘判据排在纵向让路之前 ✓' if ok else '::error::V0.3.13 纵向让路跑到了呼盘判据前面（斜向呼盘会被放掉）');sys.exit(0 if ok else 1)" "$OWNM"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('BOOL horizontal = (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy));');b=s.find('if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx))');ok=(a>0 and b>0 and a<b);print('V0.3.13 呼盘判据排在纵向让路之前 ✓' if ok else '::error::V0.3.13 纵向让路跑到了呼盘判据前面（斜向呼盘会被放掉）');sys.exit(0 if ok else 1)" "$OWNM"
           grep -q 'if (fabs((double)dy) > 40.0)' "$OWNM" \
             || { echo "::error::V0.3.13 纵向 40pt 兜底闸被删了"; exit 1; }
           # ④借腿降为纯兜底：自建腿已注册时借腿不许呼盘（Aevon(91)：29 条「达阈值但被拦」全是白算）
@@ -4636,7 +4650,40 @@ jobs:
             || { echo "::error::V0.3.13 主库缺区域/隐藏/闸门标记"; exit 1; }
           strings "$ADYL" | grep -q 'AevonAppBandRetireV313' \
             || { echo "::error::V0.3.13 App 库缺吞带退役标记"; exit 1; }
-          echo "V0.3.13 校验: 右缘底部百分比区域 + 把手可隐藏（fail-open）+ 纵向首帧让路 + 借腿降兜底 + 放行四分类 + App 吞带退役 ✓"
+          echo "V0.3.13 校验: 右缘底部矩形 + 把手可隐藏（fail-open）+ 纵向首帧让路 + 借腿降兜底 + 放行四分类 + App 吞带退役 ✓"
+
+          # ── V0.3.14 校验（Aevon(93) 定档：贴边窄带 + 暂扣段 + App 侧吞带拆净）──
+          # 用户原话：「边缘触发条的宽度能不能改成只要手指贴着右侧底部 30% 高度中向左滑动时触发，
+          # 而不要任何宽度？」以及「同时做清理 App 侧 150 行空转代码这一刀」。
+          # ①三段式落点判定在位：0 不接管 / 1 贴边 / 2 边缘候选，且 ObjC 侧按返回值分岔
+          grep -q 'static func ownLegHitLevel(x: CGFloat, y: CGFloat) -> Int32' "$OWNE" \
+            && grep -q 'if x >= core.minX { return 1 }' "$OWNE" \
+            && grep -q 'if pad.width > 0, x >= pad.minX { return 2 }' "$OWNE" \
+            && grep -q '@_cdecl("AevonGripOwnHitLevel")' "$OWNE" \
+            || { echo "::error::V0.3.14 缺三段式落点判定（贴边/边缘候选/带外）"; exit 1; }
+          # ②边缘候选必须走严格判据：|dy| <= 6 才认，右移或纵向 ≥12 立刻还回去
+          grep -q 'if (horizontal && fabs((double)dy) <= 6.0)' "$OWNM" \
+            && grep -q 'if (dx > 0.0 || fabs((double)dy) >= 12.0)' "$OWNM" \
+            || { echo "::error::V0.3.14 边缘候选缺严格判据（抖音进度条会被抢）"; exit 1; }
+          # ③贴边落点仍走宽松判据（BOOL horizontal 那条），且纵向让路仍在它之后
+          grep -q 'if (horizontal) {' "$OWNM" \
+            || { echo "::error::V0.3.14 贴边落点的宽松判据丢了（贴边也呼不出来）"; exit 1; }
+          # ④App 侧拆净：几何变量一条都不许回来 + 拆净标记进二进制
+          if grep -nE '^static (CGRect|CGSize|BOOL|CFTimeInterval) gAevonGrip(Rect|RealScreen|Cached|CacheAt)' \
+               "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"; then
+            echo "::error::V0.3.14 App 侧吞带几何变量又回来了"
+            exit 1
+          fi
+          strings "$ADYL" | grep -q 'AevonAppBandPurgeV314' \
+            || { echo "::error::V0.3.14 App 库缺拆净标记 AevonAppBandPurgeV314"; exit 1; }
+          # ⑤App 侧必须还留着浮窗边带（拆过头的防回退网）
+          grep -q 'static BOOL AevonPointInFloatEdge' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            && grep -q 'static BOOL AevonPointInCanvasBand' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
+            || { echo "::error::V0.3.14 拆过头了：浮窗边带 / 承载画布边缘带也一起删了（浮窗拖动会带动 App）"; exit 1; }
+          # ⑥主库标记进二进制
+          strings "$MDYL" | grep -q 'AevonEdgePadV314' \
+            || { echo "::error::V0.3.14 主库缺贴边+暂扣标记"; exit 1; }
+          echo "V0.3.14 校验: 贴边窄带（5pt 默认，可调 1~60）+ 暂扣段严格判据 + App 侧吞带拆净（浮窗边带保留）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

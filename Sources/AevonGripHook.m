@@ -703,6 +703,8 @@ BOOL AevonGripHookProbeInstall(void) {
  * =========================================================================== */
 
 extern int AevonGripOwnBandHit(double x, double y);
+/// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选（暂扣）。
+extern int AevonGripOwnHitLevel(double x, double y);
 extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
 extern void AevonGripOwnLog(const char *kind, const char *detail);
 
@@ -716,12 +718,15 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
  * 为什么必须分类：Aevon(91) 那 18 条 pass 全是同一句话「落点不在把手带内」，
  * 一个字都没有落点坐标 —— 于是「很小的几率触发 App 内操作」到底有几次、每次差几 pt，
  * 全都只能靠猜。现在四类分开计数（带外 / 纵向 / 超时 / 抬手），带坐标，
- * 每类只打前 6 条，剩下的只累加不刷日志。 */
+ * 每类只打前 6 条，剩下的只累加不刷日志。
+ * V0.3.14 增第五类（边缘候选被严格判据否掉）—— 它和「纵向为主」是两回事，
+ * 混在一起下一轮就看不出「暂扣段到底救回了几次、否掉了几次」。 */
 enum {
     AevonOwnPassBand = 0,   // 落点不在呼出区（唯一真正会「漏给 App」的一类）
     AevonOwnPassVert,       // 纵向为主 → 让给滚动/翻页
     AevonOwnPassBail,       // 0.28s 内没达阈值
     AevonOwnPassTap,        // 抬手没左滑
+    AevonOwnPassStrict,     // V0.3.14：边缘候选但不像纯水平左滑 → 立刻还回去
     AevonOwnPassKindCount
 };
 static NSInteger gAevonOwnPassByKind[AevonOwnPassKindCount];
@@ -752,6 +757,8 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     CFTimeInterval _ownStartStamp;   // V0.3.11：落指时刻（0.9s 总上限的基准）
     int _ownMovedFrames;             // V0.3.11：本手势收到的 moved 帧数（判「注册到底生效没有」）
     NSTimer *_ownHold;               // V0.3.12：认领后的兜底放行（手指不抬手也不会卡住）
+    BOOL _ownStrict;                 // V0.3.14：边缘候选（非贴边）→ 首帧 moved 用严格判据
+    CGPoint _ownHit;                 // V0.3.14：began 落点（日志与严格判据都用它）
 }
 
 - (instancetype)init {
@@ -840,16 +847,27 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     UITouch *t = touches.anyObject;
     CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
     /* 落点判据在**落指那一刻**做 —— 这才是自建腿相对「借识别器」的本质优势：
-     * 0.3.8 只能在达阈值之后用后置几何否决，那时 App 已经跟了 8pt 了。 */
-    if (AevonGripOwnBandHit((double)p.x, (double)p.y) == 0) {
+     * 0.3.8 只能在达阈值之后用后置几何否决，那时 App 已经跟了 8pt 了。
+     *
+     * V0.3.14（AevonEdgePadV314）：三段式。
+     *   1 = 贴边落点（离右缘 ≤ GripZoneW，默认 5pt）→ 宽松判据，左滑 8pt 就呼盘；
+     *   2 = 边缘候选（离右缘 ≤ W+35pt）→ **先扣住**，首帧 moved 用严格判据
+     *       （近似纯水平左滑）才呼盘，否则立刻还回去；
+     *   0 = 带外 → 立刻放行。
+     * 为什么不再一刀切：0.3.13 的 25% 宽（≈107pt）把抖音底部进度条和右下角按钮全吃了；
+     * 而只收 5pt 又会把「落点偏内 10~30pt」的呼盘全漏掉。两段式两头都要。 */
+    int level = AevonGripOwnHitLevel((double)p.x, (double)p.y);
+    if (level == 0) {
         CGSize scr = [UIScreen mainScreen].bounds.size;
         NSString *d = [NSString stringWithFormat:
-                       @"落点不在呼出区 x=%.0f y=%.0f（屏 %.0fx%.0f）→ 放行"
+                       @"落点不在右缘呼出区 x=%.0f y=%.0f（屏 %.0fx%.0f）→ 放行"
                        "（侧滑返回/边缘滚动不受影响）", p.x, p.y, scr.width, scr.height];
         [self ownPass:"pass" bucket:AevonOwnPassBand detail:d];
         return;
     }
     _ownStart = p;
+    _ownHit = p;
+    _ownStrict = (level == 2);
     _ownSummoned = NO;
     _ownMovedFrames = 0;
     _ownStartStamp = CACurrentMediaTime();
@@ -859,7 +877,13 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
                                               selector:@selector(ownBailFired)
                                               userInfo:nil
                                                repeats:NO];
-    AevonGripOwnLog("hold", "落点在呼出区内 → 扣住触摸，等左滑达阈值（App 此时收不到 began）");
+    CGSize scr2 = [UIScreen mainScreen].bounds.size;
+    NSString *hd = [NSString stringWithFormat:
+                    @"落点 x=%.0f y=%.0f（离右缘 %.0fpt，%s）→ 扣住触摸，等左滑达阈值"
+                    "（App 此时收不到 began）",
+                    p.x, p.y, scr2.width - p.x,
+                    _ownStrict ? "边缘候选，走严格判据" : "贴边落点"];
+    AevonGripOwnLog("hold", hd.UTF8String);
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -879,15 +903,42 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     }
     /* V0.3.13（AevonOwnGateV313）：**先判呼盘、再判纵向**，顺序不能反。
      *
-     * 触发区从 24pt 窄带扩大成「右缘底部 屏宽25% × 屏高30%」之后，区域里几乎全是 App 的
-     * 正常操作面（抖音右下角按钮、进度条、微信「+」）。原来只在 |dy|>40pt 时让路，
-     * 意味着上下滑要先被扣住 40pt（约 1cm）才还回去 —— 视觉上就是「卡一下再跳」。
-     * 现在只要「纵向分量 ≥12pt 且压过横向」就立刻放行，上下滑第一帧就还回去。
+     * ⛔ 真实呼盘是「向左抖一下」，dy 常有 10~15pt 的自然漂移；若先判纵向，
+     * dx=-10/dy=-13 这种就会被当成滚动放掉 —— 那是把功能判死。
      *
-     * ⛔ 但呼盘必须先判：真实呼盘是「向左抖一下」，dy 常有 10~15pt 的自然漂移，
-     * 若先判纵向，dx=-10/dy=-13 这种就会被当成滚动放掉 —— 那是把功能判死。
-     * 所以第一判据是「横向达阈值且横向占优」，只有横向不占优时才轮到纵向让路。 */
-    if (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy)) {
+     * V0.3.14（AevonEdgePadV314）：分两条判据。
+     *   · 贴边落点（level 1）：上面的宽松判据原样保留 —— 落点本来就压在右缘，
+     *     左滑 8pt 就是明确意图，不必再额外刁难；
+     *   · 边缘候选（level 2）：落点离右缘 5~40pt，可能是抖音进度条、也可能是想呼盘
+     *     但落偏的手指。所以**只认近似纯水平的左滑**（|dy| ≤ 6），并且一旦看清
+     *     「不是左滑」（右移 / 纵向 ≥12）立刻还回去，不等 0.28s 闸。 */
+    BOOL horizontal = (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy));
+    if (_ownStrict) {
+        if (horizontal && fabs((double)dy) <= 6.0) {
+            _ownSummoned = YES;
+            [_ownBail invalidate];
+            _ownBail = nil;
+            [_ownHold invalidate];
+            _ownHold = nil;
+            self.state = UIGestureRecognizerStateBegan;
+            AevonGripOwnSummon((double)p.x, (double)p.y,
+                               (double)_ownStart.x, (double)_ownStart.y);
+            self.state = UIGestureRecognizerStateEnded;
+            return;
+        }
+        if (dx > 0.0 || fabs((double)dy) >= 12.0) {
+            NSString *d = [NSString stringWithFormat:
+                           @"边缘候选不是纯水平左滑 dx=%.0f dy=%.0f（落点 x=%.0f 离右缘 %.0fpt）"
+                           @"→ 立刻放行，App 拿回这根手指", dx, dy, _ownHit.x,
+                           [UIScreen mainScreen].bounds.size.width - _ownHit.x];
+            [self ownPass:"pass" bucket:AevonOwnPassStrict detail:d];
+            return;
+        }
+        /* 灰带（|dy| 6~12 或 dx 还没到 -8）：再看一帧 */
+        [self ownBailRearm];
+        return;
+    }
+    if (horizontal) {
         _ownSummoned = YES;
         [_ownBail invalidate];
         _ownBail = nil;
@@ -1649,3 +1700,13 @@ __attribute__((used)) static const char AevonOwnUIKitMgrV312Marker[] = "AevonOwn
 __attribute__((used)) static const char AevonGripZoneV313Marker[] = "AevonGripZoneV313";
 __attribute__((used)) static const char AevonHandleHideV313Marker[] = "AevonHandleHideV313";
 __attribute__((used)) static const char AevonOwnGateV313Marker[] = "AevonOwnGateV313";
+
+/* V0.3.14（AevonEdgePadV314）：触发区从「屏宽 25% 矩形」收回「贴边窄带 + 暂扣段」。
+ *
+ * 用户 Aevon(93)：「只要手指贴着右侧底部 30% 高度中向左滑动时触发，而不要任何宽度」。
+ * 0.3.13 那 107pt 宽的好处是「零落偏」，坏处是抖音底部进度条、右下角按钮全在里面；
+ * 本版把宽度交给用户按 pt 调（默认 5），落偏靠 padRect 的暂扣段兜：
+ *   · bandRect（默认 5pt）：贴边落点 → 宽松判据，左滑 8pt 就呼盘；
+ *   · padRect（+35pt）：边缘候选 → 先扣一帧，只有近似纯水平左滑才认，否则立刻还回去。
+ * 两段式让「贴边就触发」和「右下角横向拖动不受影响」同时成立。 */
+__attribute__((used)) static const char AevonEdgePadV314Marker[] = "AevonEdgePadV314";

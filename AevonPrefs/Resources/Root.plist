@@ -39,7 +39,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>呼盘入口：右缘底部那块矩形区域内任意位置向左滑 8pt 即可呼出圆盘。区域大小与把手显隐在下面调。</string>
+			<string>呼盘入口：贴着右缘、底部 30% 高度内向左滑 8pt 即可呼出圆盘。宽度与高度在下面调。</string>
 			<key>label</key>
 			<string>圆盘呼出区</string>
 		</dict>

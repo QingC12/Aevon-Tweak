@@ -1841,15 +1841,21 @@ static void AevonScreenFitInstall(void) {
 
 static IMP gAevonSendEventOrig;
 static NSMutableSet *gAevonSwallowedTouches;
-static CFTimeInterval gAevonGripCacheAt;
-static CGRect gAevonGripRect;
-static CGSize gAevonRealScreen;
-static BOOL gAevonGripCached;
 
 /* 纯 ASCII 的 used 数组：CI 用 strings 查标记，而 @"…（AevonGripSwallowV261）" 这种
  * 带中文的字面量在 ObjC 里会被编成 UTF-16 存进 __ustring —— strings 一个字节都搜不到
  * （0.2.61 第一次构建就是栽在这里）。本文件其它版本的标记同样靠这种数组兜底。 */
 __attribute__((used)) static const char AevonGripSwallowV261Marker[] = "AevonGripSwallowV261";
+
+/* V0.3.14（AevonAppBandPurgeV314）：把手吞带的几何变量（gAevonGripRect /
+ * gAevonRealScreen / gAevonGripCached / gAevonGripCacheAt）与整段计算已随
+ * `AevonGripRefreshCache` 一起删除。0.3.13 把这套归零之后它已经纯粹空转
+ * （按矩形判定的两个出口恒为否、`sendEvent:` 里没有任何一个分支会真的吞），
+ * 现在连空转也不留 —— 「少一条会改触摸归属的代码，就少一个卡屏来源」（0.3.3 铁律）。
+ *
+ * 留下的只有浮窗边带（`AevonPointInFloatEdge` / `AevonPointInFloatEdgeInflated`）与
+ * 承载画布边缘带（`AevonPointInCanvasBand`）：那是浮窗拖动/缩放能压住 App 的唯一机制，
+ * 与圆盘呼出无关。 */
 
 /* 真·屏幕尺寸：直接走**被接管前的** -[UIScreen bounds] 原实现。
  * 不能用当前 [UIScreen bounds] —— 它在本进程里被 AevonAppScreenFitV249 接管过，
@@ -1907,88 +1913,22 @@ static BOOL AevonKeyboardVisible(void) {
     return NO;
 }
 
-static void AevonGripRefreshCache(void) {
-    CFTimeInterval now = CACurrentMediaTime();
-    if (gAevonGripCached && now - gAevonGripCacheAt < 2.0) { return; }
-    gAevonGripCacheAt = now;
-    gAevonGripCached = YES;
-    gAevonGripRect = CGRectZero;
-    gAevonRealScreen = AevonRealScreenSize();
-    CFPropertyListRef enabled = CFPreferencesCopyAppValue(CFSTR("RingGripEnabled"), CFSTR("com.Aevon"));
-    BOOL on = YES;
-    if (enabled != NULL) {
-        if (CFGetTypeID(enabled) == CFBooleanGetTypeID()) { on = CFBooleanGetValue((CFBooleanRef)enabled); }
-        CFRelease(enabled);
-    }
-    if (!on) { return; }
-    double ratio = 30.0, len = 64.0, bandW = 24.0;
-    CFPropertyListRef y = CFPreferencesCopyAppValue(CFSTR("GripY"), CFSTR("com.Aevon"));
-    if (y != NULL) {
-        if (CFGetTypeID(y) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)y, kCFNumberDoubleType, &ratio); }
-        CFRelease(y);
-    }
-    CFPropertyListRef l = CFPreferencesCopyAppValue(CFSTR("GripLen"), CFSTR("com.Aevon"));
-    if (l != NULL) {
-        if (CFGetTypeID(l) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)l, kCFNumberDoubleType, &len); }
-        CFRelease(l);
-    }
-    /* V0.3.8（AevonGripZoneV308）：触发带宽度可配（GripWidth），App 侧必须跟读同一个 key。 */
-    CFPropertyListRef wpref = CFPreferencesCopyAppValue(CFSTR("GripWidth"), CFSTR("com.Aevon"));
-    if (wpref != NULL) {
-        if (CFGetTypeID(wpref) == CFNumberGetTypeID()) { CFNumberGetValue((CFNumberRef)wpref, kCFNumberDoubleType, &bandW); }
-        CFRelease(wpref);
-    }
-    if (ratio < 10) { ratio = 10; }
-    if (ratio > 90) { ratio = 90; }
-    if (len < 36) { len = 36; }
-    /* V0.3.8：上限 120 → 400，与 SB 侧 AevonRingGripView.lenMax 严格同步
-     * （用户把 GripLen 拉到 400 = 整条右缘都能呼盘）。 */
-    if (len > 400) { len = 400; }
-    if (bandW < 12) { bandW = 12; }
-    if (bandW > 60) { bandW = 60; }
-    CGSize screen = gAevonRealScreen;
-    if (screen.width < 100 || screen.height < 200) { return; }
-    /* V0.3.3（AevonGripBandNarrowV303）：outsetX 40 → 12，与 SB 侧
-     * AevonRingGrip.swift 的 hitOutsetX 严格同步（两侧不一致 = 一侧吞一侧不吞，
-     * 就是 0.2.61~0.2.84 反复出现的「吞不掉/误吞」那一类鬼）。
-     *
-     * V0.3.8（AevonGripZoneV308）：横向宽度改由 GripWidth 决定，下限仍是
-     * barWidth + outsetX（17pt）。纵向多给 bandPadY（10pt，上下各一份）——
-     * 必须与 SB 侧 `AevonRingGrip.bandRect` 的公式**一字不差**：
-     * 触发带 ⊂ 吞带 是「呼盘不带动 App」的前提，吞带比触发带小就会出现
-     * 「圆盘出来了、App 却跟着滑了几个像素」这种半截状态。 */
-    const double barWidth = 5.0, outsetX = 12.0, outsetY = 14.0, bandPadY = 10.0;
-    double cy = screen.height * (1.0 - ratio / 100.0);
-    double hitW = bandW < (barWidth + outsetX) ? (barWidth + outsetX) : bandW;
-    double hitH = len + (outsetY + bandPadY) * 2.0;
-    gAevonGripRect = CGRectMake(screen.width - hitW, cy - hitH / 2.0, hitW, hitH);
-
-    /* V0.3.13（AevonAppBandRetireV313）：App 侧吞带**整体退役** —— 上面算完立刻归零。
-     *
-     * 为什么必须退役，而不是让它跟上新的触发区：
-     *   ① 0.3.13 的触发区是「右缘底部 屏宽25% × 屏高30%」≈ 107×280pt。这个面积里
-     *      几乎全是 App 的正常按钮面（抖音点赞/评论/分享、微信右下角「+」、进度条）。
-     *      按 0.3.3 的规则「began 帧整根认领」，跟上去就等于把这一整片点击全部吞掉。
-     *   ② 不跟上去更糟：带子会留在屏幕中部（老几何），落点对不上，变成「误吞又不呼盘」。
-     *   ③ 最关键的事实依据 —— Aevon(85) 的 33 次呼盘 33 次成功全部发生在**抖音**
-     *      （`__RESTRICT`，Aevon 根本注入不进去，本文件的代码在那台机器上从未执行），
-     *      Aevon(91) 更是 27/27 全走 SB 侧自建识别器腿。「呼盘时 App 不跟手」这件事
-     *      100% 由 SB 侧的 `delaysTouchesBegan` 提供，App 侧吞带一直是零贡献。
-     *   ④ 0.3.3 已定档：App 侧「began 放行、中途改吞」是死锁温床。少一条会改触摸归属的
-     *      代码，就少一个卡屏来源。
-     *
-     * 归零是**最小改动面**的退役方式：所有消费点（`AevonPointInGrip`、窗口层 dispatch 里的
-     * `!CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(...)`）都以「矩形非空」为前置，
-     * 这里归零 = 一次性全闭嘴，不必去改那七八处判定。 */
-    gAevonGripRect = CGRectZero;
-}
-
 __attribute__((used)) static const char AevonAppBandRetireV313Marker[] = "AevonAppBandRetireV313";
+__attribute__((used)) static const char AevonAppBandPurgeV314Marker[] = "AevonAppBandPurgeV314";
 
-static BOOL AevonPointInGrip(CGPoint p) {
-    AevonGripRefreshCache();
-    return !CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(gAevonGripRect, p);
-}
+/* V0.3.14（AevonAppBandPurgeV314）：App 侧「把手吞带」整段删除 —— 变量、几何计算、
+ * 判定函数一个不留。0.3.13 只是把它归零（纯空转），本版连空转也拆掉：
+ * 「一根手指的归属只在 began 那一帧决定」已定档（0.3.3），能少一条改归属的代码，
+ * 就少一个卡屏来源。
+ *
+ * 事实依据：Aevon(85) 的 33 次呼盘全部发生在抖音（`__RESTRICT`，本文件在那台机器上
+ * 从未执行），Aevon(91) 27/27 全走 SB 侧自建识别器腿 —— 「呼盘时 App 不跟手」
+ * 100% 由 SB 侧的 `delaysTouchesBegan` 提供，App 侧吞带的贡献是零。
+ *
+ * 保留下来的两条几何判定与圆盘无关：浮窗边带（浮窗拖动/缩放要压住底下的 App）
+ * 与承载画布边缘带。删这两条 = 0.2.61~0.2.72 那十二个版本的老病全量复发。
+ *
+ * CI 凭证：`AevonAppBandRetireV313`（0.3.13 归零）+ `AevonAppBandPurgeV314`（本版拆净）。 */
 
 /* V0.2.61（AevonGripSwallowV261）：这一拍能不能吞？
  * 两条硬闸，都是为了不在别人的 App 里误伤正常操作：
@@ -2282,7 +2222,10 @@ static BOOL AevonShouldConsiderSwallow(UITouch *touch, CGPoint p) {
             return AevonPointInFloatEdge(p);
         }
     }
-    return AevonPointInGrip(p);
+    /* V0.3.14（AevonAppBandPurgeV314）：原来这里还有一条 `AevonPointInGrip(p)` ——
+     * 把手带的判定在 0.3.13 已归零、本版连函数一起删除，所以这里直接放行。
+     * 圆盘呼出相关的 App 侧代码现在是 0 行。 */
+    return NO;
 }
 
 /* V0.2.63：右缘落点诊断的限频时间戳（两个钩子共用） */
@@ -2303,16 +2246,17 @@ static void AevonSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                      * 就是屏幕坐标（也对得上把手命中区）。 */
                     CGPoint p = [touch locationInView:nil];
                     /* 诊断（限频 3s）：右缘 80pt 内的落点一律记一条 —— 万一还是没吞，
-                     * 下一篇日志直接能看出是「点没到这一层」还是「坐标对不上」。 */
+                     * 下一篇日志直接能看出是「点没到这一层」还是「坐标对不上」。
+                     * V0.3.14（AevonAppBandPurgeV314）：把手矩形已不存在，日志里去掉它。 */
                     CGSize real = AevonRealScreenSize();
                     if (real.width > 100 && p.x >= real.width - 80.0) {
                         CFTimeInterval nowLog = CACurrentMediaTime();
                         if (nowLog - gAevonGripMissLoggedAt > 3.0) {
                             gAevonGripMissLoggedAt = nowLog;
-                            AevonAppLog(@"[App侧] 右缘落点 %@（把手矩形 %@，真屏 %.0fx%.0f，"
-                                        @"浮窗承载=%@，键盘=%@）→ 吞=%@"
+                            AevonAppLog(@"[App侧] 右缘落点 %@（真屏 %.0fx%.0f，"
+                                        @"浮窗承载=%@，键盘=%@）→ 浮窗边带吞=%@"
                                         @"（AevonGripSwallowFixV263 AevonGripBusyV263）",
-                                        NSStringFromCGPoint(p), NSStringFromCGRect(gAevonGripRect),
+                                        NSStringFromCGPoint(p),
                                         real.width, real.height,
                                         AevonAppIsFloatHosted() ? @"是" : @"否",
                                         AevonKeyboardVisible() ? @"是" : @"否",
@@ -2436,9 +2380,6 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
              * 铁律（V0.3.3 定档）：一根手指的归属只在 began 那一帧决定，整根一致；
              * 任何「began 放行、中途改吞」都是死锁。 */
             BOOL ringActive = AevonRingActiveNow();
-            /* 命中区缓存在第一次触摸时可能还没算过 —— 这里先刷一次再说（每 2 秒最多
-             * 读一次偏好，代价可忽略），否则「刚开 App 的第一下滑把手」永远不吞。 */
-            AevonGripRefreshCache();
             if (gAevonSwallowedTouches == nil) { gAevonSwallowedTouches = [NSMutableSet set]; }
             BOOL anySwallowed = NO;
             BOOL allSwallowed = YES;
@@ -2454,8 +2395,6 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                     @"不吞已在屏的手指）（AevonRingOwnV303）");
                     } else {
                     CGPoint p = [touch locationInView:win];
-                    AevonGripRefreshCache();
-                    BOOL inRect = !CGRectIsEmpty(gAevonGripRect) && CGRectContainsPoint(gAevonGripRect, p);
                     CGSize real = AevonRealScreenSize();
                     BOOL fullScreen = win.bounds.size.height >= real.height - 60.0;
                     /* V0.2.67（AevonShieldFSV267，用户 Aevon(40) #8）：浮窗手势区吞噬
@@ -2515,22 +2454,6 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                         @"边条/底边归浮窗手势，浮窗里的 App 不许跟手）"
                                         @"（AevonCanvasBandV268）", NSStringFromCGPoint(p));
                         }
-                    } else if (inRect && fullScreen && !AevonKeyboardVisible()) {
-                        /* V0.2.77（AevonBandTap2V277）：把手区也做 tap 豁免 ——
-                         * 落在可点击控件（抖音右栏评论按钮 / Filza 编辑按钮…）上就整根放行，
-                         * 抬手即 fire；从控件上拖走时 UIControl 不会触发，滑动仍归把手。 */
-                        if (AevonPointHitsTapTarget(win, p, event)) {
-                            AevonAppLog(@"[App侧] 把手区落点 %@ 命中可点击控件（%@）→ 放行"
-                                        @"（把手 tap 豁免：左滑起手仍归圆盘）"
-                                        @"（AevonGripSwallowWinV262 AevonBandTap2V277）",
-                                        NSStringFromCGPoint(p),
-                                        [([win hitTest:p withEvent:event]) class]);
-                        } else {
-                            [gAevonSwallowedTouches addObject:key];
-                            AevonAppLog(@"[App侧] 把手区落点 %@ → 整根触摸丢弃（窗口层，"
-                                        @"不再带着 App 内滑动）（AevonGripSwallowV261 "
-                                        @"AevonGripSwallowWinV262）", NSStringFromCGPoint(p));
-                        }
                     } else if (fullScreen && !AevonKeyboardVisible()) {
                         /* V0.2.69（AevonFloatBandV269）：全屏 + 有浮窗矩形时的漏判诊断
                          * —— #10 复发时这条直接给出「落点 vs 矩形」的差值，
@@ -2554,22 +2477,13 @@ static void AevonWindowSendEventSwizzled(id self, SEL _cmd, UIEvent *event) {
                                             AevonFloatAlive() ? @"在" : @"已停");
                             }
                         }
-                    } else if (inRect) {
-                        /* 中了矩形却没吞：留一条可诊断的证（5 秒限频），
-                         * 下次出问题不用再靠猜（浮窗内 / 键盘在屏 / 窗口不是全屏）。 */
-                        CFTimeInterval now = CACurrentMediaTime();
-                        if (now - gAevonGripMissLoggedAt > 5.0) {
-                            gAevonGripMissLoggedAt = now;
-                            AevonAppLog(@"[App侧] 把手区命中但按纪律不吞：窗口高 %.0f（真屏 %.0f，"
-                                        @"全屏=%@）键盘在屏=%@（AevonGripSwallowWinV262）",
-                                        win.bounds.size.height, real.height,
-                                        fullScreen ? @"是" : @"否",
-                                        AevonKeyboardVisible() ? @"是" : @"否");
-                        }
+
                     }
                     }
-                    /* ↑ 关闭 V0.3.3 的 else {（AevonRingOwnV303：非圆盘在屏才走原来的
-                     * 浮窗边带 / 把手区几何判定；圆盘在屏已在上面的 began 分支认领）。 */
+                    /* ↑ 关闭 0.3.3 的 else {（AevonRingOwnV303：非圆盘在屏才走原来的
+                     * 浮窗边带 / 承载画布边缘带判定；圆盘在屏已在上面的 began 分支认领）。
+                     * V0.3.14（AevonAppBandPurgeV314）：原来这里还有第三个分支（把手区），
+                     * 已随几何变量整段删除 —— 现在这条链只剩「浮窗边带 / 画布边缘带 / 诊断」。 */
                 }
                 BOOL swallowed = [gAevonSwallowedTouches containsObject:key];
                 if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
