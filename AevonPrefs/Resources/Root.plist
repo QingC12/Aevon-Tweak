@@ -86,6 +86,20 @@
 			<string>右缘呼盘交给系统手势（推荐）</string>
 		</dict>
 		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.Aevon</string>
+			<key>infoText</key>
+			<string>实验（0.3.9，默认关）：Aevon 自己造一个手势识别器接管右缘，落指那一刻就决定这根手指收不收 —— 收下的手指 App 连「按下」都收不到，所以呼圆盘时 App 不会再跟着滑一下。这是 Stheno 的做法，也是目前唯一能覆盖抖音、QQ、桌面（都装不进 Aevon 的 App 侧）的机制。开启后先划一次让宿主就位，从第二次起生效。它属于会改动触摸派发的动刀：如果右缘出现点不动、滑不动（尤其输入框、右缘按钮），把这个开关关掉即可，立即生效不用注销。</string>
+			<key>key</key>
+			<string>GripOwnLeg</string>
+			<key>label</key>
+			<string>自建手势接管右缘（实验 · 零跟手）</string>
+		</dict>
+		<dict>
 			<key>action</key>
 			<string>aevonOpenGrip</string>
 			<key>cell</key>

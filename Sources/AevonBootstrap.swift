@@ -128,6 +128,19 @@ enum AevonBootstrap {
             AevonLog.warn("[引导] 系统识别器腿安装抛异常（\(name): \(exReason ?? "无")），已拦截，呼出退回把手通道（AevonGripSystemLegV304）")
         }
 
+        // V0.3.9（AevonGripOwnLegV309）：自建识别器腿 —— 只有 GripOwnLeg 打开才装配。
+        // 关着时整条腿不存在（等于 0.3.8 的行为）；打开后在**第一次看到系统边沿识别器**时
+        // 装配（那时宿主 UISystemGestureView 就在眼前），拿不到管理器就退回直接挂宿主。
+        exName = nil
+        exReason = nil
+        AevonTryExecute({
+            AevonGripOwnLegEnable(AevonPrefs.bool("GripOwnLeg", default: false),
+                                  AevonPrefs.bool("GripHookProbe", default: false))
+        }, &exName, &exReason)
+        if let name = exName {
+            AevonLog.warn("[引导] 自建识别器腿开关读取抛异常（\(name): \(exReason ?? "无")），已拦截，保持关闭（AevonGripOwnLegV309）")
+        }
+
         // V0.2.99（AevonGripProbeV299）：SBGrabberTongue 探测骨架（默认关，@try 包裹 fail-open）。
         exName = nil
         exReason = nil

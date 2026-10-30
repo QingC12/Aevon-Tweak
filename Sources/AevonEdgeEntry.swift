@@ -994,6 +994,67 @@ enum AevonEdgeEntry {
         presentRing(source: "system")
     }
 
+    // MARK: - V0.3.9（AevonGripOwnLegV309）：自建识别器腿
+
+    /// 自建腿的落点预判 —— ObjC 侧在 `touchesBegan` 里**同步**调用。
+    ///
+    /// 为什么这一层是架构分水岭：0.3.4~0.3.8 我们是「借」系统的边沿识别器，只能在
+    /// **达阈值之后**用后置几何判据决定要不要呼盘；而自建识别器的
+    /// `delaysTouchesBegan = YES` 是**在落指那一刻**就决定这根手指归不归我。
+    /// 带外的手指连认定都不会发生，直接 failed 把触摸原样还给系统 ——
+    /// 侧滑返回插件、列表边缘滚动、右缘按钮一律不受影响（比几何判据彻底）。
+    ///
+    /// 返回值：true = 这根手指由自建腿接管（触摸被扣住）；false = 立刻 failed 放行。
+    static func ownLegBandHit(x: CGFloat, y: CGFloat) -> Bool {
+        guard AevonPrefs.bool("Enabled", default: true) else { return false }
+        // V0.3.9：默认关 —— 自建腿要往系统手势视图上挂识别器，属于会改变触摸派发的动刀，
+        // 必须让用户显式打开才生效（装不上/异常时全程 fail-open 回 0.3.8 的借用腿）。
+        guard AevonPrefs.bool("GripOwnLeg", default: false) else { return false }
+        guard AevonRingMenu.presented == nil else { return false }
+        let screen = UIScreen.main.bounds
+        let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)
+        guard band.width > 0, band.height > 0 else { return false }
+        guard x >= band.minX else { return false }
+        if AevonRingGrip.scopeFullEdge { return true }
+        return y >= band.minY && y <= band.maxY
+    }
+
+    /// 自建腿呼盘 —— ObjC 侧在 `touchesMoved` 达到阈值那一刻调用。
+    ///
+    /// 与 `systemLegSummon` 的差别只在记账文案，机制上完全不同：那一条是「借别人赢下的
+    /// 仲裁」，触摸的 began 早已派发给 App；这一条是「自己的识别器赢下仲裁」，落指第一帧
+    /// 就被扣住，App 连 began 都收不到 —— 也就是「呼盘时 App 一像素都不跟」。
+    static func ownLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat, startY: CGFloat) {
+        guard AevonPrefs.bool("Enabled", default: true) else {
+            ownLegBlocked("总开关关")
+            return
+        }
+        guard AevonRingMenu.presented == nil else {
+            ownLegBlocked("圆盘已开")
+            return
+        }
+        guard CACurrentMediaTime() - lastTriggerAt > 0.6 else {
+            ownLegBlocked("0.6s 节流")
+            return
+        }
+        let point = CGPoint(x: x, y: y)
+        lastTouchPoint = point
+        AevonLog.info("[圆盘] 自建识别器腿呼盘（右缘起点 x=\(Int(startX))"
+            + " → 左滑 \(Int(max(0, startX - x)))pt）："
+            + "触摸从落指第一帧就被扣住，App 收不到 began"
+            + "（AevonGripOwnLegV309）")
+        presentRing(source: "system")
+    }
+
+    /// 自建腿放行/被拦的记账（限流 1s：`touchesBegan` 是触摸热路径，不许刷日志）。
+    private static var ownLegLastLogAt: CFTimeInterval = 0
+    static func ownLegBlocked(_ reason: String) {
+        let now = CACurrentMediaTime()
+        guard now - ownLegLastLogAt > 1.0 else { return }
+        ownLegLastLogAt = now
+        AevonLog.info("[圆盘] 自建识别器腿放行/被拦：\(reason)（AevonGripOwnLegV309）")
+    }
+
     /// V0.3.4（AevonGripProbe5V304）：实例级探针。
     ///
     /// V0.3.5（AevonGripYieldV305）修正限流口径：0.3.4 用的是「每类最多 6 条」，
@@ -1199,6 +1260,30 @@ public func AevonGripLegOutcome(_ cls: UnsafePointer<CChar>?, _ kind: Int32,
                                 _ maxDx: Double, _ frames: Int32) {
     let name = cls.map { String(cString: $0) } ?? "edge"
     AevonEdgeEntry.legOutcome(cls: name, kind: Int(kind), maxDx: maxDx, frames: Int(frames))
+}
+
+/// V0.3.9（AevonGripOwnLegV309）：自建腿的落点预判。
+/// 用 Int32 而不是 Bool —— C 的 BOOL 在各架构下宽度不同，这里不留类型擦边球。
+@_cdecl("AevonGripOwnBandHit")
+public func AevonGripOwnBandHit(_ x: Double, _ y: Double) -> Int32 {
+    return AevonEdgeEntry.ownLegBandHit(x: CGFloat(x), y: CGFloat(y)) ? 1 : 0
+}
+
+/// V0.3.9（AevonGripOwnLegV309）：自建腿呼盘。
+@_cdecl("AevonGripOwnSummon")
+public func AevonGripOwnSummon(_ x: Double, _ y: Double,
+                               _ startX: Double, _ startY: Double) {
+    AevonEdgeEntry.ownLegSummon(x: CGFloat(x), y: CGFloat(y),
+                                startX: CGFloat(startX), startY: CGFloat(startY))
+}
+
+/// V0.3.9（AevonGripOwnLegV309）：自建腿的取证/结局日志桥（类普查、挂载、放行原因）。
+@_cdecl("AevonGripOwnLog")
+public func AevonGripOwnLog(_ kind: UnsafePointer<CChar>?,
+                            _ detail: UnsafePointer<CChar>?) {
+    let k = kind.map { String(cString: $0) } ?? "?"
+    let d = detail.map { String(cString: $0) } ?? ""
+    AevonLog.info("[GripHook] 自建腿 \(k)：\(d)（AevonGripOwnLegV309）")
 }
 
 @_cdecl("AevonGripProbeEvent")

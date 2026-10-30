@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <string.h>
 #import <math.h>
 
@@ -243,6 +244,9 @@ extern void AevonGripLegProbe(const char *cls, double x, double y, double edges,
 extern void AevonGripLegOutcome(const char *cls, int kind, double maxDx, int frames);
 
 static BOOL gAevonLegProbeOn = NO;      // 设置页 GripHookProbe 打开时才打实例级细节
+/* V0.3.9（AevonGripOwnLegV309）：装配入口前置声明 —— 定义在文件尾部，
+ * 而调用点（AevonGripLegObserve）在上方。 */
+extern void AevonGripOwnLegArm(UIView *host);
 static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
 static BOOL gAevonGlobalHooksInstalled = NO;
 static IMP gAevonOrigPubSetState = NULL;
@@ -424,6 +428,12 @@ static void AevonGripLegObserve(id self, NSInteger state) {
         if (!gAevonLegEnabled || state != 1) { return; }
         if (!AevonGripIsEdgeClass(cn)) { return; }
         UIGestureRecognizer *g = (UIGestureRecognizer *)self;
+        /* V0.3.9（AevonGripOwnLegV309）：宿主视图此刻就在眼前 —— 系统边沿识别器
+         * 挂在 UISystemGestureView 上，我们自己的识别器要挂的正是同一个视图。
+         * 第一次见到时装配（第一根手指赶不上，从第二根开始生效，可接受）。 */
+        if (gAevonOwnLegEnabled) {
+            AevonGripOwnLegArm(g.view);
+        }
         CGPoint p = [g locationInView:nil];
         CGFloat sw = [UIScreen mainScreen].bounds.size.width;
         if (p.x < sw - 24.0) { return; }        // 只认右缘起手，屏幕中部拖动一律不碰
@@ -604,6 +614,326 @@ BOOL AevonGripHookProbeInstall(void) {
     }
 }
 
+/* ===========================================================================
+ * V0.3.9（AevonGripOwnLegV309）：自建识别器腿 —— 走 Stheno 真正的那条路
+ *
+ * 为什么必须自己造一个识别器（而不是继续借系统的）：
+ *   Aevon(87) 实锤 —— 50 次呼盘里 24 次在桌面、16 次在抖音、9 次在 QQ，
+ *   而 App 侧 dylib 只加载了 Preferences / Spotlight / Filza 三个进程。
+ *   也就是说「App 侧吞带」在真实使用场景里 98% 的时候根本不在场：
+ *   它不是「有时失效」，是「绝大多数时候不在」。那条路对抖音（__RESTRICT）、
+ *   QQ（未注入）、桌面（SpringBoard 被排除）天生无效，调参救不回来。
+ *
+ *   唯一能覆盖这三处的机制是「在 App 收到 began 之前就把触摸收走」，
+ *   而这件事只有握有仲裁身份的识别器做得到 —— 而 0.0.x 的老教训（0.1.9）
+ *   是「把自己造的 pan 挂到 App 的 window 上」：没有仲裁身份 → 永远停
+ *   possible → UIKit 一直不补发被扣的 began → 「只能点不能滑」。
+ *   差别不是 delaysTouchesBegan 有毒，是**缺了注册这一步**。
+ *
+ * Stheno 的原版结构（ScreenCore 的 SCArcGestureCoordinator，classdump 实锤）：
+ *   -sc_registerSystemGestureRecognizer:  把自己的识别器注册进系统手势管线
+ *   -gestureRecognizer:shouldReceiveTouch: / -sc_canBeginAtPoint:  触摸级过滤
+ *   -sc_handleArcPan:                      真正的手势处理
+ *   -sc_acquireSystemGestureDisableAssertion  关掉竞争的系统手势
+ * 本版对应：AevonOwnLegGesture + AevonOwnTryRegister + 白名单取证。
+ *
+ * 安全设计（任何一条不成立都不会影响现有功能）：
+ *   · 开关 GripOwnLeg 默认关 —— 不打开等于这段代码不存在；
+ *   · 拿不到系统手势管理器 → 退回「直接挂到系统边沿识别器的宿主视图」（UISystemGestureView）；
+ *   · 注册方法按白名单逐个试签名（返回 void + 恰好 1 个 id 参数），不符一律不调；
+ *   · 绝不枚举全类表（0.2.72 SIGTRAP 铁律），只对已知类做 method_getTypeEncoding；
+ *   · 0.1.9 复发的闸：0.28s 内没达阈值 → 主动 failed 放行；纵向为主 → 放行；
+ *     抬手没左滑 → 放行。任何一条路径都不会把触摸扣到抬手之后；
+ *   · 断言（acquireSystemGestureDisableAssertion…）只在 GripHookProbe 打开时做取证调用，
+ *     日常不申请 —— 它的真实语义（会不会连系统手势一起关掉）还没验证，先不动手。
+ * =========================================================================== */
+
+extern int AevonGripOwnBandHit(double x, double y);
+extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
+extern void AevonGripOwnLog(const char *kind, const char *detail);
+
+static BOOL gAevonOwnLegEnabled = NO;       // 自建腿总闸（prefs 打开 + 安装成功才 YES）
+static BOOL gAevonOwnRegistered = NO;       // 是否走的是「管理器注册」这条路（那时 view 由系统给，可能恒 nil）
+static BOOL gAevonOwnManagerTried = NO;
+static id gAevonOwnGesture = nil;           // 我们自己的识别器实例（ARC 全局强引用）
+static id gAevonOwnManager = nil;           // 系统手势管理器（拿不到就退回直接挂宿主）
+static BOOL gAevonOwnLegProbeOn = NO;       // GripHookProbe（只控制取证/断言的深度）
+
+#pragma mark - 自建识别器
+
+@interface AevonOwnLegGesture : UIGestureRecognizer
+@end
+
+@implementation AevonOwnLegGesture {
+    CGPoint _ownStart;
+    BOOL _ownSummoned;
+    NSTimer *_ownBail;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        /* 这两行就是「App 一像素都不跟」的全部来源：
+         * delaysTouchesBegan = YES → 未决期间不向视图派发 began；
+         * cancelsTouchesInView = YES → 识别成功时把已派发的触摸 cancel 掉。
+         * 与 0.1.9 的唯一区别是这个识别器有仲裁身份（不是挂在 App 的 window 上）。 */
+        self.delaysTouchesBegan = YES;
+        self.cancelsTouchesInView = YES;
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_ownBail invalidate];
+}
+
+/// 放行（failed）：触摸原样还回去，App 该收什么收什么。
+- (void)ownPass:(const char *)why {
+    [_ownBail invalidate];
+    _ownBail = nil;
+    if (self.state == UIGestureRecognizerStatePossible) {
+        self.state = UIGestureRecognizerStateFailed;
+        AevonGripOwnLog("pass", why);
+    }
+}
+
+/// 0.1.9 复发的闸门：0.28s 内没达到阈值就当成「不是呼盘手势」，立刻放行。
+- (void)ownBailFired {
+    _ownBail = nil;
+    [self ownPass:"0.28s 内未达阈值 → 放行（AevonNoStuckV309 防扣死）"];
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *t = touches.anyObject;
+    CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
+    /* 落点判据在**落指那一刻**做 —— 这才是自建腿相对「借识别器」的本质优势：
+     * 0.3.8 只能在达阈值之后用后置几何否决，那时 App 已经跟了 8pt 了。 */
+    if (AevonGripOwnBandHit((double)p.x, (double)p.y) == 0) {
+        [self ownPass:"落点不在把手带内 → 立刻放行（侧滑返回/边缘滚动不受影响）"];
+        return;
+    }
+    _ownStart = p;
+    _ownSummoned = NO;
+    [_ownBail invalidate];
+    _ownBail = [NSTimer scheduledTimerWithTimeInterval:0.28
+                                                target:self
+                                              selector:@selector(ownBailFired)
+                                              userInfo:nil
+                                               repeats:NO];
+    AevonGripOwnLog("hold", "落点在把手带内 → 扣住触摸，等左滑达阈值（App 此时收不到 began）");
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (self.state != UIGestureRecognizerStatePossible || _ownSummoned) { return; }
+    UITouch *t = touches.anyObject;
+    CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
+    CGFloat dx = p.x - _ownStart.x;
+    CGFloat dy = p.y - _ownStart.y;
+    if (fabs((double)dy) > 40.0) {
+        [self ownPass:"纵向为主 → 放行（不抢滚动/翻页）"];
+        return;
+    }
+    if (dx <= -8.0) {
+        _ownSummoned = YES;
+        [_ownBail invalidate];
+        _ownBail = nil;
+        self.state = UIGestureRecognizerStateBegan;
+        AevonGripOwnSummon((double)p.x, (double)p.y,
+                           (double)_ownStart.x, (double)_ownStart.y);
+        self.state = UIGestureRecognizerStateEnded;
+    }
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [_ownBail invalidate];
+    _ownBail = nil;
+    if (self.state == UIGestureRecognizerStatePossible) {
+        self.state = UIGestureRecognizerStateFailed;
+        AevonGripOwnLog("tap", "点击（没左滑）→ 放行，App 收得到这一下");
+    } else if (self.state == UIGestureRecognizerStateBegan
+               || self.state == UIGestureRecognizerStateChanged) {
+        self.state = UIGestureRecognizerStateEnded;
+    }
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [_ownBail invalidate];
+    _ownBail = nil;
+    self.state = UIGestureRecognizerStateCancelled;
+}
+
+@end
+
+#pragma mark - 系统手势管理器取证（白名单，不枚举）
+
+/// 只对**已知方法名**做探测 —— 0.2.72 的 SIGTRAP 就是全类表枚举炸的，
+/// 这里一次 class_copyMethodList 都没有。
+static void AevonOwnProbeSels(Class cls, NSString *tag) {
+    if (cls == Nil) { return; }
+    NSArray<NSString *> *names = @[
+        @"addGestureRecognizer:", @"addGestureRecognizer:withType:",
+        @"registerGestureRecognizer:", @"registerGestureRecognizer:forType:",
+        @"_registerGestureRecognizer:", @"_registerGestureRecognizer:forType:",
+        @"acquireSystemGestureDisableAssertionForReason:exceptSystemGestureTypes:"
+    ];
+    NSMutableString *hits = [NSMutableString string];
+    for (NSString *n in names) {
+        Method m = class_getInstanceMethod(cls, NSSelectorFromString(n));
+        if (m == NULL) { continue; }
+        const char *enc = method_getTypeEncoding(m);
+        [hits appendFormat:@" %@=%s", n, enc ? enc : "?"];
+    }
+    NSString *line = [NSString stringWithFormat:@"%@（%s）%@",
+                      tag, class_getName(cls),
+                      hits.length > 0 ? hits : @" 白名单零命中"];
+    AevonGripOwnLog("census", line.UTF8String);
+}
+
+static id AevonOwnLookupManager(void) {
+    id found = nil;
+    /* ① SB 侧单例：17.3.1 上类存在，但此前普查「无候选方法」——
+     *    所以这里先取证再取实例，两个白名单单例名都试。 */
+    Class sbm = NSClassFromString(@"SBSystemGestureManager");
+    if (sbm != Nil) {
+        AevonOwnProbeSels(sbm, @"SBSystemGestureManager");
+        for (NSString *s in @[@"sharedInstance", @"sharedSystemGestureManager"]) {
+            SEL sel = NSSelectorFromString(s);
+            if ([sbm respondsToSelector:sel]) {
+                id inst = ((id (*)(id, SEL))objc_msgSend)(sbm, sel);
+                if (inst != nil) { found = inst; break; }
+            }
+        }
+    }
+    /* ② UIKit 私有 manager：对象属性走 KVC（标量才禁 perform，对象安全）。 */
+    if (found == nil) {
+        id app = [UIApplication sharedApplication];
+        for (NSString *k in @[@"_systemGestureManager", @"systemGestureManager"]) {
+            @try {
+                id v = [app valueForKey:k];
+                if (v != nil) {
+                    AevonOwnProbeSels([v class], @"UISystemGestureManager");
+                    found = v;
+                    break;
+                }
+            } @catch (NSException *exception) {
+            }
+        }
+    }
+    return found;
+}
+
+/// 注册：白名单逐个试，签名必须「返回 void + 恰好 1 个 id 参数」，否则不调。
+static BOOL AevonOwnTryRegister(id mgr, UIGestureRecognizer *g) {
+    if (mgr == nil || g == nil) { return NO; }
+    NSArray<NSString *> *cands = @[@"addGestureRecognizer:",
+                                   @"registerGestureRecognizer:",
+                                   @"_registerGestureRecognizer:"];
+    for (NSString *name in cands) {
+        SEL sel = NSSelectorFromString(name);
+        if (![mgr respondsToSelector:sel]) { continue; }
+        Method m = class_getInstanceMethod([mgr class], sel);
+        if (m == NULL) { continue; }
+        const char *enc = method_getTypeEncoding(m);
+        if (enc == NULL || enc[0] != 'v' || AevonGripEncArgCount(enc) != 1) {
+            NSString *line = [NSString stringWithFormat:@"%@ 签名不符（%s）→ 不调",
+                              name, enc ? enc : "?"];
+            AevonGripOwnLog("register", line.UTF8String);
+            continue;
+        }
+        @try {
+            ((void (*)(id, SEL, id))objc_msgSend)(mgr, sel, g);
+            NSString *line = [NSString stringWithFormat:@"已用 %@ 注册进系统手势管理器（拿到仲裁身份）", name];
+            AevonGripOwnLog("register", line.UTF8String);
+            return YES;
+        } @catch (NSException *exception) {
+            NSString *line = [NSString stringWithFormat:@"%@ 抛异常 %@ → 换下一个", name, exception.name];
+            AevonGripOwnLog("register", line.UTF8String);
+        }
+    }
+    return NO;
+}
+
+/// 退路：直接挂到系统边沿识别器的宿主视图（UISystemGestureView）。
+/// 不依赖任何未知 API；层级上仍然在 App 之上，只是没有管理器层面的仲裁登记。
+static void AevonOwnAttachTo(UIView *host) {
+    if (host == nil || gAevonOwnGesture != nil) { return; }
+    AevonOwnLegGesture *g = [[AevonOwnLegGesture alloc] init];
+    [host addGestureRecognizer:g];
+    gAevonOwnGesture = g;
+    NSString *line = [NSString stringWithFormat:@"已挂到宿主 %s（退路：未拿到管理器仲裁身份）",
+                      class_getName(object_getClass(host))];
+    AevonGripOwnLog("attach", line.UTF8String);
+}
+
+/// 取证用的断言（只在 GripHookProbe 打开时调；日常不申请）。
+void AevonGripOwnLegAssertProbe(void) {
+    if (!gAevonOwnLegProbeOn || gAevonOwnManager == nil) { return; }
+    SEL sel = NSSelectorFromString(@"acquireSystemGestureDisableAssertionForReason:exceptSystemGestureTypes:");
+    if (![gAevonOwnManager respondsToSelector:sel]) { return; }
+    Method m = class_getInstanceMethod([gAevonOwnManager class], sel);
+    if (m == NULL) { return; }
+    const char *enc = method_getTypeEncoding(m);
+    if (enc == NULL || enc[0] != '@' || AevonGripEncArgCount(enc) != 2) {
+        AevonGripOwnLog("assert", "签名不符（期望 @…@16Q24）→ 跳过");
+        return;
+    }
+    @try {
+        id token = ((id (*)(id, SEL, id, unsigned long long))objc_msgSend)
+            (gAevonOwnManager, sel, @"AevonGripOwnLegV309", 0ULL);
+        NSString *line = token != nil ? @"断言已拿到（只取证，不改变行为）" : @"断言返回 nil";
+        AevonGripOwnLog("assert", line.UTF8String);
+    } @catch (NSException *exception) {
+        AevonGripOwnLog("assert", "断言调用抛异常 → 已跳过");
+    }
+}
+
+/// 装配入口：由 AevonGripLegObserve 在第一次看到边沿识别器时调用（宿主就在眼前）。
+void AevonGripOwnLegArm(UIView *host) {
+    if (!gAevonOwnLegEnabled) { return; }
+    /* 走管理器注册的识别器，view 由系统在合适时机给（可能一直是 nil）—— 不重装。 */
+    if (gAevonOwnRegistered) { return; }
+    if (gAevonOwnGesture != nil) {
+        /* 直接挂宿主的那条路：宿主视图（UISystemGestureView）随场景重建会消失，
+         * 识别器的 view 变 nil 就说明它已经不在任何视图上了 → 重装到新宿主。
+         * 不重装的话「第一次装配之后永远失效」，而这种失效在日志里只会表现为
+         * 「开关开着却毫无反应」，最难查。 */
+        UIGestureRecognizer *cur = (UIGestureRecognizer *)gAevonOwnGesture;
+        if (cur.view != nil) { return; }
+        gAevonOwnGesture = nil;
+    }
+    if (host == nil) { return; }
+    if (gAevonOwnManager == nil && !gAevonOwnManagerTried) {
+        gAevonOwnManagerTried = YES;
+        gAevonOwnManager = AevonOwnLookupManager();
+        if (gAevonOwnManager == nil) {
+            AevonGripOwnLog("manager", "拿不到系统手势管理器 → 退回直接挂宿主视图");
+        }
+    }
+    if (gAevonOwnManager != nil) {
+        AevonOwnLegGesture *g = [[AevonOwnLegGesture alloc] init];
+        if (AevonOwnTryRegister(gAevonOwnManager, g)) {
+            gAevonOwnGesture = g;
+            gAevonOwnRegistered = YES;
+            return;
+        }
+    }
+    AevonOwnAttachTo(host);
+}
+
+/// 开关（由 Swift 启动时按 prefs 调；关掉即整条腿不装配）。
+void AevonGripOwnLegEnable(BOOL on, BOOL probeOn) {
+    gAevonOwnLegEnabled = on;
+    gAevonOwnLegProbeOn = probeOn;
+    AevonGripOwnLog("enable", on ? "自建识别器腿已启用（等宿主视图出现就装配）"
+                                 : "自建识别器腿关闭（GripOwnLeg = false）");
+}
+
+/// 状态查询（给 Swift 侧日志/CI 判断用）。
+BOOL AevonGripOwnLegReady(void) {
+    return gAevonOwnGesture != nil;
+}
+
+
 /* V0.3.7（AevonYieldDefaultV307）：让路模式转正 —— GripSystemYield 默认值
  * false → true，SB 侧把手默认不接触摸，右缘呼盘全部交给系统边沿识别器。
  * 依据 Aevon(85)：让路开启的 67 秒里 33 次呼盘 33 次全由系统识别器腿完成
@@ -621,3 +951,12 @@ __attribute__((used)) static const char AevonYieldDefaultV307Marker[] = "AevonYi
  * 同一份几何在 App 侧 AevonAppSide.m 的 AevonGripRefreshCache 里镜像一份 ——
  * 触发带必须 ⊂ 吞带，否则会出现「圆盘出来了、App 却跟着滑了几像素」的半截状态。 */
 __attribute__((used)) static const char AevonGripZoneV308Marker[] = "AevonGripZoneV308";
+
+/* V0.3.9（AevonGripOwnLegV309）：自建识别器腿 —— 自己造 UIGestureRecognizer、
+ * delaysTouchesBegan=YES / cancelsTouchesInView=YES，注册进系统手势管理器
+ *（拿不到就退回挂 UISystemGestureView），落指那一刻就用 bandRect 决定收不收这根手指。
+ * 依据 Aevon(87)：50 次呼盘里桌面 24 / 抖音 16 / QQ 9 / 设置 1，App 侧 dylib 只加载了
+ * 三个进程 —— 旧的「App 侧吞带」在真实场景 98% 的时候不在场，不是失效而是在缺席。
+ * 0.1.9 的「只能点不能滑」根因也在此定案：不是 delaysTouchesBegan 有毒，
+ * 是当年那个 pan 挂在 App 的 window 上、没有仲裁身份、永远 failed 不了。 */
+__attribute__((used)) static const char AevonGripOwnLegV309Marker[] = "AevonGripOwnLegV309";

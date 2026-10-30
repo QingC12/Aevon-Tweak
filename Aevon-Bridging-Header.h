@@ -21,6 +21,16 @@ BOOL AevonGripHookProbeInstall(void);
 /// 返回 NO = 没有可装的 setState:，本腿关闭，调用方照旧用把手 + sendEvent 两条老腿。
 BOOL AevonGripSystemLegInstall(void);
 
+/// V0.3.9（AevonGripOwnLegV309，Aevon(87) 定案）：自建识别器腿 —— 走 Stheno 真正那条路。
+/// 自己造一个 `UIGestureRecognizer`（`delaysTouchesBegan=YES` / `cancelsTouchesInView=YES`），
+/// 注册进系统手势管理器（拿不到就退回挂 `UISystemGestureView`），落指那一刻就用 bandRect
+/// 决定收不收这根手指 —— 收下的手指 App 连 began 都收不到。
+///
+/// 为什么非造不可：50 次呼盘里桌面 24 / 抖音 16 / QQ 9 / 设置 1，App 侧 dylib 只加载了三个
+/// 进程 —— 旧的「App 侧吞带」在真实场景 98% 的时候根本没在场，不是失效而是在缺席。
+BOOL AevonGripOwnLegReady(void);
+void AevonGripOwnLegEnable(BOOL on, BOOL probeOn);
+
 /// V0.1.6（AevonFullscreenCloseV106）：从「全屏 App 画面容器」反查它承载的是哪个 App。
 /// 返回形如 `com.apple.Preferences-default` 的场景标识，或直接是 bundleIdentifier；
 /// 全部路径都取不到时返回 nil —— 调用方必须把 nil 当作「未知」而不是「不是同一个 App」。
