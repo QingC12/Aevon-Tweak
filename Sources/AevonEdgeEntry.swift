@@ -214,6 +214,35 @@ enum AevonEdgeEntry {
         return CACurrentMediaTime() - lastTouchFrameAt < 0.25
     }
 
+    /// V0.3.2（AevonTouchRouteV302，用户 Aevon(80)「先查抖音卡屏是哪个版本出现的问题」+
+    /// 定档「本轮构建一版纯探针」）：**右缘触摸路由探针（只观察，零行为改变）**。
+    ///
+    /// 为什么必须先探这一刀：0.2.85 的笔记当天就查明抖音没被注入（`__RESTRICT` 挡 dyld），
+    /// 但 0.2.86~0.3.1 共 11 个版本的所有修法都建立在一个**从未被验证的假设**上——
+    /// 「发往未注入 App 的触摸能在 SpringBoard 侧被看到并吞掉」。假设若为假，所有修法
+    /// 无论怎么调都必然无效；假设若为真，卡屏可以在 SB sendEvent 里用一条几何判据拦掉。
+    ///
+    /// 判读（下一份日志）：
+    ///   · 抖音全屏时滑右缘，出现本行 → SB 层看得到这根手指 → 最好结果：在 sendEvent
+    ///     里按几何吞掉 began，不牺牲点击、不需要注入；
+    ///   · 一行都没有 → 触摸由 HID 直投 App scene、根本不过 SB sendEvent →
+    ///     必须下沉到 `BKSHIDEventDeliveryManager`（本轮类普查正在找的落点）。
+    private static var lastRouteProbeAt: CFTimeInterval = 0
+    private static func touchRouteProbe(point: CGPoint) {
+        let screen = UIScreen.main.bounds
+        // 只看右缘带（把手在右缘，呼盘也起于右缘；其它触摸与本问题无关）
+        guard point.x >= screen.width - 60 else { return }
+        let now = CACurrentMediaTime()
+        if now - lastRouteProbeAt < 0.4 { return }
+        lastRouteProbeAt = now
+        let bid = AevonEntryHost.currentForegroundBundleID
+        let float = AevonWindowManager.openBundleID
+        AevonLog.info("[触摸路由] SB sendEvent 看到右缘 began (\(Int(point.x)),\(Int(point.y)))"
+            + " 前台=\(bid.isEmpty ? "无" : bid)"
+            + " 浮窗=\(float ?? "无")"
+            + " 圆盘=\(AevonRingMenu.presented == nil ? "关" : "开")（AevonTouchRouteV302）")
+    }
+
     static func handleGlobal(phase: UITouch.Phase, point: CGPoint, touchID: UInt) {
         guard AevonPrefs.bool("Enabled", default: true) else { return }
         let screen = UIScreen.main.bounds
@@ -221,6 +250,8 @@ enum AevonEdgeEntry {
         case .began:
             // V0.2.57（AevonTouchProbeV257）：失效瞬间探针，每根 began 触发（3 秒节流）。
             AevonEntryHost.touchTriggeredProbeIfDue()
+            // V0.3.2（AevonTouchRouteV302）：右缘触摸路由探针（只观察，零行为改变）。
+            touchRouteProbe(point: point)
             // V0.2.57（AevonZombieSealV257）：已封印触摸的重投 began 一并静默消费
             //（UIKit 不应看到它的任何帧，见 sealZombieTouch 注释）。
             if touchID == zombieSealID, CACurrentMediaTime() <= zombieSealUntil { return }
@@ -1024,6 +1055,9 @@ public func AevonGripProbeEvent(_ kind: UnsafePointer<CChar>?,
         AevonLog.info("[GripHook] 已装 \(c)（AevonGripProbe3V301）")
     case "skip":
         AevonLog.info("[GripHook] 跳过 \(c)（AevonGripProbe3V301）")
+    case "census":
+        // V0.3.2（AevonGripProbe4V302）：事件投递链类普查结果 —— 类存在性 + 候选方法签名参数数
+        AevonLog.info("[GripHook] 类普查 \(c)（AevonGripProbe4V302）")
     default:
         AevonLog.info("[GripHook] \(k) 命中 \(c)（AevonGripProbe3V301）")
     }

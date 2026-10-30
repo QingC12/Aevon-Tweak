@@ -165,9 +165,10 @@ jobs:
                    AevonGripThreshV299 AevonGripProbeV299 AevonFullFreezeV299 \
                    AevonReturnDeadlineV2100 AevonSuspendDelayV2100 \
                    AevonKickThrottleV300 AevonFreezeIndepWinV300 AevonGripProbe2V300 \
-                   AevonSharpGateV301 AevonKickSkipV301 AevonGripProbe3V301; do
+                   AevonSharpGateV301 AevonKickSkipV301 AevonGripProbe3V301 \
+                   AevonTouchRouteV302 AevonGripProbe4V302; do
             strings "$DYLIB" | grep -q "$m" \
-              || { echo "::error::0.2.82~0.3.0 二进制里缺标记 $m"; exit 1; }
+              || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
           strings "$DYLIB" | grep -q 'presentationView' \
             || { echo "::error::缺少 presentationView 取用"; exit 1; }
@@ -4194,6 +4195,24 @@ jobs:
             && grep -q 'SBSystemGestureManager' "$GH" \
             || { echo "::error::0.3.1 探针广度不完整（全局识别器 + 多类入口 + 签名自检）"; exit 1; }
           echo "V0.3.1 校验③: 探针广度（全局 _setState: + 四类手势入口，签名不符即跳过）✓"
+
+          # ── V0.3.2 校验（Aevon(80)：抖音卡屏版本溯源 → 纯探针，零行为改变）──────────
+          # ①右缘触摸路由探针：回答「发往未注入 App（抖音）的触摸经不经过 SB sendEvent」
+          #   这是过去 11 个版本所有修法都没验证过的前提假设。
+          grep -q 'AevonTouchRouteV302' "$EE" \
+            && grep -q 'private static func touchRouteProbe' "$EE" \
+            && grep -q 'touchRouteProbe(point: point)' "$EE" \
+            && grep -q 'SB sendEvent 看到右缘 began' "$EE" \
+            || { echo "::error::0.3.2 触摸路由探针不完整（AevonTouchRouteV302）"; exit 1; }
+          echo "V0.3.2 校验①: 右缘触摸路由探针（只观察，判定 SB sendEvent 是否看得到未注入 App 的手指）✓"
+          # ②事件投递链类普查 + 全局 setState: 补探（只查存在性/签名，不装钩子）
+          grep -q 'AevonGripProbe4V302' "$EE" \
+            && grep -q 'AevonGripCensusClass' "$GH" \
+            && grep -q 'BKSHIDEventDeliveryManager' "$GH" \
+            && grep -q 'SBTouchDeliveryManager' "$GH" \
+            && grep -q 'AevonGripOrigGlobalSetStatePub' "$GH" \
+            || { echo "::error::0.3.2 事件投递链类普查不完整（AevonGripProbe4V302）"; exit 1; }
+          echo "V0.3.2 校验②: 事件投递链类普查 + 全局 setState: 补探（零钩子、零行为改变）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

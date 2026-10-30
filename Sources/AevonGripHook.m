@@ -174,6 +174,36 @@ AEVON_GRIP_ONE_ARG_HOOK(AevonGripHookPull, "pull", AevonGripOrigPull)
 AEVON_GRIP_ONE_ARG_HOOK(AevonGripHookSysGesture, "sysgesture", AevonGripOrigSysGesture)
 AEVON_GRIP_ONE_ARG_HOOK(AevonGripHookSysTouch, "systouch", AevonGripOrigSysTouch)
 
+/*
+ * V0.3.2（AevonGripProbe4V302，用户 Aevon(80)「先查抖音卡屏是哪个版本出现的问题」+
+ *   定档「本轮构建一版纯探针」）：**事件投递链类普查**。
+ *
+ * 目的只有一个：找出发往「未注入 App（抖音）」的触摸在 SpringBoard 侧到底由哪个类路由。
+ * 这是「SB 侧窄口径吞摸」的选点依据 —— 0.2.85 的笔记就写了这条路要单独做，但一直没定
+ * 落点。本轮只查「类与方法是否存在 + 签名参数数」，**不安装任何钩子、零行为改变**。
+ * 下一版拿到清单后再决定装哪个（届时才需要签名自检 + 限流）。
+ */
+static void AevonGripCensusClass(NSString *clsName, NSArray<NSString *> *sels) {
+    @try {
+        Class cls = NSClassFromString(clsName);
+        if (cls == Nil) {
+            AevonGripProbeEvent("census", [[NSString stringWithFormat:@"%@=无", clsName] UTF8String], 0);
+            return;
+        }
+        NSMutableString *hit = [NSMutableString string];
+        for (NSString *s in sels) {
+            Method m = class_getInstanceMethod(cls, NSSelectorFromString(s));
+            if (m == NULL) { continue; }
+            const char *enc = method_getTypeEncoding(m);
+            [hit appendFormat:@" %@/%d", s, enc ? AevonGripEncArgCount(enc) : -1];
+        }
+        NSString *line = [NSString stringWithFormat:@"%@=有%@", clsName,
+                          hit.length > 0 ? (id)hit : (id)@" (无候选方法)"];
+        AevonGripProbeEvent("census", [line UTF8String], 0);
+    } @catch (NSException *exception) {
+    }
+}
+
 /// 全局识别器状态钩子（全局 UIGestureRecognizer._setState: 用）
 static IMP AevonGripOrigGlobalSetState = NULL;
 
@@ -183,6 +213,30 @@ static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
     }
     @try {
         // 只记终态与起始态；changed(2) 逐帧刷屏，不记
+        if (state != 1 && state != 3 && state != 4 && state != 5) {
+            return;
+        }
+        Class c = object_getClass(self);
+        const char *cn = c ? class_getName(c) : NULL;
+        if (AevonGripEventAllowed(cn)) {
+            AevonGripProbeEvent("recog", cn, (long)state);
+        }
+    } @catch (NSException *exception) {
+    }
+}
+
+/// V0.3.2（AevonGripProbe4V302）：公有 `setState:` 版本的观察钩子。
+/// 0.3.1 实锤 `UIGestureRecognizer._setState:` 在 iOS 17.3.1 上**不存在**，
+/// 所以那条「最强覆盖」的全局探测腿是空的 —— 这里补探公有名 `setState:`。
+/// 转发指针独立（不复用 _setState: 那条），避免两个都装上时互相覆盖成无限递归。
+static IMP AevonGripOrigGlobalSetStatePub = NULL;
+
+static void AevonGripGlobalSetStatePub(id self, SEL _cmd, NSInteger state) {
+    if (AevonGripOrigGlobalSetStatePub) {
+        ((void (*)(id, SEL, NSInteger))AevonGripOrigGlobalSetStatePub)(self, _cmd, state);
+    }
+    @try {
+        // 只记 began/ended/cancelled/failed；changed 逐帧刷屏不记
         if (state != 1 && state != 3 && state != 4 && state != 5) {
             return;
         }
@@ -291,6 +345,38 @@ BOOL AevonGripHookProbeInstall(void) {
             }
         } else {
             AevonGripProbeEvent("skip", "UIGestureRecognizer._setState: 不存在", 0);
+        }
+
+        /* ⑥ V0.3.2（AevonGripProbe4V302）：事件投递链类普查 —— 只查存在性/签名，不装钩子。
+         * 这是「发往抖音的触摸走哪个类」的候选清单，也是「SB 侧窄口径吞摸」的选点依据。 */
+        AevonGripCensusClass(@"BKSHIDEventDeliveryManager",
+            @[@"deliveryChainForDescriptor:", @"_deliveryChainsForDescriptor:", @"destinationsForEvent:fromSender:"]);
+        AevonGripCensusClass(@"BKSHIDEventDeliveryRuleChangeRequest", @[@"setRule:", @"rule"]);
+        AevonGripCensusClass(@"SBTouchDeliveryManager", @[@"_handleTouchEvent:", @"handleTouchEvent:", @"_handleEvent:"]);
+        AevonGripCensusClass(@"SBTouchDeliverySession", @[@"_handleTouchEvent:", @"handleEvent:"]);
+        AevonGripCensusClass(@"SBMainWorkspace", @[@"_handleEvent:"]);
+        AevonGripCensusClass(@"_UISceneEventQueue", @[@"_processEvent:", @"enqueueEvent:"]);
+        AevonGripCensusClass(@"SBApplicationSceneHandle", @[@"_handleTouchEvent:", @"_handleEvent:"]);
+        AevonGripCensusClass(@"SBDeviceApplicationSceneHandle", @[@"_handleTouchEvent:", @"_handleEvent:"]);
+        AevonGripCensusClass(@"UIGestureRecognizer", @[@"setState:", @"_setState:", @"_updateGestureWithEvent:buttonEvent:"]);
+        AevonGripCensusClass(@"SBSystemGestureManager", @[@"_handleTouchEvent:", @"handleTouchEvent:", @"_handleEvent:"]);
+
+        /* ⑦ V0.3.2：全局识别器 setState: 补探（0.3.1 实锤 _setState: 不存在，这条腿空着） */
+        SEL pubSetStateSel = NSSelectorFromString(@"setState:");
+        Method pubSetStateMethod = class_getInstanceMethod([UIGestureRecognizer class], pubSetStateSel);
+        if (pubSetStateMethod != NULL) {
+            const char *penc = method_getTypeEncoding(pubSetStateMethod);
+            if (penc != NULL && penc[0] == 'v' && AevonGripEncArgCount(penc) == 1) {
+                AevonGripOrigGlobalSetStatePub = method_setImplementation(pubSetStateMethod,
+                                                                         (IMP)AevonGripGlobalSetStatePub);
+                if (AevonGripOrigGlobalSetStatePub != NULL) {
+                    AevonGripProbeEvent("install", "UIGestureRecognizer.setState:", 1);
+                }
+            } else {
+                AevonGripProbeEvent("skip", "UIGestureRecognizer.setState: 签名不符", 0);
+            }
+        } else {
+            AevonGripProbeEvent("skip", "UIGestureRecognizer.setState: 不存在", 0);
         }
 
         AevonGripHookInstalled = YES;
