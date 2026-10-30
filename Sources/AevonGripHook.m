@@ -239,6 +239,8 @@ static void AevonGripCensusClass(NSString *clsName, NSArray<NSString *> *sels) {
 extern void AevonGripSystemSummon(double x, double y, const char *cls);
 extern void AevonGripLegProbe(const char *cls, double x, double y, double edges,
                               int delays, int cancels, const char *viewCls);
+/// V0.3.5（AevonGripLegOutcomeV305）：认领了但没走到呼盘时的结局上报。
+extern void AevonGripLegOutcome(const char *cls, int kind, double maxDx, int frames);
 
 static BOOL gAevonLegProbeOn = NO;      // 设置页 GripHookProbe 打开时才打实例级细节
 static BOOL gAevonLegEnabled = YES;     // 系统腿总闸（安装失败/异常时置 NO，退回老腿）
@@ -254,6 +256,12 @@ static IMP gAevonOrigPrivSetState = NULL;
 @property (nonatomic) CFTimeInterval stamp;
 @property (nonatomic, assign) const char *cls;
 @property (nonatomic) BOOL done;
+/// V0.3.5（AevonGripLegOutcomeV305）：认领期间见过的最大左向位移（正数 = 向左的 pt 数）
+/// 与 changed 帧数 —— 用来区分「没认领」「认领没 changed」「changed 没到阈值」。
+@property (nonatomic) double maxDxLeft;
+@property (nonatomic) int changedFrames;
+/// V0.3.5：结局只报一次（过期清理与状态回调用的是同一个出口）
+@property (nonatomic) BOOL reported;
 - (void)handleGesture:(UIGestureRecognizer *)g;
 @end
 
@@ -293,6 +301,22 @@ static BOOL AevonGripIsEdgeClass(const char *cn) {
         || strstr(cn, "EdgePan") != NULL;
 }
 
+/// V0.3.5（AevonGripLegOutcomeV305）：认领候选的统一出口 —— 报结局 + 回收。
+/// 结局只报一次：过期清理、超 60pt、终态回调三条路都走这里。
+static void AevonGripLegFinish(AevonGripLegProxy *p, int kind) {
+    if (p == nil) { return; }
+    if (p.reported) {
+        AevonGripLegDrop(p);
+        return;
+    }
+    p.reported = YES;
+    const char *cn = p.cls;
+    double mdx = p.maxDxLeft;
+    int frames = p.changedFrames;
+    AevonGripLegDrop(p);
+    AevonGripLegOutcome(cn, kind, mdx, frames);
+}
+
 @implementation AevonGripLegProxy
 
 - (void)handleGesture:(UIGestureRecognizer *)g {
@@ -306,8 +330,13 @@ static BOOL AevonGripIsEdgeClass(const char *cn) {
             CGPoint now = [g locationInView:nil];
             double dx = (double)now.x - (double)self.start.x;
             double dy = (double)now.y - (double)self.start.y;
+            /* V0.3.5（AevonGripLegOutcomeV305）：先记账再看要不要呼盘 —— 没记账就永远
+             * 分不清「changed 帧根本没来」和「来了但只到 -5pt」。 */
+            self.changedFrames += 1;
+            if (-dx > self.maxDxLeft) { self.maxDxLeft = -dx; }
             if (dx <= -8.0 && fabs(dy) < 40.0) {
                 self.done = YES;
+                self.reported = YES;    // 达阈值这条路自己负责呼盘，不再报「未达阈值」
                 const char *cn = self.cls;
                 double fx = (double)now.x, fy = (double)now.y;
                 AevonGripLegDrop(self);
@@ -317,14 +346,13 @@ static BOOL AevonGripIsEdgeClass(const char *cn) {
                 return;
             }
             if (dx * dx + dy * dy > 3600.0) {   // 位移超 60pt 还没过阈值 = 不是呼盘手势
-                self.done = YES;
-                AevonGripLegDrop(self);
+                AevonGripLegFinish(self, 2);
             }
         } else if (st == UIGestureRecognizerStateEnded
                    || st == UIGestureRecognizerStateCancelled
                    || st == UIGestureRecognizerStateFailed) {
-            self.done = YES;
-            AevonGripLegDrop(self);
+            // changed 一帧都没收到 = kind 3（这条识别器不往外吐 changed，是最坏信号）
+            AevonGripLegFinish(self, self.changedFrames == 0 ? 3 : 1);
         }
     } @catch (NSException *exception) {
     }

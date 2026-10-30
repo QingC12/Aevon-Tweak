@@ -75,6 +75,15 @@ final class AevonRingGripView: UIView {
     private let visual = UIView()
     private var didSummon = false
 
+    /// V0.3.5（AevonGripYieldV305）：让路模式（实验，默认关）。
+    ///
+    /// 打开后把手**完全不接触摸**（handle 不交互、不装 pan、hitTest 返回 nil），
+    /// 右缘的手指改由系统 `UISystemGestureView` 那条边沿识别器接收 —— 也就是
+    /// 系统识别器腿 100% 接管。存在的意义是做 A/B：Aevon(83) 日志里 60 次呼盘
+    /// 系统腿只占 3 次，全部落在把手竖条之外；把手竖条之内到底是「系统腿没认领」
+    /// 还是「认领了但比把手慢」，只有让把手闭嘴才能测出来。
+    private var yieldMode = false
+
     var onSummon: ((String) -> Void)?
 
     override init(frame: CGRect) {
@@ -99,15 +108,48 @@ final class AevonRingGripView: UIView {
 
         // V0.2.55（AevonRingGripV255）：识别器全部挂 handle（真实控件），
         // 全屏宿主不再持有任何识别器。
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        pan.delegate = self
-        handle.addGestureRecognizer(pan)
+        installHandlePan()
         // V0.2.60（AevonGripSwipeOnlyV260，用户 Aevon(34) #3）：「移除触发条的点击显示
         // 圆盘功能，只保留滑动触发圆盘」—— 点击识别器整建制退役（含 require(toFail:)）。
         // 顺带解决一个老毛病：把手和右侧吸附边条在屏幕上挨着，点边条停靠时那一下
         // 也会被把手当点击吃掉（Aevon(34) 32.180 那次「边条轻点停靠」紧跟着
         // 「把手被点 → 呼出圆盘」就是它）。
+
+        // V0.3.5（AevonGripYieldV305）：装完 pan 再按偏好决定是否让路。
+        yieldMode = false
+        applyYieldMode()
+    }
+
+    /// V0.3.5：把手自己的滑动识别器（让路模式下会被摘掉）。
+    private func installHandlePan() {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        handle.addGestureRecognizer(pan)
+    }
+
+    /// V0.3.5（AevonGripYieldV305）：读偏好并切换让路状态。
+    /// 设置页改完会走 Darwin 通知 → `AevonRingGrip.refreshFromPrefs()` → 这里，**实时生效**。
+    func applyYieldMode() {
+        let want = AevonPrefs.bool("GripYieldSystem", default: false)
+        guard want != yieldMode else { return }
+        yieldMode = want
+        if want {
+            handle.isUserInteractionEnabled = false
+            for g in handle.gestureRecognizers ?? [] {
+                handle.removeGestureRecognizer(g)
+            }
+            AevonLog.warn("[圆盘] 把手让路模式已开（实验）：把手不接触摸、不装 pan，"
+                + "右缘全部交给系统 gesture view → 系统识别器腿 100% 接管；"
+                + "App 侧吞带与 sendEvent 全局通道保留当兜底（AevonGripYieldV305）")
+        } else {
+            handle.isUserInteractionEnabled = true
+            if (handle.gestureRecognizers ?? []).isEmpty {
+                installHandlePan()
+            }
+            AevonLog.info("[圆盘] 把手让路模式已关：把手恢复自建 pan（系统腿只做补充）"
+                + "（AevonGripYieldV305）")
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -154,6 +196,9 @@ final class AevonRingGripView: UIView {
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        // V0.3.5（AevonGripYieldV305）：让路模式下手把自己的窗口也不接这一下 ——
+        // 触摸不投给我们的窗口，系统 UISystemGestureView 才拿得到完整序列。
+        guard !yieldMode else { return false }
         guard !isHidden, alpha > 0.01 else { return false }
         return hitRect.contains(point)
     }
@@ -162,6 +207,7 @@ final class AevonRingGripView: UIView {
         // 把手之外一律 nil：系统继续往 App 派发，不产生任何争抢。
         // V0.2.55：命中时返回 handle（真实控件），不再返回全屏宿主自身 ——
         // touch.view 永远不会是这块全屏透明视图。
+        guard !yieldMode else { return nil }        // V0.3.5 让路模式：整块让开
         guard !isHidden, alpha > 0.01 else { return nil }
         guard hitRect.contains(p) else { return nil }
         return handle
@@ -431,6 +477,8 @@ enum AevonRingGrip {
     /// 这里只需让把手视图重排一次。位置不落盘状态、无缓存漂移。
     static func refreshFromPrefs() {
         guard let grip = grip, grip.superview != nil else { return }
+        // V0.3.5（AevonGripYieldV305）：让路开关实时切换（Darwin 通知已通到这条路）
+        grip.applyYieldMode()
         grip.setNeedsLayout()
         grip.layoutIfNeeded()
     }

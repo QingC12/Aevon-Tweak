@@ -174,7 +174,8 @@ jobs:
                    AevonSharpGateV301 AevonKickSkipV301 AevonGripProbe3V301 \
                    AevonTouchRouteV302 AevonGripProbe4V302 \
                    AevonGripIntentRetireV303 AevonGripBandNarrowV303 \
-                   AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripProbe5V304; do
+                   AevonGripSystemLegV304 AevonGripLegTagV304 AevonGripProbe5V304 \
+                   AevonGripYieldV305 AevonGripLegOutcomeV305; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -4307,6 +4308,44 @@ jobs:
             && strings "$MDYL" | grep -q 'AevonGripProbe5V304' \
             || { echo "::error::V0.3.4 主库缺系统腿/实例探针标记"; exit 1; }
           echo "V0.3.4 校验: 系统识别器腿（右缘 24pt 认领 + 8pt 阈值 + 外挂 target + fail-open 回退 + 常驻安装）✓"
+
+          # ── V0.3.5 校验（Aevon(83) 定档「方案 A：探针升级 + 让路开关」）──
+          # 前提数据（Aevon(83) 日志）：系统腿已装、认领 18 条、呼盘成功 3 次，但 60 次
+          # 呼盘里只占 3/60；那 3 次落点全在把手竖条之外 → 把手腿在场时系统腿抢不到。
+          # ①让路开关：读 GripYieldSystem + 两条 hitTest 让路 + 设置变更实时生效
+          RG="$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"
+          grep -q 'AevonPrefs.bool("GripYieldSystem", default: false)' "$RG" \
+            && grep -q 'guard !yieldMode else { return false }' "$RG" \
+            && grep -q 'guard !yieldMode else { return nil }' "$RG" \
+            && grep -q 'func applyYieldMode()' "$RG" \
+            && grep -q 'handle.isUserInteractionEnabled = false' "$RG" \
+            && grep -q 'handle.removeGestureRecognizer(g)' "$RG" \
+            || { echo "::error::V0.3.5 让路开关不完整（偏好/两条 hitTest/拆 pan/关交互）"; exit 1; }
+          # ②让路必须在设置变更路径上被调用（否则改开关要注销才生效）
+          grep -q 'grip.applyYieldMode()' "$RG" \
+            || { echo "::error::V0.3.5 refreshFromPrefs 没调 applyYieldMode（开关不能实时生效）"; exit 1; }
+          # ③探针限流改成时间制：同类 2s 一条 + 全局 240（0.3.4 每类 6 条在 20 秒内打满）
+          grep -q 'legProbeTotal >= 240' "$EE" \
+            && grep -q 'legProbeLastAt\[cls, default: 0\] < 2.0' "$EE" \
+            || { echo "::error::V0.3.5 探针还是旧的按条数限流（会打满即静默）"; exit 1; }
+          # ④结局记账三处：ObjC 记 maxDx/changed 帧 + 统一出口 + Swift 三种结局与拦截原因
+          grep -q 'maxDxLeft' "$GH" \
+            && grep -q 'changedFrames' "$GH" \
+            && grep -q 'AevonGripLegFinish' "$GH" \
+            && grep -q 'AevonGripLegOutcome' "$GH" \
+            && grep -q 'AevonGripLegOutcomeV305' "$EE" \
+            && grep -q 'static func legBlocked' "$EE" \
+            || { echo "::error::V0.3.5 系统腿结局记账不完整（maxDx/changed/出口/拦截原因）"; exit 1; }
+          # ⑤达阈值那条路必须自己报 done，不能再落进「未达阈值」结局（否则数据全错）
+          grep -q 'self.reported = YES;    // 达阈值这条路自己负责呼盘' "$GH" \
+            || { echo "::error::V0.3.5 达阈值路径没标 reported（会重复报成未达阈值）"; exit 1; }
+          # ⑥设置页开关在位且默认关（默认关 = 零行为改变，A/B 靠用户手动开）
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripYieldSystem'];ok=(len(h)==1 and h[0].get('default') is False);print('V0.3.5 设置开关: GripYieldSystem 在位且默认关 ✓' if ok else '::error::V0.3.5 Root.plist 缺 GripYieldSystem 开关或默认不是关（实测命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
+          # ⑦标记进主库二进制
+          strings "$MDYL" | grep -q 'AevonGripYieldV305' \
+            && strings "$MDYL" | grep -q 'AevonGripLegOutcomeV305' \
+            || { echo "::error::V0.3.5 主库缺让路/结局标记"; exit 1; }
+          echo "V0.3.5 校验: 让路开关（实时生效 + 默认关）+ 探针时间限流 + 系统腿结局三分类✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

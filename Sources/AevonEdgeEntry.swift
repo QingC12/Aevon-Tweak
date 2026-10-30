@@ -938,11 +938,26 @@ enum AevonEdgeEntry {
     /// 外挂了一个 target；App 那边收到的序列由系统按它本来的 cancel 语义处理，我不从
     /// sendEvent 里扣任何一帧 —— 这是 Stheno「一根手指都不碰」的同构做法。
     static func systemLegSummon(x: CGFloat, y: CGFloat, cls: String) {
-        guard AevonPrefs.bool("Enabled", default: true) else { return }
-        guard AevonRingMenu.presented == nil else { return }
+        guard AevonPrefs.bool("Enabled", default: true) else {
+            legBlocked(cls: cls, reason: "总开关关")
+            return
+        }
+        guard AevonRingMenu.presented == nil else {
+            legBlocked(cls: cls, reason: "圆盘已开")
+            return
+        }
         let screen = UIScreen.main.bounds
-        guard x >= screen.width - 24 else { return }
-        guard CACurrentMediaTime() - lastTriggerAt > 0.6 else { return }
+        guard x >= screen.width - 24 else {
+            legBlocked(cls: cls, reason: "不在右缘 24pt 内")
+            return
+        }
+        guard CACurrentMediaTime() - lastTriggerAt > 0.6 else {
+            /* V0.3.5（AevonGripYieldV305）：0.6s 节流拦下要记账 —— Aevon(83) 日志里
+             * 60 次呼盘只有 3 次走系统腿，无法判断是「没认领」「没到阈值」还是
+             * 「到了却被节流吞掉」。不记账就永远只能猜。 */
+            legBlocked(cls: cls, reason: "0.6s 节流")
+            return
+        }
         let point = CGPoint(x: x, y: y)
         lastTouchPoint = point
         AevonLog.info("[圆盘] 系统识别器腿呼盘（\(cls)，右缘 x=\(Int(x)) → 左滑 8pt）"
@@ -951,15 +966,48 @@ enum AevonEdgeEntry {
         presentRing(source: "system")
     }
 
-    /// V0.3.4（AevonGripProbe5V304）：实例级探针 —— 每个类最多 6 条。
-    /// 记 edges / 延迟投递属性 / 宿主视图类，用来定案「右缘这只手挂在哪个实例上、
-    /// 它是否本来就在延迟触摸（= 系统已经在替我们扣手指）」。
+    /// V0.3.4（AevonGripProbe5V304）：实例级探针。
+    ///
+    /// V0.3.5（AevonGripYieldV305）修正限流口径：0.3.4 用的是「每类最多 6 条」，
+    /// Aevon(83) 日志里 18 条（3 类 × 6）在前 20 秒就打满、之后全程静默 ——
+    /// 恰好把「把手区内到底认领没有」这个决定架构的未知量永久遮住。
+    /// 改成**按时间**限流：同一个类 2s 内最多 1 条，全局上限 240 条（约 20KB 日志）。
     private static var legProbeCounts: [String: Int] = [:]
+    private static var legProbeLastAt: [String: CFTimeInterval] = [:]
+    private static var legProbeTotal = 0
+
+    /// V0.3.5：探针开关的 5 秒缓存。
+    ///
+    /// `AevonGripLegOutcome` 由 ObjC 侧在**每根手指结束**时调用，而 `AevonPrefs.bool`
+    /// 走 CFPreferencesCopyAppValue = 跨进程查询。直接读 = 把 IPC 塞进触摸热路径
+    /// （0.2.82 那条教训同源：热路径不许做重活）。这里 5 秒窗口缓存一次，代价归零。
+    private static var legProbeFlagCached = false
+    private static var legProbeFlagAt: CFTimeInterval = 0
+
+    private static func legProbeOn() -> Bool {
+        let now = CACurrentMediaTime()
+        if now - legProbeFlagAt > 5.0 {
+            legProbeFlagAt = now
+            AevonPrefs.synchronize()
+            legProbeFlagCached = AevonPrefs.bool("GripHookProbe", default: false)
+        }
+        return legProbeFlagCached
+    }
+
+    /// 探针/结局日志共用的一道闸：同类 2s 一条 + 全局 240 条。
+    private static func legLogAllowed(_ cls: String) -> Bool {
+        if legProbeTotal >= 240 { return false }
+        let now = CACurrentMediaTime()
+        if now - legProbeLastAt[cls, default: 0] < 2.0 { return false }
+        legProbeLastAt[cls] = now
+        legProbeTotal += 1
+        legProbeCounts[cls, default: 0] += 1
+        return true
+    }
 
     static func legProbe(cls: String, x: CGFloat, y: CGFloat, edges: Double,
                          delays: Bool, cancels: Bool, viewCls: String) {
-        if legProbeCounts[cls, default: 0] >= 6 { return }
-        legProbeCounts[cls, default: 0] += 1
+        guard legLogAllowed(cls) else { return }
         let edgeText: String
         if edges < 0 {
             edgeText = "非公有Edge类"
@@ -969,7 +1017,35 @@ enum AevonEdgeEntry {
         AevonLog.info("[GripHook] 系统腿认领右缘 began 类=\(cls) 落点=(\(Int(x)),\(Int(y)))"
             + " \(edgeText) 延迟began=\(delays ? "是" : "否")"
             + " 识别时cancel=\(cancels ? "是" : "否") 宿主=\(viewCls)"
-            + "（AevonGripProbe5V304）")
+            + "（AevonGripProbe5V304 AevonGripYieldV305）")
+    }
+
+    /// V0.3.5（AevonGripLegOutcomeV305）：系统腿「认领了但没呼盘」的结局记账。
+    ///
+    /// 三种走不到呼盘的路径要能分开：
+    ///   · kind=1 未达阈值就结束 —— 认领成功、changed 帧也到了，但最大位移不到 8pt
+    ///     （= 用户只是轻点/短划，本来就不该呼盘，属正常）
+    ///   · kind=2 位移超 60pt 放弃 —— 是别的动作（上下滑/斜划），也正常
+    ///   · kind=3 被守卫拦下 —— 达阈值了但被圆盘已开/节流/边界拦掉，**这是要修的**
+    static func legOutcome(cls: String, kind: Int, maxDx: Double, frames: Int) {
+        guard legProbeOn() else { return }
+        guard legLogAllowed(cls) else { return }
+        let what: String
+        switch kind {
+        case 1: what = "未达阈值就结束"
+        case 2: what = "位移超 60pt 放弃"
+        default: what = "认领后无有效 changed"
+        }
+        AevonLog.info("[GripHook] 系统腿认领结局 类=\(cls) \(what)"
+            + " 最大dx=\(Int(maxDx))pt changed帧=\(frames)（AevonGripLegOutcomeV305）")
+    }
+
+    /// V0.3.5（AevonGripYieldV305）：呼盘被守卫拦下的记账（达阈值但没响 = 最可疑的一类）。
+    static func legBlocked(cls: String, reason: String) {
+        guard legProbeOn() else { return }
+        guard legLogAllowed(cls + "#blocked") else { return }
+        AevonLog.warn("[GripHook] 系统腿达阈值但被拦 类=\(cls) 原因=\(reason)"
+            + "（AevonGripYieldV305）")
     }
 
     /// 圆盘收起：立刻解除接管，把事件通道还给系统。
@@ -1083,6 +1159,14 @@ public func AevonGripLegProbe(_ cls: UnsafePointer<CChar>?, _ x: Double, _ y: Do
     let view = viewCls.map { String(cString: $0) } ?? "nil"
     AevonEdgeEntry.legProbe(cls: name, x: CGFloat(x), y: CGFloat(y), edges: edges,
                             delays: delays != 0, cancels: cancels != 0, viewCls: view)
+}
+
+/// V0.3.5（AevonGripLegOutcomeV305）：系统腿「认领了但没走到呼盘」的结局回调。
+@_cdecl("AevonGripLegOutcome")
+public func AevonGripLegOutcome(_ cls: UnsafePointer<CChar>?, _ kind: Int32,
+                                _ maxDx: Double, _ frames: Int32) {
+    let name = cls.map { String(cString: $0) } ?? "edge"
+    AevonEdgeEntry.legOutcome(cls: name, kind: Int(kind), maxDx: maxDx, frames: Int(frames))
 }
 
 @_cdecl("AevonGripProbeEvent")
