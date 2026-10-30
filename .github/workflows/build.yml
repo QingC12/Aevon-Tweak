@@ -2616,7 +2616,7 @@ jobs:
             && { echo "::error::0.2.61 视图层又直接调 dockCurrent（停靠唯一入口 = 点边条，走全局通道）"; exit 1; } || true
           # ④双击窗口：**0.3.24 起整条退役** —— 底边改为上滑关闭终止手势
           #    （AevonBottomFlickV324，对齐 Stheno 的 __bottomLikeTouchRegions +
-          #    sc_shouldCloseForBottomUpwardFlick:）。双击三件套（间隔/半径/原地轻点
+          #    sc_shouldCloseForBottomUpwardFlick:）。双击三件套（间隔 / 半径 / 原地轻点
           #    位移判定）已无任何读取者，这里改成反向网防回潮。
           if grep -q 'private static let floatDoubleTapGap' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
             echo "::error::0.3.24 双击间隔常量回潮（底边双击已退役，改上滑关闭）"; exit 1
@@ -4336,8 +4336,8 @@ jobs:
           ADYL="$(find . -name 'AevonApp.dylib' | head -n1)"
           [ -n "$MDYL" ] || { echo "::error::V0.3.3 找不到 Aevon.dylib"; exit 1; }
           [ -n "$ADYL" ] || { echo "::error::V0.3.3 找不到 AevonApp.dylib"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonGripIntentRetireV303' \
-            && strings "$DYLIB" | grep -q 'AevonGripBandNarrowV303' \
+          strings "$MDYL" | grep -q 'AevonGripIntentRetireV303' \
+            && strings "$MDYL" | grep -q 'AevonGripBandNarrowV303' \
             || { echo "::error::V0.3.3 主库缺退役/收窄标记"; exit 1; }
           strings "$ADYL" | grep -q 'AevonRingOwnV303' \
             && strings "$ADYL" | grep -q 'AevonGripBandNarrowV303' \
@@ -4377,8 +4377,8 @@ jobs:
             exit 1
           fi
           # ⑥标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonGripSystemLegV304' \
-            && strings "$DYLIB" | grep -q 'AevonGripProbe5V304' \
+          strings "$MDYL" | grep -q 'AevonGripSystemLegV304' \
+            && strings "$MDYL" | grep -q 'AevonGripProbe5V304' \
             || { echo "::error::V0.3.4 主库缺系统腿/实例探针标记"; exit 1; }
           echo "V0.3.4 校验: 系统识别器腿（右缘 24pt 认领 + 8pt 阈值 + 外挂 target + fail-open 回退 + 常驻安装）✓"
 
@@ -4414,8 +4414,8 @@ jobs:
           # ⑥V0.3.15 反转：设置页**不许**再有 GripSystemYield（已写死为常量）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 设置页: GripSystemYield 已移除（代码恒开）✓' if ok else '::error::V0.3.15 Root.plist 还有 GripSystemYield（应与代码一起移除，命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑦标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonGripYieldV305' \
-            && strings "$DYLIB" | grep -q 'AevonGripLegOutcomeV305' \
+          strings "$MDYL" | grep -q 'AevonGripYieldV305' \
+            && strings "$MDYL" | grep -q 'AevonGripLegOutcomeV305' \
             || { echo "::error::V0.3.5 主库缺让路/结局标记"; exit 1; }
           echo "V0.3.5 校验: 让路开关（实时生效 + 0.3.7 起默认开）+ 探针时间限流 + 系统腿结局三分类✓"
 
@@ -4448,7 +4448,7 @@ jobs:
             exit 1
           fi
           # ⑤标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonGripYieldDeepV306' \
+          strings "$MDYL" | grep -q 'AevonGripYieldDeepV306' \
             || { echo "::error::V0.3.6 主库缺让路彻底化标记"; exit 1; }
           echo "V0.3.6 校验: 让路接到全局通道收口点 + 右缘判据用 began 起点（防回退网在位）✓"
 
@@ -4470,7 +4470,7 @@ jobs:
           # ④label 不许再挂「实验」字样（转正后仍标实验会误导用户以为是 A/B 档）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 switch: removed ok' if ok else '::error::V0.3.15 switch GripSystemYield should be removed');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑤转正标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonYieldDefaultV307' \
+          strings "$MDYL" | grep -q 'AevonYieldDefaultV307' \
             || { echo "::error::V0.3.7 主库缺让路转正标记"; exit 1; }
           echo "V0.3.7 校验: 让路转正为默认开（Swift 与 Root.plist 同侧 + 防回退网 + label 去实验）✓"
 
@@ -4512,7 +4512,7 @@ jobs:
             exit 1
           fi
           # ⑥标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonGripZoneV308' \
+          strings "$MDYL" | grep -q 'AevonGripZoneV308' \
             || { echo "::error::V0.3.8 主库缺触发区参数化标记"; exit 1; }
           echo "V0.3.8/V0.3.13 校验: 触发区走 bandRect（V0.3.13 起为百分比区域）+ GripScope 兜底 + App 吞带已退役（防回退网在位）✓"
 
@@ -4548,7 +4548,7 @@ jobs:
           # ⑦V0.3.15 反转：设置页不许再有 GripOwnLeg（代码已写死 true）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripOwnLeg'];ok=(len(h)==0);print('V0.3.15 设置页: GripOwnLeg 已移除（代码恒开）✓' if ok else '::error::V0.3.15 Root.plist 还有 GripOwnLeg（代码已写死 true，命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑧标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonGripOwnLegV309' \
+          strings "$MDYL" | grep -q 'AevonGripOwnLegV309' \
             || { echo "::error::V0.3.9 主库缺自建识别器腿标记"; exit 1; }
           echo "V0.3.9 校验: 自建识别器（落指即判 + 0.1.9 三闸 + 白名单取证 + 默认关）✓"
 
@@ -4579,8 +4579,8 @@ jobs:
             exit 1
           fi
           # ⑦标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonOwnLegRegV310' \
-            && strings "$DYLIB" | grep -q 'AevonOwnLegDefaultV310' \
+          strings "$MDYL" | grep -q 'AevonOwnLegRegV310' \
+            && strings "$MDYL" | grep -q 'AevonOwnLegDefaultV310' \
             || { echo "::error::V0.3.10 主库缺自建腿注册/转正标记"; exit 1; }
           echo "V0.3.10 校验: 真名注册（两参 + 签名自检）+ 主动重试装配 + 开关实时生效 + 旁听门控 + 默认转正 ✓"
 
@@ -4609,8 +4609,8 @@ jobs:
             && grep -q 'AevonGripOwnStampSummon()' "$OWNE" \
             || { echo "::error::V0.3.11 自建腿/系统腿去重缺失（抑制窗没接）"; exit 1; }
           # ⑦标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonOwnLegTypeV311' \
-            && strings "$DYLIB" | grep -q 'AevonOwnSuppressV311' \
+          strings "$MDYL" | grep -q 'AevonOwnLegTypeV311' \
+            && strings "$MDYL" | grep -q 'AevonOwnSuppressV311' \
             || { echo "::error::V0.3.11 主库缺类型值取证/去重标记"; exit 1; }
           echo "V0.3.11 校验: withType: 真名注册 + 类型值运行时实测（未知不猜）+ moved 首帧探针 + 滚动闸 + 双线去重 ✓"
 
@@ -4643,9 +4643,9 @@ jobs:
           grep -q "denc\[0\] == 'v' && AevonGripEncArgCount(denc) == 2" "$OWNM" \
             || { echo "::error::V0.3.12 toDisplayWithIdentity 调用前没做签名自检"; exit 1; }
           # ⑧标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonOwnClaimV312' \
-            && strings "$DYLIB" | grep -q 'AevonOwnIvarV312' \
-            && strings "$DYLIB" | grep -q 'AevonOwnUIKitMgrV312' \
+          strings "$MDYL" | grep -q 'AevonOwnClaimV312' \
+            && strings "$MDYL" | grep -q 'AevonOwnIvarV312' \
+            && strings "$MDYL" | grep -q 'AevonOwnUIKitMgrV312' \
             || { echo "::error::V0.3.12 主库缺认领/ivar/宿主类修正标记"; exit 1; }
           echo "V0.3.12 校验: 借腿呼盘连带认领 + 装配可升级 + _UISystemGestureManager 真宿主 + ivar 形状取证 ✓"
 
@@ -4688,9 +4688,9 @@ jobs:
               || { echo "::error::V0.3.13 放行原因分桶缺 $k"; exit 1; }
           done
           # ⑥标记进二进制：主库三条 + App 库一条（吞带退役）
-          strings "$DYLIB" | grep -q 'AevonGripZoneV313' \
-            && strings "$DYLIB" | grep -q 'AevonHandleHideV313' \
-            && strings "$DYLIB" | grep -q 'AevonOwnGateV313' \
+          strings "$MDYL" | grep -q 'AevonGripZoneV313' \
+            && strings "$MDYL" | grep -q 'AevonHandleHideV313' \
+            && strings "$MDYL" | grep -q 'AevonOwnGateV313' \
             || { echo "::error::V0.3.13 主库缺区域/隐藏/闸门标记"; exit 1; }
           strings "$ADYL" | grep -q 'AevonAppBandRetireV313' \
             || { echo "::error::V0.3.13 App 库缺吞带退役标记"; exit 1; }
@@ -4728,7 +4728,7 @@ jobs:
             && grep -q 'static BOOL AevonPointInCanvasBand' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::V0.3.14 拆过头了：浮窗边带 / 承载画布边缘带也一起删了（浮窗拖动会带动 App）"; exit 1; }
           # ⑥主库标记进二进制
-          strings "$DYLIB" | grep -q 'AevonEdgePadV314' \
+          strings "$MDYL" | grep -q 'AevonEdgePadV314' \
             || { echo "::error::V0.3.14 主库缺贴边+暂扣标记"; exit 1; }
           echo "V0.3.14 校验: 贴边窄带（5pt 默认，可调 1~60）+ 暂扣段严格判据 + App 侧吞带拆净（浮窗边带保留）✓"
 
@@ -4769,7 +4769,7 @@ jobs:
             || { echo "::error::V0.3.15 滑条拖动时没记住并压回手指值（refresh 会把滑块拽回旧值）"; exit 1; }
           # ⑦标记进主库二进制
           for mk in AevonGripHardcodeV315 AevonHandleTopV315 AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 AevonOwnLogAsciiV315; do
-            strings "$DYLIB" | grep -q "$mk" \
+            strings "$MDYL" | grep -q "$mk" \
               || { echo "::error::V0.3.15 主库缺标记 $mk"; exit 1; }
           done
           echo "V0.3.15 校验: 呼出手势写死（一级页 5 开关）+ 隐藏把手提一级 + 高度 35% + 滑条拖动实时刷新 + 严格判据角度化 + 日志去乱码 ✓"
@@ -4825,7 +4825,7 @@ jobs:
           sed -n '/^- (void)reset {/,/^}/p' "$OWNM" | grep -q '\[super reset\];' \
             || { echo "::error::V0.3.16 -reset 没调 [super reset]"; exit 1; }
           # ⑧标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonOwnLiftV316' \
+          strings "$MDYL" | grep -q 'AevonOwnLiftV316' \
             || { echo "::error::V0.3.16 主库缺标记 AevonOwnLiftV316"; exit 1; }
           echo "V0.3.16 校验: 自建腿活到抬手（召唤不置 Ended + -reset 清标记）+ AevonGripOwnLift 双路 + 权威抬手绕开 0.12s 交换闸 + 被拒留痕 + 看门狗未动 ✓"
 
@@ -4881,9 +4881,9 @@ jobs:
           grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$RM" \
             || { echo "::error::V0.3.17 看门狗 0.8s 被动了（会回归 0.2.69「按住不动圆盘自己收」）"; exit 1; }
           # ⑧标记进主库二进制
-          strings "$DYLIB" | grep -q 'AevonOwnFeedV317' \
+          strings "$MDYL" | grep -q 'AevonOwnFeedV317' \
             || { echo "::error::V0.3.17 主库缺标记 AevonOwnFeedV317"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonKeyframeHoverV320' \
+          strings "$MDYL" | grep -q 'AevonKeyframeHoverV320' \
             || { echo "::error::V0.3.20 主库缺标记 AevonKeyframeHoverV320"; exit 1; }
           echo "V0.3.17 校验: 自建腿每帧喂盘（召唤后先喂再判状态 + 只认本指）+ 来源改 ownleg + 权威 moved 换通道重设基线 + 划过留痕 + 看门狗未动 ✓"
 
@@ -4923,7 +4923,7 @@ jobs:
           grep -q 'AevonOwnPassOverlay' "$OWNM" \
             || { echo "::error::V0.3.18 放行分类里没有 AevonOwnPassOverlay"; exit 1; }
           # ⑤标记进主库（`used` 纯 ASCII C 串，注释不算）
-          strings "$DYLIB" | grep -q 'AevonSceneGateV318' \
+          strings "$MDYL" | grep -q 'AevonSceneGateV318' \
             || { echo "::error::V0.3.18 主库缺标记 AevonSceneGateV318"; exit 1; }
           echo "V0.3.18 校验: 系统浮层闸（窗口表判据唯一 + alpha 门槛 + 落指即 Failed + 两条腿各一道 + RingAnywhere 退路）✓"
 
@@ -4973,7 +4973,7 @@ jobs:
             || { echo "::error::V0.3.18 AevonSpring 没读 RingSpringDamping 滑条"; exit 1; }
           grep -q 'AevonSpringUnifyV318' "$RM" \
             || { echo "::error::V0.3.18 缺标记 AevonSpringUnifyV318"; exit 1; }
-          strings "$DYLIB" | grep -q 'AevonSpringUnifyV318' \
+          strings "$MDYL" | grep -q 'AevonSpringUnifyV318' \
             || { echo "::error::V0.3.18 主库缺标记 AevonSpringUnifyV318"; exit 1; }
           echo "V0.3.18 校验: 弹簧统一（response+ζ → mass/stiffness/damping）+ 一条弹道 retarget + 阻尼单次读 + 标记进主库 ✓"
 
@@ -5037,7 +5037,7 @@ jobs:
           [ "$DF_CNT" -eq 1 ] \
             || { echo "::error::V0.3.19 AevonLog 里 DateFormatter() 出现 $DF_CNT 次（只允许 1 次，就是那个单例）"; exit 1; }
           # ⑥ 标记进主库（`used` 纯 ASCII C 串，注释不算）
-          strings "$DYLIB" | grep -q 'AevonKeyframeHoverV320' \
+          strings "$MDYL" | grep -q 'AevonKeyframeHoverV320' \
             || { echo "::error::V0.3.20 主库缺标记 AevonKeyframeHoverV320"; exit 1; }
           echo "V0.3.19 校验: 命中滞回（现任优先）+ 划过日志改抬手汇总 + DateFormatter 静态单例 ✓"
 
@@ -5133,7 +5133,7 @@ jobs:
 
           # ⑥ 标记进主库（`used` 纯 ASCII C 串）
           for m320 in AevonKeyframeHoverV320 AevonSquashStretchV320 AevonShadowPathV320 AevonFrameProbeV320; do
-            strings "$DYLIB" | grep -q "$m320" \
+            strings "$MDYL" | grep -q "$m320" \
               || { echo "::error::V0.3.20 主库缺标记 $m320"; exit 1; }
           done
           echo "V0.3.20 校验: 定长关键帧（shakeY 抖动 + rubberBand 挤压 + 一记余弹）+ 解析求值接住中途改目标 + shadowPath/去 mask + 帧率自证 ✓"
@@ -5268,7 +5268,7 @@ jobs:
                       AevonRingUnfoldV323 AevonRingIcon40V323 AevonHubPanelV323; do
             grep -q "$m321" "$GITHUB_WORKSPACE/Sources/AevonGripHook.m" \
               || { echo "::error::V0.3.21 源码缺标记 $m321"; exit 1; }
-            strings "$DYLIB" | grep -q "$m321" \
+            strings "$MDYL" | grep -q "$m321" \
               || { echo "::error::V0.3.21 主库缺标记 $m321"; exit 1; }
           done
           # ⑦ 白晕 + z 序 + 新标记进主库 —— V0.3.22 的「跳出来」读感
@@ -5349,7 +5349,6 @@ jobs:
 
           echo "V0.3.22 校验: 跳上去停住（46pt/100ms）+ 170ms 单调回落 + 白色柔光底盘 + zPosition 置顶 + 全程等比 ✓"
           echo "V0.3.23 校验: 进度驱动径向展开（等比铺开 / 拖动跟手 / 时间兜底）+ 图标 40pt 环径重算 + 中心面板差异化 ✓"
-
           # ── V0.3.24 校验（Aevon(98) 三项：上滑关闭 / 定时模糊 / 双黑窗）──────────────
           WV="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
           EE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
