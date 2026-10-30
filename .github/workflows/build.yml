@@ -184,8 +184,9 @@ jobs:
                    AevonEdgePadV314 AevonGripHardcodeV315 AevonHandleTopV315 \
                    AevonSliderLiveV315 AevonZoneH35V315 AevonStrictAngleV315 \
                    AevonOwnLogAsciiV315 AevonOwnLiftV316 \
-                   AevonOwnFeedV317 AevonHoverTrackV317 \
-                   AevonSceneGateV318 AevonSpringUnifyV318; do
+                   AevonOwnFeedV317 \
+                   AevonSceneGateV318 AevonSpringUnifyV318 \
+                   AevonHoverTrailV319; do
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.82~0.3.1 二进制里缺标记 $m"; exit 1; }
           done
@@ -811,7 +812,7 @@ jobs:
           fi
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'GripHandleHidden' \
             || { echo "::error::Root.plist 缺少 GripHandleHidden（隐藏把手没提到一级页）"; exit 1; }
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];z=[i for i in it if i.get('key')=='RingSpringDamping'];ok=(len(z)==1 and float(z[0].get('min',0))==0.5 and float(z[0].get('max',0))==1.0 and float(z[0].get('default',0))==0.72 and len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15 Grip.plist: 宽度 5pt/1~60 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15 Grip.plist 量程不符（应 5pt/1~60、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];z=[i for i in it if i.get('key')=='RingSpringDamping'];ok=(len(z)==1 and float(z[0].get('min',0))==0.5 and float(z[0].get('max',0))==1.0 and float(z[0].get('default',0))==0.60 and len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15 Grip.plist: 宽度 5pt/1~60 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15 Grip.plist 量程不符（应 5pt/1~60、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
             || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
@@ -1188,8 +1189,11 @@ jobs:
           grep -q 'static let hoverSpringVelocity: CGFloat = 3.4' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             && { echo "::error::hoverSpringVelocity 又回来了（V0.3.18 起用 response+dampingFraction，不再有 initialSpringVelocity）"; exit 1; }
           # V0.3.18（AevonSpringUnifyV318）反转：划过动画改用 response（一个振荡周期）。
-          grep -q 'static let hoverSpringResponse: Double = 0.40' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
-            || { echo "::error::划过弹簧的 response 不是 0.40（V0.3.18 起统一到 AevonSpring）"; exit 1; }
+          # V0.3.19（AevonHoverTrailV319）再反转：0.40 → 0.28。
+          #   0.40 / ζ 0.72 的位移曲线是「16ms 走 3%、50ms 走 21%」，而 Aevon(95) 实测
+          #   划过间隔中位数正好 50ms —— 每个图标只抬 2.5pt，眼睛看不见。
+          grep -q 'static let hoverSpringResponse: Double = 0.28' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
+            || { echo "::error::划过弹簧的 response 不是 0.28（V0.3.19：0.40 在 50ms 停留里只走 21%，看不见）"; exit 1; }
           # 放大到 1.30 之后，命中判定再拿 frame 就会跟着膨胀 30%，隔壁图标被抢 ——
           # 一律用 bounds（不受 transform 影响）。这条是「放大」带出来的必然副作用。
           if grep -q 'icon\.frame\.width' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift"; then
@@ -4847,19 +4851,29 @@ jobs:
           AUTH_CNT=$(grep -c 'authoritative: Bool = false' "$RM" || true)
           [ "$AUTH_CNT" -ge 2 ] \
             || { echo "::error::V0.3.17 moved 与 ended 应各有一条 authoritative 声明，实为 $AUTH_CNT"; exit 1; }
-          # ⑥划过日志（本版唯一验收判据：分不清「没喂到」与「喂到了没高亮」）
+          # ⑥划过取证（本版唯一验收判据：分不清「没喂到」与「喂到了没高亮」）
+          # V0.3.19（AevonHoverTrailV319）反转：逐条「划过 X」日志已合并成**抬手汇总**。
+          #   原因见 Aevon(95) 定量 —— 逐条日志每次都要新建 DateFormatter + 开关文件 + stat，
+          #   峰值 62 行/秒全落在触摸热路径上。判据本身没丢：
+          #   「本轮划过 N 次」的 N 就是原来逐条日志的条数。
           grep -q '划过' "$RM" \
             || { echo "::error::V0.3.17 缺「划过」取证日志"; exit 1; }
-          grep -q 'AevonHoverTrackV317' "$RM" \
-            || { echo "::error::V0.3.17 缺标记 AevonHoverTrackV317"; exit 1; }
+          grep -q '本轮划过' "$RM" \
+            || { echo "::error::V0.3.19 划过明细没改成抬手汇总（逐条落盘是 62 行/秒的同步 I/O）"; exit 1; }
+          # 防回退：逐条「划过 <App>（离圆心 …）」那条日志不许再长回来
+          if grep -qF '划过 \(icon.displayName)' "$RM"; then
+            echo "::error::V0.3.19 逐条「划过 X」日志又回来了（会重新把同步文件 I/O 打进触摸热路径）"; exit 1
+          fi
+          grep -q 'AevonHoverTrailV319' "$RM" \
+            || { echo "::error::V0.3.19 缺标记 AevonHoverTrailV319"; exit 1; }
           # ⑦看门狗照旧不动（本版不碰「收不收」，只碰「看不看得见手指」）
           grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$RM" \
             || { echo "::error::V0.3.17 看门狗 0.8s 被动了（会回归 0.2.69「按住不动圆盘自己收」）"; exit 1; }
           # ⑧标记进主库二进制
           strings "$MDYL" | grep -q 'AevonOwnFeedV317' \
             || { echo "::error::V0.3.17 主库缺标记 AevonOwnFeedV317"; exit 1; }
-          strings "$MDYL" | grep -q 'AevonHoverTrackV317' \
-            || { echo "::error::V0.3.17 主库缺标记 AevonHoverTrackV317"; exit 1; }
+          strings "$MDYL" | grep -q 'AevonHoverTrailV319' \
+            || { echo "::error::V0.3.19 主库缺标记 AevonHoverTrailV319"; exit 1; }
           echo "V0.3.17 校验: 自建腿每帧喂盘（召唤后先喂再判状态 + 只认本指）+ 来源改 ownleg + 权威 moved 换通道重设基线 + 划过留痕 + 看门狗未动 ✓"
 
           # ── V0.3.18 校验（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指 ──
@@ -4922,12 +4936,23 @@ jobs:
           if grep -qE 'let stiffness: CGFloat = 140' "$RM"; then
             echo "::error::V0.3.18 旋转积分器还写死 140"; exit 1
           fi
-          # ③连续弹道：整盘一个 animator，切换时停在当前值再重发（SwiftUI 的 retarget 同构）
-          grep -q 'private var hoverAnimator: UIViewPropertyAnimator?' "$RM" \
-            || { echo "::error::V0.3.18 缺 hoverAnimator（每图标各起一条动画 = 多弹道打架）"; exit 1; }
-          grep -q 'anim.stopAnimation(false)' "$RM" \
-            && grep -q 'anim.finishAnimation(at: .current)' "$RM" \
-            || { echo "::error::V0.3.18 切换高亮时没把动画停在当前值（会跳回起点重弹）"; exit 1; }
+          # ③弹道归属：V0.3.19（AevonHoverTrailV319）**反转**了 V0.3.18 的做法。
+          #
+          #   0.3.18 是「整盘一个 animator」：每次高亮切换都 stopAnimation(false) +
+          #   finishAnimation(at: .current)，addAnimations 里重设全部 20 个图标的 transform。
+          #   而 Aevon(95) 实测划过间隔中位数 50ms、p10 只有 9ms —— 等于每 50ms 就有
+          #   20 条在途动画被定格丢弃一次，观感就是发黏、一顿一顿。
+          #
+          #   现在动画对象挂在图标自己身上：一次切换只有 3~4 个图标振幅变了，
+          #   也就只有 3~4 条弹道被重建，而且每条都带一个指向新目标的初速。
+          grep -q 'var hoverAnimator: UIViewPropertyAnimator?' "$RM" \
+            || { echo "::error::V0.3.19 图标上没有 hoverAnimator（每图标一条弹道是余韵波的前提）"; exit 1; }
+          if grep -q 'private var hoverAnimator: UIViewPropertyAnimator?' "$RM"; then
+            echo "::error::V0.3.19 圆盘上又出现了整盘级 hoverAnimator（20 条在途动画会被整批定格丢弃）"; exit 1
+          fi
+          grep -q 'old.stopAnimation(false)' "$RM" \
+            && grep -q 'old.finishAnimation(at: .current)' "$RM" \
+            || { echo "::error::V0.3.19 换弹道前没把旧弹道停在当前值（图层会跳回终点 = 图标瞬移）"; exit 1; }
           # ④阻尼只读一次（逐帧读 CFPreferences 是跨进程 IPC）
           grep -q 'menu.hoverZ = AevonSpring.userDampingFraction()' "$RM" \
             || { echo "::error::V0.3.18 present 没缓存 hoverZ（逐帧读 prefs 会拖慢触摸）"; exit 1; }
@@ -4938,6 +4963,68 @@ jobs:
           strings "$MDYL" | grep -q 'AevonSpringUnifyV318' \
             || { echo "::error::V0.3.18 主库缺标记 AevonSpringUnifyV318"; exit 1; }
           echo "V0.3.18 校验: 弹簧统一（response+ζ → mass/stiffness/damping）+ 一条弹道 retarget + 阻尼单次读 + 标记进主库 ✓"
+
+          # ── V0.3.19 校验（AevonHoverTrailV319）：划过 = 每图标一条弹道 + 时间序余韵波 ──
+          #
+          # 用户 Aevon(95)：「阻尼调节后更 Q 弹，但是不流畅，手指划过时没有明显的图标
+          # 抖动或者波浪形的起伏」，并明确波浪是「手指划过图标时**依据先后顺序**使图标
+          # 先后起伏」，不是圆盘展开时自动跳一下。
+          #
+          # 定量依据（Aevon(95) 765 次划过）：间隔中位 50ms / p25 25ms / p10 9ms，
+          # 66% < 60ms；A→B→A 回跳 112 次（15%），最短 8ms 一个来回。
+          # 四条对策分别钉在下面：
+          #   ① response 0.40 → 0.28（50ms 停留从 21% 抬到 41%，才看得见）
+          #   ② 每图标一条弹道 + 指向新目标的初速（不再整盘定格重发）
+          #   ③ 余韵波：按划过顺序排队，越早划过回得越慢（波往身后铺开）
+          #   ④ 命中滞回 + 划过日志改汇总（62 行/秒的同步 I/O 出热路径）
+          #
+          # ① 起步速度：初速是 UIKit 物理三参独有的杠杆，SwiftUI spring 没有。
+          grep -q 'static let hoverRiseVelocity: CGFloat = 6.0' "$RM" \
+            || { echo "::error::V0.3.19 升起初速不是 6.0（零初速的弹簧 16ms 只走 6%，划过看不见）"; exit 1; }
+          grep -q 'static let hoverFallVelocity: CGFloat = 3.0' "$RM" \
+            || { echo "::error::V0.3.19 回落初速不是 3.0"; exit 1; }
+          # ② 余韵波三组参数：振幅 / response 放大 / 错峰延迟，必须各 4 拍（等长）
+          grep -q 'static let hoverTrailAmplitudes: \[CGFloat\] = \[1.0, 0.60, 0.32, 0.14\]' "$RM" \
+            || { echo "::error::V0.3.19 余韵振幅不是 4 拍 [1.0, 0.60, 0.32, 0.14]"; exit 1; }
+          grep -q 'static let hoverTrailResponseScale: \[Double\] = \[1.0, 1.25, 1.55, 1.85\]' "$RM" \
+            || { echo "::error::V0.3.19 余韵 response 放大不是 4 拍（越靠后收得越慢 = 波往身后铺开）"; exit 1; }
+          grep -q 'static let hoverTrailDelay: \[TimeInterval\] = \[0, 0.010, 0.020, 0.030\]' "$RM" \
+            || { echo "::error::V0.3.19 余韵错峰延迟不是 4 拍（没有相位差就没有波的传播感）"; exit 1; }
+          grep -q 'func applyHoverWave()' "$RM" \
+            || { echo "::error::V0.3.19 缺 applyHoverWave 下发函数"; exit 1; }
+          grep -qF 'hoverTrail.firstIndex(where: { $0 === item })' "$RM" \
+            || { echo "::error::V0.3.19 余韵波没按划过顺序定位（下标即波的位置）"; exit 1; }
+          # 只有振幅真的变了的图标才重建弹道 —— 每帧全量重发等于把弹簧按回第 0 帧
+          grep -qF 'guard abs(want - item.hoverAmplitude) > 0.001 else { continue }' "$RM" \
+            || { echo "::error::V0.3.19 又在给振幅没变的图标重发动画（每帧全量重发 = 一顿一顿）"; exit 1; }
+          # ③ 命中滞回：必须排在「取候选」之前，否则无人候选的那一帧高亮会灭一下
+          grep -q 'private static let hoverHysteresisReach: CGFloat = 1.35' "$RM" \
+            || { echo "::error::V0.3.19 滞回扩边不是 1.35"; exit 1; }
+          grep -q 'private static let hoverHysteresisGap: CGFloat = 8' "$RM" \
+            || { echo "::error::V0.3.19 滞回切换门槛不是 8pt"; exit 1; }
+          HYST_LINE=$(grep -n 'let curArc = arcScore(of: cur' "$RM" | head -1 | cut -d: -f1)
+          CAND_LINE=$(grep -n 'guard let candidate = best else { return nil }' "$RM" | head -1 | cut -d: -f1)
+          { [ -n "$HYST_LINE" ] && [ -n "$CAND_LINE" ] && [ "$HYST_LINE" -lt "$CAND_LINE" ]; } \
+            || { echo "::error::V0.3.19 命中滞回排在 guard candidate 之后（顺序反了等于没滞回，且高亮会闪灭）"; exit 1; }
+          # ④ 划过关账：定义 + clearPointer + dismiss = 3 处（少一处丢数，多一处就是重复写）
+          SUM_CNT=$(grep -c 'flushHoverSummary()' "$RM" || true)
+          [ "$SUM_CNT" -eq 3 ] \
+            || { echo "::error::V0.3.19 flushHoverSummary 出现 $SUM_CNT 次（应为 3：定义 + clearPointer + dismiss）"; exit 1; }
+          grep -q 'menu.resetHoverWave()' "$RM" \
+            || { echo "::error::V0.3.19 present 没清余韵队列（上一局残留会带到新盘）"; exit 1; }
+          grep -q 'static let defaultDampingFraction: Double = 0.60' "$SP" \
+            || { echo "::error::V0.3.19 默认阻尼不是 0.60（0.72 的过冲只有 3.8%，看不出「弹」）"; exit 1; }
+          # ⑤ 日志降载：formatter 必须是静态单例（每条日志新建 DateFormatter 是重活）
+          LG="$GITHUB_WORKSPACE/Sources/AevonLog.swift"
+          grep -q 'private static let formatter: DateFormatter' "$LG" \
+            || { echo "::error::V0.3.19 AevonLog 的 DateFormatter 不是静态单例"; exit 1; }
+          DF_CNT=$(grep -vE '^[[:space:]]*(//|\*|/\*)' "$LG" | grep -c 'DateFormatter()' || true)
+          [ "$DF_CNT" -eq 1 ] \
+            || { echo "::error::V0.3.19 AevonLog 里 DateFormatter() 出现 $DF_CNT 次（只允许 1 次，就是那个单例）"; exit 1; }
+          # ⑥ 标记进主库（`used` 纯 ASCII C 串，注释不算）
+          strings "$MDYL" | grep -q 'AevonHoverTrailV319' \
+            || { echo "::error::V0.3.19 主库缺标记 AevonHoverTrailV319"; exit 1; }
+          echo "V0.3.19 校验: 每图标一条弹道 + 指向新目标的初速 + 时间序 4 拍余韵波 + 命中滞回 + 划过日志降载 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

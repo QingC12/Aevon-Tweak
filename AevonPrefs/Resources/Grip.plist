@@ -24,11 +24,11 @@
 			<key>key</key>
 			<string>GripZoneH</string>
 			<key>default</key>
-			<real>35</real>
+			<real>35.0</real>
 			<key>min</key>
-			<real>15</real>
+			<real>15.0</real>
 			<key>max</key>
-			<real>50</real>
+			<real>50.0</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -48,11 +48,11 @@
 			<key>key</key>
 			<string>GripZoneW</string>
 			<key>default</key>
-			<real>5</real>
+			<real>5.0</real>
 			<key>min</key>
-			<real>1</real>
+			<real>1.0</real>
 			<key>max</key>
-			<real>60</real>
+			<real>60.0</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -68,7 +68,7 @@
 			<key>label</key>
 			<string>划过动画</string>
 			<key>footerText</key>
-			<string>0.3.18 起圆盘的划过 / 入场 / 收起 / 旋转用同一套弹簧（AevonSpringUnifyV318）。这个滑条只调其中的阻尼系数：0.72 = 默认（回摆约 4%，看得见「弹」但收得干净）；往 1.0 拖 = 几乎不过冲、最「稳」；往 0.5 拖 = 明显回摆、最「Q」。
+			<string>0.3.19 起圆盘的划过 / 入场 / 收起 / 旋转用同一套弹簧（AevonHoverTrailV319）。这个滑条只调其中的阻尼系数：0.60 = 默认（回摆约 10%，划过时看得见「抬起来 → 微超调 → 落回去」）；往 1.0 拖 = 几乎不过冲、最「稳」；往 0.5 拖 = 明显回摆、最「Q」。
 
 ⛔ 这是临时项：等动画手感定下来，会取一个固定值、把这条滑条删掉。届时这一页会少一行。</string>
 		</dict>
@@ -82,7 +82,7 @@
 			<key>key</key>
 			<string>RingSpringDamping</string>
 			<key>default</key>
-			<real>0.72</real>
+			<real>0.6</real>
 			<key>min</key>
 			<real>0.5</real>
 			<key>max</key>

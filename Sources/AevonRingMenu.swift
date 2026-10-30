@@ -13,6 +13,20 @@ final class AevonRingIcon: UIView {
     /// 是否成功拿到原生图标（决定高亮时改边框还是改底色）
     private let hasIcon: Bool
 
+    /* V0.3.19（AevonHoverTrailV319）：划过动画改成 **每个图标自己一条弹道**。
+     *
+     * 0.3.18 是「整盘一个 animator」：每次高亮切换都 `stopAnimation(false)` +
+     * `finishAnimation(at: .current)` 再从零初速重发，而且 `addAnimations` 里重设
+     * 全部 20 个图标的 transform —— 而 Aevon(95) 实测划过间隔中位数 50ms、p10 只有
+     * 9ms，等于每 50ms 就有 20 条在途动画被定格丢弃一次。观感就是发黏、一顿一顿。
+     *
+     * 现在动画对象挂在图标自己身上：一次切换通常只有 3~4 个图标的振幅变了，
+     * 也就只有 3~4 条弹道被重建；而且每条都带一个**指向新目标的初速** ——
+     * 不归零，所以不会有「先减速再起步」的那一下。 */
+    var hoverAnimator: UIViewPropertyAnimator?
+    /// 当前正在呈现的振幅（0 = 未高亮，1 = 满幅）。用来判断「目标变了没有」。
+    var hoverAmplitude: CGFloat = 0
+
     init(bundleID: String, name: String, size: CGFloat) {
         self.bundleID = bundleID
         self.displayName = name
@@ -142,6 +156,18 @@ final class AevonRingMenu: UIView {
     private static let centerSize: CGFloat = 48
     /// 命中半径系数
     private static let hitFactor: CGFloat = 0.95
+    /* V0.3.19（AevonHoverTrailV319）：命中滞回。
+     *
+     * Aevon(95) 实测 765 次划过里有 **112 次是 A→B→A 的 200ms 内回跳**（15%），
+     * 最短的 8ms 一个来回（`31.156 Loon → 31.164 威锋 → 31.181 Loon`）。
+     * 原因很直接：没有滞回时「离得最近的那个」在角平分线上会逐帧翻转，
+     * 而每次翻转都要重建弹道 —— 视觉上就是图标原地抖、怎么也弹不起来。
+     *
+     * 规则：现任图标在自己的放大幅度内（`hoverHysteresisReach` 倍）继续占有，
+     * 只有别的图标在**弧长**上比它近 `hoverHysteresisGap` pt 以上才换人。
+     * 两个数都是 pt / 倍数，不随圈半径变。 */
+    private static let hoverHysteresisReach: CGFloat = 1.35
+    private static let hoverHysteresisGap: CGFloat = 8
     /// 圆心按住多久进入 / 退出旋转模式（秒）
     private static let centerHoldDuration: TimeInterval = 1.0
     /// 圆心命中半径（比按钮本身放大一点，手指压在图标边缘也算）
@@ -169,9 +195,36 @@ final class AevonRingMenu: UIView {
      * 更要紧的是它和圆盘上另外四条弹道（ζ 0.55 / 0.676 / 0.78 / easeOut）各弹各的 ——
      * 同一个盘上五种手感，观感就是不连贯。
      *
-     * 现在全部走 `AevonSpring.params`：response 0.40、ζ 由用户滑条给（默认 0.72），
-     * 回摆约 4% —— 看得见「弹」，但收得干净。老的那三个常量已删除，不许再长回来。 */
-    static let hoverSpringResponse: Double = 0.40
+     * 现在全部走 `AevonSpring.params`：response 由 `hoverSpringResponse` 给、
+     * ζ 由用户滑条给。老的那三个常量已删除，不许再长回来。
+     *
+     * V0.3.19（AevonHoverTrailV319）：0.40 → **0.28**。
+     * 0.40 / ζ 0.72 的位移曲线是：16ms 走 3%、33ms 走 10%、50ms 只走 21% ——
+     * 而 Aevon(95) 的划过间隔中位数正好是 50ms，等于每个图标只来得及抬 2.5pt，
+     * 眼睛看不见。压到 0.28 后同一时刻走到 41%，才谈得上「划过」。 */
+    static let hoverSpringResponse: Double = 0.28
+
+    /* V0.3.19（AevonHoverTrailV319）：划过之后留在波峰后面的「余韵」。
+     *
+     * 用户 Aevon(95) 要的是「手指划过图标时**依据先后顺序**使图标先后波浪起伏」，
+     * 并且明确排除了「圆盘展开时图标自动跳一下」那种。所以这里不按角度距离取邻居，
+     * 而是**按划过的时间顺序**排队：第 0 位是当前高亮的（满幅），
+     * 第 1 位是刚被划过的（0.60）、第 2 位 0.32、第 3 位 0.14 ——
+     * 手指扫过一串图标时，波峰在前面走，身后那几个依次落回去，就是「波浪」。
+     *
+     * `hoverTrailResponseScale` 往后越来越大是刻意的：越靠后收得越慢，
+     * 波才会往身后铺开，而不是所有图标整齐地一起落。
+     * `hoverTrailDelay` 给每拍一点错峰，波才有「传播」的先后感。
+     * 三个数组长度就是「余韵保留几拍」，改长度即可增减波宽（数组必须等长）。
+     */
+    static let hoverTrailAmplitudes: [CGFloat] = [1.0, 0.60, 0.32, 0.14]
+    static let hoverTrailResponseScale: [Double] = [1.0, 1.25, 1.55, 1.85]
+    static let hoverTrailDelay: [TimeInterval] = [0, 0.010, 0.020, 0.030]
+    /// 升起 / 回落时注入的初速（SwiftUI 的 spring 没有这个参数，UIKit 的物理三参有）。
+    /// 零初速的弹簧起步太软，是「划过看不见」的另一半原因 —— 给一个指向目标的初速，
+    /// 第一帧（16ms）就能走到 13%，而不是 6%。
+    static let hoverRiseVelocity: CGFloat = 6.0
+    static let hoverFallVelocity: CGFloat = 3.0
     /// 指针事件中断多久之后允许新手指出手接管（自愈，防止某条通道漏发 ended 把圆盘卡死）
     private static let pointerStaleInterval: CFTimeInterval = 1.2
     /// V0.2.66（AevonRingIdleV266）：指针静默多久后判定「手指早已离屏但 ended 漏发」
@@ -286,6 +339,8 @@ final class AevonRingMenu: UIView {
         host.bringSubviewToFront(menu)
         current = menu
         menu.reload()
+        // V0.3.19（AevonHoverTrailV319）：新盘从「没有划过任何图标」开始，余韵队列清空
+        menu.resetHoverWave()
         menu.animateIn()
         menu.startIdleWatch()
     }
@@ -712,7 +767,7 @@ final class AevonRingMenu: UIView {
         // V0.3.18（AevonSpringUnifyV318）：换成与划过同一条 ζ 谱 ——
         // 以前是 `UISpringTimingParameters(dampingRatio: 0.55)` + duration 0.55（老式的
         // 「百分比阻尼 + 总时长」组合），和划过那条（ζ 0.34）不是一套手感。
-        // 现在 response 0.50 / ζ = 用户的滑条值（默认 0.72），入场的过冲量也跟着滑条走。
+        // 现在 response 0.50 / ζ = 用户的滑条值（默认 0.60），入场的过冲量也跟着滑条走。
         let spring = AevonSpring.params(response: 0.50,
                                         dampingFraction: hoverZ,
                                         initialVelocity: CGVector(dx: 0.25, dy: 0.25))
@@ -752,15 +807,20 @@ final class AevonRingMenu: UIView {
         cancelCenterHold()
         clearPointer()
         stopDamping()
-        /* V0.3.18（AevonSpringUnifyV318）：收起时先把划过动画停在当前值，再让「吸附回圆心」
-         * 接管这批 transform —— 两个 animator 同时写 transform 会互相打断，收起来一顿一顿。 */
-        if let hovering = hoverAnimator {
-            if hovering.isRunning {
-                hovering.stopAnimation(false)
-                hovering.finishAnimation(at: .current)
+        /* V0.3.19（AevonHoverTrailV319）：逐个停掉图标自己的弹道，再让「吸附回圆心」
+         * 接管这批 transform —— 两个 animator 同时写 transform 会互相打断。
+         * 0.3.18 只有一个盘级 animator，这里换成每个图标各停各的。 */
+        for icon in icons {
+            if let hovering = icon.hoverAnimator {
+                if hovering.isRunning {
+                    hovering.stopAnimation(false)
+                    hovering.finishAnimation(at: .current)
+                }
+                icon.hoverAnimator = nil
             }
-            hoverAnimator = nil
         }
+        // V0.3.19（AevonHoverTrailV319）：收起前把本轮划过汇总打一次（逐条日志已改汇总）
+        flushHoverSummary()
         AevonRingMenu.current = nil
         // V0.2.50（AevonRingGripV250）：圆盘收起 → 把手重新露出来
         AevonRingGrip.setVisible(true)
@@ -1052,6 +1112,8 @@ final class AevonRingMenu: UIView {
     }
 
     private func clearPointer() {
+        // V0.3.19（AevonHoverTrailV319）：这根手指的划过明细在这里结账（每根手指一条）
+        flushHoverSummary()
         pointerSource = ""
         pointerEverInsideRing = false
         pointerLastEventAt = 0
@@ -1208,8 +1270,21 @@ final class AevonRingMenu: UIView {
     /// 每帧都会调一次，只有真的换了一个图标才是用户看得见的「划过」。
     private var hoveredBundleID = ""
 
-    /// V0.3.18（AevonSpringUnifyV318）：划过动画的**唯一** animator（见 `startHoverAnimation`）。
-    private var hoverAnimator: UIViewPropertyAnimator?
+    /// V0.3.19（AevonHoverTrailV319）：当前高亮图标本体 —— 命中滞回要用它。
+    private var hoveredIcon: AevonRingIcon?
+
+    /// V0.3.19（AevonHoverTrailV319）：最近划过的图标，**最近的在最前**，
+    /// 最多 `hoverTrailAmplitudes.count` 个。下标即「波的位置」，这就是余韵波。
+    private var hoverTrail: [AevonRingIcon] = []
+
+    /// V0.3.19（AevonHoverTrailV319）：本轮划过计数与最近几个名字 —— 日志降载用。
+    ///
+    /// 以前每划过一次就写一条日志，而 `AevonLog` 每次都要新建 `DateFormatter`、
+    /// 打开 / 关闭一次文件、再 `stat` 一次。Aevon(95) 定量：峰值 **62 行/秒**，
+    /// 全落在触摸热路径上，120Hz 下 8.3ms 一帧，这条必掉帧。
+    /// 现在只在抬手 / 收起时打一条汇总，明细保留最近 8 个名字。
+    private var hoverSwitchCount = 0
+    private var hoverRecentNames: [String] = []
 
     /// 本次展开的阻尼比。在 `present` 里读一次缓存 —— `AevonPrefs` 走 CFPreferences，
     /// 是跨进程 IPC，放进 `setHovered` 这种逐帧路径会拖慢触摸响应。
@@ -1217,70 +1292,121 @@ final class AevonRingMenu: UIView {
 
     private func setHovered(_ icon: AevonRingIcon?) {
         let newID = icon?.bundleID ?? ""
-        let changed = newID != hoveredBundleID
-        if changed {
+        if newID != hoveredBundleID {
             hoveredBundleID = newID
-            /* V0.3.17（AevonHoverTrackV317）：只在**高亮真的换了**时打一条。
-             * 这条日志是本版唯一的验收判据 —— 上一份日志分不清「移动帧到了但没高亮」
-             * 和「移动帧根本没到」，因为两者在日志上都只剩一片空白。现在：
-             * 有「划过 X」= 喂料与高亮都通了；只有「喂盘 N 帧」没有「划过」= 帧到了
-             * 但坐标永远落在图标外（那是几何/命中问题，不是喂料问题）。 */
+            hoveredIcon = icon
             if let icon = icon {
-                let d = distanceToCenter(pointerPoint)
-                var a = angle(from: ringCenter, to: pointerPoint).truncatingRemainder(dividingBy: 360)
-                if a < 0 { a += 360 }
-                AevonLog.info("[圆盘] 划过 \(icon.displayName)（离圆心 \(Int(d))pt，角度 \(Int(a))°）"
-                    + "→ 高亮 + 跳跃（AevonHoverTrackV317）")
+                /* V0.3.19（AevonHoverTrailV319）：只在内存里记一笔，**不写盘**。
+                 * 逐条「划过 X」日志的成本见 `hoverSwitchCount` 的注释。 */
+                hoverSwitchCount += 1
+                hoverRecentNames.append(icon.displayName)
+                if hoverRecentNames.count > 8 { hoverRecentNames.removeFirst() }
+                // 重新压到队首：来回划同一个图标不该在余韵里留两个位置
+                hoverTrail.removeAll { $0 === icon }
+                hoverTrail.insert(icon, at: 0)
+                let cap = AevonRingMenu.hoverTrailAmplitudes.count
+                if hoverTrail.count > cap { hoverTrail.removeLast(hoverTrail.count - cap) }
+            } else {
+                /* 手指离开图标区（落在图标之间的空隙 / 盘外）：余韵波整条撤掉。
+                 * 波是「跟着手指走」的，手指已经不在任何一个图标上了，再留几拍
+                 * 抬着反而像卡住；而且这一帧之后每次都会走到这里，状态是稳定的，
+                 * 不会来回抽。 */
+                hoverTrail.removeAll()
             }
         }
-        /* V0.3.18（AevonSpringUnifyV318）：高亮集合没变就**一个字都不动**。
-         * 以前是「每个图标各自判断 transform != target 再起动画」，在划过中途新动画与
-         * 旧动画并存；这里改成整盘一条弹道，没换图标时重启只会把弹簧按回第 0 帧，
-         * 表现是一顿一顿。 */
-        if !changed && hoverAnimator != nil { return }
-        // 展开后的首帧（还没划过任何图标）不必启动动画：全场本来就都是 identity。
-        if !changed && hoverAnimator == nil && icon == nil { return }
-        startHoverAnimation(highlighting: icon)
+        applyHoverWave()
     }
 
-    /// V0.3.18（AevonSpringUnifyV318）：**一条弹道带动全部图标** —— 旧高亮回落与
-    /// 新高亮升起在同一个 animator 里、用同一条弹簧，这是「连续感」的来源。
+    /// V0.3.19（AevonHoverTrailV319）：把「余韵波」下发到每个图标。
     ///
-    /// 切换高亮时先把现有 animator 停在当前值（`stopAnimation(false)` +
-    /// `finishAnimation(at: .current)`），再从定格处重新出发。这正是 SwiftUI 在目标
-    /// 变化时的 retarget 行为（也就是它 `blendDuration` 想解决的问题）：画面永远是
-    /// 「从此刻的位置接着弹」，不会跳回起点重来。
-    private func startHoverAnimation(highlighting icon: AevonRingIcon?) {
-        if let anim = hoverAnimator {
-            if anim.isRunning {
-                anim.stopAnimation(false)
-                anim.finishAnimation(at: .current)
+    /// 一次高亮切换通常只影响 3~4 个图标（队首升到满幅、身后几拍降一档），
+    /// 只有振幅真的变了的才重建弹道 —— 0.3.18 是每次切换把 20 个图标全量重发。
+    private func applyHoverWave() {
+        guard !icons.isEmpty else { return }
+        let amps = AevonRingMenu.hoverTrailAmplitudes
+        let responseScales = AevonRingMenu.hoverTrailResponseScale
+        let delays = AevonRingMenu.hoverTrailDelay
+
+        for item in icons {
+            var want: CGFloat = 0
+            var slot = 0
+            if let k = hoverTrail.firstIndex(where: { $0 === item }), k < amps.count {
+                want = amps[k]
+                slot = k
             }
-            hoverAnimator = nil
-        }
-        // V0.0.35（AevonRingHopV35）：划过图标 = 放大 + **向上跳跃**。
-        // 位移用屏幕坐标向上（y 负），与圆周角度无关，任何位置的图标都是「向上跳」。
-        let params = AevonSpring.params(response: AevonRingMenu.hoverSpringResponse,
-                                        dampingFraction: hoverZ)
-        let animator = UIViewPropertyAnimator(duration: 1.0, timingParameters: params)
-        animator.addAnimations {
-            for item in self.icons {
-                let on = (item === icon)
-                /* V0.3.18：高亮（边框 / 光晕 / 底色）也放进同一条弹道。
-                 * 以前它在动画块外、瞬时生效 —— 图标放大是弹簧、边框是硬切，
-                 * 快划时就看见「框先跳、块后弹」。layer 属性在
-                 * UIViewPropertyAnimator 的动画块内会被一并驱动。 */
-                item.setHighlighted(on)
-                if on {
-                    item.transform = CGAffineTransform(translationX: 0, y: -AevonRingMenu.hoverLift)
-                        .scaledBy(x: AevonRingMenu.hoverScale, y: AevonRingMenu.hoverScale)
-                } else {
-                    item.transform = .identity
+            // 振幅没变就一个字都不动 —— 每帧全量重发等于把弹簧按回第 0 帧。
+            guard abs(want - item.hoverAmplitude) > 0.001 else { continue }
+            let rising = want > item.hoverAmplitude
+            item.hoverAmplitude = want
+
+            let target: CGAffineTransform
+            if want > 0.001 {
+                target = CGAffineTransform(translationX: 0, y: -AevonRingMenu.hoverLift * want)
+                    .scaledBy(x: 1 + (AevonRingMenu.hoverScale - 1) * want,
+                              y: 1 + (AevonRingMenu.hoverScale - 1) * want)
+            } else {
+                target = .identity
+            }
+
+            /* 旧弹道先按「当前呈现值」收尾，再从这里出发。不这么做直接丢引用，
+             * 图层会跳回模型值（= 终点），横向看就是图标瞬移。 */
+            if let old = item.hoverAnimator {
+                if old.isRunning {
+                    old.stopAnimation(false)
+                    old.finishAnimation(at: .current)
                 }
+                item.hoverAnimator = nil
             }
+
+            let k = min(slot, responseScales.count - 1)
+            let response = AevonRingMenu.hoverSpringResponse * responseScales[k]
+            // 初速指向新目标：升起给大一点，回落小一点 —— 这样每次重发都是
+            // 「从当前位置接着冲」，而不是从 0 速度慢慢起步（那才是发黏的来源）。
+            let velocity = CGVector(dx: 0, dy: rising
+                ? AevonRingMenu.hoverRiseVelocity
+                : AevonRingMenu.hoverFallVelocity)
+            let animator = UIViewPropertyAnimator(
+                duration: 1.0,
+                timingParameters: AevonSpring.params(response: response,
+                                                    dampingFraction: hoverZ,
+                                                    initialVelocity: velocity))
+            // ⛔ 用 weak：`item.hoverAnimator` 持有 animator，animator 的闭包若强捕 item
+            // 就是一条环（图标 → 弹道 → 图标）；UIKit 不保证每次都会替我们解开。
+            animator.addAnimations { [weak item] in
+                guard let item = item else { return }
+                // 只有队首算「选中」，余韵那几拍只是跟着抬一点，不给蓝框
+                item.setHighlighted(want >= 0.999)
+                item.transform = target
+            }
+            animator.startAnimation(afterDelay: delays[k])
+            item.hoverAnimator = animator
         }
-        hoverAnimator = animator
-        animator.startAnimation()
+    }
+
+    /// V0.3.19（AevonHoverTrailV319）：展开 / 重建列表时把余韵波清空。
+    private func resetHoverWave() {
+        hoverTrail.removeAll()
+        hoveredBundleID = ""
+        hoveredIcon = nil
+        hoverSwitchCount = 0
+        hoverRecentNames.removeAll()
+        for icon in icons {
+            icon.hoverAnimator?.stopAnimation(true)
+            icon.hoverAnimator = nil
+            icon.hoverAmplitude = 0
+            icon.transform = .identity
+            icon.setHighlighted(false)
+        }
+    }
+
+    /// V0.3.19（AevonHoverTrailV319）：本轮划过汇总（只在抬手 / 收起时调一次）。
+    private func flushHoverSummary() {
+        guard hoverSwitchCount > 0 else { return }
+        let tail = hoverRecentNames.suffix(6).joined(separator: "→")
+        AevonLog.info("[圆盘] 本轮划过 \(hoverSwitchCount) 次（最后几个：\(tail)）"
+            + "（AevonHoverTrailV319）")
+        hoverSwitchCount = 0
+        hoverRecentNames.removeAll()
     }
 
     // MARK: - 本地触摸（第二根手指 / 抬手后再按）
@@ -1379,8 +1505,38 @@ final class AevonRingMenu: UIView {
                 best = icon
             }
         }
+        /* V0.3.19（AevonHoverTrailV319）：现任优先（命中滞回）。
+         *
+         * 没有这一段时，指针压在两个图标的角平分线上，「最近的那个」会逐帧翻转 ——
+         * Aevon(95) 实测 765 次划过里 112 次是 A→B→A（15%），最短 8ms 一个来回。
+         * 规则：现任图标只要还在自己放大幅度内（1.35 倍命中半径）就继续占有，
+         * 除非别的图标在弧长上比它近 `hoverHysteresisGap` pt 以上。
+         * 注意判在 `guard let candidate` 之前 —— 否则「现任还在范围内、但没人是候选」
+         * 的那一帧会返回 nil，高亮凭空灭一下。 */
+        if let cur = hoveredIcon, cur !== best,
+           let curArc = arcScore(of: cur, distance: distance, pointAngle: pointAngle) {
+            let reach = cur.bounds.width * AevonRingMenu.hitFactor * AevonRingMenu.hoverHysteresisReach
+            if curArc <= reach, bestScore > curArc - AevonRingMenu.hoverHysteresisGap {
+                return cur
+            }
+        }
         guard let candidate = best else { return nil }
         return bestScore <= candidate.bounds.width * AevonRingMenu.hitFactor ? candidate : nil
+    }
+
+    /// V0.3.19（AevonHoverTrailV319）：单个图标相对指针的**弧长**距离（pt）。
+    /// 超出它那一圈的径向容差就返回 nil（和 `icon(at:)` 里同一套判据）。
+    private func arcScore(of icon: AevonRingIcon, distance: CGFloat, pointAngle: CGFloat) -> CGFloat? {
+        guard let index = icons.firstIndex(where: { $0 === icon }),
+              index < iconRadii.count, index < iconBaseAngles.count else { return nil }
+        let radius = iconRadii[index]
+        let tolerance = max(icon.bounds.width * 0.78, 28)
+        guard abs(distance - radius) <= tolerance else { return nil }
+        var iconAngle = (iconBaseAngles[index] + rotation).truncatingRemainder(dividingBy: 360)
+        if iconAngle < 0 { iconAngle += 360 }
+        var delta = abs(iconAngle - pointAngle)
+        if delta > 180 { delta = 360 - delta }
+        return delta * .pi / 180 * radius
     }
 
     private func angle(from center: CGPoint, to point: CGPoint) -> CGFloat {

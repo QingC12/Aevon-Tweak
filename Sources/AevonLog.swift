@@ -30,20 +30,33 @@ enum AevonLog {
     private static func emit(_ level: String, _ message: String) {
         NSLog("[%@][%@] %@", tag as NSString, level as NSString, message as NSString)
         guard AevonPrefs.bool("LogEnabled", default: true) else { return }
-        append("[\(timestamp())] [\(level)] \(message)\r\n")
+        /* V0.3.19（AevonHoverTrailV319）：时间戳与落盘合并到同一把锁内。
+         * 以前 `timestamp()` 每次 `DateFormatter()` 新建一个（分配 + 解析一遍格式串），
+         * `append` 又各自加锁 —— Aevon(95) 峰值 62 行/秒全在触摸热路径上。
+         * 现在 formatter 是静态单例、一次锁住整条写路径。 */
+        lock.lock()
+        defer { lock.unlock() }
+        guard fileLogAvailable else { return }
+        append("[\(timestampLocked())] [\(level)] \(message)\r\n")
     }
 
-    private static func timestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm:ss.SSS"
+    /// V0.3.19（AevonHoverTrailV319）：复用同一个 formatter（`DateFormatter` 的构造
+    /// 是重活，每条日志新建一次在 60~120Hz 的触摸路径上足以掉帧）。
+    /// ⛔ 只能在持有 `lock` 时调 —— `DateFormatter` 的格式化不是线程安全的。
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM-dd HH:mm:ss.SSS"
+        return f
+    }()
+
+    private static func timestampLocked() -> String {
         return formatter.string(from: Date())
     }
 
+    /// ⛔ 调用方必须已持有 `lock`。
     private static func append(_ line: String) {
         guard let data = line.data(using: .utf8) else { return }
-        lock.lock()
-        defer { lock.unlock() }
         guard fileLogAvailable else { return }
 
         let manager = FileManager.default

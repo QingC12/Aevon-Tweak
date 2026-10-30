@@ -1917,6 +1917,11 @@ __attribute__((used)) static const char AevonOwnLiftV316Marker[] = "AevonOwnLift
  * → `-sc_updateSelectionAtPoint:`，它的圆盘从不经过任何旁路通道。 */
 __attribute__((used)) static const char AevonOwnFeedV317Marker[] = "AevonOwnFeedV317";
 
+/* V0.3.19（AevonHoverTrailV319）：划过动画改成「每图标一条弹道 + 时间序余韵波」。
+ * 标记放在垫片里是为了让 CI 能从 dylib 里 grep 到 —— Swift 那一侧的实现细节
+ * 会随编译器优化变形，但这条 ASCII 常量永远在二进制里。 */
+__attribute__((used)) static const char AevonHoverTrailV319Marker[] = "AevonHoverTrailV319";
+
 /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指。
  * 用户 2026-10-30：「在控制中心，通知中心，锁屏解锁后没有上滑进入桌面时都可以触发圆盘，
  * 应该修改为不能通过手势触发圆盘」。根因是 `presentRing` 的守卫里根本没有「当前在不在
