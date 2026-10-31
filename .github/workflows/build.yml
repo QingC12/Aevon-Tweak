@@ -1729,11 +1729,13 @@ jobs:
           if grep -q 'nativeBounds' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"; then
             echo "::error::0.2.49 屏幕贴合只许改 bounds，不许碰 nativeBounds"; exit 1
           fi
-          # ③（0.2.89 反转）关闭动画已瞬时化（AevonCloseInstantV289）：离场帧 + 淡出
-          #    整段退役，这里原「先抓离场帧再销毁」的顺序断言与「进场缩放过渡」must
+          # ③（0.2.89 反转 → 0.3.45 再反转）开窗动画回来了，但形状定死为「只缩放不淡入」：
+          #    允许 0.92（AevonRevealScaleV345）/ 0.94（关窗离场）/ 0.965（停靠按压脉冲），
+          #    唯独禁 0.96 —— 那是 0.2.85「空壳 0.965→1 缩放 + 淡入」的原始符号，
+          #    用户在这条链路上被打回过两次。用 ERE 精确匹配，别让 0.96 命中 0.965。
           if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-               | grep -q 'scaleX: 0.96'; then
-            echo "::error::0.2.89 进场缩放过渡（0.96 空壳淡入）回来了 = 开窗闪的本体"
+               | grep -qE 'scaleX: 0\.96([^0-9]|$)'; then
+            echo "::error::0.2.89 进场缩放 0.96 空壳过渡回来了 = 开窗闪的本体"
             exit 1
           fi
           # ④ App 必须先收到「浮窗里是谁」再改画布（否则第一遍布局用整屏尺寸）
