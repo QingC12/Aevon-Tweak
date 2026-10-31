@@ -4446,11 +4446,16 @@ jobs:
             && grep -q 'double sx = (double)self.start.x;' "$GH" \
             && grep -q 'AevonGripSystemSummon(fx, fy, sx, sy,' "$GH" \
             || { echo "::error::V0.3.6 ObjC 没把 began 起点 x/y 传给系统腿（判据会自我否决）"; exit 1; }
+          # V0.3.28：几何来源由 `edgeMinX` 换成 `band.minX`（单一几何源），
+          # 但「右缘判据必须用 began 起点而不是当前 x」这条本意原样保留。
           grep -q 'static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat,' "$EE" \
             && grep -q 'startY: CGFloat, cls: String)' "$EE" \
             && grep -q 'let edgeRef = startX > 0 ? startX : x' "$EE" \
-            && grep -q 'guard edgeRef >= edgeMinX else' "$EE" \
+            && grep -q 'guard edgeRef >= band.minX else' "$EE" \
             || { echo "::error::V0.3.6 Swift 右缘判据还是用当前 x（7 条误拦的来源）"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$EE" | grep -qF 'edgeMinX'; then
+            echo "::error::V0.3.28 右缘判据又出现了第二几何 edgeMinX（只许 band.minX）"; exit 1
+          fi
           # ④防回退：右缘判据不许再直接拿当前 x 判（形态锁）
           if grep -q 'guard x >= screen.width - 24 else' "$EE"; then
             echo "::error::V0.3.6 右缘判据回退成当前 x（Aevon(84) 7 条误拦的真因）"
@@ -4667,11 +4672,12 @@ jobs:
           # 唯一漏出口是 24pt 窄边。用户定几何：「右边缘底部向上 30% 高度，宽度 25%」。
           # ①几何必须贴右下：横向 GripZoneW **按 pt**（V0.3.14 起，默认 5），纵向 GripZoneH 按屏高 %
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect');j=s.find(chr(10)+'    }',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and j>i and 'GripZoneW' in b and 'GripZoneH' in b and 'screenH * hPct / 100.0' in b and 'x: screenW - w' in b and 'y: screenH - h' in b and 'screenW * wPct' not in b and 'GripY' not in b and 'GripLen' not in b and 'GripWidth' not in b);print('V0.3.13/14 触发区 = 右缘底部矩形（横向 pt、纵向 %）✓' if ok else '::error::bandRect 横向又变回百分比，或函数体里仍在读 GripY/GripLen/GripWidth');sys.exit(0 if ok else 1)" "$RG"
-          # ①b V0.3.14（AevonEdgePadV314）：暂扣区必须存在且比贴边区宽 edgePadPts
-          grep -q 'static func padRect(screenW: CGFloat, screenH: CGFloat) -> CGRect' "$RG" \
-            && grep -q 'core.width + AevonRingGripView.edgePadPts' "$RG" \
-            && grep -q 'static let edgePadPts: CGFloat = 35' "$RG" \
-            || { echo "::error::V0.3.14 缺 padRect / edgePadPts（边缘候选的暂扣段）"; exit 1; }
+          # ①b V0.3.28（AevonEdgeBandOnly328）：暂扣段（padRect / edgePadPts）整体退役。
+          #    多一条几何就多一条「带外也抢」的路 —— Aevon(101) 的 6 次「两头空」正是
+          #    借腿伸到 44pt 抢下了系统本来能接的手指。这里改成反向断言守住。
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$RG" | grep -qE 'func padRect|edgePadPts'; then
+            echo "::error::V0.3.28 暂扣段回潮了（padRect / edgePadPts 必须保持退役）"; exit 1
+          fi
           # ②把手可隐藏：开关默认开 + alpha 走同一套通道（禁 isHidden）+ 两腿都没就绪时 fail-open 显形
           grep -q 'AevonPrefs.bool("GripHandleHidden", default: true)' "$RG" \
             && grep -q 'static var gripShownAlpha' "$RG" \
@@ -4681,14 +4687,18 @@ jobs:
             echo "::error::V0.3.13 藏手又用 isHidden（0.2.85 铁律：isHidden 会 cancel 在屏手指）"
             exit 1
           fi
-          # ③释手指顺序：呼盘必须排在纵向让路**之前**（否则 dx=-10/dy=-13 会被当成滚动放掉）
-          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('BOOL horizontal = (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy));');b=s.find('if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx))');ok=(a>0 and b>0 and a<b);print('V0.3.13 呼盘判据排在纵向让路之前 ✓' if ok else '::error::V0.3.13 纵向让路跑到了呼盘判据前面（斜向呼盘会被放掉）');sys.exit(0 if ok else 1)" "$OWNM"
-          grep -q 'if (fabs((double)dy) > 40.0)' "$OWNM" \
-            || { echo "::error::V0.3.13 纵向 40pt 兜底闸被删了"; exit 1; }
-          # ④借腿降为纯兜底：自建腿已注册时借腿不许呼盘（Aevon(91)：29 条「达阈值但被拦」全是白算）
-          grep -q 'if AevonGripOwnLegReadyBridge() != 0 {' "$OWNE" \
-            && grep -q '@_silgen_name("AevonGripOwnLegReadyInt")' "$OWNE" \
-            || { echo "::error::V0.3.13 借腿没降为兜底（自建腿 ready 时仍在呼盘）"; exit 1; }
+          # ③释手指顺序：召唤必须排在续闸**之前**（否则慢速滑动会被当成滚动放掉）。
+          #   V0.3.28 判据只剩 `hypot >= 8pt` 一条，旧的 `BOOL horizontal` / `42pt` 兜底
+          #   都已退役，所以锚「hypot 挡在前面、ownBailRearm 落在后面」这个结构。
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('double dist = hypot((double)dx, (double)dy);');b=s.find('[self ownBailRearm];',a if a>0 else 0);ok=(a>0 and b>a);print('V0.3.13/28 召唤判据排在续闸之前 ✓' if ok else '::error::V0.3.13/28 续闸跑到了召唤判据前面（慢速滑动会被放掉）');sys.exit(0 if ok else 1)" "$OWNM"
+          # ④借腿降为纯兜底：**本手势**自建腿真的接管了，借腿才闭嘴上交。
+          #   V0.3.28（AevonYieldGuardV328）把判据从静态「识别器已注册」改成动态
+          #   「0.15s 内打出过 hold」。Aevon(101) 的 6 次「两头空」= 静态判据拦住了
+          #   系统腿、自建腿又没接这根手指 —— 带外落指本来就该原样交给系统。
+          grep -q 'let holdAge = AevonGripOwnHoldAgeBridge()' "$OWNE" \
+            && grep -q 'if holdAge < 0.15 {' "$OWNE" \
+            && grep -q '@_silgen_name("AevonGripOwnHoldAge")' "$OWNE" \
+            || { echo "::error::V0.3.28 借腿让路没接上「本手势已 hold」动态判据（会两头空）"; exit 1; }
           # ④b防回退：ready 判据必须同时要求「走的是管理器注册那条路」——
           # `AevonOwnAttachTo` 的旁听退路也会给 gAevonOwnGesture 赋值，但它一条 moved 都收不到
           # （0.3.11 实测 38 hold / 0 moved）。若把它算成就绪，借腿被让路 = 完全没有入口。
@@ -4706,27 +4716,26 @@ jobs:
             || { echo "::error::V0.3.13 主库缺区域/隐藏/闸门标记"; exit 1; }
           strings "$ADYL" | grep -q 'AevonAppBandRetireV313' \
             || { echo "::error::V0.3.13 App 库缺吞带退役标记"; exit 1; }
-          echo "V0.3.13 校验: 右缘底部矩形 + 把手可隐藏（fail-open）+ 纵向首帧让路 + 借腿降兜底 + 放行四分类 + App 吞带退役 ✓"
+          echo "V0.3.13 校验: 右缘底部矩形 + 把手可隐藏（fail-open）+ 召唤先于续闸 + 借腿让路动态化 + 放行四分类 + App 吞带退役 ✓"
 
           # ── V0.3.14 校验（Aevon(93) 定档：贴边窄带 + 暂扣段 + App 侧吞带拆净）──
           # 用户原话：「边缘触发条的宽度能不能改成只要手指贴着右侧底部 30% 高度中向左滑动时触发，
           # 而不要任何宽度？」以及「同时做清理 App 侧 150 行空转代码这一刀」。
-          # ①三段式落点判定在位：0 不接管 / 1 贴边 / 2 边缘候选，且 ObjC 侧按返回值分岔
+          # ①落点判定在位：0 不接管 / 1 带内，ObjC 侧按返回值分岔。
+          #   V0.3.28（AevonEdgeBandOnly328）：0.3.14 的「2 = 边缘候选」已删 ——
+          #   暂扣段不存在了，落点在带外就是 0，一律原样交给系统。
           grep -q 'static func ownLegHitLevel(x: CGFloat, y: CGFloat) -> Int32' "$OWNE" \
-            && grep -q 'if x >= core.minX { return 1 }' "$OWNE" \
-            && grep -q 'if pad.width > 0, x >= pad.minX { return 2 }' "$OWNE" \
+            && grep -q 'return (x >= core.minX) ? 1 : 0' "$OWNE" \
             && grep -q '@_cdecl("AevonGripOwnHitLevel")' "$OWNE" \
-            || { echo "::error::V0.3.14 缺三段式落点判定（贴边/边缘候选/带外）"; exit 1; }
-          # ②边缘候选必须走严格判据，右移或纵向 ≥12 立刻还回去
-          #   V0.3.15（AevonStrictAngleV315）把判据从绝对 |dy|<=6 改成角度式，
-          #   所以这里锚主结构（_ownStrict 分支 + ady/adx 两个绝对值）而不是具体阈值。
-          grep -q 'if (_ownStrict) {' "$OWNM" \
-            && grep -q 'double ady = fabs((double)dy);' "$OWNM" \
-            && grep -q 'if (dx > 0.0 || fabs((double)dy) >= 12.0)' "$OWNM" \
-            || { echo "::error::V0.3.14/15 边缘候选缺严格判据（抖音进度条会被抢）"; exit 1; }
-          # ③贴边落点仍走宽松判据（BOOL horizontal 那条），且纵向让路仍在它之后
-          grep -q 'if (horizontal) {' "$OWNM" \
-            || { echo "::error::V0.3.14 贴边落点的宽松判据丢了（贴边也呼不出来）"; exit 1; }
+            || { echo "::error::V0.3.28 缺两档落点判定（带内 1 / 带外 0）"; exit 1; }
+          # ②防回退：三段式的第 2 档不许回来（它必然要第二条几何才算得出来）
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$OWNE" | grep -qE 'return 2|pad\.minX'; then
+            echo "::error::V0.3.28 边缘候选（return 2）回潮了（暂扣段已退役）"; exit 1
+          fi
+          # ③防回退：首帧角度判据不许回来 —— 带内只看位移量
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$OWNM" | grep -qE 'BOOL horizontal|_ownStrict|double ady = fabs\(\(double\)dy\);'; then
+            echo "::error::V0.3.28 首帧角度判据回潮了（horizontal / _ownStrict / ady）"; exit 1
+          fi
           # ④App 侧拆净：几何变量一条都不许回来 + 拆净标记进二进制
           if grep -nE '^static (CGRect|CGSize|BOOL|CFTimeInterval) gAevonGrip(Rect|RealScreen|Cached|CacheAt)' \
                "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"; then
@@ -4742,7 +4751,7 @@ jobs:
           # ⑥主库标记进二进制
           strings "$MDYL" | grep -q 'AevonEdgePadV314' \
             || { echo "::error::V0.3.14 主库缺贴边+暂扣标记"; exit 1; }
-          echo "V0.3.14 校验: 贴边窄带（5pt 默认，可调 1~60）+ 暂扣段严格判据 + App 侧吞带拆净（浮窗边带保留）✓"
+          echo "V0.3.14 校验: 贴边窄带（0.3.28 起 15pt 默认、可调 6~25、0=关）+ 暂扣段已退役 + App 侧吞带拆净（浮窗边带保留）✓"
 
           # ── V0.3.15 校验（Aevon(93)：呼出手势写死 + 隐藏把手提到一级 + 滑条实时 + 高度 35%）──
           # 用户原话：「将设置中的默认开启的呼出手势开关选项添加到代码中，不再显示开关选项（并且

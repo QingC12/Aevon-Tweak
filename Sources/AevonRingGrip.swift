@@ -255,9 +255,9 @@ final class AevonRingGripView: UIView {
         super.layoutSubviews()
         let zone = AevonRingGrip.bandRect(screenW: bounds.width, screenH: bounds.height)
         guard zone.width > 0, zone.height > 0 else { return }
-        /* V0.3.14（AevonEdgePadV314）：贴边宽可能只有 5pt，视觉竖条（barWidth 5pt）
-         * 会被挤到 0 宽。handle 只在这一层承载「fail-open 显形时的那条竖条」，
-         * 触摸判据走 bandRect / padRect，与 handle.frame 无关 —— 所以这里取 max(12)。
+        /* V0.3.14（AevonEdgePadV314）：贴边宽可能只有 15pt（0.3.28 默认），视觉竖条
+         * （barWidth 5pt）会被挤到 0 宽。handle 只在这一层承载「fail-open 显形时的那条竖条」，
+         * 触摸判据走 bandRect，与 handle.frame 无关 —— 所以这里取 max(12)。
          * 平时 alpha=0，这笔加宽一个字都不会被感知。 */
         let handleW = max(zone.width, AevonRingGripView.barWidth * 2.4)
         handle.frame = CGRect(x: bounds.width - handleW, y: zone.minY,
@@ -388,8 +388,9 @@ enum AevonRingGrip {
      * 通道就是这道 24pt 的边。用户直接在体验上确认了：「开启后很小的几率触发 App 内操作」。
      *
      * V0.3.13 曾把横向拉到 25%（≈107pt）来一次性消灭落偏，代价是抖音底部进度条、
-     * 右下角按钮全在那片区域里。V0.3.14 按用户定档改回「贴边」：横向 pt 值（默认 5），
-     * 纵向仍是屏高百分比（默认 30，贴底）。落偏由 `padRect` 的暂扣段兜住，不靠加宽。
+     * 右下角按钮全在那片区域里。V0.3.14 按用户定档改回「贴边」：横向 pt 值，
+     * 纵向仍是屏高百分比（默认 30，贴底）。V0.3.28 起横向默认 15pt、可调 6~25、
+     * 0 = 关闭自建腿；落偏不再靠暂扣段捞，而是交给系统边缘手势区（见下）。
      *
      * ⛔ 两侧同侧纪律（0.2.61~0.2.84 反复踩）：本函数仍是唯一权威。App 侧
      * `AevonAppSide.m` 的吞带已整体删除（0.3.14 `AevonAppBandPurgeV314`）——
