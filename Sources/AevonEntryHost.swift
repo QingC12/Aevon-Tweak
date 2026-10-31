@@ -114,6 +114,8 @@ final class AevonTransitionSentry: NSObject {
                 && sv.transform.isIdentity
             guard settled, let box = AevonEntryHost.container, box.superview !== sv else { return }
             AevonEntryHost.reattachToSceneView()
+            // V0.3.27（AevonKeepAliveEarlyV327）：过渡哨是误报 → 把同一拍起跑的保活探针收掉
+            AevonWindowManager.cancelTransitionProbe()
             AevonLog.info("[入口] 回桌面过渡哨误报还原：场景仍在屏且几何稳定 → 容器搬回场景视图"
                 + "（AevonHomeFreezeV291）")
         }

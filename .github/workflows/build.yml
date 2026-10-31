@@ -5546,9 +5546,13 @@ jobs:
           #    桌面灰带必须扣到抬手：>=2 帧就撤闸，不许再排 0.28s 放行
           sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '[_ownBail invalidate]' \
             || { echo "::error::V0.3.26 桌面灰带还在半截放行（那一下就是翻页）"; exit 1; }
-          #    App 内 14 度锥必须保留（R2 差异化的前提）
-          grep -qF 'ady <= adx * 0.25' "$GH26" \
-            || { echo "::error::V0.3.26 App 内严格锥被一起放宽了（R2 要求差异化）"; exit 1; }
+          #    V0.3.27（AevonGripConeV327）：App 内锥从写死的 0.25 改成走配置值 ——
+          #    「App 内与桌面必须差异化」这条不变，但判据形态换成 ady <= adx * cone。
+          grep -qF 'ady <= adx * cone' "$GH26" \
+            || { echo "::error::V0.3.27 App 内锥没走配置值（AevonGripConeV327）"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qF 'ady <= adx * 0.25'; then
+            echo "::error::V0.3.27 写死的 14 度锥还在（回退开关会失效）"; exit 1
+          fi
 
           # ③ 场景保活探针（AevonKeepAliveProbeV326）
           grep -qF 'Sources/AevonKeepAliveProbe.m' "$MF26" \
@@ -5582,6 +5586,81 @@ jobs:
             || { echo "::error::V0.3.26 探针没有 @try 防线"; exit 1; }
 
           echo "V0.3.26 校验: 底边窗口测速+跟手三出口 / 桌面呼盘取消锥角且绝不半截放行 / 场景保活多探针 ✓"
+
+          # ── V0.3.27 校验（Aevon(100)：手势命中率 / 回桌面闪两次 / 底部把手隐藏）──
+          MYD27="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
+          [ -n "$MYD27" ] && [ -f "$MYD27" ] || { echo "::error::V0.3.27 定位不到主库 dylib"; exit 1; }
+          #    本 step 没有 EH（AevonEntryHost.swift）的变量，自己定义 —— 别复用别的 step 的局部量
+          EH27="$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift"
+          for s in AevonGripConeV327 AevonGripWidenV327 AevonReassertBudgetV327 \
+                   AevonReassertGateV327 AevonBottomBarHideV327 AevonKeepAliveCensusV327 \
+                   AevonKeepAlivePredicateV327 AevonKeepAliveEarlyV327; do
+            strings "$MYD27" | grep -qF "$s" \
+              || { echo "::error::V0.3.27 主库缺标记 $s"; exit 1; }
+          done
+
+          # ① 手势命中率（AevonGripConeV327 / AevonGripWidenV327）
+          grep -qF 'static double aev_grip_cone_value(void)' "$GH26" \
+            || { echo "::error::V0.3.27 App 内锥没有配置读取函数"; exit 1; }
+          grep -qF 'AevonGripCone327' "$GH26" \
+            || { echo "::error::V0.3.27 锥角没有回退开关（AevonGripCone327）"; exit 1; }
+          grep -qF 'AevonGripWidenOff327' "$GH26" \
+            || { echo "::error::V0.3.27 续判没有回退开关（AevonGripWidenOff327）"; exit 1; }
+          grep -qF '_ownMovedFrames < 3' "$GH26" \
+            || { echo "::error::V0.3.27 首帧判死后没有续判窗口"; exit 1; }
+          #    反向：桌面分支不许被续判影响 —— 桌面灰带仍然一次扣到抬手
+          #    ⛔ 必须写成 if…then 而不是 `cmd && { exit 1; }`：run 脚本是 bash -e，
+          #    后者在「条件不成立」时会返回 1，被 -e 当成失败直接红。
+          if sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '_ownMovedFrames < 3'; then
+            echo "::error::V0.3.27 续判渗进了桌面分支（桌面必须一次扣死）"; exit 1
+          fi
+          sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '[_ownBail invalidate]' \
+            || { echo "::error::V0.3.27 桌面灰带撤闸被破坏（D5 防回退）"; exit 1; }
+
+          # ② 回桌面闪两次（AevonReassertBudgetV327 / AevonReassertGateV327）
+          grep -qF 'private var liveWaitReassertBudget = -1' "$WV" \
+            || { echo "::error::V0.3.27 没有让位期重申预算"; exit 1; }
+          grep -qF 'liveWaitReassertBudget = isLiveWait ? 1 : -1' "$WV" \
+            || { echo "::error::V0.3.27 布防没把让位期预算设成 1"; exit 1; }
+          grep -qF 'let reassertDelays: [Double] = isLiveWait ? [] : [0.25, 0.55, 0.85]' "$WV" \
+            || { echo "::error::V0.3.27 让位期还在排 +0.40s 那一发（第二下黑就是它）"; exit 1; }
+          grep -qF 'if liveWaitReassertBudget == 0 { return }' "$WV" \
+            || { echo "::error::V0.3.27 预算闸没接在写之前"; exit 1; }
+          grep -qF 'sceneHost.contentLooksRendering == true' "$WV" \
+            || { echo "::error::V0.3.27 重申前没读 cs（画面在画时白写一次就是多黑一次）"; exit 1; }
+          #    反向：让位分支不许再有 [0.40]
+          if grep -vE '^[[:space:]]*(//|///|\*|/\*)' "$WV" | grep -qF '? [0.40] : [0.25, 0.55, 0.85]'; then
+            echo "::error::V0.3.27 让位期 +0.40s 那发回潮了"; exit 1
+          fi
+
+          # ③ 底部把手隐藏（AevonBottomBarHideV327）
+          grep -qF 'flickBar.alpha = 0' "$WV" \
+            || { echo "::error::V0.3.27 底部把手没有隐藏"; exit 1; }
+          grep -qF 'flickBar.alpha = 1' "$WV" \
+            || { echo "::error::V0.3.27 长按进预备态时把手不显形（丢了关闭确认）"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|///|\*|/\*)' "$WV" | grep -qF 'flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)'; then
+            echo "::error::V0.3.27 把手还在用 32% 白常显"; exit 1
+          fi
+
+          # ④ 保活探针 v2（AevonKeepAliveCensusV327 / PredicateV327 / EarlyV327）
+          grep -qF 'static id aev_scene_predicate(void)' "$KA26" \
+            || { echo "::error::V0.3.27 探针没有「只命中本场景」的谓词"; exit 1; }
+          grep -qF 'class_copyMethodList' "$KA26" \
+            || { echo "::error::V0.3.27 探针没有接口普查（真 API 名靠 census 不靠猜）"; exit 1; }
+          grep -qF 'if (gActive) { return 2; }' "$KA26" \
+            || { echo "::error::V0.3.27 探针起跑不幂等（过渡哨 + 布防会重复建断言）"; exit 1; }
+          grep -qF 'setPredicate:' "$KA26" \
+            || { echo "::error::V0.3.27 探针没有 setPredicate 路径"; exit 1; }
+          grep -qF 'addAssertion:withTransitionContext:' "$KA26" \
+            || { echo "::error::V0.3.27 探针没有 manager.addAssertion 路径"; exit 1; }
+          grep -qF 'func kickKeepAliveProbeOnTransition()' "$WV" \
+            || { echo "::error::V0.3.27 探针没有过渡哨起跑入口"; exit 1; }
+          grep -qF 'view.kickKeepAliveProbeOnTransition()' "$WM" \
+            || { echo "::error::V0.3.27 过渡哨没起跑探针（布防才起跑就晚了 0.95s）"; exit 1; }
+          grep -qF 'AevonWindowManager.cancelTransitionProbe()' "$EH27" \
+            || { echo "::error::V0.3.27 过渡哨误报时没收掉探针（悬空断言）"; exit 1; }
+
+          echo "V0.3.27 校验: App 内 22°锥 + 两帧续判 / 让位期重申预算 1 + 写前读 cs / 底部把手默认隐藏（长按显形）/ 保活探针 v2（census + 真谓词 + 过渡哨起跑）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

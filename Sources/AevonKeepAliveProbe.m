@@ -48,6 +48,12 @@
 extern void AevonKeepAliveLog(const char *utf8Detail);
 
 __attribute__((used)) static const char AevonKeepAliveProbeV326[] = "AevonKeepAliveProbeV326";
+/* V0.3.27（Aevon(100) #2，仍然闪两次）：三处新取证 —— ① 接口全量普查
+ * （上一版谓词=无/无，说明我们猜的两个谓词类都不存在，必须把真接口 dump 出来）
+ * ② 四条 acquire 路径逐条实测 ③ 断言用的谓词是否真的指向我们那个场景。 */
+__attribute__((used)) static const char AevonKeepAliveCensusV327[] = "AevonKeepAliveCensusV327";
+__attribute__((used)) static const char AevonKeepAlivePredicateV327[] = "AevonKeepAlivePredicateV327";
+__attribute__((used)) static const char AevonKeepAliveEarlyV327[] = "AevonKeepAliveEarlyV327";
 __attribute__((used)) static const char AevonKeepAliveAssertV326[] = "AevonKeepAliveAssertV326";
 __attribute__((used)) static const char AevonKeepAliveMatrixV326[] = "AevonKeepAliveMatrixV326";
 __attribute__((used)) static const char AevonKeepAliveNoWriteV326[] = "AevonKeepAliveNoWriteV326";
@@ -130,6 +136,40 @@ static long long aev_read_int(id obj, NSString *key) {
 
 /* ---- 一、类型与方法矩阵（每个进程只打一次）---- */
 
+/* V0.3.27（AevonKeepAliveCensusV327）：把类的实例方法名全量 dump 出来。
+ * 为什么必须这么做：0.3.26 靠猜 —— `predicateMatchingAllScenes` 和
+ * `…PredicateSceneExtension` 都不存在（矩阵打出「谓词=无/无」），断言于是没有谓词、
+ * 不覆盖任何场景，等于空断言。**真 API 名靠 census 不靠猜**（这条已经写进工作区铁律）。 */
+static NSString *aev_method_names(Class cls, NSUInteger limit) {
+    if (cls == nil) { return @"-"; }
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    unsigned int n = 0;
+    Method *ms = class_copyMethodList(cls, &n);
+    if (ms != NULL) {
+        for (unsigned int i = 0; i < n && out.count < limit; i++) {
+            const char *nm = sel_getName(method_getName(ms[i]));
+            if (nm != NULL) { [out addObject:[NSString stringWithUTF8String:nm]]; }
+        }
+        free(ms);
+    }
+    return out.count > 0 ? [out componentsJoinedByString:@"|"] : @"-";
+}
+
+static NSString *aev_property_names(Class cls) {
+    if (cls == nil) { return @"-"; }
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    unsigned int n = 0;
+    objc_property_t *ps = class_copyPropertyList(cls, &n);
+    if (ps != NULL) {
+        for (unsigned int i = 0; i < n; i++) {
+            const char *nm = property_getName(ps[i]);
+            if (nm != NULL) { [out addObject:[NSString stringWithUTF8String:nm]]; }
+        }
+        free(ps);
+    }
+    return out.count > 0 ? [out componentsJoinedByString:@"|"] : @"-";
+}
+
 static void aev_log_matrix(void) {
     if (gMatrixLogged) { return; }
     gMatrixLogged = YES;
@@ -178,6 +218,31 @@ static void aev_log_matrix(void) {
                       aev_responds((id)predCls, @"predicateMatchingAllScenes")];
     }
     AevonKeepAliveLog(m.UTF8String);
+
+    /* V0.3.27（AevonKeepAliveCensusV327）：接口全量 dump —— 三方分开打，避免单行过长被截。 */
+    if (mgrCls != nil) {
+        AevonKeepAliveLog([NSString stringWithFormat:@"普查 管理器实例方法（AevonKeepAliveCensusV327）：%@",
+                           aev_method_names(mgrCls, 80)].UTF8String);
+    }
+    if (asrtCls != nil) {
+        AevonKeepAliveLog([NSString stringWithFormat:@"普查 断言实例方法（AevonKeepAliveCensusV327）：%@",
+                           aev_method_names(asrtCls, 80)].UTF8String);
+        AevonKeepAliveLog([NSString stringWithFormat:@"普查 断言属性（AevonKeepAliveCensusV327）：%@",
+                           aev_property_names(asrtCls)].UTF8String);
+    }
+    /* 场景侧到底能不能读到 deactivationReasons：0.3.26 三轮全是 -998（KVC 读不到），
+     * 所以顺带把「场景类 + settings 类」的属性名 dump 一次，下一轮直接照名字读。 */
+    if (gScene != nil) {
+        id settings = aev_call0(gScene, @"settings");
+        AevonKeepAliveLog([NSString stringWithFormat:@"普查 场景类=%@ 属性：%@",
+                           NSStringFromClass([gScene class]),
+                           aev_property_names([gScene class])].UTF8String);
+        if (settings != nil) {
+            AevonKeepAliveLog([NSString stringWithFormat:@"普查 settings类=%@ 属性：%@",
+                               NSStringFromClass([settings class]),
+                               aev_property_names([settings class])].UTF8String);
+        }
+    }
 }
 
 /* ---- 二、只读取证：场景的 deactivation 账 ---- */
@@ -198,6 +263,26 @@ static void aev_log_reasons(NSString *tag) {
 }
 
 /* ---- 三、写探针 A：deactivation 断言（正规通道，默认开）---- */
+
+/* V0.3.27（AevonKeepAlivePredicateV327）：只命中「我们这一扇窗的场景」的谓词。
+ * 每次起跑现建（约 0.05ms），不做缓存 —— 缓存会把场景对象强引用到下一轮。 */
+static id aev_scene_predicate(void) {
+    if (gScene == nil) { return nil; }
+    id target = gScene;
+    id p = nil;
+    @try {
+        p = [NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *bindings) {
+            return obj == target;
+        }];
+    } @catch (NSException *e) {
+        p = nil;
+    }
+    if (p == nil) {
+        @try { p = [NSPredicate predicateWithFormat:@"SELF == %@", target]; }
+        @catch (NSException *e) { p = nil; }
+    }
+    return p;
+}
 
 static void aev_try_assertion(void) {
     Class mgrCls = NSClassFromString(@"UIApplicationSceneDeactivationManager");
@@ -237,27 +322,46 @@ static void aev_try_assertion(void) {
         return;
     }
     gAssertion = assertion;
-    /* 谓词：优先全场景谓词，拿不到就退回不带谓词的 acquire。 */
-    id predicate = aev_call0(NSClassFromString(@"UIApplicationSceneDeactivationPredicate"),
-                             @"predicateMatchingAllScenes");
+    /* V0.3.27（AevonKeepAlivePredicateV327）：谓词不再猜类名。
+     * 0.3.26 打的是「谓词=无/无」—— 两个候选谓词类都不存在，于是断言不带谓词、
+     * 不覆盖任何场景，等于空断言（这就是「断言已持有却照旧闪」的原因）。
+     * 现在直接建一个「对象 == 我们那个场景」的 NSPredicate：断言内部每当对某个场景
+     * 求值，只有我们这一个会命中。 */
+    id predicate = aev_scene_predicate();
+    NSString *path = @"-";
     BOOL ok = NO;
     @try {
-        if (predicate != nil && aev_responds(assertion, @"acquireWithPredicate:transitionContext:")) {
+        if (predicate != nil && aev_responds(assertion, @"setPredicate:")) {
+            ((void (*)(id, SEL, id))objc_msgSend)(assertion, aev_sel(@"setPredicate:"), predicate);
+        }
+        if (aev_responds(assertion, @"acquire")) {
+            ((void (*)(id, SEL))objc_msgSend)(assertion, aev_sel(@"acquire"));
+            ok = YES;
+            path = (predicate != nil && aev_responds(assertion, @"setPredicate:"))
+                 ? @"setPredicate+acquire" : @"acquire";
+        }
+        if (!ok && predicate != nil && aev_responds(assertion, @"acquireWithPredicate:transitionContext:")) {
             ((void (*)(id, SEL, id, id))objc_msgSend)(assertion,
                                                      aev_sel(@"acquireWithPredicate:transitionContext:"),
                                                      predicate, nil);
             ok = YES;
-        } else if (aev_responds(assertion, @"acquire")) {
-            ((void (*)(id, SEL))objc_msgSend)(assertion, aev_sel(@"acquire"));
+            path = @"acquireWithPredicate";
+        }
+        if (!ok && aev_responds(gManager, @"addAssertion:withTransitionContext:")) {
+            ((void (*)(id, SEL, id, id))objc_msgSend)(gManager,
+                                                     aev_sel(@"addAssertion:withTransitionContext:"),
+                                                     assertion, nil);
             ok = YES;
+            path = @"manager.addAssertion";
         }
     } @catch (NSException *e) {
         AevonKeepAliveLog([NSString stringWithFormat:@"断言 acquire 抛异常：%@", e.reason].UTF8String);
         ok = NO;
     }
     AevonKeepAliveLog([NSString stringWithFormat:
-                       @"断言 %@（谓词=%@，reason=1）（AevonKeepAliveAssertV326）",
-                       ok ? @"已持有" : @"未持有", predicate ? @"全场景" : @"无"].UTF8String);
+                       @"断言 %@（路径=%@，谓词=%@，reason=1）（AevonKeepAliveAssertV326 AevonKeepAlivePredicateV327）",
+                       ok ? @"已持有" : @"未持有", path,
+                       predicate != nil ? @"指向本场景" : @"无"].UTF8String);
 }
 
 /* ---- 四、写探针 B：直接写 deactivationReasons=0（默认关）---- */
@@ -301,6 +405,9 @@ static void aev_try_reasons_write(void) {
 int AevonKeepAliveProbeBegin(void *scene) {
     aev_ensure_config();
     if (gOff || scene == NULL) { return 0; }
+    /* V0.3.27（AevonKeepAliveEarlyV327）：起跑点提前到「回桌面过渡哨」那一拍，
+     * 布防那一拍的调用就成了兜底 —— 这里必须幂等，否则会重复建断言（旧的泄漏不释放）。 */
+    if (gActive) { return 2; }
     gScene = (__bridge id)scene;
     if (gScene == nil) { return 0; }
     gBeganAt = CACurrentMediaTime();

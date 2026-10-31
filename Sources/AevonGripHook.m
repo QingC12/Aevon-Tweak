@@ -731,6 +731,45 @@ extern void AevonGripOwnLift(double x, double y, int32_t cancelled);
 extern void AevonGripOwnMove(double x, double y);
 extern void AevonGripOwnLog(const char *kind, const char *detail);
 
+/* V0.3.27（AevonGripConeV327 / AevonGripWidenV327，用户 Aevon(100) #1
+ * 「桌面和全屏 app 中手势触发并不是 100% 成功」）。
+ *
+ * Aevon(100) 实测（93 次右缘落指，6 分钟）：
+ *   · 桌面   56 次 → 展开 43（77%）
+ *   · 抖音   19 次 → 展开 10（53%）
+ *   · 设置   13 次 → 展开  6（46%）
+ * App 内被拒的 10 次首帧角度：20°×2 / 48° / 50° / 51° / 52° / 54° / 59°。
+ * 全部死在 `ady <= adx × 0.25`（14°）这一条 —— 而这个判据**只在首帧生效**，
+ * 后面手指再怎么往左走都没有第二次机会（下一帧先撞上 `|dy| >= 12` 立刻放行）。
+ *
+ * 两处改动：
+ *   ① 锥角 0.25（14°）→ 0.40（22°）。20° 那两次是 dx=-36/dy=13，比值 0.36，
+ *      差的就是这口气；
+ *   ② 首帧判不出「横向」时**不再立刻放行**，再看 2 帧（累计位移会越滑越横向）——
+ *      系统识别器本来就是整段持续判定，只有我们在首帧就下结论。
+ * 这两条都只作用于 **App 内**：桌面上没有横向滚动内容可抢，只有翻页，
+ * 0.3.26 的「首帧横向占优即呼盘 + 灰带扣到抬手」原样保留。 */
+static double aev_grip_cone_value(void) {
+    static double cached = -1;
+    if (cached >= 0) { return cached; }
+    /* ⛔ 必须走 UserDefaults：写死常量的话回退开关就没法生效（0.3.25 栽过一次）。 */
+    NSNumber *v = [[NSUserDefaults standardUserDefaults] objectForKey:@"AevonGripCone327"];
+    double d = (v != nil) ? [v doubleValue] : 0.40;
+    if (d < 0.10) { d = 0.10; }
+    if (d > 1.00) { d = 1.00; }
+    cached = d;
+    return cached;
+}
+
+static BOOL aev_grip_widen_off(void) {
+    static int cached = -1;
+    if (cached >= 0) { return cached == 1; }
+    id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"AevonGripWidenOff327"];
+    cached = (v != nil && [v boolValue]) ? 1 : 0;
+    return cached == 1;
+}
+
+
 /* 全局状态（gAevonOwnLegEnabled / gAevonOwnGesture …）定义在前置区 —— 见
  * AevonGripLegObserve 上方的说明，别挪回这里。 */
 
@@ -1099,8 +1138,27 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
             [self ownBailRearm];
             return;
         }
-        if (horizontal && (ady <= 6.0 || ady <= adx * 0.25)) {
+        /* V0.3.27（AevonGripConeV327）：锥角 14° → 22°（从 0.25 提到可配的 0.40）。
+         * `ady <= 6.0` 那条保留 —— 短滑的 ±6pt 是抖动，样本太短角度不可靠。 */
+        double cone = aev_grip_cone_value();
+        if (horizontal && (ady <= 6.0 || ady <= adx * cone)) {
             [self ownSummonAtPoint:p];
+            return;
+        }
+        /* V0.3.27（AevonGripWidenV327）：首帧没判成「横向」时**不立刻放行**，
+         * 再看 2 帧。理由见 `aev_grip_cone_value` 上方的注释：
+         * Aevon(100) 有 10 次在首帧被静默放掉，而手指其实还在往左走。
+         * 只对「已经在往左」（dx < 0）的手指续判；右移是明确的「还给你」，
+         * 立刻放行，一帧都不多等。 */
+        if (!aev_grip_widen_off() && dx < 0.0 && _ownMovedFrames < 3) {
+            if (_ownMovedFrames == 2) {
+                NSString *d = [NSString stringWithFormat:
+                               @"续判放行暂缓（第 2 帧仍不横向）dx=%.0f dy=%.0f 角度 %.0f°"
+                               @"→ 再看 1 帧（App 内 22° 锥）",
+                               dx, dy, atan2(ady, MAX(1.0, adx)) * 180.0 / M_PI];
+                AevonGripOwnLog("widen", d.UTF8String);
+            }
+            [self ownBailRearm];
             return;
         }
         if (dx > 0.0 || fabs((double)dy) >= 12.0) {
@@ -2206,3 +2264,9 @@ __attribute__((used)) static const char AevonTermWinVelV326Marker[] = "AevonTerm
  * 灰带一律扣到抬手，绝不半截补投。App 内保持原判据不变。 */
 __attribute__((used)) static const char AevonHomeLooseV326Marker[] = "AevonHomeLooseV326";
 __attribute__((used)) static const char AevonNoMidPassV326Marker[] = "AevonNoMidPassV326";
+
+/* V0.3.27（Aevon(100) #1「桌面和全屏 app 中手势触发并不是 100% 成功」）：
+ * App 内锥角 14° → 22°（可配，`AevonGripCone327`），并在首帧判不出横向时再看 2 帧
+ * （`AevonGripWidenOff327` 可关）。桌面判据一律不动。 */
+__attribute__((used)) static const char AevonGripConeV327Marker[] = "AevonGripConeV327";
+__attribute__((used)) static const char AevonGripWidenV327Marker[] = "AevonGripWidenV327";

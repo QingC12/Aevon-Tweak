@@ -1043,23 +1043,33 @@ final class AevonWindowView: UIView {
 
     // MARK: - 底部手势条（V0.3.24，AevonBottomFlickV324）
 
-    /// 底边手势条的视觉提示（36×4pt，白色 32%，距底 6pt）。
+    /// 底边手势条的视觉提示（36×4pt，距底 6pt）。
     ///
     /// 只用来看：`isUserInteractionEnabled = false`，触摸全部由外层 `AevonEdgeHandleView`
     /// 的 pan（移动）+ long press（关闭预备态）接（`handleBarPan` / `handleTerminationPress`）。
-    /// 长按成立时 alpha 0.32 → 0.90 作为「这次会关窗」的视觉确认。
+    /// V0.3.27 起**平时完全隐藏**（alpha 0），只有长按进入关闭预备态那一拍显形，
+    /// 松手回隐藏 —— 见 `installFlickBar` 内注释（AevonBottomBarHideV327）。
     /// 用 autoresizing 而不是约束，是因为这个类全程 frame 布局（窗口拖动/缩放直接改 frame），
     /// 混用约束会在缩放期抖动。
     private func installFlickBar() {
         guard flickBar.superview == nil else { return }
         flickBar.isUserInteractionEnabled = false
-        flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
+        /* V0.3.27（AevonBottomBarHideV327，用户 Aevon(100) #3
+         * 「悬浮窗关闭手势不错…可以移除悬浮窗底部的把手或者隐藏」）。
+         *
+         * 平时 **alpha = 0**（走 alpha 通道，禁用 isHidden —— 0.3.13 的让位纪律：
+         * isHidden 会让 cancelled 路径上的 use-after-free 复活）。
+         * 只有长按进入关闭预备态那一拍才亮起来，松手回 0：
+         * 平时不占视觉，进预备态仍有「这次会关窗」的确认。 */
+        flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.9)
+        flickBar.alpha = 0
         flickBar.layer.cornerRadius = 2
         flickBar.layer.cornerCurve = .continuous
         flickBar.autoresizingMask = [.flexibleTopMargin, .flexibleLeftMargin, .flexibleRightMargin]
         addSubview(flickBar)
         layoutFlickBar()
-        AevonLog.info("[窗口] 底部手势条已装（36×4pt，白色 32%，上滑关闭）（AevonBottomFlickV324）")
+        AevonLog.info("[窗口] 底部手势条已装（36×4pt，平时隐藏，长按进入关闭预备态才显形）"
+            + "（AevonBottomFlickV324 AevonBottomBarHideV327）")
     }
 
     private func layoutFlickBar() {
@@ -1120,7 +1130,7 @@ final class AevonWindowView: UIView {
                     && terminationShouldClose(upward: upward, velocity: velocity, dragX: dragX)
                 terminationArmed = false
                 terminationTrack.removeAll(keepingCapacity: true)
-                flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
+                flickBar.alpha = 0   // V0.3.27：松手即回隐藏（AevonBottomBarHideV327）
                 isBarHoldMoving = false
                 if fire {
                     frame = terminationHoldFrame   // Stheno sc_applyRestoredFrame: 回位再关
@@ -1367,7 +1377,7 @@ final class AevonWindowView: UIView {
             terminationTrack = [(CACurrentMediaTime(), terminationHoldPoint)]
             // 0.4s 内的微移已让 pan 挪过窗口 → 回位，关闭从原位起（Stheno sc_applyRestoredFrame:）
             _ = beginTerminationFollow()
-            flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.9)
+            flickBar.alpha = 1   // V0.3.27：进关闭预备态才显形（AevonBottomBarHideV327）
             AevonLog.info("[窗口] 底边长按成立（0.4s / ≤12pt）→ 关闭预备态：上移 "
                 + "\(Int(AevonWindowView.terminationLift))pt 且速度 "
                 + "\(Int(AevonWindowView.terminationVelocity))pt/s 以上才关；"
@@ -1382,7 +1392,7 @@ final class AevonWindowView: UIView {
             if termFollowActive { endTerminationFollow(restore: true) }
             terminationArmed = false
             terminationTrack.removeAll(keepingCapacity: true)
-            flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
+            flickBar.alpha = 0   // V0.3.27：松手即回隐藏（AevonBottomBarHideV327）
         default:
             break
         }
@@ -2063,6 +2073,17 @@ final class AevonWindowView: UIView {
     /// 本次布防里已经重申过几次前台 / 上一次重申的时刻
     private var reassertCount = 0
     private var lastReassertAt: TimeInterval = 0
+    /// V0.3.27（AevonReassertBudgetV327，用户 Aevon(100) #2「返回桌面时黑白闪 2 次」）：
+    /// **让位期的重申预算**。`-1` = 不限（沿用旧的 `reassertCount < 4`），`>= 0` = 还能写几次。
+    ///
+    /// 为什么要有它：Aevon(100) 三次回桌面全部同构 —— 布防那拍「立即」一发、+0.40s 再一发，
+    /// 两发之间 `cs` 还在 0/1 之间来回（0→1，又掉回 0→1）。每一次 `updateSettings`
+    /// 都会让远程表面重建一次，屏幕上就是黑一下再亮一下 —— 用户数的「闪两次」就是这两发。
+    /// 让位窗口只有 0.75 秒，两发都在窗口里，第二发抢到的是**同一个**恢复过程，
+    /// 额外价值接近零，代价是实打实多闪一次。所以让位期只放行 1 发。
+    private var liveWaitReassertBudget = -1
+    /// 让位期「画面已在画 → 重申跳过」只打一行，避免每 0.1s 一拍刷屏
+    private var liveWaitReassertSkipLogged = false
     /// V0.2.85（AevonIdleRewakeV285）：定格自愈 —— 上一次「重新布防 + 重申」的时刻
     /// 与累计次数。低频（每 3 秒最多一次）是为了不在全屏 App 前台时把场景设置写爆。
     private var lastIdleRewakeAt: TimeInterval = 0
@@ -2298,7 +2319,11 @@ final class AevonWindowView: UIView {
         beginGuardWindow(reason: reason)
         // V0.2.60（AevonLiveFirstV260）：回桌面 / 切 App 走「先让位、后淡入」，
         // 不再盖定格帧（Aevon(34) #1：定格 1 秒观感比晚出现 0.3 秒差得多）。
-        if reason.contains("画面离场") {
+        // V0.3.27（AevonReassertBudgetV327）：让位期总预算 1 发（见 liveWaitReassertBudget 注释）
+        let isLiveWait = reason.contains("画面离场")
+        liveWaitReassertBudget = isLiveWait ? 1 : -1
+        liveWaitReassertSkipLogged = false
+        if isLiveWait {
             beginLiveWait(reason: reason)
         } else if sceneHost.contentLooksRendering == false {
             installDarkFreeze(reason: "离场")
@@ -2319,7 +2344,11 @@ final class AevonWindowView: UIView {
         // 再亮一下」；0.25 / 0.55 / 0.85 三发 + 立即那一发 = 让位期四发，正好凑成
         // 用户说的「频率很快的闪」。让位分支（reason 含「画面离场」）改成只留一发
         // 0.40s 的兜底重申；其它离场（切 App 等）保持原来的三拍。
-        let reassertDelays: [Double] = reason.contains("画面离场") ? [0.40] : [0.25, 0.55, 0.85]
+        // V0.3.27（AevonReassertBudgetV327）：让位分支的 `+0.40s` 那一发**退役**。
+        // Aevon(100) 三次回桌面实测：那两发之间 cs 在 0↔1 之间反复，第二发并没有让
+        // 恢复更快（让位结束时刻 1.708 / 1.554 / 1.744 秒，与 0.3.26 的 1.7 秒一致），
+        // 只是多黑一次。让位期现在只发「立即」这一发，其余交给守卫拍（同样受预算约束）。
+        let reassertDelays: [Double] = isLiveWait ? [] : [0.25, 0.55, 0.85]
         for delay in reassertDelays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.reassertContentForeground(tag: String(format: "+%.2fs", delay))
@@ -2339,6 +2368,22 @@ final class AevonWindowView: UIView {
     /// 现在改成：窗口**从头到尾 alpha = 1，位置不动**；内容层用最后一张真画面顶住，
     /// 实时画面回来后即时交接（0.2.69 起 removeDarkFreeze 直接摘帧，无交叉淡出）。屏幕上永远有一块
     /// 连续的浮窗，没有"空窗"帧，也就不可能闪。
+    /// V0.3.27（AevonKeepAliveEarlyV327）：把保活探针的起跑点提前到「回桌面过渡哨」那一拍。
+    ///
+    /// 0.3.26 把它放在 `beginLiveWait`，而 `beginLiveWait` 是**布防**那拍调用的 ——
+    /// Aevon(100) 实测布防比过渡哨晚 0.95 秒（1.708/1.554/1.744 秒的让位窗口全同构）。
+    /// 等布防才起跑，那 0.95 秒里场景早就是 cs=0，先手根本拿不到。
+    /// 探针内部幂等：布防那拍再调一次直接返回 2，不会重复建断言。
+    func kickKeepAliveProbeOnTransition() {
+        _ = AevonKeepAliveProbeBegin(Unmanaged.passUnretained(sceneHost.scene).toOpaque())
+        AevonLog.info("[保活] 过渡哨同拍起跑（抢在布防之前约 0.95s）（AevonKeepAliveEarlyV327）")
+    }
+
+    /// 过渡哨误报（控制中心半拉之类）时把探针收掉，别留一个没人释放的断言。
+    func cancelKeepAliveProbe() {
+        AevonKeepAliveProbeEnd()
+    }
+
     private func beginLiveWait(reason: String) {
         let now = CACurrentMediaTime()
         /* V0.3.26（AevonKeepAliveProbeV326）：回桌面同一拍起跑场景保活探针。
@@ -2363,7 +2408,8 @@ final class AevonWindowView: UIView {
         }
         AevonLog.info("[窗口] 回桌面：窗口保持可见（整窗 alpha 不动，\(reason)）→ 用最后一帧顶住，"
             + "实时画面回来即时交接（无交叉淡出），上限 \(String(format: "%.1f", AevonWindowView.liveWaitLimit)) 秒"
-            + "（AevonLiveFirstV260 AevonLiveFirstFixV261 AevonLiveQuietV262 AevonNoVanishV265）")
+            + "（AevonLiveFirstV260 AevonLiveFirstFixV261 AevonLiveQuietV262 AevonNoVanishV265"
+            + " AevonReassertBudgetV327）")
     }
 
     /// 让位结束：只决定「定格帧撤不撤」，永远不碰窗口自身 alpha。
@@ -2379,6 +2425,8 @@ final class AevonWindowView: UIView {
             removeDarkFreeze(reason: "让位结束且实时画面已回来")
         }
         // V0.3.26（AevonKeepAliveProbeV326）：让位结束 → 释放保活断言，记本轮持有时长
+        // V0.3.27（AevonReassertBudgetV327）：让位窗口关闭 → 预算解除（回到通用有界 4 次）
+        liveWaitReassertBudget = -1
         AevonKeepAliveProbeEnd()
         /* rendering != true 时保留定格帧（宁可停住，也不露一块空窗）；
          * 常驻看门会在 cs=2 时撤掉它。 */
@@ -2443,6 +2491,22 @@ final class AevonWindowView: UIView {
     private func reassertContentForeground(tag: String) {
         guard guardArmedUntil > 0, window != nil else { return }
         guard reassertCount < 4 else { return }
+        /* V0.3.27（AevonReassertGateV327，用户 Aevon(100) #2）：两道闸，都在**写之前**。
+         *
+         *   ① 让位期预算用完 → 一发都不再写（这是「闪两次」变「闪一次」的直接来源）；
+         *   ② 先读 cs：**已经在画（cs=2）就不许写** —— 每次 `updateSettings` 都会让
+         *      远程表面重建一次，屏幕上就是黑一下再亮一下；画面明明在，写它只是自伤。
+         *  ⛔ 读不到 cs（nil / -1）时**照常写**：fail-open，不把「读不到」当「在画」。 */
+        if liveWaitReassertBudget == 0 { return }
+        if liveWaitReassertBudget >= 0, sceneHost.contentLooksRendering == true {
+            if !liveWaitReassertSkipLogged {
+                liveWaitReassertSkipLogged = true
+                AevonLog.info("[窗口] 重申跳过：实时画面已在画（cs=2），写一次就是多黑一次"
+                    + "（\(tag)）（AevonReassertGateV327）")
+            }
+            return
+        }
+        if liveWaitReassertBudget > 0 { liveWaitReassertBudget -= 1 }
         let now = CACurrentMediaTime()
         // V0.2.59（AevonGuardFastV259）：间隔下限 0.35 → 0.25（用户 Aevon(33) #1）。
         if reassertCount > 0, now - lastReassertAt < 0.25 { return }

@@ -351,6 +351,14 @@ enum AevonWindowManager {
     static func noteTransitionFreeze() {
         guard let view = currentView else { return }
         view.installTransitionFreeze(reason: "回桌面过渡哨")
+        // V0.3.27（AevonKeepAliveEarlyV327）：同一拍起跑场景保活探针。
+        // 布防要等 0.95 秒之后才来，那时候先手已经丢了。
+        view.kickKeepAliveProbeOnTransition()
+    }
+
+    /// V0.3.27：过渡哨误报（控制中心半拉等）→ 收掉保活探针，别留悬空断言。
+    static func cancelTransitionProbe() {
+        currentView?.cancelKeepAliveProbe()
     }
 
     /// 这个 App 是否正装在我们某个浮窗里（主窗或停靠小窗）。
