@@ -83,7 +83,7 @@ static BOOL AevonTouchHookFailed = NO;
 static __unsafe_unretained UIApplication *gAevonHeldApp = nil;
 static UIEvent *gAevonHeldEvent = nil;
 static uintptr_t gAevonHeldTid = 0;
-static CGPoint gAevonHeldPoint = CGPointZero;
+static CGPoint gAevonHeldPoint = {0, 0};
 static CFTimeInterval gAevonHeldAt = 0;
 static BOOL gAevonHeldCommitted = NO;
 static NSUInteger gAevonHeldDropped = 0;
@@ -171,7 +171,7 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                             claimed = 0;
                         }
                         if (claimed) {
-                            gAevonHeldApp = (__unsafe_unretained UIApplication *)[UIApplication sharedApplication];
+                            gAevonHeldApp = [UIApplication sharedApplication];
                             gAevonHeldEvent = event;
                             gAevonHeldTid = tid;
                             gAevonHeldPoint = p;
