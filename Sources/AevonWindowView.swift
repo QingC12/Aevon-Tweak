@@ -2143,6 +2143,11 @@ final class AevonWindowView: UIView {
     /// V0.3.38（AevonDeskNoCoverV338）：让位期连续「掉出画」的拍数。
     /// 零定格档里画面掉了要抢，抢不回（0.2s）就兜底盖帧 —— 绝不留一块真空窗。
     private var liveWaitMissTicks = 0
+    /// V0.3.39（AevonKeepHoldV339）：保活断言续持到期时刻（0 = 没在续持）。
+    private var keepAliveHoldUntil: TimeInterval = 0
+    /// V0.3.39（AevonKeepHoldV339）：断言续持期内连续「掉出画」的拍数。
+    /// 期内掉出 ≠ 真死，先补前台；连 2 拍（0.2s）没回才允许盖帧兜底。
+    private var keepMissTicks = 0
     /// V0.2.65（AevonNoVanishV265）：让位期**不再现场抓帧**，次数计数器随之退休。
     /// V0.2.94（AevonQuietRevealV294，用户确认方案 M）：加「转场静默」闸后多占拍数
     /// （连续 2 拍静止才放行），fail-open 上限 1.0 → 1.5s —— 冻结帧全程在盖，
@@ -2583,8 +2588,22 @@ final class AevonWindowView: UIView {
         }
         // V0.3.26（AevonKeepAliveProbeV326）：让位结束 → 释放保活断言，记本轮持有时长
         // V0.3.27（AevonReassertBudgetV327）：让位窗口关闭 → 预算解除（回到通用有界 4 次）
+        /* V0.3.39（AevonKeepHoldV339）：**不再在让位结束就释放**。
+         * Aevon(110) 三次实测：让位结束时 cs=2（画面活着），断言一放，
+         * 约 +0.8 秒后场景被系统收走（cs=0）= 「闪黑一下」的源头。
+         * 这里改成继续持有 keepHoldSeconds（3.0s），覆盖整段回收窗口；
+         * 常驻看门每拍检查到期后释放（见 checkBackgroundGuard 开头）。
+         * 持有期零写，不会引发表面重提交。 */
         liveWaitReassertBudget = -1
-        AevonKeepAliveProbeEnd()
+        if AevonWindowView.keepHoldEnabled, AevonKeepAliveProbeActive() == 1 {
+            keepAliveHoldUntil = CACurrentMediaTime() + AevonWindowView.keepHoldSeconds
+            keepMissTicks = 0
+            AevonLog.info("[保活] 让位结束，断言继续持有 "
+                + "\(String(format: "%.1f", AevonWindowView.keepHoldSeconds))s（覆盖回桌面后的场景回收窗口，"
+                + "期内掉出先补前台不盖帧）（AevonKeepHoldV339）")
+        } else {
+            AevonKeepAliveProbeEnd()
+        }
         /* rendering != true 时保留定格帧（宁可停住，也不露一块空窗）；
          * 常驻看门会在 cs=2 时撤掉它。 */
         AevonLog.info("[窗口] 回桌面让位结束（\(String(format: "%.2f", held))s，\(reason)，"
@@ -2649,6 +2668,10 @@ final class AevonWindowView: UIView {
         darkTicks = 0
         renderTicks = 0
         AevonKeepAliveProbeEnd()
+        /* V0.3.39（AevonKeepHoldV339）：定格保持自己会降后台，续持窗口一并作废，
+         * 否则看门每拍都要多跑一次到期判断（无害但没必要）。 */
+        keepAliveHoldUntil = 0
+        keepMissTicks = 0
         /* 让常驻看门计时器在位（此刻被 deskHoldActive 挡着，零开销）—— 定格保持结束后
          * 它要立刻接手「画面掉了就盖帧」的职责，这里不启动就见不到那一拍。 */
         startGuardTimerIfNeeded()
@@ -2848,6 +2871,16 @@ final class AevonWindowView: UIView {
     ///   · `cs == -1`（读不到）→ **一根手指都不动**，既不盖也不撤（绝不把「读不到」当黑）。
     private func checkBackgroundGuard() {
         guard window != nil, !isTearingDown else { return }
+        /* V0.3.39（AevonKeepHoldV339）：保活断言续持到期 → 在这里释放。
+         * 放在 deskHoldActive 早退之前：定格保持那条路不接管断言，但到期必须有人放手，
+         * 否则断言会一直挂着（一个没人释放的断言 = 该场景永远不被系统收走）。 */
+        if keepAliveHoldUntil > 0, CACurrentMediaTime() > keepAliveHoldUntil {
+            keepAliveHoldUntil = 0
+            keepMissTicks = 0
+            AevonKeepAliveProbeEnd()
+            AevonLog.info("[保活] 断言续持到期 → 释放（\(sceneHost.stateSummary())）"
+                + "（AevonKeepHoldV339）")
+        }
         /* V0.3.35（AevonDeskHoldV335）：定格保持期内一拍都不判 —— 不盖、不撤、不重申、
          * 不重建 presenter。这段里唯一该发生的事由 deskHoldWakeTick 自己管，
          * 少一次判断就少一次误写（每次写 = 一次表面重提交 = 一次黑）。 */
@@ -3008,6 +3041,7 @@ final class AevonWindowView: UIView {
         case .some(true):
             darkTicks = 0
             renderTicks += 1
+            keepMissTicks = 0
             // V0.2.53（AevonDarkGuardV253，用户 Aevon(27) #5）：0.2.50 的「稳定 2 拍
             // （0.4s）才撤」防的是「cs 先报 2、表面还没画」。现在第一拍就**现场验证**：
             // drawHierarchy 抓得到真画面 = 远程表面确实在画 → 立刻撤冻结；
@@ -3022,11 +3056,22 @@ final class AevonWindowView: UIView {
         case .some(false):
             renderTicks = 0
             darkTicks += 1
-            // V0.2.63（AevonFlashDampV263）：同上，布防期也要静默期防盖/撤抖动。
-            // V0.2.69（AevonSnapPadV269，用户 Aevon(41) #5「进入全屏 App 时悬浮窗先
-            // 黑屏一下」）：布防期 3 拍（0.3s）才盖 = 每次进全屏 App 都先看 0.3s 黑。
-            // 布防的语义就是「画面离场事件已实锤」，第一拍就垫帧；静默期压到
-            // 0.6s（只防 cs 抖动引发的反复盖撤，第一次盖不受静默期限制）。
+            /* V0.3.39（AevonKeepHoldV339）：断言续持期内掉出画 → 先补前台、**不盖帧**。
+             * Aevon(110) 证明：断言还在的时候场景被收走只是「暂时」，补一笔就回来
+             * （12.398 cs=0 → 12.402 已提交 → 12.715 进采样 → 13.343 cs=2）。
+             * 而那一盖，正是用户看到的「模糊快照」。所以先抢，连 2 拍（0.2s）
+             * 还没回来才允许往下走盖帧兜底 —— 宁可先赌一次，也不主动糊住画面。 */
+            if keepAliveHoldUntil > 0 {
+                keepMissTicks += 1
+                if keepMissTicks < 2 {
+                    reassertContentForeground(tag: "断言持有期掉出画")
+                    return
+                }
+                AevonLog.warn("[保活] 断言持有期内掉出画 0.2s 未回 → 盖帧兜底"
+                    + "（\(sceneHost.stateSummary())）（AevonKeepHoldV339）")
+            }
+            // V0.2.63/269：布防的语义就是「画面离场事件已实锤」，第一拍就垫帧；
+            // 静默期压到 0.6s（只防 cs 抖动引发的反复盖撤，第一次盖不受静默期限制）。
             let quiet = AevonWindowView.freezeQuietWindow * 0.5
             let everCovered = freezeRemoveCount > 0
             if darkFreezeView == nil, darkTicks >= (everCovered ? 3 : 1),
@@ -3119,7 +3164,7 @@ final class AevonWindowView: UIView {
         /* V0.3.1（AevonSharpGateV301）：0.9s 最短保护期 + 2.6s 清晰度采样上限。
          * 0.2.100 的 1.2s 固定 deadline 只解决"盖了又早撤"，解决不了"撤了以后还模糊"
          * —— 模糊在撤帧之后（App 正在重排 / 系统低清场景快照），撤帧判据必须看画面。 */
-        freezeReturnDeadline = armedAt + 0.9
+        freezeReturnDeadline = armedAt + AevonWindowView.freezeMinHold
         freezeSharpnessDeadline = armedAt + 2.6
         freezeBaseSharpness = 0
         lastSharpSampleAt = 0
@@ -3691,11 +3736,30 @@ final class AevonWindowView: UIView {
         return v ?? false
     }()
 
-    /// V0.3.38（AevonDockSpreadV338）：停靠列是否「整列竖直居中」。
-    /// `AevonDockSpreadOff338` = true → 回到「从顶部 10% 起依次向下堆」。
-    static let dockSpreadDisabled: Bool = {
-        let v = UserDefaults.standard.object(forKey: "AevonDockSpreadOff338") as? Bool
-        return v ?? false
+    /// V0.3.39（AevonKeepHoldV339）：让位结束后继续持有保活断言多少秒。
+    ///
+    /// Aevon(110) 三次回桌面实测：让位结束（+0.16s）时 cs 还是 2（画面活着），
+    /// 而断言恰在那一刻被我们 `AevonKeepAliveProbeEnd()` 释放 —— 之后约 0.8 秒
+    /// 场景被系统收走（cs=0）= 用户看到的「闪黑一下」，看门再盖一张缓存帧
+    /// （模糊快照）→ 受 0.9s 保护期限制卡住 0.94 秒才撤 → 变回实时。
+    /// 也就是说：0.3.38 的「零定格」只覆盖到让位结束，让位之后没人管。
+    /// 这里把断言一直持到回桌面 +3.0s，覆盖整段回收窗口（零写，不引发表面重提交）。
+    /// 回退：`AevonKeepHoldOff339` = true → 回到「让位结束即释放」。
+    static let keepHoldEnabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonKeepHoldOff339") as? Bool
+        return !(v ?? false)
+    }()
+    /// 断言续持时长（秒）。
+    static let keepHoldSeconds: TimeInterval = 3.0
+
+    /// V0.3.39（AevonFreezeShortV339）：盖帧最短保护期。
+    /// 0.9s 是 0.3.1 为「回桌面转场中撤帧露出被缩放重采样的模糊宿主」定的，
+    /// 而 0.3.38 起盖帧基本只发生在转场**结束之后**（掉出才盖），0.9s 纯属白等。
+    /// 0.35s + 清晰度闸（活画面必须够清晰才撤）已经足够。
+    /// 回退：`AevonFreezeHoldLong339` = true → 回到 0.9s。
+    static let freezeMinHold: TimeInterval = {
+        let v = UserDefaults.standard.object(forKey: "AevonFreezeHoldLong339") as? Bool
+        return (v ?? false) ? 0.9 : 0.35
     }()
 
     /// 停靠期盖在内容层上的静态封面。
@@ -3895,6 +3959,15 @@ final class AevonWindowView: UIView {
         dockLiveMissTicks = 0
         dockReassertTries = 0
         dockLastReassertAt = 0
+        /* V0.3.39（AevonKeepHoldV339）：吸附那一刻把保活断言也拉起来。
+         * 停靠窗回桌面**没有**主窗那条「让位期」链（Aevon(110) 19:13:04 那轮只有
+         * 过渡哨 + 停靠探针，没有让位期日志），断言是它唯一能拿到的「先手」。
+         * 持 3 秒后到期，由常驻看门统一释放。 */
+        if AevonWindowView.keepHoldEnabled {
+            _ = AevonKeepAliveProbeBegin(Unmanaged.passUnretained(sceneHost.scene).toOpaque())
+            keepAliveHoldUntil = CACurrentMediaTime() + AevonWindowView.keepHoldSeconds
+            keepMissTicks = 0
+        }
         guard dockLiveTimer == nil else { return }
         let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
             self?.dockLiveTick()
@@ -4318,6 +4391,10 @@ private func AevonKeepAliveProbeBegin(_ scene: UnsafeMutableRawPointer?) -> Int3
 
 @_silgen_name("AevonKeepAliveProbeEnd")
 private func AevonKeepAliveProbeEnd()
+
+/// V0.3.39（AevonKeepHoldV339）：断言是否仍在持有（1 = 持有中）。
+@_silgen_name("AevonKeepAliveProbeActive")
+private func AevonKeepAliveProbeActive() -> Int32
 
 /// ObjC 探针的统一日志出口（探针自己拼中文，这里只负责落盘 + 带标记串）。
 @_cdecl("AevonKeepAliveLog")

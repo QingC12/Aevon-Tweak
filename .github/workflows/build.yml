@@ -3784,7 +3784,7 @@ jobs:
           grep -q 'AevonQuietRevealV294' "$WVW" \
             || { echo "::error::0.2.100 AevonQuietRevealV294 标记收容丢失（历史标记必须进二进制）"; exit 1; }
           grep -q 'let transitionQuiet = guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WVW" \
-            && grep -q 'freezeReturnDeadline = armedAt + 0.9' "$WVW" \
+            && grep -q 'freezeReturnDeadline = armedAt +' "$WVW" \
             && ! grep -q 'revealQuietTicks' "$WVW" \
             || { echo "::error::0.2.100 returnDeadline 闸结构不完整（AevonReturnDeadlineV2100）"; exit 1; }
           echo "V0.2.94 校验: 显形回调先于直写(冷启动回归修复)已就位（静默采样已退役→deadline 闸）"
@@ -3909,7 +3909,7 @@ jobs:
           # ③ V0.3.1 反转：撤帧闸从「1.2s 固定 deadline」升级为「0.9s 最短保护 + 清晰度采样」
           QT=$(grep -c 'guardReturnDeadlineOpen(now: CACurrentMediaTime())' "$WV")
           if [ "$QT" -ge 4 ] \
-             && grep -q 'freezeReturnDeadline = armedAt + 0.9' "$WV" \
+             && grep -q 'freezeReturnDeadline = armedAt +' "$WV" \
              && grep -q 'AevonReturnDeadlineV2100' "$WV" \
              && grep -q 'AevonSharpGateV301' "$WV"; then
             echo "V0.2.99→100→301 校验③: 盖帧撤帧闸（撤帧闸 ×$QT 处 + 0.9s 保护 + 清晰度采样）✓"
@@ -3968,7 +3968,7 @@ jobs:
           #   （Aevon(79) 实锤模糊在撤帧之后：16x16 降采样比对对模糊不敏感恒判一致）
           grep -q 'AevonSharpGateV301' "$WV" \
             && grep -q 'private func sharpnessScore' "$WV" \
-            && grep -q 'freezeReturnDeadline = armedAt + 0.9' "$WV" \
+            && grep -q 'freezeReturnDeadline = armedAt +' "$WV" \
             && grep -q 'freezeSharpnessDeadline = armedAt + 2.6' "$WV" \
             && grep -q 'freezeBaseSharpness = sharpnessScore(image)' "$WV" \
             && grep -q 'sharpSampleCount < 12' "$WV" \
@@ -5537,13 +5537,35 @@ jobs:
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func installTransitionFreeze(reason: String) {');j=s.find('liveWaitFreezeAllowed = true',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'deskNoCoverEnabled' in b and 'contentLooksRendering == true' in b);print('V0.3.38 过渡哨在画不盖帧 ✓' if ok else '::error::V0.3.38 过渡哨仍无条件盖帧（回桌面立刻定格）');sys.exit(0 if ok else 1)" "$WV35"
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func updateCornerRadius(animated: Bool) {');j=s.find('private func syncDockCoverCorner()',i);b=s[i:j] if 0<i<j else '';ok=('AevonDock.cornerRadius' in b and 'self.syncDockCoverCorner()' in b);print('V0.3.38 停靠圆角档 + 封面同步 ✓' if ok else '::error::V0.3.38 封面圆角不跟随（吸附格四角黑边）');sys.exit(0 if ok else 1)" "$WV35"
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func syncDockCoverCorner()');j=s.find('cover.layer.cornerRadius = radius',i);ok=(0<i<j);print('V0.3.38 封面圆角写回 ✓' if ok else '::error::V0.3.38 syncDockCoverCorner 没写圆角');sys.exit(0 if ok else 1)" "$WV35"
-          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func frame(side: AevonDockSide, index: Int, count: Int = 1)');j=s.find('static let dropThreshold',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'var lead' in b and 'dockSpreadDisabled' in b);print('V0.3.38 吸附列整列居中 ✓' if ok else '::error::V0.3.38 吸附列还是从顶部堆（没有 count/居中）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonDock.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func frame(side: AevonDockSide, index: Int, count: Int = 1)');j=s.find('static let dropThreshold',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'var lead' not in b and 'count' in b);print('V0.3.39 吸附列无居中偏移 ✓' if ok else '::error::V0.3.39 吸附列还在按数量居中');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonDock.swift"
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func beginLiveWait(reason: String) {');j=s.find('func finishLiveWait',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'skipPad' in b and 'deskNoCoverEnabled' in b);print('V0.3.38 让位期在画不垫帧 ✓' if ok else '::error::V0.3.38 让位期仍无条件垫帧');sys.exit(0 if ok else 1)" "$WV35"
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();ok=('liveWaitMissTicks >= 2' in s and 'AevonDeskQuickV338' in s and 'if !live, AevonWindowView.deskNoCoverEnabled' in s);print('V0.3.38 掉出兜底+走位提速在位 ✓' if ok else '::error::V0.3.38 掉出后没有兜底/提速');sys.exit(0 if ok else 1)" "$WV35"
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func dockLiveTick() {');j=s.find('override func traitCollectionDidChange',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and '>= 0.35' in b and 'rebuildPresenter' in b);print('V0.3.38 停靠期补前台 0.35s + 1.5s 重建 ✓' if ok else '::error::V0.3.38 停靠期补前台仍是 1 秒一档');sys.exit(0 if ok else 1)" "$WV35"
           APPD38="$(find . -name 'AevonApp.dylib' | head -n1)"
           if [ -n "$APPD38" ] && strings "$APPD38" | grep -qF 'AevonDeskNoCoverV338'; then echo "::error::V0.3.38 标记漏进 App 库"; exit 1; fi
           echo "V0.3.38 校验: 回桌面零定格（在画不盖帧/不降后台，掉出 0.2s 兜底盖帧 + 0.4s 重建 presenter）+ 停靠圆角 12pt 封面同步 + 吸附侧整列竖直居中 ✓"
+          # ── V0.3.39 校验（断言续持 3s 覆盖回收窗口 + 保护期 0.35s + 吸附列顶部起）──
+          strings "$MYD28" | grep -qF 'AevonKeepHoldV339' || { echo "::error::V0.3.39 主库缺断言续持标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonFreezeShortV339' || { echo "::error::V0.3.39 主库缺保护期标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonDockTopV339' || { echo "::error::V0.3.39 主库缺排列标记"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func finishLiveWait(reason: String) {');j=s.find('回桌面让位结束',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'AevonWindowView.keepHoldEnabled' in b and 'keepAliveHoldUntil = CACurrentMediaTime() + AevonWindowView.keepHoldSeconds' in b);print('V0.3.39 让位结束不释放断言 ✓' if ok else '::error::V0.3.39 让位结束仍然立刻释放断言（回桌面 0.8s 后场景被收走）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func checkBackgroundGuard() {');j=s.find('if deskHoldActive { return }',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'keepAliveHoldUntil > 0' in b and 'AevonKeepAliveProbeEnd()' in b);print('V0.3.39 看门负责到期释放 ✓' if ok else '::error::V0.3.39 断言没人释放（会一直挂住场景）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('case .some(false):\n            renderTicks = 0\n            darkTicks += 1');j=s.find('let quiet = AevonWindowView.freezeQuietWindow',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'if keepAliveHoldUntil > 0 {' in b and 'keepMissTicks < 2' in b and 'installDarkFreeze' not in b);print('V0.3.39 续持期内掉出先补前台不盖帧 ✓' if ok else '::error::V0.3.39 续持期内掉出仍先盖帧（模糊快照）');sys.exit(0 if ok else 1)" "$WV35"
+          grep -qF 'freezeReturnDeadline = armedAt + AevonWindowView.freezeMinHold' "$WV35" \
+            || { echo "::error::V0.3.39 盖帧保护期没接 freezeMinHold"; exit 1; }
+          grep -qF 'return (v ?? false) ? 0.9 : 0.35' "$WV35" \
+            || { echo "::error::V0.3.39 保护期默认值不是 0.35s"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func armDockLiveProbe() {');j=s.find('func stopDockLiveProbe()',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'AevonKeepAliveProbeBegin' in b and 'keepAliveHoldUntil = CACurrentMediaTime()' in b);print('V0.3.39 吸附即起保活断言 ✓' if ok else '::error::V0.3.39 停靠窗拿不到先手（回桌面必掉一幕）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func frame(side: AevonDockSide, index: Int, count: Int = 1)');j=s.find('static let dropThreshold',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'var lead' not in b and 'top + CGFloat(max(0, index)) * (slot.height + gap)' in b);print('V0.3.39 吸附列只按 index 定位置 ✓' if ok else '::error::V0.3.39 吸附列位置仍随数量变化');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonDock.swift"
+          grep -qF 'AevonDock.frame(side: side, index: index, count: count)' "$WV35" \
+            || { echo "::error::V0.3.39 停靠几何没接 frame(side:index:)"; exit 1; }
+          APPD39="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD39" ]; then
+            for m39 in AevonKeepHoldV339 AevonFreezeShortV339 AevonDockTopV339; do
+              if strings "$APPD39" | grep -qF "$m39"; then echo "::error::V0.3.39 标记漏进 App 库: $m39"; exit 1; fi
+            done
+          fi
+          echo "V0.3.39 校验: 断言续持 3s（让位结束不放手，看门到期释放，期内掉出先补前台不盖帧）+ 盖帧保护期 0.9→0.35s + 吸附列一律从顶部起 ✓"
 
 
 

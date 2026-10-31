@@ -87,25 +87,20 @@ enum AevonDock {
 
     /// 某一格的 frame（屏幕坐标）。
     ///
-    /// V0.3.38（AevonDockSpreadV338）：用户 Aevon(109) 要求「给吸附后的小窗一个布局形状，
-    /// 让它们在吸附侧均匀排列」。旧规则是「从顶部 10% 起依次向下、间距 8pt」——
-    /// 只有一个窗时贴着顶部，两个以上就全挤在上半屏、下半屏空一大片。
-    /// 新规则：**整列在可用区内竖直居中**（上下留白相等、格间仍是 8pt），
-    ///   · 1 个窗：保持旧行为（顶部 10% 处），不破坏 V0.0.50 定档的「右上角第一个」；
-    ///   · 2 个以上：居中对齐，视觉上是一条整齐的列。
-    /// 回退：`AevonDockSpreadOff338` = true → 回到「从顶部起向下堆」。
+    /// V0.3.39（AevonDockTopV339）：用户 Aevon(110) 定档「始终顶部起」。
+    /// 0.3.38 的规则是「1 个窗在顶部 10%、2 个以上整列竖直居中」—— 用户实测反馈
+    /// 「一个小窗时它在顶部停靠，两个小窗时它俩会到右侧边缘中心，这不好看」：
+    /// 数量一变位置就跳，同一个窗在屏幕上乱跑。这里把居中对齐整条拿掉，
+    /// **一律从顶部 10% 起依次向下堆**（间距仍是 8pt），位置只由 index 决定，
+    /// 与「同侧有几个」无关。
+    ///
+    /// `count` 参数保留：调用方（`enterDock`）与历史断言都按三段式签名传，
+    /// 但本函数已不再用它做竖向偏移。
     static func frame(side: AevonDockSide, index: Int, count: Int = 1) -> CGRect {
         let screen = UIScreen.main.bounds
         let slot = size
         let top = floor(screen.height * topRatio)
-        let n = max(1, min(count, maxCount))
-        var lead: CGFloat = 0
-        if n >= 2, !AevonWindowView.dockSpreadDisabled {
-            let avail = max(slot.height, (screen.height - bottomMargin) - top)
-            let total = CGFloat(n) * slot.height + CGFloat(n - 1) * gap
-            lead = floor(max(0, avail - total) / 2)
-        }
-        let y = top + lead + CGFloat(max(0, index)) * (slot.height + gap)
+        let y = top + CGFloat(max(0, index)) * (slot.height + gap)
         let x: CGFloat = (side == .left) ? edgeInset : (screen.width - slot.width - edgeInset)
         return CGRect(x: x, y: y, width: slot.width, height: slot.height)
     }

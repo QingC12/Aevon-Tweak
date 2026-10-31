@@ -136,3 +136,10 @@ __attribute__((used, unused)) static const char AevonDockCornerMark338[] = "Aevo
 __attribute__((used, unused)) static const char AevonDockSpreadMark338[] = "AevonDockSpreadV338";
 __attribute__((used, unused)) static const char AevonDeskNoCoverMark338[] = "AevonDeskNoCoverV338";
 __attribute__((used, unused)) static const char AevonDeskQuickMark338[] = "AevonDeskQuickV338";
+
+/* ── V0.3.39 二进制标记（AevonKeepHoldV339 / AevonFreezeShortV339 / AevonDockTopV339）─
+ * ① 断言续持 3 秒覆盖回桌面回收窗口（零写）② 盖帧最短保护期 0.9→0.35s
+ * ③ 停靠列一律从顶部 10% 起堆（取消按数量居中）。三条各自一条纯 ASCII C 串。 */
+__attribute__((used, unused)) static const char AevonKeepHoldMark339[] = "AevonKeepHoldV339";
+__attribute__((used, unused)) static const char AevonFreezeShortMark339[] = "AevonFreezeShortV339";
+__attribute__((used, unused)) static const char AevonDockTopMark339[] = "AevonDockTopV339";
