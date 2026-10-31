@@ -5740,6 +5740,31 @@ jobs:
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static BOOL AevonGripSysLegShouldFail(id recog) {');j=s.find(chr(10)+'}',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and '_UIPendingEdgeSwipe' in b and 'UIScreenEdgePanGestureRecognizer' in b and 'sw - 40.0' in b);print('V0.3.32 系统腿吊销只认右缘两个类 ✓' if ok else '::error::V0.3.32 系统腿判据不全（会误伤底部上滑/侧滑返回）');sys.exit(0 if ok else 1)" "$GH26"
 
           echo "V0.3.32 校验: 落指扣住（App 连 began 都收不到）+ 55ms 回放（点击不受影响）+ 系统腿 Began 即吊销 ✓"
+          # ── V0.3.33 校验（Aevon(106)：55ms 那道墙正好卡在两群中间）──
+          # 42 hold → 29 完美（App 零帧，吞层实丢中位 97 帧）+ 13 回放；41 次真实滑动的
+          #「落指 → 首帧位移帧」是干净的两群：完美群 7~55ms（中位 23ms）、
+          # 回放群 57~100ms（中位 77ms）。回放轮的吞层实丢恒为 1（只有 began 一条），
+          # 后续 71~197 个 moved 帧全部投给了 App = 完整滑动泄漏。真点击全程只 1 次，
+          # 且走 heldAbort（抬手即回放），所以抬高窗口的代价接近零。
+          for s in AevonHeldWindowV333 AevonHeldExtendV333 AevonHeldSawMoveV333; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.33 主库缺标记 $s"; exit 1; }
+          done
+          grep -qF 'static const double kAevonHeldWindow = 0.110;' "$TH32" \
+            || { echo "::error::V0.3.33 扣住窗口没提到 110ms（13/41 慢起手仍会被回放）"; exit 1; }
+          grep -qF 'static const double kAevonHeldExtend = 0.060;' "$TH32" \
+            || { echo "::error::V0.3.33 缺延长档常量（110ms 已在滑但没到 8pt 的手会被回放）"; exit 1; }
+          #   ① 见到位移帧先延一档，且延长必须排在回放之前
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static void AevonHeldTimerFired(void) {');j=s.find('static void AevonHookSendEvent',i);b=s[i:j] if (i>0 and j>i) else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);k=b.find('if (gAevonHeldSawMove && !gAevonHeldExtended)');r=b.find('AevonHeldReplayNow');ok=(i>0 and k>0 and r>k and 'gAevonHeldExtended = YES;' in b);print('V0.3.33 见到位移帧先延一档、延长在回放之前 ✓' if ok else '::error::V0.3.33 延长分支缺失或排在回放之后（慢起手照样被回放）');sys.exit(0 if ok else 1)" "$TH32"
+          #   ② sawMove 只能挂在「真的吞掉 moved」那条分支上，否则延长档永不触发
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('if (phase == UITouchPhaseMoved) {');j=s.find('gAevonHeldSawMove = YES;');ok=(i>0 and j>i and 0 < j-i < 900);print('V0.3.33 sawMove 在吞层真丢位移帧时置位 ✓' if ok else '::error::V0.3.33 sawMove 没有置位点（延长档永远不生效）');sys.exit(0 if ok else 1)" "$TH32"
+          #   ③ 清场必须连两个新标志一起清，否则上一轮的状态会污染下一轮
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static void AevonHeldResetState(void) {');j=s.find(chr(10)+'}',i);b=s[i:j] if (i>0 and j>i) else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);ok=(i>0 and 'gAevonHeldSawMove = NO;' in b and 'gAevonHeldExtended = NO;' in b);print('V0.3.33 ResetState 连新标志一起清 ✓' if ok else '::error::V0.3.33 ResetState 没清新标志（上一轮的 sawMove 会污染下一次落指）');sys.exit(0 if ok else 1)" "$TH32"
+          #   ④ 新落指开始扣住时也要归零，不能靠 ResetState 兜
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('gAevonHeldPoint = p;');j=s.find('dispatch_after',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and 'gAevonHeldSawMove = NO;' in b and 'gAevonHeldExtended = NO;' in b);print('V0.3.33 落指扣住时新标志归零 ✓' if ok else '::error::V0.3.33 落指没归零新标志（连续两次快呼盘时第二次会继承上一轮延长位）');sys.exit(0 if ok else 1)" "$TH32"
+
+          echo "V0.3.33 校验: 扣住窗口 55ms→110ms + 见到位移帧再延 60ms（慢起手不再被当点击回放）+ 真点击走抬手路径零延迟 ✓"
+
 
 
 
