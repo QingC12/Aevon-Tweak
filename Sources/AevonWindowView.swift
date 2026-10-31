@@ -4022,3 +4022,11 @@ public func AevonKeepAliveLog(_ detail: UnsafePointer<CChar>?) {
     let d = detail.map { String(cString: $0) } ?? ""
     AevonLog.info("[保活] \(d)（AevonKeepAliveProbeV326）")
 }
+
+/// V0.3.36（AevonSnapProbeV336）：系统快照接口探针的日志出口。
+/// 与保活探针分开一条通道 —— 两者行数都多，混在一起 grep 会互相干扰。
+@_cdecl("AevonSnapProbeLog")
+public func AevonSnapProbeLog(_ detail: UnsafePointer<CChar>?) {
+    let d = detail.map { String(cString: $0) } ?? ""
+    AevonLog.info("[快照探针] \(d)（AevonSnapProbeV336）")
+}

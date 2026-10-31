@@ -1,6 +1,11 @@
 import Foundation
 import UIKit
 
+/// V0.3.36（AevonSnapProbeV336）：系统快照接口只读探针（实现见 `AevonSnapProbe.m`）。
+/// 传真场景指针进去，探针自己保证「每进程只跑一次 + 全程只读 + 失败不影响承载」。
+@_silgen_name("AevonSnapProbeRun")
+private func AevonSnapProbeRun(_ scene: UnsafeMutableRawPointer?) -> Int32
+
 /// 单个 App 场景的承载器（V0.0.10 重写）。
 ///
 /// V0.0.9 的做法是错的，两处都被真机日志证明：
@@ -132,6 +137,14 @@ final class AevonSceneHost {
 
         // 激活 presenter 之后再把场景推一次前台：只有场景处于前台，App 才会持续渲染。
         AevonSceneHelper.setForeground(scene, true)
+
+        /* V0.3.36（AevonSnapProbeV336）：系统快照接口只读探针。
+         *
+         * 为什么放在这里而不是 `scene(for:)`：这一刻场景**已经被激活并推了前台**，
+         * 系统侧的 sceneHandle 才一定建立完毕 —— 而 `saveSuspendSnapshot:forSceneHandle:`
+         * 要的正是 handle。早一步可能反查不到，晚一步则要另找调用点。
+         * ObjC 侧每进程只跑一次（gRan），失败只留日志，绝不影响承载。 */
+        _ = AevonSnapProbeRun(Unmanaged.passUnretained(scene).toOpaque())
     }
 
     deinit {

@@ -5813,6 +5813,17 @@ jobs:
           grep -qF 'view.enterDeskHold(reason: "全屏 App 画面离场（过渡哨命中）")' "$WM35" \
             || { echo "::error::V0.3.35 过渡哨没交给定格保持"; exit 1; }
           echo "V0.3.35 校验: 回桌面定格保持（清晰帧 + 主动降后台 + 零写）→ 1.9s 自动唤醒交接 + 停靠封面计时器作废 ✓"
+          # ── V0.3.36 校验（K2-A：系统快照接口只读探针）──
+          for s in AevonSnapProbeV336 AevonSnapCensusV336 AevonSnapIvarV336 AevonSnapSelV336 AevonSnapNoWriteV336; do
+            strings "$MYD28" | grep -qF "$s" || { echo "::error::V0.3.36 主库缺标记 $s"; exit 1; }
+          done
+          grep -qF 'Sources/AevonSnapProbe.m' "$GITHUB_WORKSPACE/Makefile" || { echo "::error::V0.3.36 探针没进 Makefile（等于没编译）"; exit 1; }
+          WSP36="$GITHUB_WORKSPACE/Sources/AevonSnapProbe.m"
+          python3 -c "import io,sys,re;s=io.open(sys.argv[1],encoding='utf-8').read();L=[l for l in s.split(chr(10)) if 'objc_msgSend' in l and not l.strip().startswith(('//','*','/*'))];bad=[l.strip()[:50] for l in L if re.search(r'save|set[A-Z]|create|remove',l)];print('V0.3.36 探针全程只读 ✓' if not bad else '::error::V0.3.36 探针出现写调用 '+str(bad[:2]));sys.exit(0 if not bad else 1)" "$WSP36"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('int AevonSnapProbeRun(void *scenePtr)');j=s.find('gRan = YES',i);b=s[i:j] if 0<i<j else '';ok=('if (gRan) { return 0; }' in b and 'if (gOff) { return 0; }' in b);print('V0.3.36 探针只跑一次 + 总闸 ✓' if ok else '::error::V0.3.36 探针会重复跑（每开一次浮窗 dump 一遍）');sys.exit(0 if ok else 1)" "$WSP36"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('AevonSceneHelper.setForeground(scene, true)');j=s.find('AevonSnapProbeRun(',i);ok=(0<i<j and j-i<700);print('V0.3.36 探针在场景推前台之后才跑 ✓' if ok else '::error::V0.3.36 探针早于推前台（handle 还没建立）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"
+          grep -qF '@_cdecl("AevonSnapProbeLog")' "$WV35" || { echo "::error::V0.3.36 缺日志出口（探针打印无处可去）"; exit 1; }
+          echo "V0.3.36 校验: 系统快照接口只读探针（类/方法/签名/ivar/句柄反查）✓"
 
 
 
