@@ -296,9 +296,31 @@ static CFTimeInterval gAevonOwnSummonStamp = 0;
  * 借腿让路判据从「识别器已注册」改成「本手势真的接管了」—— 静态事实会让
  * 带外的落指变成「系统腿被拦 + 自建腿无 hold」两头空（Aevon(101) 有 6 次）。 */
 static CFTimeInterval gAevonOwnHoldStamp = 0;
+/* V0.3.29（AevonOwnSwallowV329）：自建腿当前那根手指的 `UITouch` 指针身份。
+ *
+ * 为什么要把它交给 Swift：0.3.28 的单层带上，召唤率已经 100%，但**这根手指
+ * 从来没被挡住**。`presentRing` 把 `ringSource` 无条件写成 `"global"`，于是自建腿
+ * 的手指在下一帧被全局通道的「收养」分支接走 —— 那个分支的语义是「只登记喂盘、不吞」，
+ * 依据是 0.2.7 的注释「把手是真实控件，命中天然路由」。可 0.3.13 起 `yieldMode`
+ * 为真、把手的 `hitTest` 一律返回 nil，这个前提早就没了。
+ * 结果：桌面 `UIScrollViewPanGestureRecognizer` 照常起来（翻页），抖音自己的左滑
+ * pan 照常起来（进博主页）。Aevon(101)/(102) 两份日志时序完全一致 —— 不是新版引入的
+ * 病，是召唤率从 86% 涨到 100% 之后每次都能看见了。
+ *
+ * 这里只存指针、不做任何判定：绑定与吞咽全部在 Swift 侧按 prefs 开关执行，
+ * ObjC 只管把身份递过去。0 = 当前没有自建腿手指。
+ */
+static uintptr_t gAevonOwnTouchID = 0;
+/* V0.3.29（AevonDeskPanGuardV329）：最近一次「自建腿真的召唤了」的时刻。
+ * 桌面翻页 pan 的强制失败窗口用它做闸（见 AevonGripDeskPanShouldFail）。 */
+static CFTimeInterval gAevonOwnSummonAtGuard = 0;
 /* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
 extern void AevonGripOwnLegKick(void);
+/* V0.3.29（AevonDeskPanGuardV329）：桌面翻页 pan 守卫 —— 定义在文件尾部，
+ * 而调用点（AevonGripGlobalSetState / Pub）在上方，必须先声明。 */
+static BOOL AevonGripDeskPanShouldFail(id recog);
+static void AevonGripDeskPanGuardNote(void);
 /* V0.3.12：认领入口的前置声明（定义在自建识别器之后；Swift 侧用 silgen_name 直链符号）。 */
 extern void AevonGripOwnLegClaim(void);
 /* V0.3.11：类型值取证也在 AevonGripLegObserve 里触发（那时边沿识别器实例就在手上）。 */
@@ -505,6 +527,13 @@ static void AevonGripLegObserve(id self, NSInteger state) {
 }
 
 static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
+    /* V0.3.29（AevonDeskPanGuardV329）：桌面翻页 pan 想进 Began 时，若自建腿刚召唤过
+     * 且它的宿主就在桌面右缘 → 直接把要转发的状态降成 Failed。
+     * 改「转发出去的状态」而不是自己再调一次 setState:，天然不会递归。 */
+    if (state == 1 && AevonGripDeskPanShouldFail(self)) {
+        state = 4;
+        AevonGripDeskPanGuardNote();
+    }
     if (gAevonOrigPrivSetState) {
         ((void (*)(id, SEL, NSInteger))gAevonOrigPrivSetState)(self, _cmd, state);
     }
@@ -512,6 +541,10 @@ static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
 }
 
 static void AevonGripGlobalSetStatePub(id self, SEL _cmd, NSInteger state) {
+    if (state == 1 && AevonGripDeskPanShouldFail(self)) {
+        state = 4;
+        AevonGripDeskPanGuardNote();
+    }
     if (gAevonOrigPubSetState) {
         ((void (*)(id, SEL, NSInteger))gAevonOrigPubSetState)(self, _cmd, state);
     }
@@ -807,6 +840,8 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 @interface AevonOwnLegGesture : UIGestureRecognizer
 /// V0.3.12（AevonOwnClaimV312）：被借腿连带认领 —— YES 表示真的认领到了。
 - (BOOL)ownClaimNow;
+/// V0.3.29（AevonOwnSwallowV329）：把这根手指移交给全局吞层（只清自建腿簿记，不动 state）。
+- (void)ownHandoff;
 @end
 
 @implementation AevonOwnLegGesture {
@@ -873,12 +908,39 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     _ownSummoned = NO;
     _ownSummonedAt = 0;
     _ownTouch = nil;
+    /* V0.3.29（AevonOwnSwallowV329）：身份一并作废 —— 指针会被复用，
+     * 留着它会让下一次绑定绑到一根已经不存在的手指上。 */
+    gAevonOwnTouchID = 0;
     _ownMovedFrames = 0;
     _ownFeedFrames = 0;
     _ownStartStamp = 0;
     /* `_ownStart` 归零不是洁癖：万一有「上根手指的 moved 落到新会话里」的怪帧，
      * dx 会变成一个大正数，`dx <= -8` 判据直接不成立，比留着旧起点安全。 */
     _ownStart = CGPointZero;
+}
+
+/* V0.3.29（AevonOwnSwallowV329）：把这根手指正式移交给全局吞层。
+ *
+ * 吞层接手之后，这个识别器**再也不会收到任何帧**（整条 UIEvent 在 `sendEvent:` 就没了），
+ * 于是 `-touchesEnded:` / `-reset` / `ownBailRearm` 三条清场路径同时失效。
+ * 不清 `_ownSummoned` 的后果很具体：抬手之后 2.5s 内任何新落指都会在
+ * `-touchesBegan:` 顶部被当成「上一轮还没结束」直接 return —— 用户感觉是
+ * 「呼完一次盘，两秒半内怎么划都没反应」。
+ *
+ * 故意**不改 `self.state`**：手指已经交给吞层，此时把识别器置 Ended/Cancelled
+ * 会让 UIKit 把延迟中的触摸补投给下层，正好是这一版要消灭的那个行为。
+ * 断言也不在这里还 —— 由 Swift 侧在全局通道的 ended 里显式归还。 */
+- (void)ownHandoff {
+    _ownSummoned = NO;
+    _ownSummonedAt = 0;
+    _ownTouch = nil;
+    _ownMovedFrames = 0;
+    _ownFeedFrames = 0;
+    [_ownBail invalidate];
+    _ownBail = nil;
+    [_ownHold invalidate];
+    _ownHold = nil;
+    gAevonOwnTouchID = 0;
 }
 
 /* V0.3.12（AevonOwnClaimV312）：借腿赢下仲裁的那一刻，把这根手指正式认领。
@@ -916,6 +978,9 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (void)ownPass:(const char *)why bucket:(int)bucket detail:(NSString *)detail {
     [_ownBail invalidate];
     _ownBail = nil;
+    /* V0.3.29（AevonOwnSwallowV329）：放行 = 这根手指不归我们，身份立即作废，
+     * 否则 Swift 侧下一次召唤会绑到一根已经被还回去的手指上。 */
+    gAevonOwnTouchID = 0;
     /* V0.3.28（AevonSysAssertV328）：手指不归我们了，断言立刻还回去。
      * 少还一次 = 用户在这段时间里右滑返回失灵，所以这里是「放行」这条路上唯一的收尾点。 */
     AevonGripAssertRelease();
@@ -975,6 +1040,10 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (void)ownSummonAtPoint:(CGPoint)p {
     _ownSummoned = YES;
     _ownSummonedAt = CACurrentMediaTime();
+    /* V0.3.29（AevonDeskPanGuardV329）：桌面翻页 pan 的强制失败窗口从这一刻起算。
+     * 桌面那条 `UIScrollViewPanGestureRecognizer` 在我们 `began` 之后十几毫秒才
+     * `began`（Aevon(101)/(102) 两份日志同构），所以窗口要覆盖到召唤之后的一小段。 */
+    gAevonOwnSummonAtGuard = CACurrentMediaTime();
     /* V0.3.28（AevonSysAssertV328）：跟踪开始 → 压住系统手势（Stheno 第 ④ 层）。
      *
      * 时机选在「确定要召盘」这一刻，不是落指那一刻：落指时只是扣住手指、还不确定
@@ -1041,6 +1110,9 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     _ownStart = p;
     _ownHit = p;
     _ownTouch = t;
+    /* V0.3.29（AevonOwnSwallowV329）：把这根手指的身份递给 Swift。
+     * 只在 `level == 1`（带内）之后写入，带外的落指在上一段已经 ownPass 走了。 */
+    gAevonOwnTouchID = (uintptr_t)(__bridge void *)t;
     _ownSummoned = NO;
     _ownMovedFrames = 0;
     _ownFeedFrames = 0;
@@ -1877,6 +1949,80 @@ double AevonGripOwnHoldAge(void) {
     return CACurrentMediaTime() - gAevonOwnHoldStamp;
 }
 
+/* V0.3.29（AevonOwnSwallowV329）：自建腿当前那根手指的 `UITouch` 指针身份。
+ *
+ * 返回的是 SpringBoard `sendEvent:` 里 `[event allTouches]` 的同一批对象之一 ——
+ * 识别器的 `-touchesBegan:` 收到的就是同一批实例，所以 Swift 侧拿它去和
+ * `AevonGlobalTouchPhase` 报上来的 `touchID` 比指针相等，能精确对上。
+ * 返回 0 = 当前没有自建腿手指（已经放行 / 已 reset / 从未接管）。
+ *
+ * 对不上时不会误伤：Swift 侧只是在 `shouldSwallowGlobalTouch` 里少一个命中，
+ * 行为退回 0.3.28（手指照旧漏给下层），不会多吞别人的手指。 */
+uintptr_t AevonGripOwnTouchID(void) {
+    return gAevonOwnTouchID;
+}
+
+/* V0.3.29（AevonOwnSwallowV329）：把这根手指移交给全局吞层。
+ * Swift 侧在 `presentRing(source:"ownleg")` 里读完身份、绑好吞层之后调用一次。 */
+void AevonGripOwnHandoff(void) {
+    if (gAevonOwnGesture == nil) { return; }
+    AevonOwnLegGesture *g = (AevonOwnLegGesture *)gAevonOwnGesture;
+    [g ownHandoff];
+}
+
+/* V0.3.29（AevonDeskPanGuardV329）：桌面翻页 pan 是否该被强制判失败。
+ *
+ * 只治桌面这件事：Aevon(101)/(102) 两份日志里，`AevonOwnLegGesture → began`
+ * 之后 17~39ms 必有 `UIScrollViewPanGestureRecognizer → began` —— 我们的识别器
+ * 挂 `_UISystemGestureManager`（系统手势环境），SB 的桌面滚动在这个环境之外，
+ * 两边不共享仲裁，所以「我们成功了」并不等于「它失败了」。
+ *
+ * 判据（全部满足才动手，任何一条不满足就 fail-open 什么都不做）：
+ *   ① 自建腿在最近 1.2s 内真的召唤过（`gAevonOwnSummonAtGuard`）；
+ *   ② 这个识别器是 `UIScrollViewPanGestureRecognizer` 或其子类；
+ *   ③ 它的宿主视图在**桌面**子树里（沿 superview 链找 HomeScreen / Icon / Folder）；
+ *   ④ 它当前的点在右缘 40pt 内（我们的带是 15pt，留 25pt 余量给手指继续左滑）。
+ * 只碰 SB 自己的桌面滚动 —— App 进程里的滚动根本不在这里，抖音那边由 Swift 的
+ * 全局吞层负责。 */
+static BOOL AevonGripDeskPanShouldFail(id recog) {
+    @try {
+        if (gAevonOwnSummonAtGuard <= 0) { return NO; }
+        if (CACurrentMediaTime() - gAevonOwnSummonAtGuard > 1.2) { return NO; }
+        if (![recog isKindOfClass:[UIGestureRecognizer class]]) { return NO; }
+        NSString *cn = NSStringFromClass([recog class]);
+        if ([cn rangeOfString:@"UIScrollViewPanGestureRecognizer"].location == NSNotFound) { return NO; }
+        UIGestureRecognizer *g = (UIGestureRecognizer *)recog;
+        UIView *v = [g view];
+        BOOL onDesk = NO;
+        for (UIView *cur = v; cur != nil; cur = [cur superview]) {
+            NSString *vn = NSStringFromClass([cur class]);
+            if ([vn rangeOfString:@"HomeScreen"].location != NSNotFound
+                || [vn rangeOfString:@"Icon"].location != NSNotFound
+                || [vn rangeOfString:@"Folder"].location != NSNotFound) { onDesk = YES; break; }
+        }
+        if (!onDesk) { return NO; }
+        CGPoint p = [g locationInView:nil];
+        CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+        if (p.x < sw - 40.0) { return NO; }
+        return YES;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+/* V0.3.29（AevonDeskPanGuardV329）：桌面 pan 被强制判失败的留痕（0.5s 限流）。
+ * 有这一行就说明守卫真的打中了；一次都没有 = 判据没命中桌面那只识别器，
+ * 需要回头收窄/放宽 ②③④ 三个条件，而不是继续猜。 */
+static void AevonGripDeskPanGuardNote(void) {
+    static CFTimeInterval lastAt = 0;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - lastAt < 0.5) { return; }
+    lastAt = now;
+    AevonGripOwnLog("deskpan",
+                    "桌面翻页 pan 已强制判失败（自建腿刚召唤，右缘 40pt 内）"
+                    "（AevonDeskPanGuardV329）");
+}
+
 
 /* V0.3.7（AevonYieldDefaultV307）：让路模式转正 —— GripSystemYield 默认值
  * false → true，SB 侧把手默认不接触摸，右缘呼盘全部交给系统边沿识别器。
@@ -2256,6 +2402,37 @@ __attribute__((used)) static const char AevonEdgeBandOnlyV328Marker[] = "AevonEd
 __attribute__((used)) static const char AevonNoConeV328Marker[] = "AevonNoConeV328";
 __attribute__((used)) static const char AevonYieldGuardV328Marker[] = "AevonYieldGuardV328";
 __attribute__((used)) static const char AevonSummonTTLV328Marker[] = "AevonSummonTTLV328";
+
+/* V0.3.29（AevonOwnSwallowV329 / AevonOwnTouchBindV329 / AevonDeskPanGuardV329）：
+ *
+ * 用户 Aevon(102) 两条反馈：「桌面触发圆盘手势时百分百触发桌面滑动」、
+ * 「抖音中触发手势时因为贴边，大几率会触发抖音的左滑进入视频博主主页」。
+ *
+ * 定量（Aevon(102) 2,019 行）：92 次 hold → 92 次召唤（**100%**，0.3.27 是 86%），
+ * 分布 桌面 40 / 抖音 37 / QQ 12 / 设置 2 / 微信 1。也就是说 #1 的触发率已经修好，
+ * 现在暴露的是「召唤 ≠ 压住」。
+ *
+ * 根因不是 0.3.28 新引入的：Aevon(101)（0.3.27）日志里时序完全一致 ——
+ * `AevonOwnLegGesture → began` 之后 20~39ms，必有 `UIScrollViewPanGestureRecognizer
+ * → began`。我们的识别器挂 `_UISystemGestureManager`（系统手势环境），SB 的桌面滚动
+ * 在这个环境之外，两边不共享仲裁，所以「我们成功了」不等于「它失败了」。
+ *
+ * 而在 `presentRing:` 里 `ringSource` 被无条件写成 `"global"`，于是自建腿的手指在
+ * 下一帧被全局通道的「收养」分支接走，那个分支的语义是「只登记喂盘、不吞」——
+ * 依据是 0.2.7 的「把手是真实控件、命中天然路由」，而 0.3.13 起 `yieldMode` 让
+ * `hitTest` 一律返回 nil，这个前提早就不存在了。手指就这样裸奔到桌面和 App。
+ *
+ * 两条改动：
+ *   ① 自建腿召唤后把这根手指**真的绑进全局吞层**（AevonOwnSwallowV329 +
+ *      AevonOwnTouchBindV329）：ObjC 递 `UITouch` 指针身份，Swift 侧
+ *      `ownsTouch = true` 让 `sendEvent:` 整条事件丢弃 —— 桌面和 App 从下一帧起
+ *      都收不到（抖音没被注入，这是唯一杠杆）；
+ *   ② 桌面再加一层与吞层无关的兜底（AevonDeskPanGuardV329）：自建腿刚召唤的
+ *      1.2s 内，桌面子树里的 `UIScrollViewPanGestureRecognizer` 想进 Began 一律
+ *      降成 Failed。吞层若因任何原因没命中，桌面这条仍然成立。 */
+__attribute__((used)) static const char AevonOwnSwallowV329Marker[] = "AevonOwnSwallowV329";
+__attribute__((used)) static const char AevonOwnTouchBindV329Marker[] = "AevonOwnTouchBindV329";
+__attribute__((used)) static const char AevonDeskPanGuardV329Marker[] = "AevonDeskPanGuardV329";
 
 /* V0.3.27（Aevon(100) #1「桌面和全屏 app 中手势触发并不是 100% 成功」）：
  * App 内锥角 14° → 22°（可配，`AevonGripCone327`），并在首帧判不出横向时再看 2 帧

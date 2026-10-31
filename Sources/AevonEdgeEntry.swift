@@ -48,6 +48,10 @@ enum AevonEdgeEntry {
     private static var globalOwnedForTouch: UInt = 0
     private static let globalOwnHardLimit: CFTimeInterval = 12
     private static let healIdleWindow: CFTimeInterval = 1.5
+    /// V0.3.29（AevonOwnSwallowV329）：当前这根被吞的手指是否是**自建腿召唤来的**。
+    /// 为真时：`remoteMoved` 走权威通道（保住 0.3.17 的跟手质量），
+    /// 并且「收养」分支不许把它降级成「只喂不吞」。
+    private static var ownSwallowBound = false
     private static var lastHealLogAt: CFTimeInterval = 0
     /// V0.2.55（AevonGripHealV255）：吞咽日志节流
     private static var lastSwallowLogAt: CFTimeInterval = 0
@@ -427,8 +431,11 @@ enum AevonEdgeEntry {
             // V0.2.7（AevonEdgeAdoptV207）：把手呼盘的那根手指 SB 侧没登记过
             // globalTouchID（它起手在把手上）→ 收养它继续喂圆盘。
             // 只登记观察，不开 ownsTouch（把手是真实控件，App 那份由 hitTest 天然路由）。
+            // V0.3.29：`!ownsTouch` —— 已经被自建腿绑进吞层的手指**不许**再走这条路。
+            // 这条分支会把指纹塞进 `gripAdoptedTouchID`，而那是「只喂不吞」的唯一钥匙；
+            // Aevon(102) 的桌面翻页 / 抖音进博主页就是被这条分支解锁的。
             if touchID != globalTouchID, AevonRingMenu.isPresented, ringSource == "global",
-               !appEdgePointerAdopted, touchID != ringExtraTouchID {
+               !ownsTouch, !appEdgePointerAdopted, touchID != ringExtraTouchID {
                 appEdgePointerAdopted = true
                 globalTouchID = touchID
                 globalStart = point
@@ -446,7 +453,7 @@ enum AevonEdgeEntry {
                 if ringSource == "global" {
                     swallowDeadline = CACurrentMediaTime() + swallowLimit
                 }
-                ring.remoteMoved(to: point, source: "global")
+                ring.remoteMoved(to: point, source: "global", authoritative: ownSwallowBound)
                 return
             }
 
@@ -476,6 +483,8 @@ enum AevonEdgeEntry {
                     globalTouchID = 0
                     globalFired = false
                     ownsTouch = false
+                    if ownSwallowBound { AevonGripAssertReleaseBridge() }   // V0.3.29：吞层接手后识别器收不到 ended、reset 也不会来 → 断言必须在这里还
+                    ownSwallowBound = false   // V0.3.29：绑吞层标记随归属一起归还
                     swallowDeadline = 0
                     globalOwnedAt = 0
                     gripAdoptedTouchID = 0
@@ -491,8 +500,9 @@ enum AevonEdgeEntry {
                 return
             }
             // 同 moved —— 未登记的手指在圆盘展开期间抬手，也要收养后送达 remoteEnded。
+            // V0.3.29：同样加 `!ownsTouch`（理由见 moved 分支）。
             if touchID != globalTouchID, AevonRingMenu.isPresented, ringSource == "global",
-               !appEdgePointerAdopted, touchID != ringExtraTouchID {
+               !ownsTouch, !appEdgePointerAdopted, touchID != ringExtraTouchID {
                 appEdgePointerAdopted = true
                 globalTouchID = touchID
                 globalFired = true
@@ -508,6 +518,8 @@ enum AevonEdgeEntry {
             globalTouchID = 0
             globalFired = false
             ownsTouch = false
+            if ownSwallowBound { AevonGripAssertReleaseBridge() }   // V0.3.29：吞层接手后识别器收不到 ended、reset 也不会来 → 断言必须在这里还
+            ownSwallowBound = false   // V0.3.29：绑吞层标记随归属一起归还
 
         case .cancelled:
             if gripSwipeTouchID != 0, touchID == gripSwipeTouchID { gripSwipeTouchID = 0 }
@@ -522,6 +534,8 @@ enum AevonEdgeEntry {
                     globalTouchID = 0
                     globalFired = false
                     ownsTouch = false
+                    if ownSwallowBound { AevonGripAssertReleaseBridge() }   // V0.3.29：吞层接手后识别器收不到 ended、reset 也不会来 → 断言必须在这里还
+                    ownSwallowBound = false   // V0.3.29：绑吞层标记随归属一起归还
                     swallowDeadline = 0
                     globalOwnedAt = 0
                     gripAdoptedTouchID = 0
@@ -539,6 +553,8 @@ enum AevonEdgeEntry {
             globalTouchID = 0
             globalFired = false
             ownsTouch = false
+            if ownSwallowBound { AevonGripAssertReleaseBridge() }   // V0.3.29：吞层接手后识别器收不到 ended、reset 也不会来 → 断言必须在这里还
+            ownSwallowBound = false   // V0.3.29：绑吞层标记随归属一起归还
 
         default:
             break
@@ -581,6 +597,8 @@ enum AevonEdgeEntry {
         guard !reason.isEmpty else { return }
         let heldID = globalTouchID
         ownsTouch = false
+        if ownSwallowBound { AevonGripAssertReleaseBridge() }   // V0.3.29：吞层接手后识别器收不到 ended、reset 也不会来 → 断言必须在这里还
+        ownSwallowBound = false   // V0.3.29：绑吞层标记随归属一起归还
         globalTouchID = 0
         globalFired = false
         swallowDeadline = 0
@@ -1055,6 +1073,43 @@ enum AevonEdgeEntry {
             globalOwnedForTouch = globalTouchID
             globalOwnedAt = now
         }
+        /* V0.3.29（AevonOwnSwallowV329）：自建腿召唤 → 把这根手指**真的**绑进吞层。
+         *
+         * 必须放在上面那段之后，且不受 `SBSwallow` 开关约束 —— 那个开关管的是
+         * 「圆盘内的触摸怎么走」，而这里要解决的是「召唤那根手指被下层吃掉了」。
+         *
+         * Aevon(102) 的 40 次桌面召唤全部伴随桌面翻页、37 次抖音召唤大概率进博主页，
+         * 根因就是这根手指从头到尾没被吞：`presentRing` 把 `ringSource` 写成
+         * "global" 之后，下一帧「收养」分支会把它标成 `gripAdoptedTouchID`，
+         * 而 `shouldSwallowGlobalTouch` 对收养指纹的第一条就是 `return false`。
+         *
+         * 指针身份由 ObjC 侧在 `-touchesBegan:` 里记下（和 `sendEvent:` 收到的是
+         * 同一批 `UITouch` 实例），所以这里的相等判断是精确的。取不到就什么都不做，
+         * 行为退回 0.3.28 —— 只是少一层保护，不会误吞别人的手指。 */
+        if source == "ownleg", AevonPrefs.bool("OwnSwallow", default: true) {
+            let tid = AevonGripOwnTouchIDBridge()
+            if tid != 0 {
+                globalTouchID = tid
+                globalStart = lastTouchPoint
+                globalFired = true
+                ownsTouch = true
+                ownSwallowBound = true
+                gripAdoptedTouchID = 0      // 清掉收养指纹：它就是「不吞」的唯一钥匙
+                appEdgePointerAdopted = false
+                globalOwnedForTouch = tid
+                globalOwnedAt = now
+                swallowDeadline = now + swallowLimit
+                AevonLog.info("[圆盘] 自建腿手指已绑全局吞层 touchID=\(tid)"
+                    + " → 桌面/App 从下一帧起收不到这根手指"
+                    + "（AevonOwnSwallowV329 AevonOwnTouchBindV329）")
+                /* 移交自建腿簿记：吞层接手后那个识别器再也收不到帧，
+                 * 不清 `_ownSummoned` 就会留下 2.5s「新落指被忽略」的死窗口。 */
+                AevonGripOwnHandoffBridge()
+            } else {
+                AevonLog.warn("[圆盘] 自建腿手指身份为空（ObjC 侧已 reset）→ 本轮不绑吞层，"
+                    + "手指照旧漏给下层（AevonOwnTouchBindV329）")
+            }
+        }
         // V0.0.34（AevonNotifyRingBitV34）：圆盘状态写进 notify(3) 共享内存。
         AevonNotifySetRing(1)
         AevonLog.info("[圆盘] 指针已交给圆盘（来源 \(source)；把手是真实控件，命中无需吞摸；"
@@ -1386,6 +1441,8 @@ enum AevonEdgeEntry {
         globalTouchID = 0
         globalFired = false
         ownsTouch = false
+        if ownSwallowBound { AevonGripAssertReleaseBridge() }   // V0.3.29：吞层接手后识别器收不到 ended、reset 也不会来 → 断言必须在这里还
+        ownSwallowBound = false   // V0.3.29：绑吞层标记随归属一起归还
         globalOwnedAt = 0
         /* V0.2.89（AevonRingOrphanEndV289）：额外手指（圆盘展开期登记吞掉的那根）
          * began 已被吞，登记不能跟着圆盘一起清 —— 清了它，剩余 moved/ended 帧立刻
@@ -1662,3 +1719,28 @@ private func AevonGripOwnHoldAgeBridge() -> Double
 
 @_silgen_name("AevonGripOwnLegReadyInt")
 private func AevonGripOwnLegReadyBridge() -> Int32
+
+/// V0.3.29（AevonOwnTouchBindV329）：自建腿当前那根手指的 `UITouch` 指针身份
+/// （ObjC 侧 `uintptr_t AevonGripOwnTouchID(void)`）。
+///
+/// 和 `AevonGlobalTouchPhase` 报上来的 `touchID` 是同一批对象 —— 识别器的
+/// `-touchesBegan:` 与 `sendEvent:` 的 `[event allTouches]` 拿到的是同一批 `UITouch`
+/// 实例，所以直接比指针相等就能精确对上。返回 0 = ObjC 侧已放行/已 reset。
+@_silgen_name("AevonGripOwnTouchID")
+private func AevonGripOwnTouchIDBridge() -> UInt
+
+/// V0.3.29（AevonOwnSwallowV329）：把手指移交全局吞层后，清掉自建腿那侧的簿记
+/// （ObjC 侧 `void AevonGripOwnHandoff(void)`，只清 `_ownSummoned`/`_ownTouch`/定时器，
+/// **不改识别器 state** —— 改 state 会让 UIKit 把延迟中的触摸补投给下层）。
+@_silgen_name("AevonGripOwnHandoff")
+private func AevonGripOwnHandoffBridge()
+
+/// V0.3.29（AevonOwnSwallowV329）：显式归还系统手势禁用断言
+/// （ObjC 侧 `void AevonGripAssertRelease(void)`，内部幂等 + 全 `@try`）。
+///
+/// 为什么要从 Swift 主动还：手指被全局吞层接走之后，自建识别器收不到 `ended`、
+/// 因此 `-reset` 也不会来，而 `ownBailRearm` 这个 ticker 同样靠 moved 驱动 ——
+/// 三条自动归还路径同时失效。少了这一句，用户呼一次盘就会失去右滑返回，
+/// 直到 respring 才恢复。
+@_silgen_name("AevonGripAssertRelease")
+private func AevonGripAssertReleaseBridge()

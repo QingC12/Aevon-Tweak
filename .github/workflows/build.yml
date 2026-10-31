@@ -5748,6 +5748,71 @@ jobs:
 
           echo "V0.3.28 校验: 单层 15pt 贴边带 + 带内只看位移不看方向 + 借腿动态让路 + 系统手势断言（5s 超时兜底）✓"
 
+          # ── V0.3.29 校验（Aevon(102) 定档「A + B」）──
+          # 用户反馈：「桌面触发圆盘手势时百分百触发桌面滑动」「抖音中触发手势时因为贴边，
+          # 大几率会触发抖音的左滑进入视频博主主页」。定量：92 hold → 92 summon（100%），
+          # 桌面 40 / 抖音 37 / QQ 12 / 设置 2 / 微信 1。
+          # 根因：`presentRing` 无条件把 ringSource 写成 "global"，自建腿的手指下一帧被
+          # 「收养」分支接走（只喂不吞）→ 手指裸奔到桌面与 App。Aevon(101) 日志同构，
+          # 说明不是新版引入的病，是召唤率涨到 100% 之后每次都能看见。
+          # ① 三个标记必须进主库二进制
+          for s in AevonOwnSwallowV329 AevonOwnTouchBindV329 AevonDeskPanGuardV329; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.29 主库缺标记 $s"; exit 1; }
+          done
+
+          # ② 方案 A：ObjC 侧把手指身份递出去 + 移交簿记
+          grep -qF 'uintptr_t AevonGripOwnTouchID(void)' "$GH26" \
+            || { echo "::error::V0.3.29 缺 AevonGripOwnTouchID 导出（Swift 侧无从绑定）"; exit 1; }
+          grep -qF 'gAevonOwnTouchID = (uintptr_t)(__bridge void *)t;' "$GH26" \
+            || { echo "::error::V0.3.29 touchesBegan 没记手指身份"; exit 1; }
+          grep -qF 'void AevonGripOwnHandoff(void)' "$GH26" \
+            || { echo "::error::V0.3.29 缺 AevonGripOwnHandoff（会留下 2.5s 新落指死窗口）"; exit 1; }
+          sed -n '/^- (void)reset {/,/^}/p' "$GH26" | grep -qF 'gAevonOwnTouchID = 0;' \
+            || { echo "::error::V0.3.29 reset 没作废手指身份（指针复用会绑错手指）"; exit 1; }
+          sed -n '/^- (void)ownPass:/,/^}/p' "$GH26" | grep -qF 'gAevonOwnTouchID = 0;' \
+            || { echo "::error::V0.3.29 ownPass 没作废手指身份"; exit 1; }
+          #   ⛔ ownHandoff 里不许改 state —— 改 state 会让 UIKit 把延迟中的触摸补投给下层
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find(chr(10)+'}',i);b=s[i:j] if i>0 else '';ok=(i>0 and 'self.state' not in b and '_ownSummoned = NO;' in b);print('V0.3.29 ownHandoff 只清簿记不动 state ✓' if ok else '::error::V0.3.29 ownHandoff 改了识别器 state（会把延迟触摸补投给下层）');sys.exit(0 if ok else 1)" "$GH26"
+
+          # ③ 方案 A：Swift 侧真绑 + 堵住「收养降级」
+          grep -qF '@_silgen_name("AevonGripOwnTouchID")' "$EE" \
+            || { echo "::error::V0.3.29 Swift 侧没声明 AevonGripOwnTouchID"; exit 1; }
+          grep -qF '@_silgen_name("AevonGripOwnHandoff")' "$EE" \
+            || { echo "::error::V0.3.29 Swift 侧没声明 AevonGripOwnHandoff"; exit 1; }
+          grep -qF 'if source == "ownleg", AevonPrefs.bool("OwnSwallow", default: true) {' "$EE" \
+            || { echo "::error::V0.3.29 自建腿召唤没有绑定全局吞层（回退开关叫 OwnSwallow）"; exit 1; }
+          grep -qF 'ownSwallowBound = true' "$EE" \
+            || { echo "::error::V0.3.29 绑定后没置 ownSwallowBound"; exit 1; }
+          grep -qF 'gripAdoptedTouchID = 0' "$EE" \
+            || { echo "::error::V0.3.29 绑定后没清收养指纹（shouldSwallow 会立刻放行）"; exit 1; }
+          grep -qF 'ring.remoteMoved(to: point, source: "global", authoritative: ownSwallowBound)' "$EE" \
+            || { echo "::error::V0.3.29 改道后的喂盘丢了权威标记（跟手会退化）"; exit 1; }
+          #   ⛔ 两条收养分支都必须带 !ownsTouch，少一条就等于留了一条降级路
+          [ "$(grep -cF '!ownsTouch, !appEdgePointerAdopted' "$EE")" -ge 2 ] \
+            || { echo "::error::V0.3.29 收养分支没堵全（moved/ended 都要 !ownsTouch）"; exit 1; }
+          #   ⛔ 吞层接手后识别器收不到 ended → reset 不来 → 断言必须显式还
+          grep -qF '@_silgen_name("AevonGripAssertRelease")' "$EE" \
+            || { echo "::error::V0.3.29 Swift 侧没有归还断言的通道（呼一次盘就丢右滑返回）"; exit 1; }
+          [ "$(grep -cF 'if ownSwallowBound { AevonGripAssertReleaseBridge() }' "$EE")" -ge 4 ] \
+            || { echo "::error::V0.3.29 断言显式归还点不足（ended/cancelled/自愈/收起 四处都要）"; exit 1; }
+
+          # ④ 方案 B：桌面翻页 pan 强制判失败（与吞层无关的第二道）
+          grep -qF 'static BOOL AevonGripDeskPanShouldFail(id recog)' "$GH26" \
+            || { echo "::error::V0.3.29 缺桌面 pan 守卫"; exit 1; }
+          grep -qF 'UIScrollViewPanGestureRecognizer' "$GH26" \
+            || { echo "::error::V0.3.29 桌面守卫没判识别器类型"; exit 1; }
+          grep -qF 'gAevonOwnSummonAtGuard = CACurrentMediaTime();' "$GH26" \
+            || { echo "::error::V0.3.29 守卫窗口没有起算点"; exit 1; }
+          [ "$(grep -cF 'if (state == 1 && AevonGripDeskPanShouldFail(self))' "$GH26")" -ge 2 ] \
+            || { echo "::error::V0.3.29 setState 公私两个入口都要接守卫"; exit 1; }
+          [ "$(grep -cF 'state = 4;' "$GH26")" -ge 2 ] \
+            || { echo "::error::V0.3.29 守卫没把状态降成 Failed"; exit 1; }
+          #   ⛔ 守卫必须四个条件齐全，任何一条漏掉都会误杀普通滚动
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static BOOL AevonGripDeskPanShouldFail(id recog) {');j=s.find(chr(10)+'}',i);b=s[i:j] if i>0 else '';need=['gAevonOwnSummonAtGuard','UIScrollViewPanGestureRecognizer','HomeScreen','p.x < sw - 40.0'];miss=[n for n in need if n not in b];ok=(i>0 and not miss);print('V0.3.29 桌面守卫四条件齐全 ✓' if ok else '::error::V0.3.29 桌面守卫缺条件：'+','.join(miss));sys.exit(0 if ok else 1)" "$GH26"
+
+          echo "V0.3.29 校验: 自建腿手指绑全局吞层（桌面/App 都收不到）+ 兜住收养降级 + 断言显式归还 + 桌面翻页 pan 吊销 ✓"
+
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
       # 为什么要它：真机崩溃日志里只有「模块 + 偏移」，而发布用的 dylib 被 strip 到只剩
