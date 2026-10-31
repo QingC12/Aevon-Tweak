@@ -692,6 +692,24 @@ final class AevonSceneHost {
         guard view.window != nil else { return false }
         guard !view.isHidden, view.alpha > 0.05 else { return false }
         guard view.bounds.width > 1, view.bounds.height > 1 else { return false }
+        /* ⛔ V0.3.44（AevonAncestorVisibleV344）：父链可见性 —— 必须逐级查到窗口。
+         *
+         * Aevon(114) 实锤：容器被「周期归位」塞回正在淡出的 App 场景视图时，下面四项
+         * 全都成立（自己 alpha=1 / 未隐藏 / 有层 / 在窗），但父链正在缩淡，屏幕上什么都
+         * 没有 —— 判据却报「可见」，所以 0.3.43 的承接物 25 拍一次都没立起来（全程
+         * `可见=1 承接=0`），那 0.66 秒仍然裸露。父链必须一起查。 */
+        var node: UIView? = view.superview
+        var depth = 0
+        while let cur = node, depth < 32 {
+            if cur.isHidden || cur.alpha <= 0.05 { return false }
+            if cur is UIWindow { break }
+            node = cur.superview
+            depth += 1
+        }
+        /* ⛔ 这里**不能**用 `windowLevel >= floating` 当门槛：全屏 App 前台时容器本来就
+         * 挂在 App 场景视图里，`view.window` 是 App 场景所在的系统窗口（实测 level=5），
+         * 那时浮窗完全可见 —— 用浮窗层当门槛会把「正常可见」判成真空期，贴一张静止图
+         * 糊在实时画面上。层级只进日志、不做判据。 */
         /* 层判据放宽成「层或子视图任一非空」：远程表面可能以 subview 形式挂着，
          * 只认 sublayers 会把正常在画的窗口误判成真空期（贴一张图挡 0.2 秒）。 */
         return (view.layer.sublayers?.count ?? 0) > 0 || !view.subviews.isEmpty
@@ -702,12 +720,32 @@ final class AevonSceneHost {
         guard !invalidated else { return "呈现=已释放" }
         let view = presentationView
         let layers = view.layer.sublayers?.count ?? 0
+        /* V0.3.44：父链最暗 alpha + 父类名 + 窗口层级 —— Aevon(114) 那次「看得见 / 看不见」
+         * 的分歧全在这三项上，缺任何一项都读不出「挂对了视图、挂错了父级」。 */
+        let minA = ancestorMinAlpha
+        let parent = view.superview.map { String(describing: type(of: $0)) } ?? "无"
+        let level = view.window?.windowLevel.rawValue ?? -1
         return "呈现[在窗=\(view.window != nil ? 1 : 0)"
             + " hidden=\(view.isHidden ? 1 : 0)"
             + " alpha=\(String(format: "%.2f", view.alpha))"
             + " 层=\(layers)"
             + " 子视图=\(view.subviews.count)"
-            + " \(Int(view.bounds.width))x\(Int(view.bounds.height))]"
+            + " \(Int(view.bounds.width))x\(Int(view.bounds.height))"
+            + " 父=\(parent) 父链α=\(String(format: "%.2f", minA)) 窗层级=\(Int(level))]"
+    }
+
+    /// V0.3.44：父链最暗 alpha（1.00 = 整条链实心；0.00 = 有祖先被淡出）。
+    private var ancestorMinAlpha: Double {
+        var minA = 1.0
+        var node: UIView? = presentationView.superview
+        var depth = 0
+        while let cur = node, depth < 32 {
+            if Double(cur.alpha) < minA { minA = Double(cur.alpha) }
+            if cur is UIWindow { break }
+            node = cur.superview
+            depth += 1
+        }
+        return minA
     }
 
     /// 一行状态串（fg / cs / layers），给守卫日志做前后对照。

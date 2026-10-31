@@ -100,6 +100,9 @@ final class AevonTransitionSentry: NSObject {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         AevonEntryHost.attachToWindowRoot(reason: "回桌面过渡哨（缩放动画第一帧）")
+        /* V0.3.44（AevonHomeLeaveLockV344）：同一拍开离场锁 —— 否则 0.26 秒后的
+         * 「周期归位」会把容器重新塞回正在淡出的 App 场景视图（Aevon(114) 实锤 0.66s 消失）。 */
+        AevonEntryHost.beginHomeLeave(reason: "回桌面过渡哨")
         AevonWindowManager.noteTransitionFreeze()
         CATransaction.commit()
         // 误报还原网：+1.5s 后场景还在屏、几何已稳、容器仍在窗口根 → 判误报
@@ -126,6 +129,9 @@ extension AevonEntryHost {
     /// V0.2.91（AevonHomeFreezeV291）：过渡哨误报还原专用 —— 把容器搬回场景视图。
     static func reattachToSceneView() {
         guard let sv = appSceneView, isUsableHost(sv) else { return }
+        /* V0.3.44：误报还原 = 那一趟不是回桌面，锁必须立刻关，否则浮窗会一直待在窗口根
+         * 不跟着 App 场景走（全屏 App 里就看不见了）。 */
+        endHomeLeave(reason: "过渡哨误报还原")
         attach(to: sv, reason: "过渡哨误报还原")
     }
 }
@@ -202,6 +208,59 @@ enum AevonEntryHost {
     /// 当前 App 场景的容器视图（弱引用；App 关掉后自动失效）
     // V0.2.91（AevonHomeFreezeV291）：internal 化 —— 回桌面过渡哨要读这个引用。
     static weak var appSceneView: UIView?
+
+    /// V0.3.44（AevonHomeLeaveLockV344）：回桌面离场锁的截止时刻。
+    ///
+    /// Aevon(114) 实锤：过渡哨命中（33.605）把容器搬回窗口根后，**周期归位 0.26 秒后
+    /// 又把它搬回 App 场景视图**（33.868 `AevonEntryRootView → UIView，原因=周期归位`）——
+    /// 那时 App 场景还在淡出（`isUsableHost` 三关都过），容器于是挂在一个正在缩小淡出的
+    /// 父视图里：探针 `层=5.0`（已经不是我们的入口窗，是 App 场景所在的系统窗口），
+    /// 一直持续到 34.526「App 场景消失」才搬回来 = **0.66 秒的消失**。
+    /// 第二次回桌面（Filza）恰好是场景消失事件先到、周期归位没抢到，所以那一趟是快的
+    /// —— 用户感觉「时快时慢」就是这两个事件赛跑的结果。
+    ///
+    /// 修法：哨响之后开一个离场窗口，期间周期归位只许走窗口根，绝不再搬回 App 场景视图。
+    /// 清锁四点：App 场景消失 / 误报还原 / App 场景重新出现 / 到期自然失效。
+    private static var homeLeaveUntil: CFTimeInterval = 0
+    /// 离场窗口长度。3 秒覆盖「上滑 → 缩放 → 场景收走」整段（Aevon(114) 实测 0.92s，
+    /// 慢设备留 3 倍余量）；到期即失效，不靠任何事件也能自愈。
+    private static let homeLeaveWindow: CFTimeInterval = 3.0
+
+    /// 回桌面离场锁的关断开关（出问题可整段回落 0.3.43 行为）。
+    /// ⛔ 必须走 UserDefaults：Swift `-O` 会把 `static let X = false` 折叠掉。
+    static let homeLeaveLockDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonHomeLeaveLockOff344") as? Bool
+        return v ?? false
+    }()
+
+    /// 开离场锁（过渡哨命中 / 桌面布防那拍调用）。
+    static func beginHomeLeave(reason: String) {
+        guard !homeLeaveLockDisabled else { return }
+        /* 没有 App 场景就没有「被搬回场景视图」的风险（场景消失后才布防的那条路
+         * 就是这种），不必开锁、也不必多打两行日志。 */
+        guard appSceneView != nil else { return }
+        homeLeaveUntil = CACurrentMediaTime() + homeLeaveWindow
+        AevonLog.info("[入口] 回桌面离场锁已开 \(String(format: "%.1f", homeLeaveWindow))s"
+            + "：期内周期归位只走窗口根，不再搬回 App 场景视图（\(reason)）（AevonHomeLeaveLockV344）")
+    }
+
+    /// 关离场锁（场景消失 / 误报还原 / App 场景重现 调用）。
+    static func endHomeLeave(reason: String) {
+        guard homeLeaveUntil > 0 else { return }
+        homeLeaveUntil = 0
+        AevonLog.info("[入口] 回桌面离场锁已关（\(reason)）（AevonHomeLeaveLockV344）")
+    }
+
+    /// 当前是否处于离场窗口内（到期即自愈）。
+    static var isHomeLeaving: Bool {
+        guard !homeLeaveLockDisabled else { return false }
+        guard homeLeaveUntil > 0 else { return false }
+        if CACurrentMediaTime() > homeLeaveUntil {
+            homeLeaveUntil = 0
+            return false
+        }
+        return true
+    }
 
     /// 浮窗外壳的统一挂载点（V0.0.36）：浮窗层优先，容器兜底。
     static var floatHost: UIView? { return floatLayer ?? container }
@@ -518,6 +577,9 @@ enum AevonEntryHost {
                 currentForegroundBundleID = bundleID
             }
         }
+        /* V0.3.44：App 场景又重新铺满 = 用户进了 App（或刚才的「回桌面」是误判），
+         * 锁必须立刻关 —— 否则 attach 到场景视图之后周期归位仍会把它拽回窗口根。 */
+        endHomeLeave(reason: "App 场景重新出现")
         appSceneView = view
         attach(to: view, reason: reason)
         // V0.2.91（AevonHomeFreezeV291）：App 场景在场 = 容器挂在场景视图里 =
@@ -580,6 +642,9 @@ enum AevonEntryHost {
     /// App 场景消失：把容器搬回入口窗口，保证桌面上入口照旧。
     static func appSceneDisappeared(_ view: UIView) {
         guard appSceneView === view else { return }
+        /* V0.3.44：场景真收走了 → 离场锁的使命结束，立刻关（后面还有 attachToWindowRoot 要做）。
+         * 放在 guard 之后：不是我们跟踪的那个场景，不该动锁。 */
+        endHomeLeave(reason: "App 场景已消失")
         appSceneView = nil
         currentForegroundBundleID = ""   // V0.2.7（AevonAppBlindDiagV207）：回桌面即清
         AevonTransitionSentry.shared.disarm()   // V0.2.91（AevonHomeFreezeV291）：过渡已由布防链接管
@@ -632,7 +697,12 @@ enum AevonEntryHost {
             AevonLog.info("[入口] 层级已重设 \(Int(before)) → \(Int(host.windowLevel.rawValue))（\(reason)）")
         }
         // 容器挂在哪一级决定「看不看得见」：优先 App 场景容器，其次窗口根视图
-        if let sceneView = appSceneView, isUsableHost(sceneView) {
+        //
+        // ⛔ V0.3.44（AevonHomeLeaveLockV344）：离场窗口内一律走窗口根。
+        // raise() 在「App 激活 / 回桌面」两类时机都会被调 —— 回桌面那次如果还按
+        // appSceneView 优先，就会把刚搬回窗口根的容器又塞回正在淡出的场景视图，
+        // 和周期归位是同一条死路（Aevon(114) 的 0.66 秒）。
+        if let sceneView = appSceneView, !isHomeLeaving, isUsableHost(sceneView) {
             attach(to: sceneView, reason: reason)
         } else {
             attachToWindowRoot(reason: reason)
@@ -796,10 +866,19 @@ enum AevonEntryHost {
         }
 
         // 容器归位：App 场景还在就贴着它，否则回窗口根视图
-        if let sceneView = appSceneView, isUsableHost(sceneView) {
+        //
+        // ⛔ V0.3.44（AevonHomeLeaveLockV344）：离场窗口内**禁止**搬回场景视图。
+        // 回桌面途中 App 场景只是「正在淡出」，isUsableHost 三关（有尺寸 / 在窗口里 /
+        // 未隐藏且 alpha>0.01）全都还成立 —— 0.3.43 就是在这里把容器搬回去，导致浮窗
+        // 被塞进一个正在缩小淡出的父视图，探针读到 `层=5.0`（换成 App 场景所在系统窗口），
+        // 直到「App 场景消失」才搬回来，中间 0.66 秒用户看不到浮窗。Aevon(114) 实锤。
+        if let sceneView = appSceneView, !isHomeLeaving, isUsableHost(sceneView) {
             if box.superview !== sceneView { attach(to: sceneView, reason: "周期归位") }
         } else {
-            if appSceneView != nil { appSceneView = nil }
+            /* ⛔ 离场窗口内**不许**清 appSceneView：清了之后 `appSceneDisappeared` 的
+             * `guard appSceneView === view` 会直接 return，回桌面布防与前台补偿都不再触发
+             * （那是「浮窗整块变黑、必须关掉重开」的老病根）。锁期只保证容器在窗口根。 */
+            if !isHomeLeaving, appSceneView != nil { appSceneView = nil }
             let rootView = host.rootViewController?.view
             // 三种情况都要搬回窗口：没有父视图 / 父视图已经不在窗口里 / 父视图不是窗口根视图
             if box.superview == nil || box.window == nil || (rootView != nil && box.superview !== rootView) {

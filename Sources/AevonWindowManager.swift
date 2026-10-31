@@ -344,6 +344,10 @@ enum AevonWindowManager {
         // 要等看门狗（3s 周期归位）才回来 = 「触发条慢 1 秒左右」。布防这拍（桌面出现
         // 之前）立刻搬回窗口根，把手即时就位。无浮窗时也执行（把手归位与浮窗无关）。
         AevonLog.info("[入口] 回桌面布防 → 把手容器立即归位到窗口根（AevonGripFastV266）")
+        /* V0.3.44（AevonHomeLeaveLockV344）：这条布防路径**没有过渡哨**（App 直接退出 /
+         * 场景被系统收走时哨兵不会命中），搬回窗口根之后 0.25 秒的周期归位照样会把容器
+         * 塞回还在淡出的场景视图 —— 所以这里也开一次离场锁。 */
+        AevonEntryHost.beginHomeLeave(reason: "回桌面布防")
         AevonEntryHost.attachToWindowRoot(reason: "回桌面把手归位")
         guard let view = currentView else { return }
         view.armBackgroundGuard(reason: "全屏 App 画面离场")

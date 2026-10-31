@@ -2670,7 +2670,7 @@ final class AevonWindowView: UIView {
                 + " \(sceneHost.presentationProbeSummary())"
                 + " \(sceneHost.stateSummary())"
                 + " 可见=\(visible ? 1 : 0) 承接=\(returnCoverView != nil ? 1 : 0)"
-                + "（AevonReturnProbeV343）")
+                + "（AevonReturnProbeV343 AevonAncestorVisibleV344）")
         }
 
         if visible {

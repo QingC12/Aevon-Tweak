@@ -160,3 +160,15 @@ __attribute__((used, unused)) static const char AevonRebuildFirstMark340[] = "Ae
 __attribute__((used, unused)) static const char AevonReturnCoverMark343[] = "AevonReturnCoverV343";
 __attribute__((used, unused)) static const char AevonReturnProbeMark343[] = "AevonReturnProbeV343";
 __attribute__((used, unused)) static const char AevonReturnCoverOffMark343[] = "AevonReturnCoverOffV343";
+
+/* V0.3.44（AevonHomeLeaveLockV344 / AevonAncestorVisibleV344 /
+ * AevonHomeLeaveLockOffV344）──────────────────────────────────────────────────
+ * ① 回桌面离场锁：过渡哨命中的同一拍开 3.0s 锁，期内「周期归位」只许走窗口根，
+ *    绝不再把容器搬回正在淡出的 App 场景视图（Aevon(114) 实锤 0.66s 消失的真因）。
+ * ② 可见判据补父链：逐级 alpha>0.05 且未隐藏，直到窗口；且 windowLevel 必须
+ *    ≥ 浮窗层（挂对视图、挂错窗口一样看不见）。
+ * ③ 探针补 父=<类名> 父链α=<最暗> 窗层级=<level>。
+ * 各一条纯 ASCII C 串，保证 strip 后 strings 仍能抓到。 */
+__attribute__((used, unused)) static const char AevonHomeLeaveLockMark344[] = "AevonHomeLeaveLockV344";
+__attribute__((used, unused)) static const char AevonAncestorVisibleMark344[] = "AevonAncestorVisibleV344";
+__attribute__((used, unused)) static const char AevonHomeLeaveLockOffMark344[] = "AevonHomeLeaveLockOffV344";

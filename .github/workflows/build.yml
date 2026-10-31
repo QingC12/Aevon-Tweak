@@ -5543,6 +5543,27 @@ jobs:
           fi
           echo "V0.3.43 校验: 判据换成呈现链真在屏（cs=2 只证明 App 在渲染）+ 真空期承接物（哨响备图只存不显示，不可见才贴、可见即撤、零场景写） ✓"
 
+          # ── V0.3.44 校验（回桌面离场锁：周期归位不许把容器搬回正在淡出的场景视图）──
+          for m44 in AevonHomeLeaveLockV344 AevonAncestorVisibleV344 AevonHomeLeaveLockOffV344; do
+            strings "$MYD28" | grep -qF "$m44" || { echo "::error::V0.3.44 主库缺标记 $m44"; exit 1; }
+          done
+          EH44="$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func raise(reason: String)');j=s.find('MARK: - 看门狗',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and '!isHomeLeaving' in b);print('V0.3.44 raise 也受离场锁管 ✓' if ok else '::error::V0.3.44 raise 没加锁（回桌面那趟 raise 会把容器塞回淡出的场景视图）');sys.exit(0 if ok else 1)" "$EH44"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private static func watchdogTick()');j=s.find('入口视图按最新配置重新落位',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and '!isHomeLeaving' in b and 'if !isHomeLeaving, appSceneView != nil' in b);print('V0.3.44 周期归位受锁管 + 锁期不清 appSceneView ✓' if ok else '::error::V0.3.44 周期归位没堵住（0.66 秒消失就是这里）');sys.exit(0 if ok else 1)" "$EH44"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();n=s.count('beginHomeLeave(reason:');m=s.count('endHomeLeave(reason:');ok=(n>=2 and m>=3);print('V0.3.44 开锁 %d 处 / 关锁 %d 处 ✓'%(n,m) if ok else '::error::V0.3.44 锁的开合点不足：开=%d 关=%d（关不上=永久待在窗口根）'%(n,m));sys.exit(0 if ok else 1)" "$EH44"
+          SH44="$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('var presentationLooksVisible');j=s.find('func presentationProbeSummary',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'while let cur = node' in b and 'cur.alpha <= 0.05' in b and 'cur is UIWindow' in b);print('V0.3.44 可见判据补父链（逐级 alpha / 未隐藏，到窗口） ✓' if ok else '::error::V0.3.44 判据没查父链（容器挂进淡出的场景视图时仍会报可见）');sys.exit(0 if ok else 1)" "$SH44"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('var presentationLooksVisible');j=s.find('func presentationProbeSummary',i);b=s[i:j] if 0<i<j else '';bad=('windowLevel.rawValue >= AevonWindowLevels.floating' in b);print('V0.3.44 未用浮窗层当门槛 ✓（否则全屏 App 前台会被误判成真空期、贴糊图）' if not bad else '::error::V0.3.44 用浮窗层当门槛了：全屏 App 里浮窗挂在 App 场景窗口(level=5)上，正常可见会被判成真空期');sys.exit(0 if not bad else 1)" "$SH44"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();bad=[t for t in ['AevonSceneHelper.setForeground','updateSettings','rebuildPresenter'] if t in s];ok=not bad;print('V0.3.44 离场锁零场景写 ✓（只改挂载父视图）' if ok else '::error::V0.3.44 锁里混进场景写: '+bad[0]);sys.exit(0 if ok else 1)" "$EH44"
+          grep -qF 'AevonHomeLeaveLockOff344' "$EH44" || { echo "::error::V0.3.44 缺回退开关 AevonHomeLeaveLockOff344"; exit 1; }
+          APPD44="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD44" ]; then
+            for m44 in AevonHomeLeaveLockV344 AevonAncestorVisibleV344 AevonHomeLeaveLockOffV344; do
+              if strings "$APPD44" | grep -qF "$m44"; then echo "::error::V0.3.44 标记漏进 App 库: $m44"; exit 1; fi
+            done
+          fi
+          echo "V0.3.44 校验: 离场锁（raise + 周期归位两处只走窗口根）+ 可见判据补父链（逐级 alpha 到窗口）+ 探针补 父/父链α/窗层级；零场景写 ✓"
+
 
 
 
