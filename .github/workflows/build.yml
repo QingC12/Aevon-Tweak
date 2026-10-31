@@ -5554,12 +5554,21 @@ jobs:
           grep -qF 'Sources/AevonKeepAliveProbe.m' "$MF26" \
             || { echo "::error::V0.3.26 Makefile 漏了 AevonKeepAliveProbe.m（显式 FILES 清单）"; exit 1; }
           [ -f "$KA26" ] || { echo "::error::V0.3.26 探针源文件不存在"; exit 1; }
-          for s in AevonKeepAliveProbeBegin AevonKeepAliveProbeEnd; do
-            strings "$MYD26" | grep -q "$s" \
-              || { echo "::error::V0.3.26 主库缺探针符号 $s"; exit 1; }
+          #    ⛔ 不许查函数符号名：release dylib 被 strip 到只剩导出符号，
+          #    `strings` 捞的是 __cstring 字面量，nlist 符号名那条路 0.3.26 首次构建就是栽在
+          #    「主库缺探针符号 AevonKeepAliveProbeBegin」这个假红上（链接是通的，符号确实存在）。
+          #    改查**探针自己的 ObjC 选择子串**：它们躺在 __objc_methname 里，只要 .m 被编进来
+          #    就一定在，这才是「探针真的参与了编译」的硬证据。
+          for s in 'AevonKeepAliveProbeV326' 'AevonKeepAliveMatrixV326' \
+                   'newAssertionWithReason:' 'predicateMatchingAllScenes' \
+                   '_setDeactivationReasons:onScene:withSettings:reason:'; do
+            strings "$MYD26" | grep -qF "$s" \
+              || { echo "::error::V0.3.26 主库缺探针痕迹 $s"; exit 1; }
           done
-          strings "$MYD26" | grep -q 'AevonKeepAliveLog' \
-            || { echo "::error::V0.3.26 主库缺探针日志桥"; exit 1; }
+          grep -qF 'extern void AevonKeepAliveLog(const char *utf8Detail);' "$KA26" \
+            || { echo "::error::V0.3.26 探针没有日志桥声明"; exit 1; }
+          grep -qF '@_cdecl("AevonKeepAliveLog")' "$WV" \
+            || { echo "::error::V0.3.26 Swift 侧没有探针日志桥实现"; exit 1; }
           grep -qF 'AevonKeepAliveProbeBegin(Unmanaged.passUnretained(sceneHost.scene).toOpaque())' "$WV" \
             || { echo "::error::V0.3.26 回桌面没起跑保活探针"; exit 1; }
           grep -qF 'AevonKeepAliveProbeEnd()' "$WV" \
