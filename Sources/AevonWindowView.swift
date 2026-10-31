@@ -2145,20 +2145,23 @@ final class AevonWindowView: UIView {
      * Stheno 逆向对照（浮窗生命周期报告 §揭幕）：它的揭幕判据 = 「启动图封面 + **连续
      * 就绪采样** + 代际」，不是固定延迟。这里搬"连续就绪采样"，采样指标换成画面清晰度
      * —— 直接对准症状本身。 */
-    /// V0.3.25（AevonNoFreezeV325）：**B3 —— 回桌面完全不盖定格帧（完全按 Stheno）。**
+    /// V0.3.25（AevonNoFreezeV325）B3「完全不盖帧」→ **V0.3.34 收回（AevonFreezeBackV334）**。
     ///
-    /// `installDarkFreeze` / `installTransitionFreeze` 的入口闸，同时停掉三处抓帧
-    /// （空闲预抓 / 滚动刷新 / 可信首帧）—— 不盖帧就没有消费方，抓帧只是热路径白烧。
-    /// 改回 `false` 即整条回退到 0.3.24 的盖帧行为（代码与判据全部保留）。
-    /// **⛔ 不能写成字面量 `true`**：Swift -O 的 whole-module 优化会做「从未被写过的
-    /// var 恒为该值」的推断，把 `guard` 之后的函数体整段判为 unreachable 并删除 ——
-    /// 连带里面的历史标记串（AevonFreezePassthruV287 等）一起消失，0.3.25 第一次
-    /// 构建就是红在这条（`0.2.82~0.3.1 二进制里缺标记 AevonFreezePassthruV287`）。
+    /// 0.3.25 定档 B3 的理由是「盖上去的是一张缓存帧，撤帧时糊一下再清」；但这个前提
+    /// 在 0.3.24 的 AevonSharpCacheGateV324 之后已经不成立（缓存入库过清晰度闸、
+    /// 另有可信帧兜底）。而 B3 的代价是实打实的：Aevon(99) 实测过渡哨命中到画面回来
+    /// **1.48 秒**（08:17:58.629 哨 → 08:17:59.529 布防 cs=0 → 08:18:00.108 cs=2），
+    /// 这 1.48 秒里浮窗一个字都没有 = 用户说的「回桌面闪一下」。
+    /// 恢复盖帧后这 1.48 秒被一张清晰帧顶住，画面「停住」而不是「消失」。
+    ///
+    /// 回退通道不变：UserDefaults `AevonFreezeOff325` 写 true 即整条停用。
+    /// ⛔ 不能写成字面量 `false`：Swift -O 的 whole-module 优化会做「从未被写过的
+    /// 常量恒为该值」推断，把 guard 之后的函数体整段判为 unreachable 并删除 ——
+    /// 连带里面的历史标记串一起消失（0.3.25 第一次构建就是红在这条）。
     /// 走 UserDefaults 取值，编译器拿不到编译期常量 → 函数体与标记都保留。
-    /// 键 `AevonFreezeOff325` 写成 false 即可临时恢复 0.3.24 的盖帧行为（回退通道）。
     static let freezeDisabled: Bool = {
         let v = UserDefaults.standard.object(forKey: "AevonFreezeOff325") as? Bool
-        return v ?? true
+        return v ?? false
     }()
     /// 「盖帧已停用」日志只打前 3 条，避免每次内容掉出画刷一行
     private static var freezeSkipLogCount = 0
@@ -2313,9 +2316,53 @@ final class AevonWindowView: UIView {
     ///      撤帧又要等 → 观感反而是「画面顿住一下」。现在 cs 还在画就不盖。
     ///   ② 撤帧从「连续 2 拍确认（≥1 秒）」改成「**一看到 cs=2 立刻撤**」，
     ///      拍子也从 0.5 秒提到 0.2 秒 —— 恢复窗口从 ~1.2 秒压到 ~0.2 秒。
+    /// V0.3.34（AevonArmEarlyV334）：过渡哨完成布防的时刻。
+    ///
+    /// 「场景消失事件」比过渡哨晚约 0.9 秒到达。既然哨已经布过防了，事件这一拍
+    /// 就不该再布一次 —— 再布一次意味着 `reassertCount` 归零、让位期再发 1 发
+    /// `updateSettings`，而每写一笔都让远程表面重建一次 = 用户看到的第二次黑。
+    private var sentryArmedAt: CFTimeInterval = 0
+
+    /// V0.3.34：布防前移 —— 从「场景消失事件」提前到「过渡哨 + delay」。
+    ///
+    /// Aevon(99) 实测：哨命中 08:17:58.629 → 布防 08:17:59.529，**晚 0.900 秒**，
+    /// 布防那一刻 cs 已经是 0。这 0.9 秒里没有任何守卫拍在跑（常驻看门只在
+    /// `guardArmedUntil == 0` 的分支里看 cs，且要连续 8 拍才判 presenter 死，
+    /// 那时早过了 1.6 秒）。提前布防 = 让位期、盖帧、守卫拍全部提前 0.9 秒上场。
+    ///
+    /// 为什么 +0.2s 而不是同拍：哨命中时转场刚起（几何已变 2 拍），让位期只放行
+    /// 1 发重申，同拍发很容易打在「系统还没开始动」的空档里；0.2s 落在转场中段。
+    ///
+    /// `reason` 必须含「画面离场」四个字 —— `armBackgroundGuard` 用它决定走
+    /// 「让位期 1 发预算」还是「非让位三拍重申」，写成别的会自己制造三次黑。
+    func armBackgroundGuardSoon(reason: String, delay: Double) {
+        guard window != nil, !isTearingDown, sceneHost.hasContent else { return }
+        guard guardArmedUntil == 0 else {
+            AevonLog.info("[窗口] 布防前移跳过：已有布防在跑（\(reason)）（AevonArmEarlyV334）")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.window != nil, !self.isTearingDown,
+                  self.guardArmedUntil == 0, self.sceneHost.hasContent else { return }
+            self.sentryArmedAt = CACurrentMediaTime()
+            self.armBackgroundGuard(reason: reason)
+            AevonLog.info("[窗口] 布防前移：过渡哨 +"
+                + String(format: "%.2f", delay)
+                + "s 已布防（比「场景消失事件」早约 0.7s）（AevonArmEarlyV334）")
+        }
+    }
+
     func armBackgroundGuard(reason: String) {
         guard window != nil else { return }
         guard sceneHost.hasContent else { return }   // 还没出过首帧：交给首帧探测，别掺和
+        /* V0.3.34（AevonArmEarlyV334）：过渡哨已经布过防 → 不再重来一次。
+         * 旧行为：哨 +0.2s 布防一次（发 1 发「立即」），场景消失事件再布防一次
+         * （reassertCount 归零、再发 1 发）—— 两发 updateSettings = 两次表面重建
+         * = 用户看到的两次黑。4 秒窗口足够覆盖一次回桌面转场。 */
+        if guardArmedUntil > 0, CACurrentMediaTime() - sentryArmedAt < 4.0 {
+            AevonLog.info("[窗口] 布防跳过：过渡哨已布防（\(reason)）（AevonArmEarlyV334）")
+            return
+        }
         beginGuardWindow(reason: reason)
         // V0.2.60（AevonLiveFirstV260）：回桌面 / 切 App 走「先让位、后淡入」，
         // 不再盖定格帧（Aevon(34) #1：定格 1 秒观感比晚出现 0.3 秒差得多）。
@@ -2862,7 +2909,8 @@ final class AevonWindowView: UIView {
             + "returnDeadline 1.2s 内不撤帧）"
             + "（\(sceneHost.stateSummary())）（AevonDarkGuardV247 AevonDarkGuardV249"
             + " AevonFreezePassthruV287 AevonRootFreezeV290 AevonCacheFreezeV298"
-            + " AevonQuietRefreezeV297 AevonReturnDeadlineV2100 AevonFreezeIndepWinV300）")
+            + " AevonQuietRefreezeV297 AevonReturnDeadlineV2100 AevonFreezeIndepWinV300"
+            + " AevonFreezeBackV334）")
     }
 
     /// V0.2.91（AevonHomeFreezeV291）：回桌面过渡哨命中的**无条件**冻结入口。
@@ -3303,6 +3351,139 @@ final class AevonWindowView: UIView {
             + "（AevonDockColumnV250 AevonDockHaloOffV259 AevonDockHaloBackV260）")
     }
 
+    // MARK: - 停靠封面（V0.3.34，AevonDockCoverV334 / AevonDockSleepV334）
+
+    /// 停靠封面总开关。写 UserDefaults `AevonDockCoverOff334` = true 可整条回退。
+    ///
+    /// ⛔ 不能写成 `static let = false` 字面量：Swift -O 的 whole-module 优化会把
+    /// 「从未被写过」的常量做常量传播，把 guard 之后的函数体整段判为 unreachable 并删除，
+    /// 连带里面的标记串一起消失（0.3.25 的 AevonNoFreezeV325 就是红在这条）。
+    /// 走 UserDefaults 取值，编译器拿不到编译期常量 → 函数体与标记都保留。
+    static let dockCoverDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDockCoverOff334") as? Bool
+        return v ?? false
+    }()
+
+    /// 停靠期盖在内容层上的静态封面。
+    private var dockCoverView: UIImageView?
+    /// 封面撤帧闸的计时起跑点（吸附那一刻；装回时重置）。
+    private var dockCoverArmedAt: CFTimeInterval = 0
+    private var dockCoverTimer: Timer?
+    private var dockCoverTicks = 0
+
+    /// 吸附前抓一帧画面当封面。
+    ///
+    /// 为什么必须有它：停靠小窗是全工程**唯一没有守卫的浮窗** ——
+    /// `checkBackgroundGuard` 里 `guard !isDocked else { return }` 让它既不盖帧也不重申。
+    /// 而全屏 App 在前台时，停靠窗的场景一旦失去前台身份，远程表面就被系统回收，
+    /// 92x158 那一块就是纯黑，只能点一下装回才恢复。封面不依赖远程表面，
+    /// 场景死没死都有画面。
+    ///
+    /// 抓帧点必须在「窗口还是大尺寸、画面还是活的」那一拍 —— `dockCurrent` 里
+    /// 钉 dockedSide / relayout 之前。用 `captureSnapshotImage`（drawHierarchy，
+    /// 能取到远程表面；`layer.render(in:)` 抓不到，见 AevonDarkGuardV249）。
+    @discardableResult
+    func installDockCover() -> Bool {
+        if AevonWindowView.dockCoverDisabled {
+            AevonLog.info("[停靠] 封面已停用（AevonDockCoverOff334）→ 跳过抓帧（\(bundleID)）"
+                + "（AevonDockCoverV334）")
+            return false
+        }
+        guard dockCoverView == nil, window != nil, !isTearingDown else { return false }
+        guard let image = captureSnapshotImage() else {
+            AevonLog.warn("[停靠] 抓不到可用画面 → 不装封面，退化成无兜底（\(bundleID)）"
+                + "（AevonDockCoverV334）")
+            return false
+        }
+        let cover = UIImageView(image: image)
+        cover.contentMode = .scaleToFill
+        cover.frame = contentClip.bounds
+        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cover.isUserInteractionEnabled = false
+        cover.layer.cornerRadius = AevonWindowView.cornerRadius(for: contentClip.bounds.width)
+        cover.layer.masksToBounds = true
+        contentClip.addSubview(cover)
+        dockCoverView = cover
+        dockCoverArmedAt = CACurrentMediaTime()
+        dockCoverTicks = 0
+        AevonLog.info("[停靠] 已装封面（图 \(Int(image.size.width))x\(Int(image.size.height))，"
+            + "\(sceneHost.stateSummary())）→ 停靠期不再依赖远程表面"
+            + "（AevonDockCoverV334）")
+        return true
+    }
+
+    /// 吸附完成 → 把该场景主动置后台。
+    ///
+    /// 停靠小窗不显示实时画面（封面已经顶住），继续占着前台身份只有一个后果：
+    /// 和用户正在用的全屏 App 抢同一个前台位 → 两边都在 cs 0/1 之间来回抖。
+    /// 主动降后台把状态说清楚，装回时由 `restoreDocked` 推回前台。
+    ///
+    /// ⛔ 顺序铁律：**先抓封面，再降后台**。反了就抓到一张空表面（表面已被回收）。
+    func suspendSceneForDock() {
+        guard !isTearingDown, sceneHost.hasContent else { return }
+        AevonSceneHelper.setForeground(sceneHost.scene, false, reason: "吸附降后台 \(bundleID)")
+        AevonLog.info("[停靠] \(bundleID) 场景已主动置后台（停靠期不需要实时画面，"
+            + "装回时再推前台）（AevonDockSleepV334）")
+    }
+
+    /// 装回主窗 → 开始判「实时画面真的回来了没有」，到了才撤封面。
+    ///
+    /// 判据只认 `contentState == 2` 连续 2 拍，并且要过 0.42 秒地板：
+    /// 装回动画 0.22s 期间窗口还在长开，cs 会先报 2 再掉回 0（历史教训：
+    /// 「cs 先报 2、远程表面还没真画上」），提前撤就是「静止图 → 黑一瞬 → 实时」。
+    /// 上限 1.5 秒必撤 —— 宁可露实时，也不许永久盖着。
+    func beginDockCoverLift() {
+        guard dockCoverView != nil else { return }
+        dockCoverArmedAt = CACurrentMediaTime()
+        dockCoverTicks = 0
+        guard dockCoverTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.dockCoverLiftTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dockCoverTimer = timer
+        AevonLog.info("[停靠] \(bundleID) 装回 → 封面留到实时画面连续 2 拍到位才撤"
+            + "（上限 1.5s，AevonDockCoverLiftV334）")
+    }
+
+    private func dockCoverLiftTick() {
+        guard dockCoverView != nil else {
+            dockCoverTimer?.invalidate()
+            dockCoverTimer = nil
+            return
+        }
+        guard !isTearingDown else {
+            dropDockCover(reason: "正在销毁")
+            return
+        }
+        let now = CACurrentMediaTime()
+        if now - dockCoverArmedAt > 1.5 {
+            dropDockCover(reason: "上限 1.5s 到达")
+            return
+        }
+        if now - dockCoverArmedAt < 0.42 { return }   // 装回动画 0.22s + 0.2s 地板
+        if sceneHost.contentLooksRendering == true {
+            dockCoverTicks += 1
+            if dockCoverTicks >= 2 {
+                dropDockCover(reason: "实时画面连续 2 拍到位（\(dockCoverTicks) 拍）")
+            }
+        } else {
+            dockCoverTicks = 0
+        }
+    }
+
+    /// 撤封面（幂等；关窗 / 重新吸附 / 超时都走它）。
+    func dropDockCover(reason: String) {
+        dockCoverTimer?.invalidate()
+        dockCoverTimer = nil
+        dockCoverTicks = 0
+        guard let view = dockCoverView else { return }
+        dockCoverView = nil
+        view.removeFromSuperview()
+        AevonLog.info("[停靠] 撤封面（\(reason)，\(sceneHost.stateSummary())）"
+            + "（AevonDockCoverLiftV334）")
+    }
+
     /// V0.2.66（AevonTraitWakeV266，用户 Aevon(39) #1「悬浮窗画面不跟随系统深浅色」）：
     /// 系统深浅色切换时，浮窗里那个 App 的场景被压在后台 —— 它收得到 trait 变化
     /// 但不重绘（远程表面停在旧外观的那一帧）。这里在 SpringBoard 侧窗口的 trait
@@ -3579,6 +3760,8 @@ final class AevonWindowView: UIView {
         guardArmedUntil = 0
         stopGuardTimer()
         removeDarkFreeze(reason: "关窗收尾")
+        // V0.3.34（AevonDockCoverV334）：停靠封面与它的撤帧闸一起收尾
+        dropDockCover(reason: "关窗收尾")
         // V0.2.60（AevonLiveFirstV260）：让位期（整窗 alpha 0）里关窗 → 先撤销让位。
         // 否则离场帧是在一个隐形窗口上抓的（抓到空壳 → 淡出动画被跳过，硬切一下）。
         if liveWaitDeadline > 0 {

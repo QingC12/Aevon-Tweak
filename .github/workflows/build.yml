@@ -5764,6 +5764,37 @@ jobs:
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('gAevonHeldPoint = p;');j=s.find('dispatch_after',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and 'gAevonHeldSawMove = NO;' in b and 'gAevonHeldExtended = NO;' in b);print('V0.3.33 落指扣住时新标志归零 ✓' if ok else '::error::V0.3.33 落指没归零新标志（连续两次快呼盘时第二次会继承上一轮延长位）');sys.exit(0 if ok else 1)" "$TH32"
 
           echo "V0.3.33 校验: 扣住窗口 55ms→110ms + 见到位移帧再延 60ms（慢起手不再被当点击回放）+ 真点击走抬手路径零延迟 ✓"
+          # ── V0.3.34 校验（停靠封面 + 吸附降后台 / 回桌面盖帧回收 + 布防前移）──
+          # 停靠小窗是全工程唯一没有守卫的浮窗（checkBackgroundGuard 里 isDocked 直接 return），
+          # 全屏 App 前台时场景被置后台 → 92x158 那块纯黑，只能点一下装回才恢复。
+          # 回桌面相反：0.3.25 定档 B3「完全不盖帧」让哨命中到 cs=2 之间 1.48 秒是真空窗。
+          for s in AevonDockCoverV334 AevonDockSleepV334 AevonDockCoverLiftV334 AevonFreezeBackV334 AevonArmEarlyV334; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.34 主库缺标记 $s"; exit 1; }
+          done
+          WV34="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
+          WM34="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
+          # ① 停靠封面：抓帧必须在缩窗之前、降后台必须在抓帧之后
+          grep -qF 'static let dockCoverDisabled: Bool = {' "$WV34" \
+            || { echo "::error::V0.3.34 缺停靠封面开关（回退通道没了）"; exit 1; }
+          grep -qF 'view.installDockCover()' "$WM34" \
+            || { echo "::error::V0.3.34 dockCurrent 没装封面"; exit 1; }
+          grep -qF 'view.suspendSceneForDock()' "$WM34" \
+            || { echo "::error::V0.3.34 吸附没降后台"; exit 1; }
+          grep -qF 'view.beginDockCoverLift()' "$WM34" \
+            || { echo "::error::V0.3.34 装回没起撤帧闸"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('view.installDockCover()');j=s.find('view.dockedSide = side');k=s.find('relayoutDock(side: side, animated: true)');m=s.find('view.suspendSceneForDock()');ok=(0<i<j and 0<k<m);print('V0.3.34 先抓帧再缩窗、再降后台 ✓' if ok else '::error::V0.3.34 抓帧/降后台顺序不对（会抓到缩略帧或空表面）');sys.exit(0 if ok else 1)" "$WM34"
+          # ② 撤封面闸必须看 cs，且带 1.5s 上限
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func dockCoverLiftTick() {');j=s.find('func dropDockCover(reason: String)',i);b=s[i:j] if 0<i<j else '';ok=('contentLooksRendering == true' in b and '1.5' in b and '0.42' in b);print('V0.3.34 撤封面闸含 cs 判据 + 地板 + 上限 ✓' if ok else '::error::V0.3.34 撤封面缺判据（撤早了会闪黑、没上限会永久盖住）');sys.exit(0 if ok else 1)" "$WV34"
+          grep -qF 'dropDockCover(reason: "关窗收尾")' "$WV34" \
+            || { echo "::error::V0.3.34 关窗没清封面"; exit 1; }
+          # ③ 盖帧回收：默认值必须是 false，且开关仍走 UserDefaults
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static let freezeDisabled: Bool = {');b=s[i:i+220] if i>0 else '';ok=('return v ?? false' in b and 'AevonFreezeOff325' in b);print('V0.3.34 回桌面盖帧已恢复（默认 false，走 UserDefaults）✓' if ok else '::error::V0.3.34 freezeDisabled 还是默认 true（1.48 秒真空窗照旧）');sys.exit(0 if ok else 1)" "$WV34"
+          # ④ 布防前移：哨跳过分支必须在 beginGuardWindow 之前，reason 必须含「画面离场」
+          grep -qF 'view.armBackgroundGuardSoon(reason: "全屏 App 画面离场（过渡哨前移）", delay: 0.2)' "$WM34" \
+            || { echo "::error::V0.3.34 过渡哨没前移布防（或 reason 丢了画面离场 → 退化成三拍重申）"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func armBackgroundGuard(reason: String) {');j=s.find('beginGuardWindow(reason: reason)',i);b=s[i:j] if 0<i<j else '';ok=('sentryArmedAt' in b);print('V0.3.34 哨已布防时跳过二次布防 ✓' if ok else '::error::V0.3.34 缺哨跳过闸（场景消失事件会再发一发 = 第二次黑）');sys.exit(0 if ok else 1)" "$WV34"
+          echo "V0.3.34 校验: 停靠封面（先抓帧→缩窗→降后台，装回按 cs 撤）+ 回桌面盖帧恢复 + 布防前移 0.7s ✓"
 
 
 

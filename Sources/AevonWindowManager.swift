@@ -354,6 +354,11 @@ enum AevonWindowManager {
         // V0.3.27（AevonKeepAliveEarlyV327）：同一拍起跑场景保活探针。
         // 布防要等 0.95 秒之后才来，那时候先手已经丢了。
         view.kickKeepAliveProbeOnTransition()
+        /* V0.3.34（AevonArmEarlyV334）：布防也前移到这一拍（+0.2s）。
+         * Aevon(99) 实测布防比哨晚 0.900 秒，那 0.9 秒里 cs 已经是 0 且没有任何
+         * 守卫拍在跑。reason 必须含「画面离场」—— armBackgroundGuard 用它决定
+         * 走「让位期 1 发预算」，写成别的会退化成三拍重申 = 自己制造三次黑。 */
+        view.armBackgroundGuardSoon(reason: "全屏 App 画面离场（过渡哨前移）", delay: 0.2)
     }
 
     /// V0.3.27：过渡哨误报（控制中心半拉等）→ 收掉保活探针，别留悬空断言。
@@ -1635,6 +1640,10 @@ enum AevonWindowManager {
         // 「已吸附到屏幕左侧（该侧现有 0 个）」实锤）→ 窗根本没进目标列（不吸附）；
         // 随后另一侧的 relayout 又把它按旧值扫进那一列（18:25:20.208 BatteryInfo 左刚停、
         // 右侧第 2 格又出现同一个窗）= 双吸附小窗。
+        // V0.3.34（AevonDockCoverV334）：**先抓一帧当停靠封面** —— 此刻窗口还是大尺寸、
+        // 画面还是活的；一旦 relayout 的 0.22s 动画开始，呈现视图就跟着缩，
+        // 抓回来的只会是重采样后的缩略帧。顺序反了（先缩再抓）等于白抓。
+        view.installDockCover()
         view.dockedSide = side
         relayoutDock(side: side, animated: true)
         // App 侧「浮窗承载」信号清掉：停靠窗只是一块缩略图，不该再让 App 按画布尺寸
@@ -1651,6 +1660,10 @@ enum AevonWindowManager {
         // V0.2.59（AevonDockStageV259）：停靠集合广播 —— App 侧据此把主窗口交互关掉，
         // 拦掉 backboardd 直投的触摸（点停靠小窗不再触发小窗里 App 的内容点击）。
         publishDockStages()
+        /* V0.3.34（AevonDockSleepV334）：封面已就位 → 把场景主动置后台。
+         * 停靠小窗不显示实时画面（封面顶住），继续占着前台身份只会和用户正在用的
+         * 全屏 App 抢同一个前台位，两边都在 cs 0/1 之间抖 = 小窗黑屏的直接来源。 */
+        view.suspendSceneForDock()
         return true
     }
 
@@ -1710,6 +1723,9 @@ enum AevonWindowManager {
         AevonPrefs.set("AevonFloatBundle", bundleID)
         AevonNotifySetFloatStage(bundleID)
         AevonSceneHelper.wakeUp(bundleID)
+        // V0.3.34（AevonDockCoverLiftV334）：场景已推回前台 → 开始判「实时画面真的
+        // 回来了没有」，连续 2 拍 cs=2 且过了 0.42s 地板才撤封面（上限 1.5s 必撤）。
+        view.beginDockCoverLift()
         if let pid = AevonAppInfo.pid(bundleID: bundleID) {
             AevonAssertionShim.resumePID(Int32(pid))
             AevonAssertionShim.acquireKeepAlive(forPID: Int32(pid))
