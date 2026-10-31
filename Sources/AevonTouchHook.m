@@ -44,6 +44,12 @@ extern BOOL AevonGlobalTouchShouldSwallow(uintptr_t touchID, NSInteger phase);
 // 「绑定白做了」和「绑定生效但晚了一帧」。
 extern void AevonGripOwnSwallowTick(void);
 
+// V0.3.31（AevonSwallowFeedV331）：吞层回喂 —— 这一帧被丢弃，同时转手喂给自建识别器。
+// 没有它，`-sendEvent:` 的丢弃会把自建识别器也一起饿死（Aevon(104)：31 次 hold、
+// 0 次自建腿召唤、圆盘时差下限恰为 ownPass 的 0.28s），圆盘最后靠系统腿呼出、
+// 走「收养」分支（只喂不吞），App 就拿到了剩余整段滑动。
+extern void AevonGripOwnExternalMove(uintptr_t tid, double x, double y);
+
 static IMP AevonOrigSendEvent = NULL;
 static BOOL AevonTouchHookInstalled = NO;
 static BOOL AevonTouchHookFailed = NO;
@@ -56,6 +62,10 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
     if ([AevonTouchSwallowHookV24 isEqualToString:@""]) { return; }
 
     BOOL swallow = NO;
+    // V0.3.31（AevonSwallowFeedV331）：本条事件里被判定要吞、且是 moved 的那根手指。
+    // 整条丢弃之前用它回喂自建识别器 —— App 拿不到位移，判据也不缺帧。
+    uintptr_t fedTid = 0;
+    CGPoint fedPoint = CGPointZero;
     @try {
         NSSet<UITouch *> *touches = [event allTouches];
         if (touches.count > 0) {
@@ -85,7 +95,12 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                     AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
                 } else {
                     AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
-                    if (AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) { swallowCount += 1; }
+                    if (AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) {
+                        swallowCount += 1;
+                        /* V0.3.31（AevonSwallowFeedV331）：这一帧即将从投递链上消失，
+                         * 只有位移帧需要回喂（began 已经被识别器收到了，ended 不参与判据）。 */
+                        if (phase == UITouchPhaseMoved) { fedTid = touchID; fedPoint = point; }
+                    }
                 }
             }
             // 整条事件的所有活动触摸都属于「被圆盘接管的那根手指」才丢弃；
@@ -99,6 +114,19 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
     if (swallow) {
         /* V0.3.30（AevonEarlyBindV330）：真的丢弃了才 +1（判断之外不计数）。 */
         AevonGripOwnSwallowTick();
+        /* V0.3.31（AevonSwallowFeedV331）：丢掉的这一帧转手喂给自建识别器。
+         * 必须在 `return` 之前、且只在真的丢时喂 —— 没丢时识别器会自己从 UIKit 收到，
+         * 这里再喂一次就是重复计位移（8pt 会被提前判成 4pt 达到）。
+         * ⛔ 必须自己包 `@try`：这一段在上一层的 @try 之外，回喂会走到
+         * `ownSummonAtPoint:` → 私有断言接口 / 识别器 state 变更，抛 NSException
+         * 在 SpringBoard 里就是 SIGABRT。回喂失败只丢一次判定，不能拖垮进程。 */
+        if (fedTid != 0) {
+            @try {
+                AevonGripOwnExternalMove(fedTid, (double)fedPoint.x, (double)fedPoint.y);
+            } @catch (NSException *exception) {
+                // 回喂失败 = 这一帧判据丢了，下次同构手势照常；绝不向 SpringBoard 冒泡
+            }
+        }
         return;
     }
     if (AevonOrigSendEvent) {

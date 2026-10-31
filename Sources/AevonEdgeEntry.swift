@@ -1224,8 +1224,10 @@ enum AevonEdgeEntry {
                         + " → 桌面/App 从下一帧起收不到这根手指"
                         + "（AevonOwnSwallowV329 AevonOwnTouchBindV329）")
                 }
-                /* 移交自建腿簿记：吞层接手后那个识别器再也收不到帧，
-                 * 不清 `_ownSummoned` 就会留下 2.5s「新落指被忽略」的死窗口。 */
+                /* 移交自建腿簿记：只作废手指身份（防吞层回喂重复判据）。
+                 * V0.3.31（AevonSwallowFeedV331）：不再清 `_ownSummoned` —— 抬手帧是放行的，
+                 * 识别器收得到 ended、`-reset` 照样会来，保留标记才能打出
+                 * `吞层实丢 N 帧` 这条唯一的吞层判据（0.3.29/0.3.30 就是在这里丢的）。 */
                 AevonGripOwnHandoffBridge()
             } else {
                 AevonLog.warn("[圆盘] 自建腿手指身份为空（ObjC 侧已 reset）→ 本轮不绑吞层，"

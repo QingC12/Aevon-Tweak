@@ -5772,8 +5772,11 @@ jobs:
             || { echo "::error::V0.3.29 reset 没作废手指身份（指针复用会绑错手指）"; exit 1; }
           sed -n '/^- (void)ownPass:/,/^}/p' "$GH26" | grep -qF 'gAevonOwnTouchID = 0;' \
             || { echo "::error::V0.3.29 ownPass 没作废手指身份"; exit 1; }
-          #   ⛔ ownHandoff 里不许改 state —— 改 state 会让 UIKit 把延迟中的触摸补投给下层
-          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find(chr(10)+'}',i);b=s[i:j] if i>0 else '';ok=(i>0 and 'self.state' not in b and '_ownSummoned = NO;' in b);print('V0.3.29 ownHandoff 只清簿记不动 state ✓' if ok else '::error::V0.3.29 ownHandoff 改了识别器 state（会把延迟触摸补投给下层）');sys.exit(0 if ok else 1)" "$GH26"
+          #   ⛔ ownHandoff 里不许改 state —— 改 state 会让 UIKit 把延迟中的触摸补投给下层。
+          #   ⛔ V0.3.31 反转：ownHandoff **不许**再清 `_ownSummoned`。抬手帧是放行的、
+          #      `-reset` 会来，清了会让 `-touchesEnded:` 走哑分支，
+          #      `吞层实丢 N 帧` 这条唯一的吞层判据会被静默跳过（0.3.29/0.3.30 就是这样丢的）。
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find(chr(10)+'}',i);b=s[i:j] if i>0 else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);ok=(i>0 and 'self.state' not in b and '_ownSummoned = NO' not in b);print('V0.3.29/V0.3.31 ownHandoff 只作废身份（不动 state、不清 _ownSummoned）✓' if ok else '::error::V0.3.29/V0.3.31 ownHandoff 动了 state 或清了 _ownSummoned（前者补投延迟触摸、后者丢吞层判据）');sys.exit(0 if ok else 1)" "$GH26"
 
           # ③ 方案 A：Swift 侧真绑 + 堵住「收养降级」
           grep -qF '@_silgen_name("AevonGripOwnTouchID")' "$EE" \
@@ -5866,6 +5869,52 @@ jobs:
             || { echo "::error::V0.3.30 吞层丢弃分支没有累加（下次日志证不出吞没吞）"; exit 1; }
 
           echo "V0.3.30 校验: 落指即预绑（漏帧从 18~49pt 降到 0）+ 抬手帧放行（消孤儿触摸）+ 吞帧计数 ✓"
+
+          # ── V0.3.31 校验（Aevon(104) 定档「吞层回喂识别器」）──
+          # 用户反馈：「全屏还是会被呼出手势带动操作，然后是最严重一点，圆盘不在跟手，
+          # 滑动手势后，圆盘会在 2 秒以后出现」。定量：31 次自建腿 hold → **0 次**自建腿
+          # 召唤；21 次圆盘全部由系统 `_UIPendingEdgeSwipeGestureRecognizer` 呼出；
+          # 前 6 次 hold 结局全是「0.28s 内未达阈值（本手势 moved 共 0 帧）→ 放行」；
+          # `本轮识别器喂 N 帧` 一条都没打；hold → 圆盘时差 31 次全部 ≥ 0.285s，
+          # 下限恰为 ownPass 的 0.28s 墙。
+          # 真因：0.3.30 把「开始吞」提前到落指，而吞层丢的是**整条 UIEvent** ——
+          # 自建识别器自己也在那条链上，被一起饿死，永远判不出 8pt。
+          TH31="$GITHUB_WORKSPACE/Sources/AevonTouchHook.m"
+
+          # ① 标记必须进主库二进制
+          strings "$MYD28" | grep -qF 'AevonSwallowFeedV331' \
+            || { echo "::error::V0.3.31 主库缺标记 AevonSwallowFeedV331"; exit 1; }
+
+          # ② ObjC：判据抽成一份，两个入口共用（⛔ 不许复制第二份判据）
+          grep -qF -- '- (void)ownJudgeMove:(CGPoint)p {' "$GH26" \
+            || { echo "::error::V0.3.31 没有抽出 ownJudgeMove（判据会被复制成两份）"; exit 1; }
+          grep -qF -- '- (void)ownExternalMove:(CGPoint)p {' "$GH26" \
+            || { echo "::error::V0.3.31 没有吞层回喂入口 ownExternalMove"; exit 1; }
+          grep -qF '[self ownJudgeMove:' "$GH26" \
+            || { echo "::error::V0.3.31 touchesMoved 没走共用判据"; exit 1; }
+          grep -qF 'void AevonGripOwnExternalMove(uintptr_t tid, double x, double y)' "$GH26" \
+            || { echo "::error::V0.3.31 缺回喂导出"; exit 1; }
+          grep -qF 'if (tid == 0 || tid != gAevonOwnTouchID) { return; }' "$GH26" \
+            || { echo "::error::V0.3.31 回喂没校验手指身份（会拿别人的坐标推判据）"; exit 1; }
+          #   ⛔ ownExternalMove 必须对已召唤的手指早退，否则每帧重复走判据、重复打 summon
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownExternalMove:(CGPoint)p {');j=s.find('\n}',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and b.find('if (_ownSummoned) { return; }')>0);print('V0.3.31 ownExternalMove 对已召唤手指早退 ✓' if ok else '::error::V0.3.31 ownExternalMove 缺 _ownSummoned 早退（会重复喂盘）');sys.exit(0 if ok else 1)" "$GH26"
+          #   ⛔ ownHandoff 不许再清 _ownSummoned：抬手帧是放行的，-reset 会来；
+          #     清掉会让 -touchesEnded: 走哑分支，「吞层实丢 N 帧」这条唯一判据又没了
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find('\n}',i);b=s[i:j] if (i>0 and j>i) else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);bad='_ownSummoned = NO' in b;print('V0.3.31 ownHandoff 保留 _ownSummoned（lift 统计打得出）✓' if (i>0 and not bad) else '::error::V0.3.31 ownHandoff 又清了 _ownSummoned（吞层判据会被静默跳过）');sys.exit(0 if (i>0 and not bad) else 1)" "$GH26"
+          grep -qF '吞层实丢 %lu 帧（实丢 >0 = 吞层与回喂在跑' "$GH26" \
+            || { echo "::error::V0.3.31 lift 日志判据文案没更新（会把「喂 0 帧」误读成吞层没生效）"; exit 1; }
+
+          # ③ 钩子侧：真的丢弃之后、return 之前回喂
+          grep -qF 'extern void AevonGripOwnExternalMove(uintptr_t tid, double x, double y);' "$TH31" \
+            || { echo "::error::V0.3.31 钩子侧没有声明回喂入口"; exit 1; }
+          grep -qF 'if (phase == UITouchPhaseMoved) { fedTid = touchID; fedPoint = point; }' "$TH31" \
+            || { echo "::error::V0.3.31 没记下被吞的 moved 帧"; exit 1; }
+          #   ⛔ 回喂只能在「真的丢了」的分支里 —— 没丢时识别器自己会从 UIKit 收到，
+          #     再喂一次就是同一帧计两次位移（8pt 会被提前判成 4pt 达到）
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('if (swallow) {');j=s.find('return;',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and j>i and b.find('AevonGripOwnExternalMove(')>0);print('V0.3.31 回喂位于「真的丢弃」分支内 ✓' if ok else '::error::V0.3.31 回喂不在 swallow 分支里（或不在 return 之前）');sys.exit(0 if ok else 1)" "$TH31"
+
+          echo "V0.3.31 校验: 吞层回喂识别器（饿死已消除）+ 判据单份共用 + 吞层实丢判据可读 ✓"
+
 
 
 

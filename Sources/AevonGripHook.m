@@ -859,6 +859,10 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (BOOL)ownClaimNow;
 /// V0.3.29（AevonOwnSwallowV329）：把这根手指移交给全局吞层（只清自建腿簿记，不动 state）。
 - (void)ownHandoff;
+/// V0.3.31（AevonSwallowFeedV331）：位移判据本体 —— `-touchesMoved:` 与吞层回喂共用一份。
+- (void)ownJudgeMove:(CGPoint)p;
+/// V0.3.31（AevonSwallowFeedV331）：吞层回喂入口 —— 这一帧被丢弃了，但判定不能少这一帧。
+- (void)ownExternalMove:(CGPoint)p;
 @end
 
 @implementation AevonOwnLegGesture {
@@ -948,16 +952,27 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
  * 会让 UIKit 把延迟中的触摸补投给下层，正好是这一版要消灭的那个行为。
  * 断言也不在这里还 —— 由 Swift 侧在全局通道的 ended 里显式归还。 */
 - (void)ownHandoff {
-    _ownSummoned = NO;
-    _ownSummonedAt = 0;
-    _ownTouch = nil;
-    _ownMovedFrames = 0;
-    _ownFeedFrames = 0;
+    /* V0.3.31（AevonSwallowFeedV331）：只作废身份，**保留 `_ownSummoned` 与 `_ownTouch`**。
+     *
+     * 0.3.29 的原始写法是「全清」（把 `_ownSummoned` 置假、`_ownTouch` 归 nil、
+     * `_ownFeedFrames` 清零），它成立的前提是「吞层接手后识别器再也收不到帧」。
+     * 那个前提在本版已经不成立：
+     * 抬手帧是**放行**的（`shouldSwallowGlobalTouch` 里 `phase == 3 || 4 → return false`），
+     * 识别器照样收得到 ended，`-reset` 也照样会来。
+     *
+     * 全清的代价已经量出来了：Aevon(103)/(104) 两份日志里
+     * `本轮识别器喂 N 帧｜吞层实丢 M 帧` **一条都没打出来** —— state 被抬到了 Began，
+     * 但 `_ownSummoned` 是 NO，`-touchesEnded:` 走的是「Began → Ended」那条哑分支，
+     * 统计行被跳过。本版正是要靠这一行判「吞层到底吞没吞、回喂有没有跑」，
+     * 所以保留标记让识别器走完整的召唤生命周期。
+     *
+     * 2.5s TTL 守卫（`-touchesBegan:` 顶部）仍然有效：万一 `-reset` 不来，
+     * 下一根手指落指时会被超时让位，不会回到「圆盘突然彻底没反应」的死窗口。 */
+    gAevonOwnTouchID = 0;
     [_ownBail invalidate];
     _ownBail = nil;
     [_ownHold invalidate];
     _ownHold = nil;
-    gAevonOwnTouchID = 0;
 }
 
 /* V0.3.12（AevonOwnClaimV312）：借腿赢下仲裁的那一刻，把这根手指正式认领。
@@ -1203,7 +1218,25 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
         return;
     }
     if (self.state != UIGestureRecognizerStatePossible) { return; }
-    CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
+    [self ownJudgeMove:((t != nil) ? [t locationInView:nil] : CGPointZero)];
+}
+
+/* V0.3.31（AevonSwallowFeedV331）：位移判据本体 —— 两个入口共用同一份。
+ *
+ * 为什么要拆出来：0.3.30 把「开始吞」提前到落指之后，吞层在 SB `-sendEvent:` 顶部
+ * 丢掉整条 `UIEvent`，而**自建识别器自己也在那条事件链里** —— 它一帧 moved 都收不到，
+ * 于是永远判不出 8pt。Aevon(104) 的证据是闭合的：
+ *   · 31 次自建腿 hold，自建腿召唤 **0 次**（0.3.29 是 36 次）；
+ *   · 前 6 次 hold 的结局全部是「0.28s 内未达阈值（本手势 moved 共 0 帧）→ 放行」；
+ *   · `本轮识别器喂 N 帧` 一条都没打出来（识别器被 ownPass 掉，连 ended 都收不到）；
+ *   · hold → 圆盘出现时差 31 次全部 ≥ 0.285s，下限恰好是 ownPass 的 0.28s 墙。
+ * 圆盘最后是靠系统 `_UIPendingEdgeSwipeGestureRecognizer` 呼出来的（21/21），
+ * 走「收养」分支（只喂不吞），所以 App 拿到剩余整段滑动 = 用户说的「带动操作」。
+ *
+ * 结论（本轮更正的一条长期结论）：**吞层的粒度是整条 UIEvent，它饿死的不只是 App，
+ * 还有我们自己那只识别器。** 0.3.29 之所以没饿死，是因为它的绑定发生在召唤之后，
+ * 8pt 早就判完了 —— 不是「吞层不饿死识别器」。 */
+- (void)ownJudgeMove:(CGPoint)p {
     CGFloat dx = p.x - _ownStart.x;
     CGFloat dy = p.y - _ownStart.y;
     /* V0.3.11（AevonOwnLegTypeV311）：每个手势只打第一条 moved —— 这是「注册到底生效没有」
@@ -1271,6 +1304,18 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     [self ownBailRearm];
 }
 
+/* V0.3.31（AevonSwallowFeedV331）：吞层回喂 —— 这一帧被 `-sendEvent:` 丢掉了，但判定
+ * 不能少这一帧，否则就是 0.3.30 那个「召唤归零 + 圆盘两秒后才出」。
+ *
+ * 只判位移、**不喂盘**：召唤成功之后的帧由吞层经 `AevonGlobalTouchPhase` 喂给圆盘
+ * （0.3.29 已验证的 `source:"global"` 通道），这里再喂一次会让跟手抖一帧。
+ * `_ownSummoned` 早退是必须的 —— 召唤后吞层仍在回喂，不挡会重复走判据、重复打 summon 日志。 */
+- (void)ownExternalMove:(CGPoint)p {
+    if (_ownSummoned) { return; }
+    if (self.state != UIGestureRecognizerStatePossible) { return; }
+    [self ownJudgeMove:p];
+}
+
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     /* V0.3.16（AevonOwnLiftV316）：召唤过的手指，抬手就是圆盘的**终点信号**。
      * 以前这条路不存在（召唤即 Ended），圆盘只能靠看门狗，固定多停 1 秒。
@@ -1286,11 +1331,14 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
         UITouch *t0 = touches.anyObject;
         CGPoint p0 = (t0 != nil) ? [t0 locationInView:nil] : _ownStart;
         /* V0.3.17（AevonOwnFeedV317）：把本轮喂了几帧写进日志 —— 这是「喂料通道到底
-         * 有没有在跑」的唯一直接判据。`0` = 招手之后识别器再没收到任何 moved（= 喂料
-         * 这条路本身不成立，得改走全局通道）；`1~3` = 手指在手势展开前后就不动了，
-         * 那是用户动作、不是 bug；`>3` = 正常喂料。 */
+         * 有没有在跑」的唯一直接判据。
+         * V0.3.31（AevonSwallowFeedV331）：本版判据换成后半段「吞层实丢」。
+         *   吞层全吞 moved 之后识别器自己一帧都收不到，前半段恒为 0 是**正常**的；
+         *   权威判据是 `吞层实丢 M 帧`：M > 0 = 吞层 + 回喂这条路真的在跑，
+         *   M = 0 = 一帧都没拦住（预绑没命中或抬手被提前放行），下次直接看这个数。 */
         NSString *feed = [NSString stringWithFormat:
-                          @"本轮识别器喂 %d 帧｜吞层实丢 %lu 帧（0 = 吞层没生效）",
+                          @"本轮识别器喂 %d 帧｜吞层实丢 %lu 帧（实丢 >0 = 吞层与回喂在跑，"
+                          @"前半段 0 是正常的：moved 全被吞了）",
                           _ownFeedFrames, (unsigned long)gAevonOwnSwallowFrames];
         AevonGripOwnLog("lift", feed.UTF8String);
         self.state = UIGestureRecognizerStateEnded;
@@ -2017,6 +2065,19 @@ void AevonGripOwnHandoff(void) {
     [g ownHandoff];
 }
 
+/* V0.3.31（AevonSwallowFeedV331）：吞层回喂入口 —— 由 `AevonTouchHook.m` 在**真的丢弃**
+ * 一帧 moved 之后调用一次（判定为吞、且已经决定 `return` 之前）。
+ *
+ * 身份校验不能省：`gAevonOwnTouchID` 是「自建腿当前扣着的那根手指」，只有它才该被回喂。
+ * 别的手指（第二根、浮窗拖拽那根）进了吞层分支时，用它去推 `_ownStart` 会让圆盘
+ * 跟着错的手指走 —— 0.3.17 的 `_ownTouch` 单指纪律就是为这件事写的。 */
+void AevonGripOwnExternalMove(uintptr_t tid, double x, double y) {
+    if (tid == 0 || tid != gAevonOwnTouchID) { return; }
+    if (gAevonOwnGesture == nil) { return; }
+    AevonOwnLegGesture *g = (AevonOwnLegGesture *)gAevonOwnGesture;
+    [g ownExternalMove:CGPointMake((CGFloat)x, (CGFloat)y)];
+}
+
 #pragma mark - V0.3.30（AevonEarlyBindV330）：落指预绑
 
 /* 落指那一刻就把这根手指交给全局吞层，**不等召唤**。
@@ -2560,6 +2621,12 @@ __attribute__((used)) static const char AevonDeskPanGuardV329Marker[] = "AevonDe
 __attribute__((used)) static const char AevonEarlyBindV330Marker[] = "AevonEarlyBindV330";
 __attribute__((used)) static const char AevonPreBindCancelV330Marker[] = "AevonPreBindCancelV330";
 __attribute__((used)) static const char AevonSwallowTickV330Marker[] = "AevonSwallowTickV330";
+
+/* V0.3.31（Aevon(104)「全屏还是被带动 + 圆盘两秒后才出现」）：吞层回喂。
+ * 吞层丢掉一帧 moved 的同时把它转手喂给自建识别器 —— App 拿不到位移，判据也不缺帧。
+ * Aevon(104) 定量：31 次 hold、**0 次**自建腿召唤、21 次全部系统腿呼盘、圆盘时差下限
+ * 恰为 ownPass 的 0.28s ⇒「吞层的粒度是整条 UIEvent，它把识别器自己也饿死了」。 */
+__attribute__((used)) static const char AevonSwallowFeedV331Marker[] = "AevonSwallowFeedV331";
 
 /* V0.3.27（Aevon(100) #1「桌面和全屏 app 中手势触发并不是 100% 成功」）：
  * App 内锥角 14° → 22°（可配，`AevonGripCone327`），并在首帧判不出横向时再看 2 帧
