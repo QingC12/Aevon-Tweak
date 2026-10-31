@@ -2252,8 +2252,8 @@ __attribute__((used)) static const char AevonNoMidPassV326Marker[] = "AevonNoMid
  *
  * 哲学来自 Stheno 的 `SCArcGestureCoordinator -sc_canBeginAtPoint:`：
  * 它只判起点在不在触发区，方向交给后续 `-sc_handleArcPan:`，没有一票否决这一层。 */
-__attribute__((used)) static const char AevonEdgeBandOnlyV328Marker[] = "AevonEdgeBandOnly328";
-__attribute__((used)) static const char AevonNoConeV328Marker[] = "AevonNoCone328";
+__attribute__((used)) static const char AevonEdgeBandOnlyV328Marker[] = "AevonEdgeBandOnlyV328";
+__attribute__((used)) static const char AevonNoConeV328Marker[] = "AevonNoConeV328";
 __attribute__((used)) static const char AevonYieldGuardV328Marker[] = "AevonYieldGuardV328";
 __attribute__((used)) static const char AevonSummonTTLV328Marker[] = "AevonSummonTTLV328";
 
