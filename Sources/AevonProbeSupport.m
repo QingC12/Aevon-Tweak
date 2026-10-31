@@ -150,3 +150,13 @@ __attribute__((used, unused)) static const char AevonDockTopMark339[] = "AevonDo
  * 各一条纯 ASCII C 串，保证 strip 后 strings 仍能抓到。 */
 __attribute__((used, unused)) static const char AevonZeroWriteMark340[] = "AevonZeroWriteV340";
 __attribute__((used, unused)) static const char AevonRebuildFirstMark340[] = "AevonRebuildFirstV340";
+
+/* ── V0.3.43 二进制标记（AevonReturnCoverV343 / AevonReturnProbeV343 /
+ * AevonReturnCoverOffV343）──────────────────────────────────────────────────
+ * ① 判据换成「呈现链真在屏」：cs=2 只证明 App 在渲染，不证明画面还在我们窗口里。
+ * ② 真空期承接物：哨响备图（只存不显示），检测到不可见才贴，可见即撤，零场景写。
+ * ③ 逐拍探针 2.5s（窗 alpha/hidden/windowScene/windowLevel + 呈现链 + cs + layers）。
+ * 各一条纯 ASCII C 串，保证 strip 后 strings 仍能抓到。 */
+__attribute__((used, unused)) static const char AevonReturnCoverMark343[] = "AevonReturnCoverV343";
+__attribute__((used, unused)) static const char AevonReturnProbeMark343[] = "AevonReturnProbeV343";
+__attribute__((used, unused)) static const char AevonReturnCoverOffMark343[] = "AevonReturnCoverOffV343";

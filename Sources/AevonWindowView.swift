@@ -2421,6 +2421,31 @@ final class AevonWindowView: UIView {
     private var entryRevealDone = false
     private static let liveSettleWindow: TimeInterval = 0.9
 
+    // ── V0.3.43（AevonReturnCoverV343）：真空期承接物 ────────────────────────────
+    /// 回桌面哨响那一刻抓的一帧（只存，不显示）。真出现真空期才贴出去。
+    private var returnCoverBackup: UIImage?
+    /// 真空期承接物（静止图，挂独立入口窗 = 不受转场层级影响）。
+    private var returnCoverView: UIImageView?
+    /// 承接物最早可撤时刻（防「可见/不可见」抖成闪）。
+    private var returnCoverEarliestDrop: TimeInterval = 0
+    /// 真空期观察窗口上限（到点后不再由本拍子管，交接给常驻看门）。
+    private var returnWatchUntil: TimeInterval = 0
+    /// 逐拍探针剩余拍数（每拍一行，用完即止）。
+    private var returnProbeLeft = 0
+    /// 连续判「不可见」的拍数（贴图门槛：硬信号 1 拍、软信号 2 拍）。
+    private var returnCoverMissTicks = 0
+    /// 承接物本轮立了几次（日志限流）。
+    private var returnCoverCount = 0
+    private static let returnWatchWindow: TimeInterval = 2.5
+    private static let returnProbeTicks = 25
+    private static let returnCoverMinHold: TimeInterval = 0.15
+
+    /// 开关：真空期承接物（默认开；置 true 关掉，行为退回 0.3.42）。
+    static let returnCoverDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonReturnCoverOff343") as? Bool
+        return v ?? false
+    }()
+
     /// 全屏 App 画面离场（回桌面 / 切 App）时布防。
     ///
     /// 为什么是「布防 + 有界重申」而不是「每秒无限重申」：0.1.5 的历史结论写得很清楚
@@ -2553,6 +2578,175 @@ final class AevonWindowView: UIView {
         AevonKeepAliveProbeEnd()
     }
 
+    /// V0.3.43（AevonReturnCoverV343）：回桌面哨响时备一张「承接图」。
+    ///
+    /// 只存不显示 —— 真检测到真空期才贴出去，所以正常路径一帧都不会看到。
+    /// 选图纪律沿用 0.3.24：**优先空闲期预抓的清晰缓存帧**（零成本、且不强迫重绘），
+    /// 缓存不合格才现场抓一次。0.2.65 的教训是「逐拍抓帧 = 反复重绘 = 闪」，
+    /// 这里全程只抓一次，且在哨响这一拍。
+    private func prepareReturnCoverBackup(reason: String) {
+        guard !AevonWindowView.returnCoverDisabled else { return }
+        /* ① 现场抓一次（`afterScreenUpdates: false` = 取屏幕现状，不强迫重绘）。
+         * 优先级高于缓存：缓存可能是 0.6~3 秒前的帧，视频上会「跳回几秒前」。
+         * 但必须过清晰度闸 —— 转场期的重采样帧贴出去就是用户最反感的「糊一下」。 */
+        if let live = captureSnapshotImage(), snapshotIsSharp(live) {
+            returnCoverBackup = live
+            AevonLog.info("[承接] 回桌面备图：现场帧（\(Int(live.size.width))x\(Int(live.size.height))）"
+                + "，只存不显示（\(reason)）（AevonReturnCoverV343）")
+            return
+        }
+        if let cached = cachedSnapshotImage, snapshotIsSharp(cached) {
+            returnCoverBackup = cached
+            AevonLog.info("[承接] 回桌面备图：缓存帧（\(Int(cached.size.width))x\(Int(cached.size.height))）"
+                + "，只存不显示（\(reason)）（AevonReturnCoverV343）")
+            return
+        }
+        if let sharp = lastSharpSnapshotImage {
+            returnCoverBackup = sharp
+            AevonLog.info("[承接] 回桌面备图：可信帧（\(Int(sharp.size.width))x\(Int(sharp.size.height))）"
+                + "，只存不显示（\(reason)）（AevonReturnCoverV343）")
+            return
+        }
+        returnCoverBackup = nil
+        AevonLog.warn("[承接] 回桌面备图失败（现场与缓存都不过清晰度闸）→ 本轮不立承接物"
+            + "（\(reason)）（\(sceneHost.stateSummary())）（AevonReturnCoverV343）")
+    }
+
+    /// V0.3.43（AevonReturnCoverV343）：浮窗此刻是否「真的看得见」。
+    ///
+    /// 两个层次都要过：**窗口自己**（在场景里 / 没被隐藏 / alpha 正常）+ **呈现链**
+    /// （呈现视图在窗、未隐藏、alpha 正常、还有层）。Aevon(113) 就是「cs=2 但呈现链
+    /// 被摘」—— 只判 cs 会漏掉这一整类。
+    private func floatLooksVisible() -> Bool {
+        guard let w = window, !isTearingDown else { return false }
+        guard !w.isHidden, w.alpha >= 0.5 else { return false }
+        guard w.windowScene != nil else { return false }
+        return sceneHost.presentationLooksVisible
+    }
+
+    /// 窗口层硬信号（窗自己还在屏上）。它失效 = 不用等第二拍，立刻贴。
+    /// 两层都看：宿主窗口（被系统隐藏/摘场景）+ 本视图自身（整窗 alpha/isHidden）。
+    private func floatWindowOnScreen() -> Bool {
+        guard let w = window, !isTearingDown else { return false }
+        guard !w.isHidden, w.alpha >= 0.5 else { return false }
+        guard w.windowScene != nil else { return false }
+        guard !isHidden, alpha >= 0.5 else { return false }
+        return true
+    }
+
+    /// V0.3.43（AevonReturnCoverV343）：真空期承接物拍子（0.1s 一拍，只在回桌面窗口期跑）。
+    ///
+    /// 判据换了：**从「cs 是不是 2」换成「呈现链是不是真的可见」**。
+    ///   · 不可见 + 有备图 → 立刻贴出去顶住（挂在独立入口窗，不受转场层级影响）；
+    ///   · 恢复可见 → 立刻撤（最短持有 0.15s，防抖成闪）；
+    ///   · 窗口期结束仍不可见 → 承接物留在屏上不露空窗，交给常驻看门在可见时撤。
+    /// 全程**零场景写**：贴图只是加一个 UIImageView，不会触发远程表面重提交。
+    private func returnCoverTick() {
+        guard !AevonWindowView.returnCoverDisabled else { return }
+        let now = CACurrentMediaTime()
+        /* 观察窗过期：只留「可见即撤」这一条收尾职责然后交棒。
+         * 到期仍不可见时承接物**故意留在屏上**（宁可静止，也不露空窗），
+         * 由这里每拍复查，哪一拍恢复可见就哪一拍撤。 */
+        if returnWatchUntil > 0, now > returnWatchUntil {
+            returnWatchUntil = 0
+            returnProbeLeft = 0
+            returnCoverBackup = nil
+            if returnCoverView != nil, floatLooksVisible(), now >= returnCoverEarliestDrop {
+                removeReturnCover(reason: "窗口期结束后呈现链恢复可见")
+            }
+            return
+        }
+        guard returnWatchUntil > 0 else { return }
+
+        let visible = floatLooksVisible()
+        if returnProbeLeft > 0 {
+            returnProbeLeft -= 1
+            let t = now - (returnWatchUntil - AevonWindowView.returnWatchWindow)
+            AevonLog.info("[探针] 回桌面 +\(String(format: "%.2f", t))s"
+                + " 窗[alpha=\(window.map { String(format: "%.2f", $0.alpha) } ?? "-")"
+                + " hidden=\(window?.isHidden == true ? 1 : 0)"
+                + " 场景=\(window?.windowScene != nil ? 1 : 0)"
+                + " 层=\(window?.windowLevel.rawValue ?? -1)]"
+                + " \(sceneHost.presentationProbeSummary())"
+                + " \(sceneHost.stateSummary())"
+                + " 可见=\(visible ? 1 : 0) 承接=\(returnCoverView != nil ? 1 : 0)"
+                + "（AevonReturnProbeV343）")
+        }
+
+        if visible {
+            returnCoverMissTicks = 0
+            if returnCoverView != nil, now >= returnCoverEarliestDrop {
+                removeReturnCover(reason: "呈现链已恢复可见")
+            }
+            return
+        }
+        /* 不可见：先看是不是「我们本来就不该可见」—— 让位期结束后的藏着等画面、
+         * 定格保持、拖拽临时隐藏，这些都不是真空期，别去贴图。 */
+        guard !deskHoldActive, !liveAwaitingContent else { return }
+        /* 窗口层已不在屏时**必须放行**（那正是最需要顶住的一档）——
+         * `windowAlphaForWriteGuard()` 在 alpha=0 时恒假，不能拿它当唯一门票。 */
+        let hardMiss = !floatWindowOnScreen()
+        guard hardMiss || windowAlphaForWriteGuard() || returnCoverView != nil else { return }
+        returnCoverMissTicks += 1
+        /* 贴图门槛分两档（防误判把一张静止图挡在正常画面上）：
+         *   · 窗口层已经不在屏（hard）→ 立刻贴，没有误判空间；
+         *   · 只有呈现链判否（soft）→ 连续 2 拍（0.2s）都判否才贴。 */
+        guard hardMiss || returnCoverMissTicks >= 2 else { return }
+        if returnCoverView == nil {
+            if hardMiss {
+                installReturnCover(reason: "窗口层不在屏（硬信号）")
+            } else {
+                installReturnCover(reason: "呈现链连续 2 拍不可见（窗还在、cs 还在，呈现层被摘）")
+            }
+        }
+    }
+
+    /// 贴承接物。挂载方式照抄 `installDarkFreeze`：优先独立入口窗（层级 10000000，
+    /// 不在任何转场缩放层级里），极端时序回退宿主窗口根级。
+    private func installReturnCover(reason: String) {
+        guard returnCoverView == nil, !isTearingDown else { return }
+        guard let image = returnCoverBackup else { return }
+        let bounds = contentClip.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let view = UIImageView(image: image)
+        view.contentMode = .scaleToFill
+        view.layer.cornerRadius = contentClip.layer.cornerRadius
+        view.layer.masksToBounds = true
+        view.isUserInteractionEnabled = false
+        if let indep = AevonEntryHost.freezeWindow, indep.window != nil {
+            view.frame = convert(contentClip.frame, to: indep)
+            indep.addSubview(view)
+        } else if let win = window {
+            view.frame = convert(contentClip.frame, to: win)
+            win.addSubview(view)
+        } else {
+            return
+        }
+        returnCoverView = view
+        returnCoverEarliestDrop = CACurrentMediaTime() + AevonWindowView.returnCoverMinHold
+        returnCoverCount += 1
+        AevonLog.warn("[承接] 真空期承接物已立（\(reason)，第 \(returnCoverCount) 次，"
+            + "\(Int(view.frame.width))x\(Int(view.frame.height))，父层=\(view.superview.map { String(describing: type(of: $0)) } ?? "无")）"
+            + "（\(sceneHost.stateSummary())）（AevonReturnCoverV343）")
+    }
+
+    private func removeReturnCover(reason: String) {
+        guard let view = returnCoverView else { return }
+        returnCoverView = nil
+        returnCoverEarliestDrop = 0
+        returnCoverMissTicks = 0
+        view.removeFromSuperview()
+        AevonLog.info("[承接] 撤掉真空期承接物（\(reason)）（\(sceneHost.stateSummary())）（AevonReturnCoverV343）")
+    }
+
+    /// 整轮收尾：观察窗口关闭 + 承接物/备图一并清掉。
+    private func endReturnWatch(reason: String) {
+        returnWatchUntil = 0
+        returnProbeLeft = 0
+        removeReturnCover(reason: reason)
+        returnCoverBackup = nil
+    }
+
     private func beginLiveWait(reason: String) {
         let now = CACurrentMediaTime()
         /* V0.3.26（AevonKeepAliveProbeV326）：回桌面同一拍起跑场景保活探针。
@@ -2569,12 +2763,20 @@ final class AevonWindowView: UIView {
         guardHoldLogged = false   // V0.2.100（AevonReturnDeadlineV2100）限流日志重置
         alpha = 1
         liveSettleUntil = 0
+        /* V0.3.43（AevonReturnCoverV343）：回桌面哨响 —— 同一拍备一张承接图，
+         * 并开一个 2.5 秒的真空期观察窗（0.1s 一拍判「呈现链是不是真的可见」）。
+         * 只在真检测到不可见时才贴出去，正常路径一张图都不会上屏。 */
+        returnWatchUntil = now + AevonWindowView.returnWatchWindow
+        returnProbeLeft = AevonWindowView.returnProbeTicks
+        returnCoverMissTicks = 0
+        prepareReturnCoverBackup(reason: reason)
         /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
          * 抓不到就保持现状 —— 但**绝不隐藏窗口**。
          *
          * V0.3.38（AevonDeskNoCoverV338）：零定格档下，画面还在画就**不垫** ——
          * 让位期本来就是「先实时、后出现」，垫一张旧帧等于把实时画面换成定格。 */
         let skipPad = AevonWindowView.deskNoCoverEnabled && sceneHost.contentLooksRendering == true
+            && sceneHost.presentationLooksVisible
         if darkFreezeView == nil, skipPad {
             AevonLog.info("[窗口] 让位期零定格：画面还在画（cs=2）→ 不垫帧，直接把实时画面留在屏上"
                 + "（\(reason)）（\(sceneHost.stateSummary())）（AevonDeskNoCoverV338）")
@@ -2967,6 +3169,10 @@ final class AevonWindowView: UIView {
         // V0.2.63（AevonLiveHiddenV263）：藏着等真画面的状态优先处理（此时 alpha=0，
         // 屏幕上看不到这个窗口，任何判定都不会造成闪烁）。
         if checkAwaitingContent() { return }
+        /* V0.3.43（AevonReturnCoverV343）：真空期承接物拍子。
+         * 放在让位段之前 —— 那一秒空白发生在让位结束之后，让位段自己 `return` 了，
+         * 挂在它后面就永远轮不到。 */
+        returnCoverTick()
         // ── V0.2.60（AevonLiveFirstV260）：让位期只做一件事 —— 等实时画面 ──────────
         // 判定口径与「撤冻结」完全一致（cs=2 且现场 drawHierarchy 抓得到真画面），
         // 区别只是收尾动作从「撤一张图」变成「整窗淡入」。
@@ -3243,6 +3449,9 @@ final class AevonWindowView: UIView {
             return
         }
         guard darkFreezeView == nil, hintLabel.isHidden, !isTearingDown else { return }
+        /* V0.3.43（AevonReturnCoverV343）：真空期承接物已在位就别再盖第二张 ——
+         * 两张静止图叠着，撤任一张都会露出下面那张（看得见的一次替换）。 */
+        guard returnCoverView == nil else { return }
         // V0.2.100（AevonReturnDeadlineV2100，用户确认方案 F，Stheno SCWSNativeFullRequest
         // .returnDeadline 同构）：盖帧起挂 1.2s 固定撤帧保护期 —— 期内任何撤帧路径一律
         // 压住（零几何判定），到点一次撤清。回桌面转场实测 0.8~1.2s，保护期覆盖全程。
@@ -3368,7 +3577,8 @@ final class AevonWindowView: UIView {
          * 0.05 秒后又主动降后台把自己推掉，于是 2.88 秒的定格由我们自己造出来。
          * 零定格档只做一件事：**在画就别碰它**；真掉出画时由常驻看门第一拍兜底盖帧
          *（那条路径的语义就是「内容不出画」，盖上去才有意义）。 */
-        if AevonWindowView.deskNoCoverEnabled, sceneHost.contentLooksRendering == true {
+        if AevonWindowView.deskNoCoverEnabled, sceneHost.contentLooksRendering == true,
+           sceneHost.presentationLooksVisible {
             AevonLog.info("[窗口] 过渡哨零定格：画面还在画（cs=2）→ 不盖帧，保持实时"
                 + "（\(reason)）（\(sceneHost.stateSummary())）（AevonDeskNoCoverV338）")
             return
@@ -4431,6 +4641,8 @@ final class AevonWindowView: UIView {
         deskHoldSettleTicks = 0
         stopDeskHoldTimer()
         removeDarkFreeze(reason: "关窗收尾")
+        // V0.3.43（AevonReturnCoverV343）：真空期承接物与备图一起收尾
+        endReturnWatch(reason: "关窗收尾")
         // V0.3.34（AevonDockCoverV334）：停靠封面与它的撤帧闸一起收尾
         dropDockCover(reason: "关窗收尾")
         // V0.3.37（AevonDockLiveV337）：停靠期实时画面探针一起收尾

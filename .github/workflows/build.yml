@@ -5522,6 +5522,27 @@ jobs:
           fi
           echo "V0.3.42 校验: 写通道修正（承载中场景的 foreground 回收在落地前改成 YES / dr=0）；零新增写入、三挂点类型编码自检 fail-closed ✓"
 
+          # ── V0.3.43 校验（判据换成「呈现链真在屏」+ 真空期承接物）──
+          for m43 in AevonReturnCoverV343 AevonReturnProbeV343 AevonReturnCoverOffV343; do
+            strings "$MYD28" | grep -qF "$m43" || { echo "::error::V0.3.43 主库缺标记 $m43"; exit 1; }
+          done
+          SH43="$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('var presentationLooksVisible: Bool {');j=s.find('func presentationProbeSummary',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'view.window != nil' in b and 'view.isHidden' in b and 'view.alpha' in b and 'sublayers' in b);print('V0.3.43 可见判据四分量齐（在窗/未隐藏/alpha/还有层） ✓' if ok else '::error::V0.3.43 可见判据不全（会漏掉整类真空期）');sys.exit(0 if ok else 1)" "$SH43"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();n=s.count('sceneHost.presentationLooksVisible');ok=n>=2;print('V0.3.43 旧判据已补可见性 %d 处（skipPad + 过渡哨） ✓'%n if ok else '::error::V0.3.43 仍只判 cs=2（那就是 Aevon(113) 的一秒空白）: %d'%n);sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func checkBackgroundGuard() {');j=s.find('if liveWaitDeadline > 0 {',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'returnCoverTick()' in b);print('V0.3.43 承接物拍子在让位段之前 ✓（让位段自己 return，挂后面永远轮不到）' if ok else '::error::V0.3.43 承接物拍子被让位段挡住（那一秒空白发生在让位结束之后）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func installReturnCover(');j=s.find('private func removeReturnCover(',i);b=s[i:j] if 0<i<j else '';bad=[t for t in ['AevonSceneHelper.setForeground','updateSettings','reassertContentForeground','rebuildPresenter'] if t in b];ok=(0<i<j and not bad);print('V0.3.43 承接物零场景写 ✓（贴图不引发表面重提交）' if ok else ('::error::V0.3.43 承接物里有场景写（贴图变成第二次闪）: '+bad[0] if bad else '::error::V0.3.43 承接物函数切片失败'));sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func returnCoverTick()');j=s.find('private func installReturnCover(',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'floatLooksVisible()' in b and 'removeReturnCover' in b and 'installReturnCover' in b);print('V0.3.43 承接物三动作齐（判可见 / 立 / 撤） ✓' if ok else '::error::V0.3.43 承接物拍子缺动作（立了不撤 = 永久静止画面）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func beginLiveWait(');j=s.find('private func finishLiveWait(',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'prepareReturnCoverBackup(' in b and 'returnWatchUntil = now +' in b);print('V0.3.43 哨响同拍备图 + 开观察窗 ✓' if ok else '::error::V0.3.43 哨响没备图（真空期无图可贴 = 一秒空白照旧）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();ok=('endReturnWatch(reason:' in s and s.count('endReturnWatch')>=2);print('V0.3.43 关窗收尾清理承接物 ✓' if ok else '::error::V0.3.43 关窗没清理承接物（残留一张图浮在桌面）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static let returnCoverDisabled: Bool');j=s.find('}()',i);b=s[i:j] if 0<i<j else '';ok=('AevonReturnCoverOff343' in b);print('V0.3.43 回退开关就位 ✓' if ok else '::error::V0.3.43 缺回退开关 AevonReturnCoverOff343（出问题没法回落）');sys.exit(0 if ok else 1)" "$WV35"
+          APPD43="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD43" ]; then
+            for m43 in AevonReturnCoverV343 AevonReturnProbeV343 AevonReturnCoverOffV343; do
+              if strings "$APPD43" | grep -qF "$m43"; then echo "::error::V0.3.43 标记漏进 App 库: $m43"; exit 1; fi
+            done
+          fi
+          echo "V0.3.43 校验: 判据换成呈现链真在屏（cs=2 只证明 App 在渲染）+ 真空期承接物（哨响备图只存不显示，不可见才贴、可见即撤、零场景写） ✓"
+
 
 
 

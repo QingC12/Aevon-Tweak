@@ -678,6 +678,38 @@ final class AevonSceneHost {
         return cs == 2
     }
 
+    /// 呈现链此刻是否**真的可见**（V0.3.43，AevonReturnCoverV343）。
+    ///
+    /// 为什么需要它：`contentState == 2` 只证明 **App 侧还在渲染**，不证明那块画面
+    /// 还在我们的窗口里。Aevon(113) 实测 —— 0.3.42 的拦写把 `fg` 保住了、`cs` 全程
+    /// 停在 2，可浮窗整整空了 1 秒：App 在画，但远程表面被系统从我们的呈现链上摘掉了。
+    /// 旧判据（cs=2 → 判在画 → 不垫帧）于是整段零兜底，那一秒裸露。
+    ///
+    /// 只读、不写：只看呈现视图自身的四个可见性分量 —— 在窗、未隐藏、alpha、还有层。
+    var presentationLooksVisible: Bool {
+        guard !invalidated else { return false }
+        let view = presentationView
+        guard view.window != nil else { return false }
+        guard !view.isHidden, view.alpha > 0.05 else { return false }
+        guard view.bounds.width > 1, view.bounds.height > 1 else { return false }
+        /* 层判据放宽成「层或子视图任一非空」：远程表面可能以 subview 形式挂着，
+         * 只认 sublayers 会把正常在画的窗口误判成真空期（贴一张图挡 0.2 秒）。 */
+        return (view.layer.sublayers?.count ?? 0) > 0 || !view.subviews.isEmpty
+    }
+
+    /// 一行呈现链现场串（只进日志，给「真空期」定性用）。
+    func presentationProbeSummary() -> String {
+        guard !invalidated else { return "呈现=已释放" }
+        let view = presentationView
+        let layers = view.layer.sublayers?.count ?? 0
+        return "呈现[在窗=\(view.window != nil ? 1 : 0)"
+            + " hidden=\(view.isHidden ? 1 : 0)"
+            + " alpha=\(String(format: "%.2f", view.alpha))"
+            + " 层=\(layers)"
+            + " 子视图=\(view.subviews.count)"
+            + " \(Int(view.bounds.width))x\(Int(view.bounds.height))]"
+    }
+
     /// 一行状态串（fg / cs / layers），给守卫日志做前后对照。
     func stateSummary() -> String {        guard !invalidated else { return "已释放" }
         var fg = "?"
