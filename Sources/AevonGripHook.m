@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "AevonGripAssert.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <string.h>
@@ -291,6 +292,10 @@ static BOOL gAevonOwnUIKitMgrTried = NO;
 /* V0.3.11：自建腿最近一次**真正呼盘**的时刻（不是 hold、不是 pass）。
  * 系统腿在同一手势里晚 20ms 达阈值时靠它让路，日志里不再出现成对的「达阈值但被拦」。 */
 static CFTimeInterval gAevonOwnSummonStamp = 0;
+/* V0.3.28（AevonYieldGuardV328）：本手势被自建腿接管（打出 hold）的时刻。
+ * 借腿让路判据从「识别器已注册」改成「本手势真的接管了」—— 静态事实会让
+ * 带外的落指变成「系统腿被拦 + 自建腿无 hold」两头空（Aevon(101) 有 6 次）。 */
+static CFTimeInterval gAevonOwnHoldStamp = 0;
 /* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
 extern void AevonGripOwnLegKick(void);
@@ -703,6 +708,10 @@ BOOL AevonGripHookProbeInstall(void) {
  * =========================================================================== */
 
 extern int AevonGripOwnBandHit(double x, double y);
+/* V0.3.28（AevonYieldGuardV328）：接管时刻的记账与读取（定义在文件尾）。
+ * 前置声明是必须的 —— `-touchesBegan:` 在 1029 行就要用它，定义在 1850 行。 */
+void AevonGripOwnStampHold(void);
+double AevonGripOwnHoldAge(void);
 /// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选（暂扣）。
 extern int AevonGripOwnHitLevel(double x, double y);
 extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
@@ -749,25 +758,12 @@ extern void AevonGripOwnLog(const char *kind, const char *detail);
  *      系统识别器本来就是整段持续判定，只有我们在首帧就下结论。
  * 这两条都只作用于 **App 内**：桌面上没有横向滚动内容可抢，只有翻页，
  * 0.3.26 的「首帧横向占优即呼盘 + 灰带扣到抬手」原样保留。 */
-static double aev_grip_cone_value(void) {
-    static double cached = -1;
-    if (cached >= 0) { return cached; }
-    /* ⛔ 必须走 UserDefaults：写死常量的话回退开关就没法生效（0.3.25 栽过一次）。 */
-    NSNumber *v = [[NSUserDefaults standardUserDefaults] objectForKey:@"AevonGripCone327"];
-    double d = (v != nil) ? [v doubleValue] : 0.40;
-    if (d < 0.10) { d = 0.10; }
-    if (d > 1.00) { d = 1.00; }
-    cached = d;
-    return cached;
-}
-
-static BOOL aev_grip_widen_off(void) {
-    static int cached = -1;
-    if (cached >= 0) { return cached == 1; }
-    id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"AevonGripWidenOff327"];
-    cached = (v != nil && [v boolValue]) ? 1 : 0;
-    return cached == 1;
-}
+/* V0.3.28（AevonEdgeBandOnly328）：`aev_grip_cone_value` / `aev_grip_widen_off`
+ * 两个函数整体删除（连同 `AevonGripCone327` / `AevonGripWidenOff327` 两个键）。
+ *
+ * 它们服务的是「首帧方向角度锥」这一层判据，而 0.3.28 把方向判据整个去掉了：
+ * 带内只看位移量、带外一个字节都不碰。留着一个没人调、却要求 `-Werror` 放行的
+ * 死函数，只会让下一版读代码的人以为方向还在参与判定。 */
 
 
 /* 全局状态（gAevonOwnLegEnabled / gAevonOwnGesture …）定义在前置区 —— 见
@@ -821,8 +817,13 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     int _ownMovedFrames;             // V0.3.11：本手势收到的 moved 帧数（判「注册到底生效没有」）
     int _ownFeedFrames;              // V0.3.17：召唤成功后喂给圆盘的 moved 帧数（>1 = 喂料真的在跑）
     NSTimer *_ownHold;               // V0.3.12：认领后的兜底放行（手指不抬手也不会卡住）
-    BOOL _ownStrict;                 // V0.3.14：边缘候选（非贴边）→ 首帧 moved 用严格判据
-    CGPoint _ownHit;                 // V0.3.14：began 落点（日志与严格判据都用它）
+    CGPoint _ownHit;                 // V0.3.14：began 落点（日志与借腿让路判据都用它）
+    /* V0.3.28（AevonSummonTTLV328）：`_ownSummoned` 的置位时刻。
+     * 顶部守卫 `if (_ownSummoned) return;` 原来没有任何超时 —— 一旦某轮因异常路径
+     * （识别器被系统摘掉、Ended 没派进来）没清掉，后续**所有**落指被静默吞掉，
+     * 日志表现是「看到右缘 began 有、自建腿 hold 一行都没有」，排查成本极高。 */
+    CFTimeInterval _ownSummonedAt;
+
     __weak UITouch *_ownTouch;       // V0.3.16：召唤那根手指 —— 抬手回调只认它自己
 }
 
@@ -864,10 +865,13 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     [super reset];
     [_ownBail invalidate];
     _ownBail = nil;
+    /* V0.3.28（AevonSysAssertV328）：识别器生命周期结束 = 跟踪结束，断言必须还。
+     * 这是最可靠的一道：UIKit 保证 Ended/Cancelled/Failed 之后一定调 reset。 */
+    AevonGripAssertRelease();
     [_ownHold invalidate];
     _ownHold = nil;
     _ownSummoned = NO;
-    _ownStrict = NO;
+    _ownSummonedAt = 0;
     _ownTouch = nil;
     _ownMovedFrames = 0;
     _ownFeedFrames = 0;
@@ -885,6 +889,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     if (self.state != UIGestureRecognizerStatePossible) { return NO; }
     if (_ownSummoned) { return NO; }
     _ownSummoned = YES;
+    _ownSummonedAt = CACurrentMediaTime();
     [_ownBail invalidate];
     _ownBail = nil;
     self.state = UIGestureRecognizerStateBegan;
@@ -911,6 +916,9 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (void)ownPass:(const char *)why bucket:(int)bucket detail:(NSString *)detail {
     [_ownBail invalidate];
     _ownBail = nil;
+    /* V0.3.28（AevonSysAssertV328）：手指不归我们了，断言立刻还回去。
+     * 少还一次 = 用户在这段时间里右滑返回失灵，所以这里是「放行」这条路上唯一的收尾点。 */
+    AevonGripAssertRelease();
     if (self.state == UIGestureRecognizerStatePossible) {
         self.state = UIGestureRecognizerStateFailed;
         AevonOwnPassCount(why, bucket, detail);
@@ -931,6 +939,10 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (void)ownBailRearm {
     [_ownBail invalidate];
     _ownBail = nil;
+    /* V0.3.28（AevonSysAssertV328）：顺带做断言超时检查。
+     * 这个方法是自建腿里唯一的周期性回调（0.28s 一拍、总上限 0.9s），
+     * 把它当 ticker 比自己开一个定时器省 —— 少一个 NSTimer 就少一条泄漏路径。 */
+    AevonGripAssertTick();
     CFTimeInterval left = 0.9 - (CACurrentMediaTime() - _ownStartStamp);
     if (left <= 0.02) { return; }
     NSTimeInterval span = left < 0.28 ? left : 0.28;
@@ -962,6 +974,13 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
  * ------------------------------------------------------------------------- */
 - (void)ownSummonAtPoint:(CGPoint)p {
     _ownSummoned = YES;
+    _ownSummonedAt = CACurrentMediaTime();
+    /* V0.3.28（AevonSysAssertV328）：跟踪开始 → 压住系统手势（Stheno 第 ④ 层）。
+     *
+     * 时机选在「确定要召盘」这一刻，不是落指那一刻：落指时只是扣住手指、还不确定
+     * 用户要干什么，提前压系统会让一次普通的右缘点击也让系统手势失效。
+     * 失败（私有接口缺失 / 抛异常）返回 NULL，功能照常，只少一层保护。 */
+    AevonGripAssertAcquire("AevonArcMenuGesture");
     [_ownBail invalidate];
     _ownBail = nil;
     [_ownHold invalidate];
@@ -977,19 +996,23 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
      * 自建腿判定。以前召唤即 Ended、UIKit 立刻 reset，所以不存在这个问题；现在识别器
      * 活到抬手，第二根手指的 began 会派进来把 _ownStart / _ownSummoned 覆盖掉，
      * 召唤那根手指抬手时就发不出终点信号（圆盘又回到僵 1 秒）。 */
-    if (_ownSummoned) { return; }
+    /* V0.3.28（AevonSummonTTLV328）：加 2.5s 上限。`_ownSummoned` 本应只由 -reset 清，
+     * 但识别器被系统摘掉 / Ended 没派进来时 reset 不会来，标记就永久粘住，
+     * 之后每一次落指都在这一行被吞掉 —— 用户看到的是「圆盘突然彻底没反应」，
+     * 日志看到的是「有 began、无 hold」。超时后强制让位，成本只是极少见的误判一次。 */
+    if (_ownSummoned && CACurrentMediaTime() - _ownSummonedAt < 2.5) { return; }
+    if (_ownSummoned) { _ownSummoned = NO; }
     UITouch *t = touches.anyObject;
     CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
     /* 落点判据在**落指那一刻**做 —— 这才是自建腿相对「借识别器」的本质优势：
      * 0.3.8 只能在达阈值之后用后置几何否决，那时 App 已经跟了 8pt 了。
      *
-     * V0.3.14（AevonEdgePadV314）：三段式。
-     *   1 = 贴边落点（离右缘 ≤ GripZoneW，默认 5pt）→ 宽松判据，左滑 8pt 就呼盘；
-     *   2 = 边缘候选（离右缘 ≤ W+35pt）→ **先扣住**，首帧 moved 用严格判据
-     *       （近似纯水平左滑）才呼盘，否则立刻还回去；
-     *   0 = 带外 → 立刻放行。
-     * 为什么不再一刀切：0.3.13 的 25% 宽（≈107pt）把抖音底部进度条和右下角按钮全吃了；
-     * 而只收 5pt 又会把「落点偏内 10~30pt」的呼盘全漏掉。两段式两头都要。 */
+     * V0.3.28（AevonEdgeBandOnly328）：两段式改成**一条贴边带**，回到 Stheno 的单层模型。
+     *   1 = 带内（离右缘 ≤ GripZoneW，默认 15pt）→ 扣住，位移到 8pt 就召唤，**不看方向**；
+     *   0 = 带外 → 立刻放行，一个字节都不碰。
+     * 依据 Aevon(101) 的 49 次 hold：落点 84% 集中在 12~15pt、0~6pt 一次都没有；
+     * 5 次被 22° 锥判成斜滑放掉的样本，第 2 帧反而更斜（dx=-47 dy=28），
+     * 说明方向判据在这个落点带上只会误杀。旧的两段式还带来「扣住又放行 → 翻页」。 */
     int level = AevonGripOwnHitLevel((double)p.x, (double)p.y);
     if (level == 0) {
         CGSize scr = [UIScreen mainScreen].bounds.size;
@@ -1018,11 +1041,13 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     _ownStart = p;
     _ownHit = p;
     _ownTouch = t;
-    _ownStrict = (level == 2);
     _ownSummoned = NO;
     _ownMovedFrames = 0;
     _ownFeedFrames = 0;
     _ownStartStamp = CACurrentMediaTime();
+    /* V0.3.28（AevonYieldGuardV328）：记下「本手势真的被自建腿接管了」的时刻。
+     * 借腿（systemLegSummon）用它判断要不要拦系统腿 —— 只有这个窗口内才拦。 */
+    AevonGripOwnStampHold();
     [_ownBail invalidate];
     _ownBail = [NSTimer scheduledTimerWithTimeInterval:0.28
                                                 target:self
@@ -1035,10 +1060,9 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
      * 「ËæπÁºòÂÄôÈÄâÔºåËµ∞‰∏•Ê†ºÂà§ÊçÆ」这种二次编码乱码，level 1 / level 2 分不出来，
      * 整篇日志的判据价值掉一半（Aevon(92) 就是这样）。中文一律走 @"…" + %@。 */
     NSString *hd = [NSString stringWithFormat:
-                    @"落点 x=%.0f y=%.0f（离右缘 %.0fpt，%@）→ 扣住触摸，等左滑达阈值"
-                    "（App 此时收不到 began）",
-                    p.x, p.y, scr2.width - p.x,
-                    _ownStrict ? @"L2 strict 边缘候选" : @"L1 flush 贴边落点"];
+                    @"落点 x=%.0f y=%.0f（离右缘 %.0fpt）→ 扣住触摸，"
+                    "位移达 8pt 即召唤、不看方向（App 此时收不到 began）",
+                    p.x, p.y, scr2.width - p.x];
     AevonGripOwnLog("hold", hd.UTF8String);
 }
 
@@ -1093,100 +1117,36 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
      * 一个绝对阈值同时要判这两件事是判不了的：短滑的 ±6pt 是抖动，长滑的 13pt 才是方向。
      * 现在两条取或：短滑看绝对量（|dy| ≤ 6，样本太短角度不可靠），长滑看锥形
      * （|dy| ≤ |dx| × 0.25 ≈ 14°）。上面那两例分别是「认」和「放」，恰好都对了。 */
-    BOOL horizontal = (dx <= -8.0 && fabs((double)dx) >= fabs((double)dy));
-    if (_ownStrict) {
-        double adx = fabs((double)dx);
-        double ady = fabs((double)dy);
-        /* V0.3.26（AevonHomeLooseV326 / AevonNoMidPassV326，用户 Aevon(99) #3
-         * 「桌面呼盘不容易触发，总是误触桌面翻页」）。
-         *
-         * 两个实测事实（Aevon(99)，6 分钟 132 次右缘落指）：
-         *   · 成功 121 次的首帧角度中位 **13°**，失败 8 次是 20°~42°（中位 27°）；
-         *     L2 的锥是 `ady ≤ adx × 0.25`（14°），正好切在自然滑动分布的中位上 ——
-         *     一半的滑动被判「不够水平」，这就是「不容易触发」。
-         *   · 「翻页」不是没扣住，是**扣住后又半截还回去**：我们在 began 就
-         *     `delaysTouchesBegan` 扣住了手指，中途 `ownPass:` 时 UIKit 会把整段滑动
-         *     补投给 SpringBoard → 桌面翻页。Stheno 天然没这个坑（系统识别器
-         *     「要么整序列消费、要么整序列放行」）。
-         *
-         * 桌面单独一套判据（R2 + R3）：桌面上没有横向滚动内容可抢，只有翻页，
-         * 所以首帧横向占优就直接呼盘（取消锥角）；只有**明确纵向**才放行；
-         * 灰带一律扣到抬手，绝不半截补投。
-         * App 内保持原判据（14° 锥 + 允许放行）——那里右缘的斜滑可能是抽屉/进度条。 */
-        BOOL home = (AevonGripHomeScreenNow() != 0);
-        if (home) {
-            if (horizontal) {
-                [self ownSummonAtPoint:p];
-                return;
-            }
-            if (_ownMovedFrames == 1 && ady >= 12.0 && ady >= adx * 1.4) {
-                NSString *d = [NSString stringWithFormat:
-                               @"桌面·明确纵向 dx=%.0f dy=%.0f（落点离右缘 %.0fpt）"
-                               @"→ 放行（桌面上下滑/搜索）",
-                               dx, dy,
-                               [UIScreen mainScreen].bounds.size.width - _ownHit.x];
-                [self ownPass:"pass" bucket:AevonOwnPassStrict detail:d];
-                return;
-            }
-            /* 灰带：扣住。取消 0.28s 闸 —— 一旦真的滑过（≥2 帧），宁可吞到抬手，
-             * 也不在半截把手指还给系统（那一下就是翻页）。 */
-            if (_ownMovedFrames >= 2) {
-                [_ownBail invalidate];
-                _ownBail = nil;
-                return;
-            }
-            [self ownBailRearm];
-            return;
-        }
-        /* V0.3.27（AevonGripConeV327）：锥角 14° → 22°（从 0.25 提到可配的 0.40）。
-         * `ady <= 6.0` 那条保留 —— 短滑的 ±6pt 是抖动，样本太短角度不可靠。 */
-        double cone = aev_grip_cone_value();
-        if (horizontal && (ady <= 6.0 || ady <= adx * cone)) {
-            [self ownSummonAtPoint:p];
-            return;
-        }
-        /* V0.3.27（AevonGripWidenV327）：首帧没判成「横向」时**不立刻放行**，
-         * 再看 2 帧。理由见 `aev_grip_cone_value` 上方的注释：
-         * Aevon(100) 有 10 次在首帧被静默放掉，而手指其实还在往左走。
-         * 只对「已经在往左」（dx < 0）的手指续判；右移是明确的「还给你」，
-         * 立刻放行，一帧都不多等。 */
-        if (!aev_grip_widen_off() && dx < 0.0 && _ownMovedFrames < 3) {
-            if (_ownMovedFrames == 2) {
-                NSString *d = [NSString stringWithFormat:
-                               @"续判放行暂缓（第 2 帧仍不横向）dx=%.0f dy=%.0f 角度 %.0f°"
-                               @"→ 再看 1 帧（App 内 22° 锥）",
-                               dx, dy, atan2(ady, MAX(1.0, adx)) * 180.0 / M_PI];
-                AevonGripOwnLog("widen", d.UTF8String);
-            }
-            [self ownBailRearm];
-            return;
-        }
-        if (dx > 0.0 || fabs((double)dy) >= 12.0) {
+    /* V0.3.28（AevonEdgeBandOnly328）：判据只剩一条 —— **位移量**，方向完全不参与。
+     *
+     * 这是把 Stheno 的模型搬过来：它的 `sc_beginTrackingAtPoint:` 只判起点在不在
+     * 触发区（`sc_triggerMatchAtPoint:`），方向交给后续 `sc_handleArcPan:`，
+     * 从来没有「首帧角度不够水平就一票否决」这一层。
+     *
+     * 我们过去五版都在加严方向判据（|dy|≤6 → 14° 锥 → 22° 锥 → 桌面取消锥角），
+     * 每版都只是把切点挪一点。Aevon(101) 的 49 次 hold 给出定论：
+     *   84% 的落点集中在离右缘 12~15pt，其中 5 次被 22° 锥放掉，而续判日志显示
+     *   它们第 2 帧**更斜**（dx 从 -30 变 -47、dy 从 15 变 28）—— 这些不是「判早了
+     *   的呼盘」，是用户本来就斜着滑。方向判据在这个落点带上只能误杀，救不了任何人。
+     *
+     * 为什么可以不看方向：带内只有离右缘 ≤15pt 的手指，这一圈本来就是系统
+     * `UIScreenEdgePanGestureRecognizer` 自己的边缘手势区（Aevon(101) 实测它认领了
+     * 离右缘 17pt 的落点、edges=15），App 的滚动内容在这里本来就抢不到手势。
+     * 带外的手指在 `touchesBegan` 就已经 `ownPass:` 了，压根进不到这个函数。
+     *
+     * 8pt 是 0.3.4 以来一直在用的召唤阈值，这里不改数值、只去掉「必须向左」这个前提。
+     * 右滑（出屏方向）与纵向滑现在都会召唤 —— 这是本版的已知代价，已写进交付说明。 */
+    double dist = hypot((double)dx, (double)dy);
+    if (dist >= 8.0) {
+        if (_ownMovedFrames <= 2) {
             NSString *d = [NSString stringWithFormat:
-                           @"边缘候选不是纯水平左滑 dx=%.0f dy=%.0f（落点 x=%.0f 离右缘 %.0fpt）"
-                           @"→ 立刻放行，App 拿回这根手指", dx, dy, _ownHit.x,
+                           @"带内位移达阈值 dx=%.0f dy=%.0f 位移=%.0fpt（落点离右缘 %.0fpt）"
+                           @"→ 召唤（AevonEdgeBandOnlyV328 不看方向）",
+                           dx, dy, dist,
                            [UIScreen mainScreen].bounds.size.width - _ownHit.x];
-            [self ownPass:"pass" bucket:AevonOwnPassStrict detail:d];
-            return;
+            AevonGripOwnLog("summon", d.UTF8String);
         }
-        /* 灰带（|dy| 6~12 或 dx 还没到 -8）：再看一帧 */
-        [self ownBailRearm];
-        return;
-    }
-    if (horizontal) {
         [self ownSummonAtPoint:p];
-        return;
-    }
-    if (fabs((double)dy) >= 12.0 && fabs((double)dy) >= fabs((double)dx)) {
-        NSString *d = [NSString stringWithFormat:
-                       @"纵向为主 dx=%.0f dy=%.0f → 放行（不抢滚动/翻页）", dx, dy];
-        [self ownPass:"pass" bucket:AevonOwnPassVert detail:d];
-        return;
-    }
-    if (fabs((double)dy) > 40.0) {
-        NSString *d = [NSString stringWithFormat:
-                       @"纵向超限 dx=%.0f dy=%.0f → 放行（横向占优但纵向太大）", dx, dy];
-        [self ownPass:"pass" bucket:AevonOwnPassVert detail:d];
         return;
     }
     /* 有移动但还没到阈值：把闸往后滚（总上限 0.9s），避免慢速滑动被误放行。 */
@@ -1905,6 +1865,18 @@ double AevonGripOwnSummonAge(void) {
     return CACurrentMediaTime() - gAevonOwnSummonStamp;
 }
 
+/* V0.3.28（AevonYieldGuardV328）：距「本手势被自建腿接管」的秒数。
+ * 借腿（`systemLegSummon`）用它决定要不要拦系统腿：只有 0.15s 内才拦。
+ * 这个窗口之外，说明这颗手指自建腿没要（落点在带外），系统腿必须放它过去。 */
+void AevonGripOwnStampHold(void) {
+    gAevonOwnHoldStamp = CACurrentMediaTime();
+}
+
+double AevonGripOwnHoldAge(void) {
+    if (gAevonOwnHoldStamp <= 0) { return 9999.0; }
+    return CACurrentMediaTime() - gAevonOwnHoldStamp;
+}
+
 
 /* V0.3.7（AevonYieldDefaultV307）：让路模式转正 —— GripSystemYield 默认值
  * false → true，SB 侧把手默认不接触摸，右缘呼盘全部交给系统边沿识别器。
@@ -2264,6 +2236,26 @@ __attribute__((used)) static const char AevonTermWinVelV326Marker[] = "AevonTerm
  * 灰带一律扣到抬手，绝不半截补投。App 内保持原判据不变。 */
 __attribute__((used)) static const char AevonHomeLooseV326Marker[] = "AevonHomeLooseV326";
 __attribute__((used)) static const char AevonNoMidPassV326Marker[] = "AevonNoMidPassV326";
+
+/* V0.3.28（AevonEdgeBandOnly328 / AevonNoConeV328 / AevonYieldGuardV328 / AevonSummonTTLV328）：
+ *
+ * 用户 Aevon(100)/(101) 两轮诉求：「桌面和全屏 app 中手势触发并不是 100% 成功」。
+ * Aevon(101) 的 49 次自建腿 hold 把根因钉死：
+ *   · 落点 84% 集中在离右缘 12~15pt，**0~6pt 一次都没有** —— 手指中心落不进最后 6pt；
+ *   · 带内 5 次被 22° 锥判成「斜滑」放掉，而续判日志显示第 2 帧更斜（dx -30 → -47）；
+ *   · 6 次「系统腿被拦 + 自建腿无 hold」= 两头空（判据是静态的「已注册」）。
+ * 四条改动：
+ *   ① 触发带 15pt 单层，带外一个字节都不碰（AevonEdgeBandOnlyV328，padRect 已删）；
+ *   ② 方向判据整体退役，带内只看位移 ≥8pt（AevonNoConeV328）；
+ *   ③ 借腿让路判据改成「本手势真的接管了」（AevonYieldGuardV328）；
+ *   ④ `_ownSummoned` 加 2.5s 上限（AevonSummonTTLV328）。
+ *
+ * 哲学来自 Stheno 的 `SCArcGestureCoordinator -sc_canBeginAtPoint:`：
+ * 它只判起点在不在触发区，方向交给后续 `-sc_handleArcPan:`，没有一票否决这一层。 */
+__attribute__((used)) static const char AevonEdgeBandOnlyV328Marker[] = "AevonEdgeBandOnly328";
+__attribute__((used)) static const char AevonNoConeV328Marker[] = "AevonNoCone328";
+__attribute__((used)) static const char AevonYieldGuardV328Marker[] = "AevonYieldGuardV328";
+__attribute__((used)) static const char AevonSummonTTLV328Marker[] = "AevonSummonTTLV328";
 
 /* V0.3.27（Aevon(100) #1「桌面和全屏 app 中手势触发并不是 100% 成功」）：
  * App 内锥角 14° → 22°（可配，`AevonGripCone327`），并在首帧判不出横向时再看 2 帧

@@ -117,25 +117,36 @@ final class AevonRingGripView: UIView {
      * 「从右边缘底部向上计算 35%」—— 语义没变，仍然是 `y = 屏高 - h`（贴底往上量），
      * 只是把默认那一段加高 5 个百分点（iPhone 15 Pro Max 上 280pt → 326pt），
      * 让用户在底部区域稍高一点的位置也能贴着边呼出来。量程 15~50 不变。 */
-    static let zoneWMin: CGFloat = 1
-    static let zoneWMax: CGFloat = 60
-    static let zoneWDefault: CGFloat = 5
+    /* V0.3.28（AevonEdgeBandOnly328）：触发带从「5pt 贴边 + 35pt 暂扣」两段式，
+     * 改成**一条 15pt 贴边带**，回到 Stheno 的单层模型。
+     *
+     * 依据 Aevon(101) 的 49 次自建腿 hold（0.3.27，用户 GripZoneW=9）：
+     *   · 落点几乎全在 **12~15pt**（41 次，84%）；10 次以下只有 4 次；
+     *     **0~6pt 一次都没有** —— 手指中心落不进最后 6pt，拇指会顶在屏幕外。
+     *   · 也就是说用户认知里的「贴边」物理上就是 12~15pt，把带宽设成 9 只覆盖
+     *     28.6% 的落指，设成 15 覆盖 98%。旧默认 5pt 是根本够不着的值。
+     *   · 那 41 次里 5 次被 22° 锥判成「斜滑」放掉（dx=-20~-51 / dy=21~28，角度
+     *     23°~46°），而 Aevon(101) 的续判日志证明它们**第 2 帧更斜**、续判一帧都
+     *     没救回来 —— 方向判据在 12~15pt 这个落点带上就是纯粹的误杀。
+     *
+     * 所以两件事一起改：
+     *   ①带宽 15pt（不再有暂扣段，edgePadPts 已删）；
+     *   ②带内**不看方向**，位移到 8pt 就召唤（Stheno 的 `sc_beginTrackingAtPoint:`
+     *     也是只判起点、方向交给后续）。
+     *
+     * 为什么不担心抢走内容区：15pt 恰好是系统 `UIScreenEdgePanGestureRecognizer`
+     * 自己的边缘手势区（Aevon(101) 实测它认领了离右缘 17pt 的落点，edges=15）——
+     * 这 15pt 本来就不是 App 的滚动内容区。旧的 padRect 伸到 44pt，那 15~44pt
+     * 才是真内容区，扣住又放行就是「桌面翻页」的来源。
+     *
+     * `GripZoneW = 0` 明确定义为**关闭自建腿**（旧代码 min=1，1~5pt 物理不可达，
+     * 等于一个看不出来的关闭）。 */
+    static let zoneWMin: CGFloat = 6
+    static let zoneWMax: CGFloat = 25
+    static let zoneWDefault: CGFloat = 15
     static let zoneHMin: CGFloat = 15
     static let zoneHMax: CGFloat = 50
     static let zoneHDefault: CGFloat = 35
-
-    /* V0.3.14（AevonEdgePadV314）：暂扣区在「贴边宽」之外额外给的容差（pt）。
-     *
-     * 为什么需要它：贴边宽收到 5pt 后，判据只剩「落点离边缘 5pt 以内」。但实测
-     * （0.3.12 那 18 次「落点不在带内」）说明相当一部分想呼盘的手指落点在内侧
-     * 10~30pt。若一刀切成 5pt，这部分会全部落空 = 呼盘抽奖。
-     *
-     * 于是分两段：
-     *   · bandRect（≤5pt）：贴边落点 —— 宽松判据，左滑 8pt 就呼盘；
-     *   · padRect（≤5+35pt）：边缘候选 —— **先扣住**，首帧 moved 用严格判据
-     *     （必须近似纯水平左滑）决定呼盘还是立刻还回去。
-     * 40pt 之外一个字节都不碰 → 抖音进度条右端之外、点赞/评论/分享按钮零影响。 */
-    static let edgePadPts: CGFloat = 35
 
     /// 命中与手势的承载视图（V0.2.55）：frame = 命中区，识别器都挂在它上面。
     private let handle = UIView()
@@ -389,6 +400,10 @@ enum AevonRingGrip {
         // （0.3.6 那条老账：静态成员先看宿主类型是谁，别想当然）。
         let rawW = CGFloat(AevonPrefs.double("GripZoneW",
                                              default: Double(AevonRingGripView.zoneWDefault)))
+        /* V0.3.28（AevonEdgeBandOnly328）：0 或负数 = 关闭自建腿（返回 .zero，上层
+         * `guard core.width > 0` 一律判 0）。旧代码 min 夹到 1，1~5pt 物理不可达，
+         * 表现是「调到最小 = 静默失灵」而不是「关掉了」。 */
+        guard rawW > 0 else { return .zero }
         let w = min(max(rawW, AevonRingGripView.zoneWMin), AevonRingGripView.zoneWMax)
         let rawH = CGFloat(AevonPrefs.double("GripZoneH",
                                              default: Double(AevonRingGripView.zoneHDefault)))
@@ -397,18 +412,16 @@ enum AevonRingGrip {
         return CGRect(x: screenW - w, y: screenH - h, width: w, height: h)
     }
 
-    /// V0.3.14（AevonEdgePadV314）：暂扣区 = 贴边宽 + `edgePadPts`，纵向与 `bandRect` 同一条。
-    ///
-    /// 落点在这里但不在 `bandRect` 里 = 「边缘候选」：自建腿先把它扣住（App 收不到 began），
-    /// 首帧 moved 用**严格**判据（近似纯水平左滑）决定呼盘还是立刻还回去。
-    /// 好处是既不漏呼盘，又不会像 0.3.13 那样把 App 右下角一整片按钮的滑动全抢走。
-    static func padRect(screenW: CGFloat, screenH: CGFloat) -> CGRect {
-        let core = bandRect(screenW: screenW, screenH: screenH)
-        guard core.width > 0 else { return .zero }
-        // 上限屏宽一半：GripZoneW 拉到 60 时暂扣区不会横跨半屏以上
-        let w = min(core.width + AevonRingGripView.edgePadPts, screenW * 0.5)
-        return CGRect(x: screenW - w, y: core.minY, width: w, height: core.height)
-    }
+    /* V0.3.28（AevonEdgeBandOnly328）：`padRect` 已整体删除。
+     *
+     * 它原来的职责是「贴边 5pt 之外再给 35pt 暂扣容差」，落点在那里就先扣住手指、
+     * 首帧用严格判据决定呼盘还是放行。Aevon(101) 证明这条路两头都亏：
+     *   · 扣住之后判「不是呼盘」再 `ownPass:`，UIKit 会把整段滑动补投给 SpringBoard
+     *     → 桌面翻页（用户 Aevon(99) #3 报的就是这个）；
+     *   · 而它想兜住的「落点偏内 10~30pt」，实测 84% 落在 12~15pt —— 15pt 带宽
+     *     本身就能盖住 98%，根本不需要第二段。
+     * 现在只剩 `bandRect` 一条权威几何，带外一个字节都不碰，也就不存在「扣住又放行」。
+     */
 
     // MARK: - 系统浮层闸（V0.3.18，AevonSceneGateV318）
 

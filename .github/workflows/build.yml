@@ -814,7 +814,7 @@ jobs:
           fi
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'GripHandleHidden' \
             || { echo "::error::Root.plist 缺少 GripHandleHidden（隐藏把手没提到一级页）"; exit 1; }
-          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];z=[i for i in it if i.get('key')=='RingSpringDamping'];ok=(len(z)==1 and float(z[0].get('min',0))==0.5 and float(z[0].get('max',0))==1.0 and float(z[0].get('default',0))==0.60 and len(w)==1 and float(w[0].get('min',0))==1.0 and float(w[0].get('max',0))==60.0 and float(w[0].get('default',0))==5.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15 Grip.plist: 宽度 5pt/1~60 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15 Grip.plist 量程不符（应 5pt/1~60、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
+          python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));it=d['items'];w=[i for i in it if i.get('key')=='GripZoneW'];h=[i for i in it if i.get('key')=='GripZoneH'];s=[i for i in it if i.get('key')=='GripScope'];x=[i for i in it if i.get('key')=='GripHandleHidden'];z=[i for i in it if i.get('key')=='RingSpringDamping'];ok=(len(z)==1 and float(z[0].get('min',0))==0.5 and float(z[0].get('max',0))==1.0 and float(z[0].get('default',0))==0.60 and len(w)==1 and float(w[0].get('min',0))==6.0 and float(w[0].get('max',0))==25.0 and float(w[0].get('default',0))==15.0 and len(h)==1 and float(h[0].get('min',0))==15.0 and float(h[0].get('max',0))==50.0 and float(h[0].get('default',0))==35.0 and len(s)==0 and len(x)==0);print('V0.3.15/28 Grip.plist: 宽度 15pt/6~25 + 高度 35%/15~50 + 只剩两条滑条 ✓' if ok else '::error::V0.3.15/28 Grip.plist 量程不符（0.3.28 起应 15pt/6~25、35%/15~50，且不许再有 GripScope/GripHandleHidden）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Grip.plist"
           plutil -convert xml1 -o - "$ICON_DIR/Root.plist" | grep -q 'aevonOpenGrip' \
             || { echo "::error::Root.plist 缺少「圆盘把手」二级页入口（aevonOpenGrip）"; exit 1; }
           [ -s "$ICON_DIR/Detail.plist" ] || { echo "::error::bundle 缺少 Detail.plist（二级细节调整页）"; exit 1; }
@@ -4494,12 +4494,15 @@ jobs:
             && grep -q 'AevonPrefs.double("GripZoneH"' "$RG" \
             || { echo "::error::V0.3.13 SB 侧缺少触发区几何函数或 GripZoneW/GripZoneH"; exit 1; }
           # ②系统腿判据必须真的用几何函数，且纵向必须判（防止回退成「右缘整条」）
-          # V0.3.14：横向判据改用 padRect（贴边宽 + 暂扣），纵向仍用 bandRect 的 y 区间
+          # V0.3.28（AevonEdgeBandOnlyV328）：暂扣段退役 —— 借腿与自建腿共用同一条 bandRect。
+          #   反向断言「源码不许再出现 padRect」：留一条第二几何就等于留了一条「带外也抢」的路。
           grep -q 'let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)' "$EE" \
-            && grep -q 'let edge = AevonRingGrip.padRect(screenW: screen.width, screenH: screen.height)' "$EE" \
-            && grep -q 'guard edgeRef >= edgeMinX else' "$EE" \
+            && grep -q 'guard edgeRef >= band.minX else' "$EE" \
             && grep -q 'guard yRef >= band.minY && yRef <= band.maxY else' "$EE" \
-            || { echo "::error::V0.3.8 系统腿判据没走 bandRect/padRect 或漏了纵向约束（右缘整条又会触发）"; exit 1; }
+            || { echo "::error::V0.3.8/28 系统腿判据没走 bandRect 或漏了纵向约束（右缘整条又会触发）"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$EE" | grep -qF 'padRect'; then
+            echo "::error::V0.3.28 借腿又用回了 padRect（第二几何已退役，带外必须原样交给系统）"; exit 1
+          fi
           # ③GripScope 兜底开关必须被读到，且默认关（关 = 只在把手带）
           grep -q 'AevonPrefs.bool("GripScope", default: false)' "$RG" \
             && grep -q 'if !AevonRingGrip.scopeFullEdge {' "$EE" \
@@ -4759,14 +4762,16 @@ jobs:
             || { echo "::error::V0.3.15 启动时没把自建腿写成恒开"; exit 1; }
           grep -q 'AevonGripOwnLegEnable(true,' "$EE" \
             || { echo "::error::V0.3.15 prefschanged 里没把自建腿写成恒开"; exit 1; }
-          # ③严格判据角度式：短滑看绝对量、长滑看锥形（V0.3.27 起锥角走配置值 cone）
-          #   Aevon(92) 那 6 次 strict 放行里，dx=-99/dy=13 的角度只有 7.5 度，却在绝对阈值下被放掉。
-          grep -q 'ady <= 6.0 || ady <= adx \* cone' "$OWNM" \
-            || { echo "::error::V0.3.15/0.3.27 边缘候选还是绝对 |dy|<=6（大左滑会被误放：dx=-99/dy=13）"; exit 1; }
-          # ④日志：hold 行的 level 标识必须走 %@（%s 只许接 ASCII，否则 MacRoman 二次编码变乱码）
-          grep -q 'L2 strict 边缘候选' "$OWNM" \
-            && grep -q 'L1 flush 贴边落点' "$OWNM" \
-            || { echo "::error::V0.3.15 hold 日志的 level 标识没改 %@（中文 C 串会二次编码成乱码）"; exit 1; }
+          # ③（V0.3.28 反转）方向判据整体退役：带内只看位移量，不许再出现角度/锥形判据。
+          #   历史：|dy|<=6 → 14° 锥（0.25）→ 22° 锥（0.40）→ 续判 2 帧，五版都在挪切点。
+          #   Aevon(101) 证明这条路走不通：被锥放掉的样本第 2 帧更斜，续判一帧都救不回来。
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$OWNM" | grep -qE 'ady <= adx \*|ady <= 6\.0'; then
+            echo "::error::V0.3.28 方向角度判据回潮了（带内只许看位移 hypot(dx,dy)）"; exit 1
+          fi
+          # ④（V0.3.28 反转）level 两段式的日志标识随之退役
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$OWNM" | grep -qF 'L2 strict 边缘候选'; then
+            echo "::error::V0.3.28 暂扣段（L2）日志回潮了"; exit 1
+          fi
           # ⑤高度默认 35%（plist 由本文件上方的量程断言守）
           grep -q 'static let zoneHDefault: CGFloat = 35' "$RG" \
             || { echo "::error::V0.3.15 zoneHDefault 不是 35"; exit 1; }
@@ -5538,22 +5543,21 @@ jobs:
           grep -qF 'win.beginTerminationFollow()' "$EE" \
             || { echo "::error::V0.3.26 全局通道进预备态没接跟手"; exit 1; }
 
-          # ② 桌面呼盘放宽 + 绝不半截放行（AevonHomeLooseV326 / AevonNoMidPassV326）
-          grep -qF 'AevonGripHomeScreenNow()' "$GH26" \
-            || { echo "::error::V0.3.26 自建腿没接桌面判定"; exit 1; }
-          grep -qF 'extern int AevonGripHomeScreenNow(void);' "$GH26" \
-            || { echo "::error::V0.3.26 桌面判定缺 extern 声明"; exit 1; }
+          # ②（V0.3.28 改写）桌面/App 差异化整个取消 —— 0.3.26 的「桌面首帧横向占优即呼盘、
+          #    灰带扣到抬手」随 padRect 一起退役。现在两条路径共用同一条判据，不可能再分叉。
+          #    保留 `AevonGripHomeScreenNow` 的声明与导出（将来要按场景分档时直接用），
+          #    但**不许**再在 moved 路径里按前台分叉 —— 用「if (home)」这个字面量做反向断言。
+          grep -qF 'AevonGripHomeScreenNow' "$GH26" \
+            || { echo "::error::V0.3.26/28 桌面判定桥被整体删掉了（留着备用，别删）"; exit 1; }
           grep -qF '@_cdecl("AevonGripHomeScreenNow")' "$EE" \
-            || { echo "::error::V0.3.26 桌面判定缺 Swift 导出"; exit 1; }
-          #    桌面灰带必须扣到抬手：>=2 帧就撤闸，不许再排 0.28s 放行
-          sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '[_ownBail invalidate]' \
-            || { echo "::error::V0.3.26 桌面灰带还在半截放行（那一下就是翻页）"; exit 1; }
-          #    V0.3.27（AevonGripConeV327）：App 内锥从写死的 0.25 改成走配置值 ——
-          #    「App 内与桌面必须差异化」这条不变，但判据形态换成 ady <= adx * cone。
-          grep -qF 'ady <= adx * cone' "$GH26" \
-            || { echo "::error::V0.3.27 App 内锥没走配置值（AevonGripConeV327）"; exit 1; }
-          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qF 'ady <= adx * 0.25'; then
-            echo "::error::V0.3.27 写死的 14 度锥还在（回退开关会失效）"; exit 1
+            || { echo "::error::V0.3.26/28 桌面判定缺 Swift 导出"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qF 'if (home)'; then
+            echo "::error::V0.3.28 moved 路径又按前台分叉了（0.3.28 起只看落点，不分 App/桌面）"; exit 1
+          fi
+          #    （V0.3.28 反转）锥角整套退役：桌面/App 不再有任何方向差异，
+          #    统一成「带内位移 ≥8pt 即召唤」。这两个函数与两个键都不许回潮。
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qE 'ady <= adx \*|aev_grip_cone_value|aev_grip_widen_off'; then
+            echo "::error::V0.3.28 锥角/续判回潮了（方向判据已在 0.3.28 整体删除）"; exit 1
           fi
 
           # ③ 场景保活探针（AevonKeepAliveProbeV326）
@@ -5601,23 +5605,10 @@ jobs:
               || { echo "::error::V0.3.27 主库缺标记 $s"; exit 1; }
           done
 
-          # ① 手势命中率（AevonGripConeV327 / AevonGripWidenV327）
-          grep -qF 'static double aev_grip_cone_value(void)' "$GH26" \
-            || { echo "::error::V0.3.27 App 内锥没有配置读取函数"; exit 1; }
-          grep -qF 'AevonGripCone327' "$GH26" \
-            || { echo "::error::V0.3.27 锥角没有回退开关（AevonGripCone327）"; exit 1; }
-          grep -qF 'AevonGripWidenOff327' "$GH26" \
-            || { echo "::error::V0.3.27 续判没有回退开关（AevonGripWidenOff327）"; exit 1; }
-          grep -qF '_ownMovedFrames < 3' "$GH26" \
-            || { echo "::error::V0.3.27 首帧判死后没有续判窗口"; exit 1; }
-          #    反向：桌面分支不许被续判影响 —— 桌面灰带仍然一次扣到抬手
-          #    ⛔ 必须写成 if…then 而不是 `cmd && { exit 1; }`：run 脚本是 bash -e，
-          #    后者在「条件不成立」时会返回 1，被 -e 当成失败直接红。
-          if sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '_ownMovedFrames < 3'; then
-            echo "::error::V0.3.27 续判渗进了桌面分支（桌面必须一次扣死）"; exit 1
-          fi
-          sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '[_ownBail invalidate]' \
-            || { echo "::error::V0.3.27 桌面灰带撤闸被破坏（D5 防回退）"; exit 1; }
+          # ①（V0.3.28 删除）0.3.27 的锥角函数 / 续判窗口断言已随判据退役一并删除，
+          #    反向断言见上方的「锥角回潮」检查。
+          #    （V0.3.28 删除）桌面分支本身已不存在，上面那条「不许出现 if (home)」的反向断言
+          #    覆盖了原本的这两条检查。
 
           # ② 回桌面闪两次（AevonReassertBudgetV327 / AevonReassertGateV327）
           grep -qF 'private var liveWaitReassertBudget = -1' "$WV" \
@@ -5662,7 +5653,91 @@ jobs:
           grep -qF 'AevonWindowManager.cancelTransitionProbe()' "$EH27" \
             || { echo "::error::V0.3.27 过渡哨误报时没收掉探针（悬空断言）"; exit 1; }
 
-          echo "V0.3.27 校验: App 内 22°锥 + 两帧续判 / 让位期重申预算 1 + 写前读 cs / 底部把手默认隐藏（长按显形）/ 保活探针 v2（census + 真谓词 + 过渡哨起跑）✓"
+          echo "V0.3.27 校验: 见上（判据已由 V0.3.28 取代）✓"
+
+          # ── V0.3.28 校验（Aevon(101)：单层贴边带 / 方向判据退役 / 系统手势断言）──
+          MYD28="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
+          [ -n "$MYD28" ] && [ -f "$MYD28" ] || { echo "::error::V0.3.28 定位不到主库 dylib"; exit 1; }
+          RG28="$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"
+          GA28="$GITHUB_WORKSPACE/Sources/AevonGripAssert.m"
+          MF28="$GITHUB_WORKSPACE/Makefile"
+
+          # ① 六个标记必须进主库（release strip 后只剩 __cstring，标记是唯一硬证据）
+          for s in AevonEdgeBandOnlyV328 AevonNoConeV328 AevonYieldGuardV328 AevonSummonTTLV328 AevonSysAssertV328 AevonSysAssertFailsafeV328; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.28 主库缺标记 $s"; exit 1; }
+          done
+
+          # ② 热区几何：一条 15pt 贴边带，暂扣段整体消失
+          for k in 'static let zoneWMin: CGFloat = 6' 'static let zoneWMax: CGFloat = 25' 'static let zoneWDefault: CGFloat = 15'; do
+            grep -qF "$k" "$RG28" || { echo "::error::V0.3.28 带宽常量不对：$k"; exit 1; }
+          done
+          grep -qF 'guard rawW > 0 else { return .zero }' "$RG28" \
+            || { echo "::error::V0.3.28 GripZoneW=0 没定义成「关闭」（旧 min=1 是看不出来的静默失灵）"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$RG28" | grep -qF 'edgePadPts'; then
+            echo "::error::V0.3.28 edgePadPts 回潮了（暂扣段已退役）"; exit 1
+          fi
+          #    落点判定必须只剩 0/1 两档
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$EE" | grep -qE 'AevonRingGrip\.padRect|return 2'; then
+            echo "::error::V0.3.28 落点判定又出现第 3 档（暂扣段）"; exit 1
+          fi
+
+          # ③ 召唤判据：只剩位移量，且必须排在放行之前
+          grep -qF 'double dist = hypot((double)dx, (double)dy);' "$GH26" \
+            || { echo "::error::V0.3.28 召唤判据不是位移量"; exit 1; }
+          grep -qF 'if (dist >= 8.0) {' "$GH26" \
+            || { echo "::error::V0.3.28 位移阈值不是 8pt"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qE 'BOOL horizontal|_ownStrict'; then
+            echo "::error::V0.3.28 横扫双重判据回潮了（horizontal / _ownStrict）"; exit 1
+          fi
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('if (dist >= 8.0) {');j=s.find('[self ownBailRearm];',i);k=s.find('[self ownSummonAtPoint:p];',i);ok=(i>0 and k>i and (j<0 or k<j));print('V0.3.28 判据顺序：先召唤后放行 ✓' if ok else '::error::V0.3.28 召唤排在放行之后（顺序反了等于不判）');sys.exit(0 if ok else 1)" "$GH26"
+
+          # ④ 配套 A：借腿让路改成「本手势真的接管了」（AevonYieldGuardV328）
+          grep -qF 'double AevonGripOwnHoldAge(void)' "$GH26" \
+            || { echo "::error::V0.3.28 缺接管时刻读取函数"; exit 1; }
+          grep -qF 'void AevonGripOwnStampHold(void)' "$GH26" \
+            || { echo "::error::V0.3.28 缺接管时刻记账函数"; exit 1; }
+          grep -qF 'AevonGripOwnStampHold();' "$GH26" \
+            || { echo "::error::V0.3.28 touchesBegan 没记接管时刻"; exit 1; }
+          grep -qF '@_silgen_name("AevonGripOwnHoldAge")' "$EE" \
+            || { echo "::error::V0.3.28 Swift 侧没声明 AevonGripOwnHoldAge"; exit 1; }
+          grep -qF 'if holdAge < 0.15 {' "$EE" \
+            || { echo "::error::V0.3.28 借腿让路还在用静态「已注册」判据"; exit 1; }
+          if grep -vE '^[[:space:]]*(//|/\*|\*)' "$EE" | grep -qF 'AevonGripOwnLegReadyBridge() != 0'; then
+            echo "::error::V0.3.28 静态让路判据回潮（会造成「系统被拦 + 自建腿无 hold」两头空）"; exit 1
+          fi
+
+          # ⑤ 配套 B：_ownSummoned 粘住保险（AevonSummonTTLV328）
+          grep -qF '_ownSummoned && CACurrentMediaTime() - _ownSummonedAt < 2.5' "$GH26" \
+            || { echo "::error::V0.3.28 _ownSummoned 没有 2.5s 上限"; exit 1; }
+
+          # ⑥ Stheno 第④层：跟踪期压制系统手势（AevonSysAssertV328）
+          grep -qF 'Sources/AevonGripAssert.m' "$MF28" \
+            || { echo "::error::V0.3.28 Makefile 漏了 AevonGripAssert.m（显式 FILES 清单）"; exit 1; }
+          [ -f "$GA28" ] || { echo "::error::V0.3.28 AevonGripAssert.m 不存在"; exit 1; }
+          grep -qF 'SBSystemGestureManager' "$GA28" \
+            || { echo "::error::V0.3.28 缺 SBSystemGestureManager（Stheno 用的就是这个类）"; exit 1; }
+          grep -qF 'acquireSystemGestureDisableAssertionForReason:exceptSystemGestureTypes:' "$GA28" \
+            || { echo "::error::V0.3.28 断言的私有选择子不对"; exit 1; }
+          grep -qF 'deviceHardwareButtonGestureTypes' "$GA28" \
+            || { echo "::error::V0.3.28 没排除硬件按键手势（压制期间电源键手势会失效）"; exit 1; }
+          #    ⛔ 泄漏兜底：不释放 = 用户永久失去右滑返回，这一条不许删
+          grep -qF 'static const double kAevonAssertMaxHold = 5.0;' "$GA28" \
+            || { echo "::error::V0.3.28 断言没有 5s 超时上限（泄漏会让右滑返回永久失灵）"; exit 1; }
+          [ "$(grep -c '@try' "$GA28")" -ge 3 ] \
+            || { echo "::error::V0.3.28 断言调用没有 @try 防线（未知选择子抛 NSException 直接 SIGABRT）"; exit 1; }
+          #    调用点：申请 1 处 + 释放 ≥2 处 + tick 1 处
+          grep -qF 'AevonGripAssertAcquire("AevonArcMenuGesture");' "$GH26" \
+            || { echo "::error::V0.3.28 召盘时没申请断言"; exit 1; }
+          [ "$(grep -c 'AevonGripAssertRelease();' "$GH26")" -ge 2 ] \
+            || { echo "::error::V0.3.28 断言释放点不足（至少 ownPass 与 reset 两处）"; exit 1; }
+          grep -qF 'AevonGripAssertTick();' "$GH26" \
+            || { echo "::error::V0.3.28 没有周期性超时检查"; exit 1; }
+          #    释放点必须覆盖 reset —— UIKit 保证 Ended/Cancelled/Failed 之后一定调它
+          sed -n '/^- (void)reset {/,/^}/p' "$GH26" | grep -qF 'AevonGripAssertRelease();' \
+            || { echo "::error::V0.3.28 reset 里没有释放断言（最可靠的一道收尾）"; exit 1; }
+
+          echo "V0.3.28 校验: 单层 15pt 贴边带 + 带内只看位移不看方向 + 借腿动态让路 + 系统手势断言（5s 超时兜底）✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

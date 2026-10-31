@@ -2,92 +2,92 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>title</key>
-	<string>圆盘呼出区</string>
 	<key>items</key>
 	<array>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>呼出区域大小</string>
 			<key>footerText</key>
 			<string>0.3.15：呼出区 = 贴着右缘的一条窄带，从底部往上 35% 高度。两个滑条拖动即时生效，数值与位置实时跟着手指走。把手显隐在一级菜单。</string>
+			<key>label</key>
+			<string>呼出区域大小</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
-			<key>label</key>
-			<string>区域高度：屏高 %</string>
+			<key>default</key>
+			<real>35.0</real>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>GripZoneH</string>
-			<key>default</key>
-			<real>35.0</real>
-			<key>min</key>
-			<real>15.0</real>
+			<key>label</key>
+			<string>区域高度：屏高 %</string>
 			<key>max</key>
 			<real>50.0</real>
+			<key>min</key>
+			<real>15.0</real>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
 			<key>footerText</key>
 			<string>从屏幕底部往上算。35 = 默认（约 326pt 高）；调大才会往屏幕中部延伸，调小则只认更靠近底部的那一段。</string>
+			<key>label</key>
+			<string> </string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
-			<key>label</key>
-			<string>区域宽度：pt</string>
+			<key>default</key>
+			<real>15.0</real>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>GripZoneW</string>
-			<key>default</key>
-			<real>5.0</real>
-			<key>min</key>
-			<real>1.0</real>
+			<key>label</key>
+			<string>区域宽度：pt</string>
 			<key>max</key>
-			<real>60.0</real>
+			<real>25.0</real>
+			<key>min</key>
+			<real>6.0</real>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
 			<key>footerText</key>
 			<string>贴着右边缘向内算，单位 pt。5 = 默认（只认真正贴边的手指）；调大到 20~30 更容易划中，但会开始抢右缘附近的横向操作。</string>
+			<key>label</key>
+			<string> </string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>划过动画</string>
 			<key>footerText</key>
 			<string>0.3.19 起圆盘的划过 / 入场 / 收起 / 旋转用同一套弹簧（AevonHoverTrailV319）。这个滑条只调其中的阻尼系数：0.60 = 默认（回摆约 10%，划过时看得见「抬起来 → 微超调 → 落回去」）；往 1.0 拖 = 几乎不过冲、最「稳」；往 0.5 拖 = 明显回摆、最「Q」。
 
 ⛔ 这是临时项：等动画手感定下来，会取一个固定值、把这条滑条删掉。届时这一页会少一行。</string>
+			<key>label</key>
+			<string>划过动画</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
-			<key>label</key>
-			<string>阻尼系数</string>
+			<key>default</key>
+			<real>0.6</real>
 			<key>defaults</key>
 			<string>com.Aevon</string>
 			<key>key</key>
 			<string>RingSpringDamping</string>
-			<key>default</key>
-			<real>0.6</real>
-			<key>min</key>
-			<real>0.5</real>
+			<key>label</key>
+			<string>阻尼系数</string>
 			<key>max</key>
 			<real>1.0</real>
+			<key>min</key>
+			<real>0.5</real>
 		</dict>
 	</array>
+	<key>title</key>
+	<string>圆盘呼出区</string>
 </dict>
 </plist>

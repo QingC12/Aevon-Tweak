@@ -1097,8 +1097,16 @@ enum AevonEdgeEntry {
          * 保留（不删）的理由：自建腿注册依赖 `_UISystemGestureManager`，万一某次
          * respring 后注册没成，`AevonGripOwnLegReady()` 立刻变 NO，借腿自动全部接回来 ——
          * 这就是它作为「兜底」的全部职责。 */
-        if AevonGripOwnLegReadyBridge() != 0 {
-            legBlocked(cls: cls, reason: "自建腿已注册（V0.3.13 借腿降为兜底）")
+        /* V0.3.28（AevonYieldGuardV328）：判据从「自建腿识别器已注册」（静态事实）
+         * 改成「**本手势**自建腿真的接管了」（0.15s 内打出过 hold）。
+         *
+         * Aevon(101) 里 6 次出现「系统腿认领 → 达阈值但被拦 原因=自建腿已注册 →
+         * 自建腿 hold 一行都没有」= 两头空：我们拦住了系统腿，自己又没接这根手指，
+         * 用户感知就是「完全没反应」。带外的落指本来就该原样交给系统，
+         * 拦住它没有任何收益。 */
+        let holdAge = AevonGripOwnHoldAgeBridge()
+        if holdAge < 0.15 {
+            legBlocked(cls: cls, reason: "自建腿本手势已接管（\(Int(holdAge * 1000))ms 前 hold）")
             return
         }
         // V0.3.11（AevonOwnSuppressV311）：同一次手势里，自建腿已经在 0.35s 内呼过盘了。
@@ -1126,14 +1134,13 @@ enum AevonEdgeEntry {
             legBlocked(cls: cls, reason: "屏幕尺寸异常")
             return
         }
-        /* V0.3.14（AevonEdgePadV314）：借腿是**兜底**（自建腿就绪时不呼盘），判据用
-         * `padRect`（贴边宽 + 暂扣）而不是 `bandRect` —— 它的职责就是在自建腿没接手时
-         * 把「落点偏内 10~35pt」那颗漏网的手指捞回来。用当前 x 会自杀（左滑天然向左），
-         * 所以一律用 began 起点。 */
-        let edge = AevonRingGrip.padRect(screenW: screen.width, screenH: screen.height)
-        let edgeMinX = edge.width > 0 ? edge.minX : band.minX
-        guard edgeRef >= edgeMinX else {
-            legBlocked(cls: cls, reason: "不在右缘 \(Int(band.width))+\(Int(AevonRingGripView.edgePadPts))pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
+        /* V0.3.28（AevonEdgeBandOnly328）：暂扣段已整体取消，借腿与自建腿共用**同一条**
+         * `bandRect`。以前借腿用 `padRect`（band+35pt）把「落点偏内」的手指捞回来，
+         * 但自建腿在 0.3.28 之后已经接管到 15pt、带外一律不碰 —— 借腿如果还伸到 44pt，
+         * 就又变成「带外那颗手指被两边抢」。一条几何、两个消费方，谁都不许自己加宽。
+         * 用当前 x 会自杀（左滑天然向左），所以一律用 began 起点。 */
+        guard edgeRef >= band.minX else {
+            legBlocked(cls: cls, reason: "不在右缘 \(Int(band.width))pt 内（起点x=\(Int(edgeRef)) 当前x=\(Int(x))）")
             return
         }
         if !AevonRingGrip.scopeFullEdge {
@@ -1184,10 +1191,14 @@ enum AevonEdgeEntry {
         guard core.width > 0, core.height > 0 else { return 0 }
         let inBandY = AevonRingGrip.scopeFullEdge || (y >= core.minY && y <= core.maxY)
         guard inBandY else { return 0 }
-        if x >= core.minX { return 1 }
-        let pad = AevonRingGrip.padRect(screenW: screen.width, screenH: screen.height)
-        if pad.width > 0, x >= pad.minX { return 2 }
-        return 0
+        /* V0.3.28（AevonEdgeBandOnly328）：只剩 0 / 1 两档。
+         *
+         * 原来的 level 2（暂扣区）= 「落点在带外先扣住，首帧用严格判据决定」。
+         * Aevon(101) 的 49 次 hold 里 41 次落在 12~15pt、5 次被 22° 锥放掉，
+         * 而续判日志证明那 5 次第 2 帧更斜（dx=-47 dy=28），续判一帧都救不回来 ——
+         * 扣住它们只是让 UIKit 在放行时把整段补投给 SpringBoard（= 翻页）。
+         * 现在带外一个字节都不碰，`_ownStrict` 也随之退役。 */
+        return (x >= core.minX) ? 1 : 0
     }
 
     /// 兼容入口（`AevonGripOwnBandHit` 仍然只回 0/1）：给「贴边落点」这一档用。
@@ -1499,7 +1510,8 @@ public func AevonGripOwnBandHit(_ x: Double, _ y: Double) -> Int32 {
     return AevonEdgeEntry.ownLegBandHit(x: CGFloat(x), y: CGFloat(y)) ? 1 : 0
 }
 
-/// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选。
+/// V0.3.28（AevonEdgeBandOnlyV328）：两档落点判定 —— 0 不接管（带外，一个字节都不碰）/
+/// 1 带内（扣住，位移到 8pt 就召唤，不看方向）。0.3.14 的「2 = 暂扣候选」已删除。
 @_cdecl("AevonGripOwnHitLevel")
 public func AevonGripOwnHitLevel(_ x: Double, _ y: Double) -> Int32 {
     return AevonEdgeEntry.ownLegHitLevel(x: CGFloat(x), y: CGFloat(y))
@@ -1643,5 +1655,10 @@ private func AevonGripOwnLegClaimBridge()
 
 /// V0.3.13（AevonOwnGateV313）：自建腿是否已注册（ObjC 侧 `int AevonGripOwnLegReadyInt(void)`）。
 /// 借腿看到它返回非 0 就整条退为兜底 —— 这是 Aevon(91)「27/27 全走自建腿」的直接结论。
+/// V0.3.28（AevonYieldGuardV328）：距「本手势被自建腿接管」的秒数（ObjC 侧
+/// `double AevonGripOwnHoldAge(void)`，无记录返回 9999）。
+@_silgen_name("AevonGripOwnHoldAge")
+private func AevonGripOwnHoldAgeBridge() -> Double
+
 @_silgen_name("AevonGripOwnLegReadyInt")
 private func AevonGripOwnLegReadyBridge() -> Int32
