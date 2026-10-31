@@ -52,6 +52,24 @@ enum AevonEdgeEntry {
     /// 为真时：`remoteMoved` 走权威通道（保住 0.3.17 的跟手质量），
     /// 并且「收养」分支不许把它降级成「只喂不吞」。
     private static var ownSwallowBound = false
+    /// V0.3.30（AevonEarlyBindV330）：落指预绑的手指身份。
+    ///
+    /// 0.3.29 只在 `presentRing` 里绑，而 `presentRing` 是自建识别器判定成功之后才调的 ——
+    /// 吞层判据挂在 SB `-sendEvent:`，识别器是在同一次 `sendEvent:` 内部才判定的，
+    /// 于是「began + 首帧 moved」必然先投给 App。Aevon(103) 量出来首帧位移中位 18pt、
+    /// 最大 49pt，App 拿到的是一个高速横向帧后彻底静止（ScrollView 拿它算惯性、
+    /// 抖音拿它判横滑）—— 这就是「呼出圆盘时 App 内被带动」的全部来源。
+    ///
+    /// 预绑把「开始吞」从召唤提前到落指：下一帧 moved 的询问就能命中，漏的只剩
+    /// began 这一帧（零位移）。召唤时只做「转正」，不重绑。
+    /// 0 = 当前没有预绑。由 ended / cancelled / `-ownPass:` 三条路清掉。
+    private static var preBindTid: UInt = 0
+    /// 预绑的起始时刻（只用于日志与超时兜底）。
+    private static var preBindAt: CFTimeInterval = 0
+    /// 预绑失效上限：超过它还没等到召唤 / 抬手，就当没预绑（fail-open）。
+    private static let earlyBindLimit: CFTimeInterval = 4
+    /// 预绑日志限流计数（同类只打前 6 条，与 `AevonOwnPassCount` 同风格）。
+    private static var preBindLogCount = 0
     private static var lastHealLogAt: CFTimeInterval = 0
     /// V0.2.55（AevonGripHealV255）：吞咽日志节流
     private static var lastSwallowLogAt: CFTimeInterval = 0
@@ -488,6 +506,8 @@ enum AevonEdgeEntry {
                     swallowDeadline = 0
                     globalOwnedAt = 0
                     gripAdoptedTouchID = 0
+                    preBindTid = 0            // V0.3.30：预绑随抬手一起作废（指针会被复用）
+                    preBindAt = 0
                 }
             }
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: false) { return }
@@ -539,6 +559,8 @@ enum AevonEdgeEntry {
                     swallowDeadline = 0
                     globalOwnedAt = 0
                     gripAdoptedTouchID = 0
+                    preBindTid = 0            // V0.3.30：预绑随取消一起作废
+                    preBindAt = 0
                 }
             }
             if handleFloatGestureEnded(point: point, touchID: touchID, cancelled: true) { return }
@@ -610,6 +632,76 @@ enum AevonEdgeEntry {
         }
     }
 
+    // MARK: - V0.3.30（AevonEarlyBindV330）：落指预绑
+
+    /// 落指那一刻就把这根手指交给全局吞层 —— 不等召唤。
+    ///
+    /// 见 `preBindTid` 的注释：漏帧是**结构性**的，不是时延调参能解决的。
+    /// 这里做的决定全部可逆且 fail-open —— 任何一条 guard 不成立就什么都不做，
+    /// 行为完全退回 0.3.29。
+    static func ownLegPreBind(tid: UInt, x: CGFloat, y: CGFloat) {
+        guard tid != 0 else { return }
+        guard AevonPrefs.bool("Enabled", default: true) else { return }
+        guard AevonPrefs.bool("EarlySwallow", default: true) else { return }
+        /* 圆盘已经开着：这根手指归圆盘自己的指针通道管，不许抢。
+         * 浮窗拖拽中：那根手指归 `floatTouchID`，同样不许抢（`shouldSwallow` 里
+         * 浮窗分支排在全局通道之前，抢了也只会让簿记更乱）。 */
+        guard AevonRingMenu.presented == nil else { return }
+        guard !floatGestureActive else { return }
+        let now = CACurrentMediaTime()
+        preBindTid = tid
+        preBindAt = now
+        globalTouchID = tid
+        globalStart = CGPoint(x: x, y: y)
+        globalFired = false
+        ownsTouch = true
+        /* 预绑**不等于**转正：`ownSwallowBound` 保持假，喂盘仍走非权威通道，
+         * 直到真的召唤才置真。这样「预绑了但其实是一次点击」不会污染跟手判据。 */
+        ownSwallowBound = false
+        /* `gripAdoptedTouchID` 是「只喂不吞」的唯一钥匙，预绑期间必须为空，
+         * 否则 `shouldSwallowGlobalTouch` 第一条就放行（0.3.29 的教训）。 */
+        gripAdoptedTouchID = 0
+        appEdgePointerAdopted = false
+        globalOwnedForTouch = tid
+        globalOwnedAt = now
+        swallowDeadline = now + earlyBindLimit
+        guard preBindLogCount < 6 else { return }
+        preBindLogCount += 1
+        AevonLog.info("[圆盘] 落指预绑 touchID=\(tid)（离右缘 \(Int(UIScreen.main.bounds.width - x))pt）"
+            + " → 从下一帧 moved 起就吞，App 拿不到位移"
+            + "（AevonEarlyBindV330）")
+    }
+
+    /// 撤销预绑：把还在扣着的手指立刻还给 App。
+    ///
+    /// `tid == 0` = 调用方（`-ownPass:`）已经把身份清掉了，用我们自己记的那个。
+    /// 只清预绑那一份簿记；0.3.29 转正之后的真实绑定由它自己的 6 个归还点管，
+    /// 两个状态混在一起清会让「召唤成功但盘还在」时手指突然漏给 App。
+    static func ownLegPreBindCancel(tid: UInt) {
+        let want = (tid != 0) ? tid : preBindTid
+        guard want != 0, want == preBindTid else { return }
+        preBindTid = 0
+        preBindAt = 0
+        guard globalTouchID == want else { return }
+        globalTouchID = 0
+        globalFired = false
+        ownsTouch = false
+        swallowDeadline = 0
+        globalOwnedAt = 0
+        globalOwnedForTouch = 0
+        gripAdoptedTouchID = 0
+    }
+
+    /// 预绑超时兜底：4 秒还没等到召唤 / 抬手就把预绑放掉（fail-open）。
+    private static func expirePreBindIfNeeded() {
+        guard preBindTid != 0, preBindAt > 0 else { return }
+        guard CACurrentMediaTime() - preBindAt > earlyBindLimit else { return }
+        /* 已经召唤成功（`ownSwallowBound`）= 这是真实绑定，不许在这里放掉；
+         * 只把计时续上，让「抬手帧放行」那条规则一直有效到抬手。 */
+        if ownSwallowBound { preBindAt = CACurrentMediaTime(); return }
+        ownLegPreBindCancel(tid: preBindTid)
+    }
+
     /// `AevonTouchHook.m` 逐帧询问：这根触摸要不要吞掉（不投递给 App）。
     ///
     /// 0.2.51 只剩两类正当吞咽：
@@ -619,7 +711,23 @@ enum AevonEdgeEntry {
     static func shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int) -> Bool {
         guard AevonPrefs.bool("Enabled", default: true) else { return false }
         guard touchID != 0 else { return false }
+        expirePreBindIfNeeded()
         healGlobalTakeoverIfNeeded()
+        /* V0.3.30（AevonEarlyBindV330）：预绑手指的**抬手帧一律放行**。
+         *
+         * 0.3.29 把 ended 也吞了（末尾 `if ownsTouch { return true }`），于是 App 手里
+         * 留着「有 began 无终止帧」的孤儿触摸 —— 这正是 0.2.57 时代已经写下来的教训，
+         * `zombieSeal` 分支的注释就摆在这里（「ended/cancelled 放行，孤儿 ended 对
+         * UIKit 无害，吞了反而留脏簿记」），新路径没照抄它。
+         *
+         * 放行不会让圆盘收不到抬手：`AevonTouchHook.m` 对结束帧是「先询问再上报」，
+         * 我们返回 false 之后 `AevonGlobalTouchPhase` 照样把这一帧喂给圆盘。
+         *
+         * 安全性：预绑期间 moved 全被吞，App 累计位移恒为 0 —— 抬手帧即便送达，
+         * 对方看到的也只是「原地按了一下」，不产生任何滚动或翻页。 */
+        if preBindTid != 0, touchID == preBindTid, phase == 3 || phase == 4 {
+            return false
+        }
         // V0.2.57（AevonZombieSealV257）：封印期触摸的 began/moved 一律吞到抬手；
         // ended/cancelled 放行 —— 孤儿 ended 对 UIKit 无害（没见过 began 就被忽略），
         // 而经重投副本见过 began 的那一路恰好需要这帧 ended 收尾，吞了反而留脏簿记。
@@ -1089,6 +1197,10 @@ enum AevonEdgeEntry {
         if source == "ownleg", AevonPrefs.bool("OwnSwallow", default: true) {
             let tid = AevonGripOwnTouchIDBridge()
             if tid != 0 {
+                /* V0.3.30（AevonEarlyBindV330）：落指预绑过的话，这里只做「转正」。
+                 * 转正 = 把 `ownSwallowBound` 置真（喂盘走权威通道）+ 把吞窗口从
+                 * 4 秒续到 12 秒，簿记已经是这一根，不需要重绑。 */
+                let prebound = (globalTouchID == tid && ownsTouch)
                 globalTouchID = tid
                 globalStart = lastTouchPoint
                 globalFired = true
@@ -1099,9 +1211,19 @@ enum AevonEdgeEntry {
                 globalOwnedForTouch = tid
                 globalOwnedAt = now
                 swallowDeadline = now + swallowLimit
-                AevonLog.info("[圆盘] 自建腿手指已绑全局吞层 touchID=\(tid)"
-                    + " → 桌面/App 从下一帧起收不到这根手指"
-                    + "（AevonOwnSwallowV329 AevonOwnTouchBindV329）")
+                /* 抬手帧要放行的那根手指就是它 —— 转正之后也要继续记住，
+                 * 否则 App 会留着「有 began 无终止帧」的孤儿触摸。 */
+                preBindTid = tid
+                preBindAt = now
+                if prebound {
+                    AevonLog.info("[圆盘] 预绑转正 touchID=\(tid)"
+                        + " → 整根手指全程被吞，App 只拿到落指那一帧（零位移）"
+                        + "（AevonEarlyBindV330 AevonOwnSwallowV329）")
+                } else {
+                    AevonLog.info("[圆盘] 自建腿手指已绑全局吞层 touchID=\(tid)"
+                        + " → 桌面/App 从下一帧起收不到这根手指"
+                        + "（AevonOwnSwallowV329 AevonOwnTouchBindV329）")
+                }
                 /* 移交自建腿簿记：吞层接手后那个识别器再也收不到帧，
                  * 不清 `_ownSummoned` 就会留下 2.5s「新落指被忽略」的死窗口。 */
                 AevonGripOwnHandoffBridge()
@@ -1598,6 +1720,24 @@ public func AevonGripOwnLift(_ x: Double, _ y: Double, _ cancelled: Int32) {
 @_cdecl("AevonGripOwnMove")
 public func AevonGripOwnMove(_ x: Double, _ y: Double) {
     AevonEdgeEntry.ownLegMove(x: CGFloat(x), y: CGFloat(y))
+}
+
+/// V0.3.30（AevonEarlyBindV330）：落指预绑 —— 由 `-touchesBegan:` 在写完身份之后立刻调用。
+///
+/// 早于召唤就设，是因为漏帧是结构性的：吞层判据在 SB `-sendEvent:`，识别器在**同一次**
+/// `sendEvent:` 内部才判定，于是「began + 首帧 moved」必然先投给 App。Aevon(103) 的
+/// 36 次召唤首帧位移中位 18pt、最大 49pt —— App 拿到一个高速横向帧后彻底静止，
+/// ScrollView 拿它算惯性、抖音拿它判横滑，这就是「呼盘时 App 内被带动」的全部来源。
+@_cdecl("AevonGripPreBindTouch")
+public func AevonGripPreBindTouch(_ tid: UInt, _ x: Double, _ y: Double) {
+    AevonEdgeEntry.ownLegPreBind(tid: tid, x: CGFloat(x), y: CGFloat(y))
+}
+
+/// V0.3.30（AevonEarlyBindV330）：撤销预绑 —— `-ownPass:` 在放行那一刻调用。
+/// `tid == 0` 表示调用方已把身份清掉，用 Swift 侧自己记的那一个。
+@_cdecl("AevonGripPreBindClear")
+public func AevonGripPreBindClear(_ tid: UInt) {
+    AevonEdgeEntry.ownLegPreBindCancel(tid: tid)
 }
 
 /// V0.3.18（AevonSceneGateV318）：系统浮层闸 —— 控制中心 / 通知中心 / 锁屏（含解锁后

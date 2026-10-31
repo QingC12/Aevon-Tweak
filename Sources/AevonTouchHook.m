@@ -36,6 +36,13 @@ extern void AevonGlobalTouchPhase(NSInteger phase, uintptr_t touchID, CGFloat x,
 // 看清是向左横扫就整根接管。抬手帧必须放行，否则 App 那边会留下没有任何后续的孤儿 touch。
 // 所以判定函数必须知道这是哪一阶段 —— 只凭 touchID 分不出 began / moved / ended。
 extern BOOL AevonGlobalTouchShouldSwallow(uintptr_t touchID, NSInteger phase);
+// V0.3.30（AevonEarlyBindV330）：吞帧计数 —— 每真的丢弃一次事件就 +1。
+//
+// 为什么要它：0.3.29 的日志能证明「绑定成功 36/36」，却**证不出吞层真的吞掉过一帧** ——
+// 绑定与吞帧之间没有可观测点。Aevon(103) 就卡在这里：现象变差，日志一片绿。
+// 计数由自建腿在 `-touchesBegan:` 归零、抬手时打进 lift 日志，一次就能分清
+// 「绑定白做了」和「绑定生效但晚了一帧」。
+extern void AevonGripOwnSwallowTick(void);
 
 static IMP AevonOrigSendEvent = NULL;
 static BOOL AevonTouchHookInstalled = NO;
@@ -89,7 +96,11 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
         // 私有路径出错绝不影响 SpringBoard
         swallow = NO;
     }
-    if (swallow) { return; }
+    if (swallow) {
+        /* V0.3.30（AevonEarlyBindV330）：真的丢弃了才 +1（判断之外不计数）。 */
+        AevonGripOwnSwallowTick();
+        return;
+    }
     if (AevonOrigSendEvent) {
         ((void (*)(id, SEL, UIEvent *))AevonOrigSendEvent)(self, _cmd, event);
     }

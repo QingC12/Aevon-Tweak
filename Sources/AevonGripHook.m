@@ -314,6 +314,18 @@ static uintptr_t gAevonOwnTouchID = 0;
 /* V0.3.29（AevonDeskPanGuardV329）：最近一次「自建腿真的召唤了」的时刻。
  * 桌面翻页 pan 的强制失败窗口用它做闸（见 AevonGripDeskPanShouldFail）。 */
 static CFTimeInterval gAevonOwnSummonAtGuard = 0;
+/* V0.3.30（AevonEarlyBindV330）：本轮吞层真正丢掉了几帧。
+ *
+ * 为什么要有这个计数器：0.3.29 的日志能证明「绑定成功 36/36」，但**证不出吞层有没有
+ * 真的吞掉一帧** —— 绑定日志和实际吞帧之间没有任何可观测点。Aevon(103) 就卡在这里：
+ * 现象变差了，而日志上一片绿。计数器在 `-touchesBegan:` 归零、由 SB `sendEvent:` 的
+ * 丢弃分支累加，抬手时打进 lift 那一行。0 = 吞层一帧都没拦住（绑定白做了），
+ * 等于抬手的帧数 = 整根手指的帧数（吞层完全没生效）。 */
+static uintptr_t gAevonOwnSwallowFrames = 0;
+/* V0.3.30（AevonEarlyBindV330）：落指预绑 / 取消预绑 —— 定义在文件尾部，
+ * 而调用点（-touchesBegan: / -ownPass:）在上方，必须先声明。 */
+void AevonGripOwnPreBind(double x, double y);
+void AevonGripPreBindCancel(uintptr_t tid);
 /* V0.3.9：装配入口前置声明 —— 定义在文件尾部，而调用点（AevonGripLegObserve）在上方。 */
 extern void AevonGripOwnLegArm(UIView *host);
 extern void AevonGripOwnLegKick(void);
@@ -748,6 +760,11 @@ double AevonGripOwnHoldAge(void);
 /// V0.3.14（AevonEdgePadV314）：三段式落点判定 —— 0 不接管 / 1 贴边 / 2 边缘候选（暂扣）。
 extern int AevonGripOwnHitLevel(double x, double y);
 extern void AevonGripOwnSummon(double x, double y, double startX, double startY);
+/// V0.3.30（AevonEarlyBindV330）：落指预绑 —— 把「开始吞」从召唤提前到落指。
+/// 由 `AevonGripOwnPreBind` 调用，实现体在 Swift（`@_cdecl("AevonGripPreBindTouch")`）。
+extern void AevonGripPreBindTouch(uintptr_t tid, double x, double y);
+/// V0.3.30：撤销预绑。tid 传 0 = 用 Swift 侧自己记的那一个。
+extern void AevonGripPreBindClear(uintptr_t tid);
 /// V0.3.18（AevonSceneGateV318）：系统浮层闸 —— 控制中心 / 通知中心 / 锁屏（含解锁后
 /// 还没上滑进桌面）里返回 1。
 ///
@@ -981,6 +998,11 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     /* V0.3.29（AevonOwnSwallowV329）：放行 = 这根手指不归我们，身份立即作废，
      * 否则 Swift 侧下一次召唤会绑到一根已经被还回去的手指上。 */
     gAevonOwnTouchID = 0;
+    /* V0.3.30（AevonEarlyBindV330）：放行同时**撤销预绑**，把还在扣着的那根手指
+     * 立刻还给 App。不撤的后果很具体：点击（无 moved）会一直扣到 4s 超时，
+     * 右缘 15pt 内的点击变成「按下去半秒没反应」。
+     * 传 0 让 Swift 侧用它自己记的那个 tid 判（这里 `gAevonOwnTouchID` 刚被清掉）。 */
+    AevonGripPreBindCancel(0);
     /* V0.3.28（AevonSysAssertV328）：手指不归我们了，断言立刻还回去。
      * 少还一次 = 用户在这段时间里右滑返回失灵，所以这里是「放行」这条路上唯一的收尾点。 */
     AevonGripAssertRelease();
@@ -1113,6 +1135,30 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     /* V0.3.29（AevonOwnSwallowV329）：把这根手指的身份递给 Swift。
      * 只在 `level == 1`（带内）之后写入，带外的落指在上一段已经 ownPass 走了。 */
     gAevonOwnTouchID = (uintptr_t)(__bridge void *)t;
+    /* V0.3.30（AevonEarlyBindV330）：身份一写下来就**立刻**请求预绑，不等召唤。
+     *
+     * 这是 Aevon(103) 定位出来的唯一漏点，而且它是**结构性**的，不是时延问题：
+     *   10:59:56.011  SB sendEvent began      ← 这一帧必然投给 App（圆盘还没开）
+     *   10:59:56.016  自建腿 hold
+     *   10:59:56.053  首帧 moved 位移 23pt     ← 这一帧也投给了 App
+     *   10:59:56.054  summon
+     *   10:59:56.072  已绑全局吞层             ← 吞层从这里才生效
+     * 吞层判据挂在 SB `-sendEvent:` 里，而自建识别器是在**同一次** `sendEvent:` 的
+     * 内部才拿到这根手指并做出判定 —— 判定永远晚于本函数顶部的吞层询问。所以
+     * 「began + 首帧 moved」必然先到 App，之后所有帧才被吞。
+     *
+     * 36 次召唤的首帧位移中位 18pt、最大 49pt（Aevon(103)），App 拿到的是
+     * 「began + 一个 18~49pt 的高速横向帧 + 再无后续」：ScrollView 会拿这一帧算惯性，
+     * 抖音会拿它判横滑。0.3.28 里 App 拿到的是完整跟随手势（跟着手指走），
+     * 这一版变成「被甩一下」—— 这就是「更严重」的机构原因。
+     *
+     * 预绑在 began 就设，下一帧 moved 的 `sendEvent:` 询问就能命中，漏的只剩
+     * began 这一帧（零位移）。点击不受影响：点击没有 moved 帧，没东西被吞，
+     * `-ownPass:` 会立刻取消预绑，ended 照常送达（延迟与旧版同为 0.28s）。
+     *
+     * 位置不能提前：带外落指与系统浮层落指在上面两段已经 ownPass 走了。 */
+    gAevonOwnSwallowFrames = 0;
+    AevonGripOwnPreBind((double)p.x, (double)p.y);
     _ownSummoned = NO;
     _ownMovedFrames = 0;
     _ownFeedFrames = 0;
@@ -1244,7 +1290,8 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
          * 这条路本身不成立，得改走全局通道）；`1~3` = 手指在手势展开前后就不动了，
          * 那是用户动作、不是 bug；`>3` = 正常喂料。 */
         NSString *feed = [NSString stringWithFormat:
-                          @"本轮喂盘 %d 帧 moved", _ownFeedFrames];
+                          @"本轮识别器喂 %d 帧｜吞层实丢 %lu 帧（0 = 吞层没生效）",
+                          _ownFeedFrames, (unsigned long)gAevonOwnSwallowFrames];
         AevonGripOwnLog("lift", feed.UTF8String);
         self.state = UIGestureRecognizerStateEnded;
         AevonGripOwnLift((double)p0.x, (double)p0.y, 0);
@@ -1970,6 +2017,47 @@ void AevonGripOwnHandoff(void) {
     [g ownHandoff];
 }
 
+#pragma mark - V0.3.30（AevonEarlyBindV330）：落指预绑
+
+/* 落指那一刻就把这根手指交给全局吞层，**不等召唤**。
+ *
+ * 漏点结构性地存在于 `presentRing` 里：吞层判据挂在 SB `-sendEvent:`，而自建识别器
+ * 是在同一次 `sendEvent:` 内部才判定「要不要召唤」。于是每一次召唤都必然先把
+ * 「began + 首帧 moved」投给 App，之后才被吞。Aevon(103) 的 36 次召唤里，首帧位移
+ * 中位 18pt、最大 49pt，App 拿到的是一个高速横向帧后彻底静止 —— ScrollView 拿它算
+ * 惯性、抖音拿它判横滑，用户看到的就是「呼出圆盘时 App 内被带动」。
+ *
+ * 预绑把「开始吞」的时机从召唤提前到落指：下一帧 moved 的 `sendEvent:` 询问就能命中，
+ * 漏的只剩 began 这一帧（零位移，对 ScrollView / pan 都不产生位移量）。
+ *
+ * 与 0.3.29 真正的绑定不冲突：召唤时 `presentRing` 发现 `globalTouchID` 已经等于
+ * 这根手指，只做「转正」（把 `ownSwallowBound` 置真、续期吞窗口），不重绑。
+ *
+ * 点击安全：点击没有 moved 帧，预绑期间一个帧都没吞掉；`-ownPass:` 立刻撤销预绑，
+ * ended 照常送达 —— 与旧版同为 0.28s 延迟，行为不变。
+ * 失败一律 fail-open：Swift 侧任何 guard 不成立就什么都不做，退回 0.3.29。 */
+void AevonGripOwnPreBind(double x, double y) {
+    uintptr_t tid = gAevonOwnTouchID;
+    if (tid == 0) { return; }
+    AevonGripPreBindTouch(tid, x, y);
+}
+
+/* 撤销预绑。tid 传 0 = 「用 Swift 侧自己记的那个」（`-ownPass:` 里身份刚被清掉）。
+ * 只撤销预绑，不动 0.3.29 已经转正的真实绑定 —— 那一份由自己的 6 个归还点管。 */
+void AevonGripPreBindCancel(uintptr_t tid) {
+    AevonGripPreBindClear(tid);
+}
+
+/* V0.3.30：SB `sendEvent:` 每真的丢弃一次事件就 +1（由 AevonTouchHook.m 调用）。
+ * 抬手时打进 lift 日志 —— 这是「吞层到底有没有在吞」唯一的直接判据。 */
+void AevonGripOwnSwallowTick(void) {
+    gAevonOwnSwallowFrames += 1;
+}
+
+uintptr_t AevonGripOwnSwallowFrames(void) {
+    return gAevonOwnSwallowFrames;
+}
+
 /* V0.3.29（AevonDeskPanGuardV329）：桌面翻页 pan 是否该被强制判失败。
  *
  * 只治桌面这件事：Aevon(101)/(102) 两份日志里，`AevonOwnLegGesture → began`
@@ -2433,6 +2521,45 @@ __attribute__((used)) static const char AevonSummonTTLV328Marker[] = "AevonSummo
 __attribute__((used)) static const char AevonOwnSwallowV329Marker[] = "AevonOwnSwallowV329";
 __attribute__((used)) static const char AevonOwnTouchBindV329Marker[] = "AevonOwnTouchBindV329";
 __attribute__((used)) static const char AevonDeskPanGuardV329Marker[] = "AevonDeskPanGuardV329";
+
+/* V0.3.30（AevonEarlyBindV330 / AevonPreBindCancelV330 / AevonSwallowTickV330）：
+ *
+ * 用户 Aevon(103)：「修复没有效果，甚至更加严重了，现在设置、QQ、抖音全屏时呼出
+ * 圆盘手势都会带动 app 内操作」。
+ *
+ * 定量（Aevon(103) 1,239 行）：63 次 hold → 36 次召唤 → **36 次绑定成功**（0 次
+ * 「身份为空」），抬手帧 37 次全部从全局通道回来 → 0.3.29 的「识别器 UITouch 与
+ * SB sendEvent 是同一批实例」这条假设**成立**，绑定真的绑上了。桌面 pan 被吊销 21 次，
+ * 桌面翻页已经压住。也就是说 A/B 两项都在执行，变差的另有其因。
+ *
+ * 真因是**结构性的漏帧**，不是时延：
+ *   10:59:56.011  SB sendEvent began      ← 必投 App（圆盘还没开）
+ *   10:59:56.016  自建腿 hold
+ *   10:59:56.053  首帧 moved 位移 23pt     ← 也投给了 App
+ *   10:59:56.054  summon
+ *   10:59:56.072  已绑全局吞层             ← 吞层从这里才生效
+ * 吞层判据挂在 SB `-sendEvent:`，而自建识别器是在**同一次** `sendEvent:` 内部才做出
+ * 判定 —— 判定永远晚于本函数顶部的吞层询问。36 次召唤的首帧位移中位 18pt、最大 49pt，
+ * App 拿到的是「began + 一个 18~49pt 的高速横向帧 + 再无后续」：ScrollView 拿这一帧
+ * 算惯性、抖音拿它判横滑。0.3.28 里 App 拿到的是完整跟随手势（跟着手指走），
+ * 0.3.29 变成「被甩一下」—— 这就是「更严重」。
+ *
+ * 另一条：0.3.29 连抬手帧也吞（`if ownsTouch { return true }`），App 留下「有 began
+ * 无终止帧」的孤儿触摸。这条教训 0.2.57 就写在 `zombieSeal` 分支的注释里了
+ *（「ended/cancelled 放行，孤儿 ended 对 UIKit 无害，吞了反而留脏簿记」），新路径没照抄。
+ *
+ * 三处改动：
+ *   ① 落指预绑（AevonEarlyBindV330）：`-touchesBegan:` 写完身份立刻请求预绑，
+ *      下一帧 moved 的询问就能命中，漏的只剩 began 那一帧（零位移）。召唤时只做
+ *      「转正」，不重绑。点击不受影响 —— 点击没有 moved 帧，`-ownPass:` 立刻撤销预绑。
+ *   ② 抬手帧放行（AevonPreBindCancelV330）：预绑手指的 ended/cancelled 一律不吞，
+ *      消掉孤儿触摸；圆盘照样收到抬手（钩子对结束帧是「先询问再上报」）。
+ *   ③ 吞帧计数（AevonSwallowTickV330）：绑定日志只能证明「绑上了」，证不出
+ *      「真的吞掉过一帧」。计数在 `-touchesBegan:` 归零、SB 丢弃分支累加、抬手打进
+ *      lift 日志 —— 0 = 吞层一帧都没拦住，下次一眼可辨。 */
+__attribute__((used)) static const char AevonEarlyBindV330Marker[] = "AevonEarlyBindV330";
+__attribute__((used)) static const char AevonPreBindCancelV330Marker[] = "AevonPreBindCancelV330";
+__attribute__((used)) static const char AevonSwallowTickV330Marker[] = "AevonSwallowTickV330";
 
 /* V0.3.27（Aevon(100) #1「桌面和全屏 app 中手势触发并不是 100% 成功」）：
  * App 内锥角 14° → 22°（可配，`AevonGripCone327`），并在首帧判不出横向时再看 2 帧

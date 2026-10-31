@@ -5813,6 +5813,61 @@ jobs:
 
           echo "V0.3.29 校验: 自建腿手指绑全局吞层（桌面/App 都收不到）+ 兜住收养降级 + 断言显式归还 + 桌面翻页 pan 吊销 ✓"
 
+          # ── V0.3.30 校验（Aevon(103) 定档「落指即预绑」）──
+          # 用户反馈：「修复没有效果，甚至更加严重了，现在设置、QQ、抖音全屏时呼出圆盘
+          # 手势都会带动 app 内操作」。定量：63 hold → 36 召唤 → **36 次绑定成功**、
+          # 0 次「身份为空」，抬手帧 37 次全部从全局通道回来 → 0.3.29 的「识别器 UITouch
+          # 与 SB sendEvent 同一批实例」假设成立；桌面 pan 被吊销 21 次。
+          # 真因是结构性漏帧：吞层判据在 SB `-sendEvent:`，识别器在**同一次** sendEvent
+          # 内部才判定，所以「began + 首帧 moved」必然先投给 App（首帧位移中位 18pt、
+          # 最大 49pt），之后才被吞 —— App 拿到一个高速横向帧后彻底静止。
+          TH30="$GITHUB_WORKSPACE/Sources/AevonTouchHook.m"
+
+          # ① 三个标记必须进主库二进制
+          for s in AevonEarlyBindV330 AevonPreBindCancelV330 AevonSwallowTickV330; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.30 主库缺标记 $s"; exit 1; }
+          done
+
+          # ② ObjC：落指预绑 + 放行时撤销 + 吞帧计数
+          grep -qF 'void AevonGripOwnPreBind(double x, double y)' "$GH26" \
+            || { echo "::error::V0.3.30 缺落指预绑入口"; exit 1; }
+          grep -qF 'AevonGripPreBindTouch(tid, x, y);' "$GH26" \
+            || { echo "::error::V0.3.30 预绑没有把身份交给 Swift"; exit 1; }
+          sed -n '/^- (void)ownPass:/,/^}/p' "$GH26" | grep -qF 'AevonGripPreBindCancel(0);' \
+            || { echo "::error::V0.3.30 ownPass 没撤销预绑（右缘点击会被扣到 4s）"; exit 1; }
+          grep -qF 'void AevonGripOwnSwallowTick(void)' "$GH26" \
+            || { echo "::error::V0.3.30 缺吞帧计数入口"; exit 1; }
+          grep -qF '吞层实丢' "$GH26" \
+            || { echo "::error::V0.3.30 lift 日志没打吞帧数（下次日志还是分不清）"; exit 1; }
+          #   ⛔ 预绑必须在 touchesBegan 里、写完身份之后、记录 hold 时刻之前
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)touchesBegan:');j=s.find('- (void)touchesMoved:',i);b=s[i:j] if (i>0 and j>i) else '';k1=b.find('gAevonOwnTouchID = (uintptr_t)(__bridge void *)t;');k2=b.find('AevonGripOwnPreBind((double)p.x, (double)p.y);');k3=b.find('AevonGripOwnStampHold();');ok=(i>0 and k1>0 and k2>k1 and (k3<0 or k2<k3));print('V0.3.30 预绑位于 touchesBegan 身份之后 hold 之前 ✓' if ok else '::error::V0.3.30 预绑调用点位置不对（必须在 touchesBegan 内、身份赋值之后）');sys.exit(0 if ok else 1)" "$GH26"
+
+          # ③ Swift：预绑本体 + 转正 + 抬手帧放行
+          grep -qF '@_cdecl("AevonGripPreBindTouch")' "$EE" \
+            || { echo "::error::V0.3.30 Swift 侧没有预绑入口"; exit 1; }
+          grep -qF '@_cdecl("AevonGripPreBindClear")' "$EE" \
+            || { echo "::error::V0.3.30 Swift 侧没有撤销预绑入口"; exit 1; }
+          grep -qF 'AevonPrefs.bool("EarlySwallow", default: true)' "$EE" \
+            || { echo "::error::V0.3.30 预绑没有回退开关（回退开关叫 EarlySwallow）"; exit 1; }
+          grep -qF 'let prebound = (globalTouchID == tid && ownsTouch)' "$EE" \
+            || { echo "::error::V0.3.30 召唤时没有「转正」分支（会重绑一次，白丢状态）"; exit 1; }
+          grep -qF 'if preBindTid != 0, touchID == preBindTid, phase == 3 || phase == 4 {' "$EE" \
+            || { echo "::error::V0.3.30 抬手帧没有放行（App 会留「有 began 无终止帧」的孤儿触摸）"; exit 1; }
+          grep -qF 'ownLegPreBindCancel(tid: preBindTid)' "$EE" \
+            || { echo "::error::V0.3.30 预绑没有超时兜底"; exit 1; }
+          #   ⛔ 抬手帧放行必须排在「收养指纹一律放行」之前，否则永远走不到
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func shouldSwallowGlobalTouch');j=s.find('guard CACurrentMediaTime() <= swallowDeadline',i);b=s[i:j] if (i>0 and j>i) else '';a=b.find('if preBindTid != 0, touchID == preBindTid, phase == 3 || phase == 4');c=b.find('if gripAdoptedTouchID != 0');ok=(i>0 and a>0 and (c<0 or a<c));print('V0.3.30 抬手放行排在收养放行之前 ✓' if ok else '::error::V0.3.30 抬手放行被收养分支挡在前面（永远走不到）');sys.exit(0 if ok else 1)" "$EE"
+
+          # ④ 钩子侧：真的丢弃才计数
+          grep -qF 'extern void AevonGripOwnSwallowTick(void);' "$TH30" \
+            || { echo "::error::V0.3.30 钩子侧没有声明计数入口"; exit 1; }
+          grep -qF 'AevonGripOwnSwallowTick();' "$TH30" \
+            || { echo "::error::V0.3.30 吞层丢弃分支没有累加（下次日志证不出吞没吞）"; exit 1; }
+
+          echo "V0.3.30 校验: 落指即预绑（漏帧从 18~49pt 降到 0）+ 抬手帧放行（消孤儿触摸）+ 吞帧计数 ✓"
+
+
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
       # 为什么要它：真机崩溃日志里只有「模块 + 偏移」，而发布用的 dylib 被 strip 到只剩
