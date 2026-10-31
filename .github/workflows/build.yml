@@ -39,9 +39,7 @@ jobs:
           sed -i '' "s/^let AevonVersion = .*/let AevonVersion = \"${VERSION}\"/" Sources/Aevon.swift
           grep -n 'let AevonVersion' Sources/Aevon.swift
           # 设置页页脚里的版本号也一起同步，避免设置里显示上一版的旧号
-          # V0.2.81（AevonDeadCodeV281）：Root.plist 必须保持**XML 文本格式**（历史一直是 XML）。
           # 0.2.81 一度被误写成 bplist，连环炸两处：① sed 在 UTF-8 locale 下报
-          # "RE error: illegal byte sequence" 并退出 1；② grep -c 'infoText' 在 bplist 上
           # 整个文件只算 1 行 → 「开关说明 ≥ 4 条」断言直接挂。改到 C locale 做纯字节替换，
           # 版本号 x.y.z 长度固定，等长替换对 XML / 任何编码都不会破坏内容。
           LC_ALL=C sed -i '' -E "s/Aevon [0-9]+\.[0-9]+\.[0-9]+/Aevon ${VERSION}/g" AevonPrefs/Resources/Root.plist
@@ -115,7 +113,6 @@ jobs:
             || { echo "::error::主插件缺少拉起 App 的调用"; exit 1; }
           echo "入口校验: 悬浮球 + 应用选择面板 已编入；图标长按 hook 已移除"
           # V0.0.10：画面承载必须走 presenter（scene.uiPresentationManager →
-          # createPresenterWithIdentifier: → activate → presentationView）。
           # 旧的两条路径必须彻底消失，否则会重现「全黑 + 注销」。
           strings "$DYLIB" | grep -q 'AevonSceneHost' \
             || { echo "::error::主插件缺少场景承载器（AevonSceneHost）"; exit 1; }
@@ -193,7 +190,6 @@ jobs:
           fi
           echo "画面承载: presenter 路径已编入；旧容器/旧兜底已清除"
           # V0.0.14：真分屏 —— 吸附几何、左右分屏流程必须都在
-          # 注意：只能查 ASCII 符号名。中文日志字面量是 UTF-8，`strings` 只输出可打印 ASCII，查不到。
           # V0.1.5（AevonNoSnapV105）：左右吸附 + 左右分屏已整体删除（单窗模式下不存在并排），
           # 这三条历史串只由 AevonAssertionShim.m 的 used 常量收容，二进制里仍可查到，
           # 但源码里必须一条都不剩 —— 下面的反回退检查逐条盯住。
@@ -258,7 +254,6 @@ jobs:
           # V0.1.6（Aevon(73) 修复）：
           # ①全屏启动时自动关浮窗（AevonFullscreenCloseV106）—— 浮窗黑窗的正解：
           #   场景被系统拿去全屏呈现后我们那个 presenter 就没画面了，只能关；
-          #   场景标识由 AevonSceneIdentifierOfViewController 从 sceneHandle 反查。
           # ②窗口诊断不许再截断（AevonWinDumpFullV106）—— 原来只印最高层 8 个，
           #   15 个窗口里 7 个从没被看过，0.1.4 因此误判「系统没有手势窗口」。
           # ③手势管理器改由运行时探针去找（AevonProbeV106），不再硬编码类名就断言「不存在」。
@@ -275,7 +270,6 @@ jobs:
           echo "V0.1.6 校验: 全屏自动关浮窗 + 窗口全量诊断 + 手势管理器运行时探针"
           # V0.1.7（归档(13)/Aevon(74) 修复）：
           # ①探针自己把 SpringBoard 打死过两次。崩溃栈是
-          #   swift_dynamicCast → swift_getObjectType → _CF_forwarding_prep_0 → SIGTRAP，
           #   反汇编定位在「遍历全进程类表」那个函数里的动态转换指令上。
           #   本版把类表 / 方法名 / ivar 扫描整块搬进 ObjC（AevonObjCProbeV107），
           #   六组探针一次部署（P1~P6），每组都从 ObjC 的 @try 里过（AevonShieldV107）。
@@ -288,8 +282,6 @@ jobs:
           # ObjC 安全带必须真的进构建：@try 兜底 + 类表扫描都在这个文件里。
           # 注意这里查源码而不是查二进制 —— C 函数名会被 strip 掉，strings 查不到会误判。
           # V0.2.81（AevonDeadCodeV281）：支撑库精简为「仍被业务使用」的 5 个只读函数。
-          # AevonAllClassNames / AevonIvarNamesForClass / AevonClassFactoryObject /
-          # AevonDescribeRecognizersOfObject / AevonObjectIvarSummary 随两套启动探针退役。
           for s in AevonShieldRun AevonMethodNamesForClass AevonObjectResponds AevonViewHostChain AevonSafeClassName; do
             grep -q "$s" "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
               || { echo "::error::支撑库保留函数 $s 被删（有业务调用者）"; exit 1; }
@@ -355,14 +347,12 @@ jobs:
             || { echo "::error::V0.1.13 标记 AevonPipelineStandDownV113 未编入"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonBandTakeoverBeganV113' \
             || { echo "::error::V0.1.13 标记 AevonBandTakeoverBeganV113 未编入"; exit 1; }
-          # ★ 0.2.17 反转（AevonPrefsSlimV217）：SB 侧整指吞 0.2.15 已下线、0.2.17 把开关
           #   从设置页撤掉。留一个「永远不生效的开关」比没有更糟：用户打开它、试几次、什么也没发生。
           #   现在断言的是「它不许回到 Root.plist」。
           if grep -q 'BandTakeoverFromBegan' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
             echo "::error::Root.plist 又出现 BandTakeoverFromBegan（0.2.17 已撤，整指吞不许回到设置页）"; exit 1
           fi
           # 抬手清状态必须连 globalTouchID 一起清（0.2.51 重写后为 defer 归还模式：
-          # ended / cancelled 各一条 heldGlobal 判定 + defer 内 globalTouchID = 0）
           grep -q 'let endedHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::ended 分支缺 heldGlobal 判定 —— 带内抬手可能漏清 globalTouchID"; exit 1; }
           grep -q 'let cancelledHeldGlobal = (globalTouchID != 0 && touchID == globalTouchID)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
@@ -418,13 +408,11 @@ jobs:
              || grep -q 'RightEdgeShowBand' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Detail.plist"; then
             echo "::error::设置页又出现 RightEdgeShowBand 常亮开关（0.2.17 已撤）"; exit 1
           fi
-          # V0.2.51：断言退役 —— 锚的旧功能代码已删（AevonSystemGestureV105.flashBandIndicato）
           echo "V0.1.16 校验: 接管带可视化开关 + 设置即时预览（自绘部分已由 V0.1.17 反转断言守住）"
           # V0.1.17（Aevon(84) 全屏卡死事故 → 安全修复版）
           #
           # 事故：用户打开「显示右缘接管带」后整个屏幕失去操作，必须卸载才恢复。
           # 日志停在 15:44:19.092「容器已搬家 → App 画面进入」之后一行不剩（连触摸日志也没了）
-          # = SpringBoard 主线程卡死。0.1.16 相对 0.1.15 只多了「全屏视图自绘 + 命中认领 + touchesBegan」，
           # 所以整块删除，并且此后 CI 反向锁死：谁把这几样加回来，构建直接红。
           for s in AevonNoBandDrawV117 AevonBandHintV117 AevonDeadManV117 AevonPanicThreeFingerV117; do
             strings "$DYLIB" | grep -q "$s" \
@@ -441,7 +429,6 @@ jobs:
           # V0.1.18（Aevon(85) 四次落点全部在带外 → 命中率修复，触摸逻辑一行没动）
           #
           # 实测：四次右缘落点距右缘 12 / 19 / 25 / 42pt，用户把宽度拖到 17pt 后 0 次进带，
-          # (411,744) 只差 1pt。覆盖率 17pt×60% = 0/4、28pt×60% = 1/4、46pt×60% = 3/4。
           # 结论：宽度可调但允许调到「必然落空」= 把「猜自己落点」的成本转给用户，本版改默认值 + 抬下限。
           for s in AevonRightEdgeDefaultV118 AevonRightEdgeMissHintV118 AevonRightEdgeWidenV118; do
             strings "$DYLIB" | grep -q "$s" \
@@ -450,7 +437,6 @@ jobs:
           # V0.2.51：断言退役 —— 锚的旧功能代码已删（widenRightEdgeOnceV118()）
           echo "V0.1.18 校验: 默认 46pt / 下限 24 / 带外落点自述原因 / 抬手结论 / 老用户带宽迁移（触摸逻辑未动）"
           # V0.2.51（AevonGripOnlyV251）：入口断言由 AevonGripOnlyV251 标记承接
-          # （Swift 类名不落 strings，旧断言锚的 AevonEdgeEntry/AevonEdgeStripView 二进制串已不在）。
           strings "$DYLIB" | grep -q 'AevonRingMenu' \
             || { echo "::error::缺少圆盘选择器（AevonRingMenu）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonRingIcon' \
@@ -503,7 +489,6 @@ jobs:
           # V0.0.28：逆时针半圈机制（AevonRingCounterClockV23）已按需求移除，不再校验
           echo "V0.0.23 校验: 全局触摸通道 + 圆盘 75% 面积 已编入"
           # V0.0.24：圆盘接管期丢弃 touched（App 不再跟着滚动）+ 圆心去文字
-          # 注意：`AevonGlobalTouchShouldSwallow` 这种纯 C 函数符号只在 LC_SYMTAB 里，
           # macOS 的 strings 默认不扫符号表，查不到 —— 所以校验 objc 文件里强制保留的 ASCII 标记。
           strings "$DYLIB" | grep -q 'AevonTouchSwallowHookV24' \
             || { echo "::error::sendEvent 里没有「接管期丢弃」逻辑（缺 AevonTouchSwallowHookV24）—— 滑圆盘时 App 仍会跟着动"; exit 1; }
@@ -589,7 +574,6 @@ jobs:
           echo "V0.0.36 校验: 浮窗单窗口化 + 四周缩放 已编入"
           # ── V0.0.37：场景停用门控 + Stheno 外侧边缘手势 + 全局几何记忆 ──
           # ── V0.1.3：V0.0.37 的「场景停用门控」已整体移除（安全模式崩溃源，见上面反回退）。
-          # 历史串 AevonDeactivationGateV37 只由 AevonAssertionShim.m 的 used 常量收容，
           # 运行期不得再有代码路径。
           strings "$DYLIB" | grep -q 'AevonGateRemovedV103' \
             || { echo "::error::停用门控移除标记未编入（缺 AevonGateRemovedV103）"; exit 1; }
@@ -637,7 +621,6 @@ jobs:
             || { echo "::error::Sileo 图标修复没有编入（缺 AevonSileoIconV40）"; exit 1; }
           echo "V0.0.40 校验: 崩溃归因 + Sileo 图标纯路径 已编入"
           # ── V0.0.41：浮窗手势改由全局触摸通道驱动（全屏 App 里也能拖动 / 缩放 / 关闭）──
-          # 标记本体在 AevonAssertionShim.m 里是 __cstring 字面量（Swift 侧字面量会被 LLVM 折叠）。
           strings "$DYLIB" | grep -q 'AevonFloatGlobalV41' \
             || { echo "::error::浮窗全局手势没有编入（缺 AevonFloatGlobalV41）—— 全屏 App 里浮窗仍无法操作"; exit 1; }
           echo "V0.0.41 校验: 浮窗全局手势 已编入"
@@ -658,7 +641,6 @@ jobs:
           # ── 插件图标：V0.2.61 起 **Sileo 列表不再显示图标**（用户 Aevon(35) #5）──
           # 原 V0.0.31/32 的正向断言（control 必须有 Icon: 且指向纯绝对路径）在
           # V0.2.61 整建制反转：Icon: 字段**必须不存在**，一旦回潮就报错。
-          # 设置里的图标不受影响 —— 那是 AevonPrefs.bundle 里的 icon.png / icon@2x / icon@3x
           #（由 entry.plist 的 icon 键引用），下面照旧守着。
           if grep -qi '^Icon:' ctl/control; then
             echo "::error::control 又出现 Icon: 字段（V0.2.61 起 Sileo 列表不显示插件图标，只保留设置里的图标）"
@@ -731,10 +713,7 @@ jobs:
             echo "::error::Root.plist 又出现 GripY/GripLen（呼出区滑条只在 Grip.plist）"
             exit 1
           fi
-          # Grip.plist：呼出区页 = 两条滑条 + 两个开关（说明一律走 footerText，滑条不挂 infoText）
           [ -s "$ICON_DIR/Grip.plist" ] || { echo "::error::bundle 缺少 Grip.plist（呼出区二级页）"; exit 1; }
-          # V0.3.13（AevonGripZoneV313）：GripY+GripLen+GripWidth 三滑条 → GripZoneW+GripZoneH 两滑条。
-          # V0.3.18（AevonSpringUnifyV318）：+RingSpringDamping（划过动画阻尼，临时项）→ 三滑条。
           GRIP_SLIDER_TOTAL=$(plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -c 'PSSliderCell' || true)
           [ "$GRIP_SLIDER_TOTAL" -eq 3 ] \
             || { echo "::error::Grip.plist 滑杆数不是 3（GripZoneW + GripZoneH + RingSpringDamping，实际 $GRIP_SLIDER_TOTAL）"; exit 1; }
@@ -756,7 +735,6 @@ jobs:
             echo "::error::Grip.plist 又出现 GripScope（0.3.15 已移除该退路开关）"
             exit 1
           fi
-          # V0.3.15（AevonHandleTopV315）：隐藏把手提到**一级菜单** —— 它是用户真会来回拨的开关，
           # 埋在二级页里找不到。二级页不许再有，一级页必须有。
           if plutil -convert xml1 -o - "$ICON_DIR/Grip.plist" | grep -q 'GripHandleHidden'; then
             echo "::error::Grip.plist 还有 GripHandleHidden（0.3.15 起该开关在一级 Root.plist）"
@@ -856,7 +834,6 @@ jobs:
               || { echo "::error::AevonApp.dylib 缺少 0.2.2 标记 $s"; exit 1; }
           done
           echo "V0.2.2 校验: 判向 8pt 提前 + cancelled 取证 + 急救提示幂等 已就位"
-          # V0.2.3（AevonAppStuckGuardV203 / AevonAppYieldV203 / AevonAppYieldNotifyV203）：
           # Aevon(89) 根因 —— 4 根手指「began 已扣住」后在 App 进程内整段断流
           # （无 moved / 无取消 / 无抬手），全部伴随 SB 热区同时接管。
           # 三道防线：① App 侧带内 began 即广播 rightedgebegan，SB 停吞让路；
@@ -866,9 +843,7 @@ jobs:
               || { echo "::error::AevonApp.dylib 缺少 0.2.3 标记 $s"; exit 1; }
           done
           echo "V0.2.3 校验: SB 让路通道 + App 侧卡死自愈 + 首帧移动取证 已就位"
-          # V0.2.4（AevonAppAllAppsV204 / AevonAppExcludeV204）：全 App 白名单。
           #   ① App 侧 dylib 编入 2 条新标记；
-          #   ② SpringBoard 分支（让位主插件）与排除表（内置 + AppSideExcludePrefixes）必须在；
           #   ③ 排除表至少要含 com.apple.springboard 与一个金融前缀（防误删兜底）。
           for s in AevonAppAllAppsV204 AevonAppExcludeV204; do
             strings "$APP_DYLIB" | grep -q "$s" \
@@ -883,7 +858,6 @@ jobs:
           grep -q 'com.chinamworld' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::排除表缺金融前缀兜底（com.chinamworld）"; exit 1; }
           echo "V0.2.4 校验: 全 App 白名单（Classes=[UIApplication]）+ SB 让位 + 排除表 已就位"
-          # V0.2.5（AevonAppWinAuthV205 / AevonAppTwoFrameV205）：权威判向 + 两帧确认。
           #   Aevon(91) 判读：链路在跑但用户仍报「App 跟着动」——
           #   ① 失败要求（带内 pan/swipe 必须等本识别器 Failed）必须在（权威判向）；
           #   ② 两帧确认 + 14pt 快划豁免 + 抬手快判必须在（防首帧误触发）；
@@ -922,7 +896,6 @@ jobs:
           grep -q 'AevonFloatBundle' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::App 侧缺浮窗退让判定 —— 浮窗内滑动会被扣 begun"; exit 1; }
           INFO_COUNT="$(grep -c 'infoText' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
-          # V0.2.17：一级页 10 → 6 个开关；V0.2.51（AevonGripOnlyV251）：边缘呼出 / App 内右缘接管
           # 两个开关随触发手势退役，一级页只剩 4 个开关，下限随之改成 4
           [ "$INFO_COUNT" -ge 4 ] || { echo "::error::Root.plist 的开关说明不足 4 条（实际 $INFO_COUNT）"; exit 1; }
           UA_LABEL="$(grep -c '<string>App 进程右缘接管' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" || true)"
@@ -1027,7 +1000,6 @@ jobs:
             grep -q "$s" "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
               || { echo "::error::V0.2.17 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
           done
-          # ② V0.2.17 曾固定 6 个开关；V0.2.51（AevonGripOnlyV251）：EdgeGestureEnabled /
           #    AppSideEnabled 随触发手势退役 —— 一级页正好 4 个开关
           #    （Enabled / LogEnabled / CrashGuard / ProbeV107）。
           #    V0.2.58（AevonGripToggleV258）反转：新增隔离实验开关 RingGripEnabled
@@ -1038,9 +1010,6 @@ jobs:
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
           # V0.2.58（AevonGripToggleV258）反转：+RingGripEnabled（隔离实验开关）
           # V0.2.81（AevonDeadCodeV281）：去掉 ProbeV107（探针已退役，开关是死配置）
-          # V0.2.99（AevonGripProbeV299）：+GripHookProbe（方案 A 灰度探测开关，默认关）
-          # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势，0.3.7 起默认开）
-          # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）
           [ "$ROOT_KEYS" = "Enabled,RingGripEnabled,GripHandleHidden,RingAnywhere,LogEnabled,CrashGuard" ] \
             || { echo "::error::一级页开关清单与定档清单不一致（实际 $ROOT_KEYS）"; exit 1; }
           # 总开关默认开（新装即生效）；探针默认关（每次启动约 70 行）
@@ -1074,7 +1043,6 @@ jobs:
           #   Aevon(96) 定位到两件事都不在「数值」上，而在模型上：
           #   ① 余韵按队列下标取振幅、弹簧沉降 0.34~0.63s，而划过间隔只有 72~100ms
           #      ⇒ 永远走不到目标就被改目标，身后挂一条永不落地的人形扇；
-          #   ② 60 次/秒的 finishAnimation(at: .current) 每次都要取呈现值（渲染服务器往返）。
           #   现在动画是定长关键帧（Sources/AevonHoverKeyframes.swift），
           #   所以这条改成「不许再出现」（真正的断言在 V0.3.20 校验块里）。
           # 放大到 1.30 之后，命中判定再拿 frame 就会跟着膨胀 30%，隔壁图标被抢 ——
@@ -1131,7 +1099,6 @@ jobs:
               || { echo "::error::V0.2.19 标记 $s 未编入二进制"; exit 1; }
           done
           echo "V0.2.19 校验: 系统手势通道已在 began 里先验热区高度（band.minY），带外立刻 Failed 归还 App；带外自述不再指向已撤开关"
-          # ---- V0.2.20（Aevon(105) 判读）：App 侧几何只认共享内存，读不到 fail-closed ----
           # 事故：抖音（沙盒最严）读不到 com.Aevon 域的带宽/带高，App 侧静默落回
           # fallback 46pt×60% —— 用户设 8pt×28% 实际生效 46pt×60%，
           # 「全屏 App 屏幕 50% 左右呼出圆盘」+ App 纵向滚动被合法取消。
@@ -1157,7 +1124,6 @@ jobs:
             || { echo "::error::内容必须 App 场景原生布局（AevonFloatSceneLayoutV224）"; exit 1; }
           # V0.2.27 反转（AevonFloatEdgeGripV227）：左右边条落指即拖 —— 不许回潮。
           # V0.3.25 例外：**底边**的关闭预备态必须是 long press（Stheno
-          # `sc_addTerminationGestureToRegion:` = 0.4s / 12pt），全文件只允许这一处。
           MPD_COUNT=$(grep -vE '^[[:space:]]*(///|//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             | grep -c 'minimumPressDuration')
           [ "$MPD_COUNT" -eq 1 ] \
@@ -1216,7 +1182,6 @@ jobs:
           grep -q 'cornerRadius = 0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::缩放期间不许关圆角（四角直角已修，AevonFloatRoundResizeV224）"; exit 1; }
           echo "V0.2.24 校验: 场景原生 5:3 + 压边手势区 + 缩放全程圆角 已就位"
-          # ---- V0.2.25（Aevon(109)）：呈现上下文 resizesHostedContext —— App 场景随窗原生重排
           for s in AevonFloatHostedResizeV225; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::浮窗 0.2.25 缺标记 $s"; exit 1; }
@@ -1240,7 +1205,6 @@ jobs:
             || { echo "::error::左边条缺失（0.2.27 左右补回，AevonFloatEdgeGripV227）"; exit 1; }
           grep -q 'CGRect(x: width - o, y: 0, width: b + o' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::右边条缺失（0.2.27 左右补回，AevonFloatEdgeGripV227）"; exit 1; }
-          # V0.2.48 反转（AevonCanvasFixedV248）：`installResizeSnapshot`（缩放起手冻结成
           # 静态图）已被删除 —— 用户要「缩放时实时出画」。这条旧断言改为钉**保留下来的
           # 抓帧能力**（黑屏守卫的最后一帧兜底就靠它）。
           grep -q 'private func captureSnapshotImage' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -1255,7 +1219,6 @@ jobs:
           done
           grep -q 'cachedSnapshotImage' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::快照预抓缓存缺失（AevonFloatSnapCacheV227）"; exit 1; }
-          # V0.2.48 反转（AevonCanvasFixedV248）：Aevon(23)「缩放时整窗黑屏、必须松手才出画」。
           # 旧断言要求「缩放期间隐藏实时远程表面、改盖静态图」，与「实时出画」直接冲突 →
           # 反转成：不许再在缩放路径里隐藏内容区（列表里谁把 contentClip 藏了，谁就是回退）。
           if grep -q 'contentClip.isHidden = true' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"; then
@@ -1302,7 +1265,6 @@ jobs:
           grep -q 'AevonSelfSceneRetryV229' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::冷启动短重试缺失"; exit 1; }
           echo "V0.2.29 校验: sharedInstance 实例路径 + step 细分 + 短重试 已就位"
-          # ---- V0.2.30：进程身份加 RBSProcessHandle 通路（LiveContainer iOS 17 主通路）
           for s in AevonSelfSceneRBSV230; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.30 缺标记 $s"; exit 1; }
@@ -1334,7 +1296,6 @@ jobs:
           grep -q 'AevonAppInfo.pid(bundleID: bundleID)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::pidHint 来源不是 AevonAppInfo（已验证路径）"; exit 1; }
           echo "V0.2.31 校验: pid 读出链对齐 AevonAppInfo 已就位"
-          # ---- V0.2.32：重申前台（LiveContainer #942 同款）+ 真首帧判据（round8）+ 只读取证
           for s in AevonSelfSceneFGV232 AevonForegroundProbeV232; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.32 缺标记 $s"; exit 1; }
@@ -1354,7 +1315,6 @@ jobs:
           grep -q 'contentReallyAlive' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::假首帧修正缺失"; exit 1; }
           echo "V0.2.32 校验: 重申前台 + 真首帧判据 + 只读取证 已就位"
-          # ---- V0.2.33：clientIdentity 双路线（FrontBoardAppLauncher 同款）+ auditToken 注册 + App 侧 scene 探针
           for s in AevonSelfSceneBundleIDV233 AevonSelfSceneAuditV233; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.33 缺标记 $s"; exit 1; }
@@ -1452,9 +1412,7 @@ jobs:
             || { echo "::error::Swift 侧缺白名单制分流"; exit 1; }
           echo "V0.2.38 校验: 白名单制（只有确证 2 才自建）+ 分流取证 已就位"
           # ── V0.2.39 校验（AevonSceneRouteV239）：主路线换 SBApplication。
-          # 0.2.38 取证实锤：LSApplicationProxy.infoDictionary 在 roothide SB 进程
           # 调用即抛 NSInvalidArgumentException → 三版全 -1 → 0.2.38 白名单制全回退。
-          # 主路线换 SBApplication.sceneSpecification（AevonAppInfo 已验证同款链路）。
           # 只加不改。
           for s in AevonSceneRouteV239; do
             strings "$DYLIB" | grep -q "$s" \
@@ -1467,9 +1425,7 @@ jobs:
           echo "V0.2.39 校验: SBApplication sceneSpecification 主路线 已就位"
           # ── V0.2.40 校验（AevonSceneRouteV240）：判据落 App 二进制。
           # 0.2.39 真机定论：SBApplication 两个 spec 选择子都不响应（全 -1 全回退）；
-          # 设置 manifest uiSceneDel=no uiMulti=0 却实现 configurationForConnecting
           # → 判据在 App 可执行文件不在 manifest。新增二进制扫描
-          # AevonSelfSceneAppBinarySupport（bundleURL→Info.plist→CFBundleExecutable
           # →分块 memmem 扫 configurationForConnectingSceneSession，带缓存），
           # AevonSelfSceneAppSceneSupport 改为 A 路线兜底 + B 路线主判。只加不改。
           for s in AevonSceneRouteV240; do
@@ -1603,9 +1559,7 @@ jobs:
           # 生效比例必须是 5:8（历史 5:3 常量仍在，但只能出现在 contentAspect58 之外）
           grep -q 'contentAspect58: CGFloat = 5.0 / 8.0' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 生效比例不是 5:8"; exit 1; }
-          # V0.2.46 反转（AevonRatioTallV246）：生效比例由 5:8 改为 5:8 加高 7%（7:12）。
           # 用户 Aevon(21) 定档「5:8 看着有点胖，高度加 5%~10%」→ 旧断言
-          # `value = contentAspect58` 与产品冲突，按「反转断言、不改产品」改为 contentAspectTall。
           grep -q 'value = contentAspectTall' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.45 contentAspectCurrent 未采用 5:8"; exit 1; }
           # 圆角必须是按窗宽算的函数（11.1%，夹 20~44），不许退回写死值
@@ -1639,7 +1593,6 @@ jobs:
             || { echo "::error::0.2.45 缺圆角标记锚"; exit 1; }
           echo "V0.2.45 校验: 5:8 真重排（画布 = 窗口 344x550）+ 圆角 11.1% + 默认窗宽 0.80 + 记忆迁移 已就位"
           # ── V0.2.46 校验（AevonCanvasScaleV246 / AevonRatioTallV246 /
-          #    AevonFloatGlowV246 / AevonFloatGripGlobalV246 / AevonCanvasHandoffV246）
           # Aevon(21) 真机四项：
           #   ① 画布倍数默认 1.30（1.00 字大内容少，1.30 字正常且真重排）+ 老值一次性回写
           #   ② 窗比例 7:12（5:8 高 7%），画布仍 = 窗口 × 倍数、1/k 缩回 → 不变形不出黑边
@@ -1670,9 +1623,7 @@ jobs:
             || { echo "::error::0.2.46 发光圈没有 shadowPath 轮廓（画不出光晕）"; exit 1; }
           grep -q 'refreshEdgeGlowIfAppearanceChanged' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.46 深浅外观切换未重刷发光圈"; exit 1; }
-          # V0.2.66 反转：浮窗外观跟随需要 traitCollectionDidChange（AevonTraitWakeV266）
           # —— iOS 17 SDK 对它只是 deprecation warning，Swift 侧不 -Werror；
-          # 真正断构建的是 ObjC 的 traitCollectionDidChange:，我们只用 Swift override。
           grep -q 'override func traitCollectionDidChange' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.66 缺 traitCollectionDidChange（深浅色切换不叫醒浮窗场景）"; exit 1; }
           grep -q 'AevonTraitWakeV266' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -1727,7 +1678,6 @@ jobs:
           fi
           # ② 发光贴边：外扩 2pt + 亮度 0.42（0.2.46 的 12pt/0.90 回潮即断构建）
           #    0.2.49 起外扩再收到 1pt（AevonGlowTightV249），亮度靠半径补回
-          #    0.2.60 反转（AevonGlowDimV260，用户 Aevon(34) #5「深色模式光晕还是有点明显」）：
           #    深色亮度定档 0.30 / 半径 5（原 0.46 / 6），浅色 0.14 不变。
           grep -q 'static let halo: CGFloat = 1' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 发光圈外扩不是 1pt（Aevon(24) 定档：只贴窗沿）"; exit 1; }
@@ -1739,7 +1689,6 @@ jobs:
             && { echo "::error::0.2.47 发光外扩 12pt 不许回潮"; exit 1; }
           grep -q 'static let halo: CGFloat = 2' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::0.2.49 发光外扩 2pt 已是历史档（用户定档 1pt）"; exit 1; }
-          # V0.2.51：断言退役 —— 0.2.47 浮窗让路排在热区判定之前（GRIP/BAND 行号比对，锚的旧热区代码已删）
           echo "V0.2.47 校验: 回桌面黑屏守卫（事件布防+有界重申+最后一帧）+ 发光贴边压暗 + 偏好定档删项 + 圆盘浮窗让路 已就位"
           for s in AevonCanvasFixedV248 AevonNoAutoLockV248 AevonFrameMemoryV248 \
                    AevonMainSceneFixedV248 AevonMainCanvasRestoreV248 AevonSelfSceneRestoreV248; do
@@ -1846,7 +1795,6 @@ jobs:
           grep -q 'AevonUnlockGuardV249' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 缺解锁守卫标记"; exit 1; }
           # ⑥ 守卫拍子必须被压到 0.2 秒（0.5 秒一拍 + 两拍确认 = 黑屏 1 秒以上）
-          # V0.2.59（AevonGuardFastV259）反转：拍子再从 0.2 压到 0.1 秒（用户 Aevon(33) #1
           # 「回桌面还要等 1 秒才见实时画面」；0.2.49 的 0.2s 定档随提速要求退役）。
           grep -q 'Timer(timeInterval: 0.1, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.59 守卫拍子不是 0.1 秒（V0.2.49 的 0.2s 定档已被 AevonGuardFastV259 反转）"; exit 1; }
@@ -1873,7 +1821,6 @@ jobs:
           grep -q 'CATransaction.setDisableActions(true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.49 发光圈仍有隐式动画（缩放时边缘会抖）"; exit 1; }
           # ⑨⑩ 关窗要等画布还原走完再挂起
-          # V0.2.100 反转（AevonSuspendDelayV2100）：0.75 → 2.05（+1.0s 行为规避实验，
           # cs=2 卡屏现场实锤：App 刚恢复整屏就被挂起诱发进程内死锁）
           grep -q 'scheduleSleep(bundleID: bundleID, after: 2.05)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.100 关窗挂起延迟没到位（应 2.05，AevonSuspendDelayV2100）"; exit 1; }
@@ -1929,7 +1876,6 @@ jobs:
           # ③ 圆盘入口改成可见把手（PullOver 逆向：空白盲带上没有「既拦住又没拦」的中间态）
           grep -q 'final class AevonRingGripView: UIView' "$W/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.50 圆盘把手没落地"; exit 1; }
-          # V0.3.3 反转（AevonGripBandNarrowV303）：命中带 40 → 12pt（用户定档方案 C）。
           grep -q 'hitOutsetX: CGFloat = 12' "$W/Sources/AevonRingGrip.swift" \
             || { echo "::error::V0.3.3 把手命中带没收窄到 12pt（误吞面仍是 46pt）"; exit 1; }
           # V0.3.14 反转：App 侧命中带已随把手吞带整段删除 —— 不再有「两侧同步」这回事，
@@ -1956,7 +1902,6 @@ jobs:
             echo "::error::0.2.50 守卫不是上屏即起（事件没来时完全没有守卫 = 黑屏 >1 秒）"; exit 1
           fi
           # V0.2.100 反转（AevonReturnDeadlineV2100）：0.2.99 的转场静默几何闸退役，
-          # 换为 Stheno returnDeadline 同构闸 guardReturnDeadlineOpen（1.2s 固定保护期），
           # 2 拍确认语义保留；形态断言随之升级。
           grep -q 'renderTicks >= 2, guardReturnDeadlineOpen' "$W/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.100 撤冻结 2 拍确认被拆（renderTicks+deadline 闸必须同条件）"; exit 1; }
@@ -2001,7 +1946,6 @@ jobs:
             || { echo "::error::0.2.50 贴合翻转后没敲窗口重排（进程留着按 737 排的残局）"; exit 1; }
           grep -q 'AevonAppFitRelayoutV250' "$W/Sources/AppSide/AevonAppSide.m" \
             || { echo "::error::0.2.50 缺 App 侧重排标记"; exit 1; }
-          # V0.2.100 反转（AevonSuspendDelayV2100）：1.05 → 2.05（+1.0s，语义不变：挂起晚于画布还原）
           grep -q 'scheduleSleep(bundleID: bundleID, after: 2.05)' "$W/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.100 关窗挂起早于画布还原（应 2.05，AevonSuspendDelayV2100）"; exit 1; }
           grep -q 'AevonFloatRestoreV250' "$W/Sources/AevonWindowManager.swift" \
@@ -2088,7 +2032,6 @@ jobs:
           # ② 视图层冗余轻点手势退役（双响应元凶）：
           ! grep -q 'handleEdgeTap' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.53 视图层 handleEdgeTap 已退役（与全局通道双响应 = 停靠后立刻装回）"; exit 1; }
-          # ③ 预热只对主场景路线生效（自建路线 mainCanvas 恒 0x0 → 写 0x0 + 跳过 kickRelayout = 断层）：
           strings "$DYLIB" | grep -q 'AevonDouyinWarmupFixV253' \
             || { echo "::error::0.2.53 缺标记 AevonDouyinWarmupFixV253（预热条件修正）"; exit 1; }
           grep -q 'let warmupCanvas = warmupFullscreenFirst && !screenAspectOn' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -2154,7 +2097,6 @@ jobs:
           grep -q 'AevonDockTapAnywhereV255' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.55 缺停靠小窗任意位置轻点装回"; exit 1; }
           # 回桌面重申拍加密：0.35/0.7/1.05，间隔下限 0.35
-          # V0.2.59（AevonGuardFastV259）反转：桶距 0.35 → 0.25（用户 Aevon(33) #1
           # 「回桌面还要等 1 秒才见实时画面」；4 次有界桶不变，0.2.55 定档随提速退役）。
           # V0.2.62 反转（AevonLiveQuietV262）：回桌面「让位」期只许 1 发 0.40s 重申
           #（每多发一次 = 远程表面重建一次 = 用户说的「频率很快的闪」），其它离场仍按
@@ -2246,7 +2188,6 @@ jobs:
           # ①守卫提速：0.1s 拍 + 0.25s 重申桶距
           grep -q 'Timer(timeInterval: 0.1, repeats: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.59 守卫拍未提速到 0.1s"; exit 1; }
-          # V0.2.62 反转（AevonLiveQuietV262）：见上面那条 —— 延迟表 + 三拍仍在 + 让位期单发。
           grep -q 'let reassertDelays: \[Double\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.59/0.2.62 重申延迟表不见了"; exit 1; }
           grep -q '\[0.25, 0.55, 0.85\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -2258,7 +2199,6 @@ jobs:
           # ③把手竖条：贴边竖条宽度常量 + 区域几何偏好读取 + prefschanged 实时刷新
           grep -q 'static let barWidth: CGFloat = 5' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.59 把手竖条化缺失"; exit 1; }
-          # V0.3.13（AevonGripZoneV313）反转：位置/长度不再是 GripY/GripLen 两个 pt 值，
           # 改成区域的百分比宽高（GripZoneW/GripZoneH）。旧断言已随几何模型一起作废。
           grep -q 'AevonPrefs.double("GripZoneW"' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::V0.3.13 呼出区宽度自定义缺失（GripZoneW）"; exit 1; }
@@ -2270,7 +2210,6 @@ jobs:
           fi
           grep -q 'AevonRingGrip.refreshFromPrefs()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::0.2.59 把手 prefschanged 实时刷新缺失"; exit 1; }
-          # ④停靠触摸拦截：SB 侧 publish（三个变更点）+ App 侧关交互 + 启动清场 + didBecomeActive 保险丝
           grep -q 'void AevonNotifyPublishDockStages' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::0.2.59 停靠集合广播函数缺失"; exit 1; }
           PSC=$(grep -c 'publishDockStages()' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" || true)
@@ -2355,7 +2294,6 @@ jobs:
           strings "$APP_DYLIB" | grep -q 'AevonGripSwallowV261' \
             || { echo "::error::0.2.61 App 侧 dylib 缺标记 AevonGripSwallowV261（把手吞咽没编进去）"; exit 1; }
           # ①把手页：控制器 + 入口动作（bundle 侧已断言），源码侧守「说明用 footerText、
-          #   滑条不挂 infoText」这条口径 —— Grip.plist 里每个 PSSliderCell 段内不许出现 infoText
           grep -q 'AevonGripListController' "$GITHUB_WORKSPACE/AevonPrefs/AevonPrefs.m" \
             || { echo "::error::0.2.61 缺少 AevonGripListController"; exit 1; }
           grep -q 'aevonOpenGrip' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist" \
@@ -2372,8 +2310,6 @@ jobs:
           grep -q 'dockCurrent' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::0.2.61 视图层又直接调 dockCurrent（停靠唯一入口 = 点边条，走全局通道）"; exit 1; } || true
           # ④双击窗口：**0.3.24 起整条退役** —— 底边改为上滑关闭终止手势
-          #    （AevonBottomFlickV324，对齐 Stheno 的 __bottomLikeTouchRegions +
-          #    sc_shouldCloseForBottomUpwardFlick:）。双击三件套（间隔 / 半径 / 原地轻点
           #    位移判定）已无任何读取者，这里改成反向网防回潮。
           if grep -q 'private static let floatDoubleTapGap' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"; then
             echo "::error::0.3.24 双击间隔常量回潮（底边双击已退役，改上滑关闭）"; exit 1
@@ -2459,16 +2395,13 @@ jobs:
             || { echo "::error::0.2.90 预热时长不在 0.30 秒（开窗提速回潮）"; exit 1; }
           # V0.3.0 反转：原锚「WM 里 now() + 0.30」从 0.2.90 起一直寄生在全屏兜底踢块的
           # 首踢延迟上（0.3.0 已按 Aevon(78) 取证把首踢改成 1.2s）；预热 0.30s 切换的
-          # 真机制 = canvasWarmupDelay 参数 → SceneHost 的 canvasWarmupDeadline。
           grep -q 'self.canvasWarmupDeadline = canvasWarmupDelay > 0 ? CACurrentMediaTime() + canvasWarmupDelay : 0' \
             "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.90 预热切换机制失踪（canvasWarmupDeadline 应由 canvasWarmupDelay 推导）"; exit 1; }
-          # V0.2.92（AevonKickCompressV292）反转：kick 起手 0.20 → 0.12（Aevon(61) #2
           # 时序账：poll 就绪后 kick 双笔 0.45 是最后大头；0.20/0.25 只是保守等待值）。
           grep -q 'now() + 0.12' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.92 kickRelayout 起手没压到 0.12 秒（0.2.62 的 0.20 已反转）"; exit 1; }
           # ①预热切换不能再把 (w-1) 传进去（kickRelayout 内部已经 -1，画布会差 1pt）
-          # V0.2.93（AevonSingleShotCanvasV293）反转：预热路径 kickRelayout 双笔退役，
           # 改走单笔直写 writeCanvasDirect（传原值，无 -1 问题）；全屏兜底路径的
           # kickRelayout 调用保留（V0.2.93 校验块 forbid 已钉预热回潮）。
           grep -q 'sceneHost.writeCanvasDirect(width: mainCanvas.width, height: mainCanvas.height,' \
@@ -2497,7 +2430,6 @@ jobs:
           grep -q 'static func enforceSingleMainWindow' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.62 缺野窗清扫（多主窗、无法关闭）"; exit 1; }
-          # V0.2.63（AevonDockNoVanishV263）反转：主窗降级改成 `force: true` 并**只在真的
           # 没进停靠列时**才关 —— Aevon(37) #2 实测「被仲裁拒掉也算失败 → 把好好的小窗关掉」。
           grep -q 'dockCurrent(side: side, force: true)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.63 主窗降级没走 force（快速连点会误关停靠小窗）"; exit 1; }
@@ -2598,8 +2530,6 @@ jobs:
           grep -q 'rangeOfString:@"TextEffects"' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
             && { echo "::error::0.2.63 又把 TextEffects 当键盘了（键盘在屏判定恒真）"; exit 1; } || true
           # ③截图/录屏走系统入口
-          # V0.2.64（AevonQuickShotV264）反转：Aevon(38) 日志「本系统既没有 SBUIController
-          # 截图方法」→ 改走 ScreenCore 同款 `_UICreateScreenUIImageWithRotation`。
           grep -q '_UICreateScreenUIImageWithRotation' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.64 截图没走 _UICreateScreenUIImageWithRotation（SBUIController 在本机不存在）"; exit 1; }
           grep -q 'PHAssetChangeRequest.creationRequestForAsset' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
@@ -2777,7 +2707,6 @@ jobs:
             || { echo "::error::0.2.66 SBScreenShotter 缺类型编码自检（fail-closed 纪律）"; exit 1; }
           # V0.2.67 反转：录屏 3fps → 8fps（分辨率同时降到 540x1170，单帧编码量 1/5.7，
           # 主线程负载与 3fps 原生像素相当）——「播放卡顿」的解法不是降帧率是降分辨率。
-          # V0.2.71 反转（AevonRecFps12V271）：兜底节拍 8 → 12fps —— 0.2.68 串行队列后
           # 实测 8fps 能吃满（73帧/10s），瓶颈已不在主线程；12fps 换更顺滑兜底画面。
           # V0.2.75 再反转（AevonRecFps15V275）：12 → 15fps —— 时隙时基下 PTS 与节拍
           # 解耦、丢拍不跳帧，540 宽 15fps 编码余量实测充足。防回退网：不许低于 15。
@@ -2860,7 +2789,6 @@ jobs:
           done
           strings "$APP_DYLIB" | grep -q "AevonCanvasBandV268" \
             || { echo "::error::0.2.68 App 侧 dylib 缺标记 AevonCanvasBandV268"; exit 1; }
-          # ① 录屏主路：RPScreenRecorder startCapture（ScreenCore 逆向实证的 SB 进程系统级录屏）
           grep -q 'RPScreenRecorder.shared()' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.68 录屏没走 RPScreenRecorder（自绘抓帧帧率上不去）"; exit 1; }
           grep -q 'startCapture(handler:' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
@@ -2881,7 +2809,6 @@ jobs:
             || { echo "::error::0.2.68 缺键盘现场检测"; exit 1; }
           grep -q 'contains("KeyboardWindow")' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.68 现场检测没认 KeyboardWindow 类名"; exit 1; }
-          # ④ 截图主路：SBScreenShotter 已换代 → SBScreenshotManager.screenshotManager
           grep -q 'screenshotManager' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
             || { echo "::error::0.2.68 截图没走 SBScreenshotManager（本机无 SBScreenShotter）"; exit 1; }
           grep -q 'saveScreenshotsWithCompletion:' "$GITHUB_WORKSPACE/Sources/AevonQuickAction.swift" \
@@ -2930,7 +2857,6 @@ jobs:
           # ① 显窗时机 = 画布定稿之后（显窗后再写画布 = 内容跳两遍闪一下）
           grep -q 'AevonRevealLateV269' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.69 显窗时机没后移（开窗闪一下复发）"; exit 1; }
-          # ⑨ 键盘检测补 UIKeyboardImpl.isOnScreen（KeyboardWindow 在 SB 栈是 hidden）
           grep -q 'UIKeyboardImpl' "$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift" \
             || { echo "::error::0.2.69 键盘检测缺 UIKeyboardImpl 判据"; exit 1; }
           # ⑩ App 侧浮窗压边 10pt
@@ -2972,7 +2898,6 @@ jobs:
           grep -q 'AevonRestoreNoAvoidV271' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.71 装回路径避让没撤（还原改变手动位置复发）"; exit 1; }
           # #3 圆盘在屏全吞：SB 侧状态位读取器回归（shim + App 侧内置实现）；
-          # V0.2.72 SBSwallow 回退焊死（Aevon(44) dynamicCast 崩溃），App 侧 bit39 保留
           grep -q 'int AevonNotifyGetRing' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::0.2.71 shim 缺 AevonNotifyGetRing"; exit 1; }
           grep -q 'AevonRingActiveNow' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
@@ -3192,7 +3117,6 @@ jobs:
           grep -q 'AevonSettingsChannel.shared.request' "$GITHUB_WORKSPACE/Sources/AevonSceneHelper.swift" \
             || { echo "::error::0.2.79 setForeground 没走单飞通道"; exit 1; }
           # Hook 层判据必须升级为账本（否则「一刀切 YES」会顶住交还全屏）
-          # V0.2.83 反转：AevonFgGuardRetireV283 把 updateSettings 的改写分支整建制下线
           #（Aevon(56) 891 行日志里「拦下系统写 foreground=NO」0 条 = 从未命中）。
           # 账本判据 `wantsForeground` 因此没有调用点 —— 断言反向，防止有人把它接回
           # 那条「复制一份 FBS settings 塞回去」的高危路径（归档(14) 同类）。
@@ -3222,7 +3146,6 @@ jobs:
           # 依据 Aevon(52) 两条实锤：
           #   ① 11:08:41.486 cap=-1（SB 侧）而 11:08:41.873 App 侧算出 cap=1
           #      = 0.2.65「不再落盘」把路线 B 判死了，此后 19 版全在 S2 打补丁；
-          #   ② 11:08:41.691 开窗第 0.4 秒被 SBMainSwitcherWindow 误判成「切换器在屏」
           #      → 整扇窗隐藏 3.5 秒（= 全屏 App 里打开浮窗不显示 / 闪一下）。
 
           # ① App 侧必须真的往盘上写（不是只写日志）
@@ -3277,7 +3200,6 @@ jobs:
 
           # ── V0.2.81 校验（修闪：让位误判下线 / 自建场景默认关 / 死代码清理）──────────
           # 依据 Aevon(54) 三条实锤：
-          #   ① 11:51:15.294 显形 → 15.329 命中 SBMainSwitcherWindow 让位 → 19.832 恢复
           #      = 窗只露 35ms、暗 4.48s —— 用户说的「闪」；判据已退回控制中心/通知中心。
           #   ② 设置自建场景 6 次全部 clientPort=nil（App 端 UIKit 拒绝第二场景）
           #      → 自建默认关，先保画面（回 S2）。
@@ -3382,7 +3304,6 @@ jobs:
             || { echo "::error::0.2.83 sigaction 没带 SA_SIGINFO"; exit 1; }
           # 读 pc 用的是 ABI 固定偏移，不是成员名 ——
           # iOS SDK 的 ucontext.h 是 macOS 的，字段名对不上（0.2.83 第一次构建实锤）。
-          # V0.2.85：`__es` 是 16 字节不是 24（0.2.83 按 24 算，pc 读成 cpsr+pad 的假值）。
           grep -q 'mcontext + 16 + 256' "$GITHUB_WORKSPACE/AevonAssertionShim.m" \
             || { echo "::error::0.2.85 没按修正后的 ABI 偏移读 pc（__es=16，不是 24）"; exit 1; }
           if grep -q 'mcontext + 24 + 2' "$GITHUB_WORKSPACE/AevonAssertionShim.m"; then
@@ -3428,7 +3349,6 @@ jobs:
           grep -q 'func sk_fbslm_setLayers(_ layers: Any?)' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
             || { echo "::error::0.2.83 _setLayers 参数又写成非可选 Any（nil 会在 thunk 里 trap）"; exit 1; }
 
-          # ⑤ updateSettings 改写分支下线（0 次命中 + mutableCopy 交副本给 FrontBoard = 0.1.5 同类风险）
           grep -q 'AevonFgGuardRetireV283' "$GITHUB_WORKSPACE/Sources/Hooks.swift" \
             || { echo "::error::0.2.83 缺前台拦截下线标记"; exit 1; }
           if grep -q 'mutableCopy() as? NSObject' "$GITHUB_WORKSPACE/Sources/Hooks.swift"; then
@@ -3523,7 +3443,6 @@ jobs:
 
           echo "── V0.2.86（归档(20) 561 条崩溃 + 开窗注销 + 闪 + 全屏点不动）──"
           # ① 出生即隐形：AevonWindowView 构造器里必须先 alpha=0，
-          #    否则 host.addSubview 那一帧就以 alpha=1 上屏（= Aevon(59)「闪一下悬浮窗」）
           grep -q 'super.init(frame: CGRect.zero)' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.86 AevonWindowView 构造器结构变了"; exit 1; }
           if ! awk '/super\.init\(frame: CGRect\.zero\)/,/leftEye|init\(coder/' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
@@ -3641,7 +3560,6 @@ jobs:
           echo "V0.2.88 校验: 圆盘选中收起瞬时化 + 藏窗浮现瞬时化 已就位"
 
           # ── V0.2.89 校验（Aevon(62) 三刀）─────────────────────────────────────
-          # ① 闪的本体：didMoveToWindow 里的空壳淡入（0.24s alpha 0.35→1 + 0.96 缩放）
           #    必须整段删除 —— 显形只由画布定稿回调瞬时完成。
           grep -q 'AevonNoShellFadeV289' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.89 缺「空壳淡入退役」标记"; exit 1; }
@@ -3658,7 +3576,6 @@ jobs:
             echo "::error::0.2.89 exitFreezeView（离场帧）复活 = 关窗动画回来了"
             exit 1
           fi
-          # ③ 二指孤儿帧：ended/cancelled 分支不得清 ringExtraTouchID（防孤儿 ended 污染手势簿记）。
           grep -q 'AevonRingOrphanEndV289' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::0.2.89 缺「孤儿帧防污染」标记"; exit 1; }
           if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
@@ -3717,7 +3634,6 @@ jobs:
           echo "V0.2.91 校验: 预热就绪poll + 关窗唤醒被覆盖App + 回桌面过渡哨根级冻结 已就位"
 
           # ── V0.2.92 校验（Aevon(61)：抖音卡死依旧 + 还要 1 秒 + 回桌面闪/黑屏）──
-          # ① 关窗唤醒第 1 轮改 launchApplicationWithIdentifier 真激活（settings 裸写已证不生效）
           grep -q 'AevonLaunchReviveV292' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.92 缺「关窗 launch 真激活」标记"; exit 1; }
           grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -3744,14 +3660,12 @@ jobs:
             || { echo "::error::0.2.92 哨命中搬家+盖帧必须同拍 CATransaction 提交（AevonSameBeatSwapV292）"; exit 1; }
           echo "V0.2.92 校验: 关窗launch真激活 + kick双笔压缩 + 揭幕连续2拍 + 哨同拍提交 已就位"
           # ── V0.2.93 校验（Aevon(62)：虚到实淡入仍在 + 仍非秒开，用户确认方案 A + X）──
-          # ① 方案 X：预热 poll 就绪 → 单笔直写（kick 双笔在预热路径退役，Stheno poll→commit 同构）
           grep -q 'func writeCanvasDirect(width: CGFloat, height: CGFloat, tag: String)' \
             "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
             || { echo "::error::0.2.93 缺单笔直写 writeCanvasDirect（AevonSingleShotCanvasV293）"; exit 1; }
           grep -q 'sceneHost.writeCanvasDirect(width: mainCanvas.width' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::0.2.93 预热路径必须走单笔直写（AevonSingleShotCanvasV293）"; exit 1; }
-          # 预热段 kickRelayout 回潮 forbid（934 行全屏兜底的 kickRelayout 保留，mainCanvas 只属于预热段）
           if grep -q 'sceneHost.kickRelayout(width: mainCanvas.width' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"; then
             echo "::error::0.2.93 预热路径 kickRelayout 回潮（应走 writeCanvasDirect，AevonSingleShotCanvasV293）"
             exit 1
@@ -3765,9 +3679,7 @@ jobs:
             || { echo "::error::0.2.93 冻结帧图像必须留存供比对（AevonFrameMatchRevealV293）"; exit 1; }
           echo "V0.2.93 校验: 单笔直写(poll→commit 同构) + 帧比对零跳变交接 已就位"
           # ── V0.2.94 校验（Aevon(71)：冷启动超 2s 兜底显窗 + 清晰→模糊→实时，用户确认回归修复 + 方案 M）──
-          # ①回归修复：onCanvasSettled 赋值必须在 writeCanvasDirect **之前**（同步 fire
           #   时回调必须先就位；Aevon(71) 实锤冷启动 1.5~2.2s 全走兜底、开过的 0.47s）
-          #   用 awk 而非 grep|cut（跨平台一致；烧 run 40864510703 = 变量名笔误 ASETTLED≠ASETTLING）
           WMGR="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
           ORDER=$(awk '/sceneHost\.onCanvasSettled = \{ \[weak sceneHost\] in/ {if(!A)A=NR} /sceneHost\.writeCanvasDirect\(width: mainCanvas\.width/ {if(!W)W=NR} END{print A+0, W+0}' "$WMGR")
           ASETTLING=${ORDER%% *}
@@ -3778,7 +3690,6 @@ jobs:
             echo "::error::0.2.94 onCanvasSettled 赋值必须先于 writeCanvasDirect（AevonRevealOrderFixV294，冷启动兜底显窗回归；实测 A=$ASETTLING W=$WDIRECT）"
             exit 1
           fi
-          # ②V0.2.100 反转：转场静默几何采样退役 → Stheno returnDeadline 闸（AevonReturnDeadlineV2100）。
           # AevonQuietRevealV294 标记收容在让位日志串里，二进制必须仍有。
           WVW="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
           grep -q 'AevonQuietRevealV294' "$WVW" \
@@ -3791,7 +3702,6 @@ jobs:
 
           # ── V0.2.95 校验（Aevon(72)：冷开窗快慢分化，微信 1.24s / 抖音 0.88s / 设置 0.25s）──
           # 方案 P：①cap 等表(0.65s)+routeDump 扫描挪进「自建开启」分支（默认档无消费方，白等）
-          # ②0.15s 固定延迟改场景就绪快门（贴 SCWSSwitch deadline+poll 纪律，Aevon(72) 六次全白付）
           # ①等表调用必须被 capWaitNeeded 分支包裹（分支声明先于等表调用）
           GATE=$(awk '/let capWaitNeeded = selfSceneOn \|\| forceSelf/ {if(!C)C=NR} /AevonSelfSceneAppCapWait\(bundleID, 0\.65\)/ {if(!W)W=NR} END{print C+0, W+0}' "$WMGR")
           CNEED=${GATE%% *}
@@ -3818,7 +3728,6 @@ jobs:
           echo "V0.2.95 校验: cap 等表入分支(默认档省 0.65~1.15s) + 场景就绪快门 + 等表调用防误删 已就位"
 
           # ── V0.2.96 校验（Aevon(73)：①开窗速度收尾 ②抖音概率卡死取证哨 R1）──
-          # ①场景就绪 poll 拍加密：0.4s→0.1s（Aevon(73) 微信「等待 2 次」平均白等 0.2~0.3s）
           grep -q 'Timer(timeInterval: 0.1, repeats: true) { timer in' "$WMGR" \
             || { echo "::error::0.2.96 场景就绪 poll 必须是 0.1s 拍（AevonScenePollFastV296）"; exit 1; }
           grep -q 'attempts > 100' "$WMGR" \
@@ -3899,7 +3808,6 @@ jobs:
             && grep -q 'AevonGripHookProbeInstall' "$BH" \
             && grep -q 'installGripProbeIfNeeded' "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
             || { echo "::error::0.2.99 探测骨架接线不完整"; exit 1; }
-          # V0.3.15（AevonGripHardcodeV315）反转：GripHookProbe 只控制取证深度，对普通用户毫无作用，
           # 已从设置页移除（代码仍读该键，默认 false = 探针不装）。这里守「UI 不许再出现」。
           if grep -q 'GripHookProbe' "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"; then
             echo "::error::Root.plist 又出现 GripHookProbe（0.3.15 已从设置页移除）"
@@ -3931,7 +3839,6 @@ jobs:
           # ②挂起执行日志带 AevonSuspendDelayV2100 标记（进二进制）
           grep -q 'AevonSuspendDelayV2100' "$WM100" \
             || { echo "::error::0.2.100 缺 AevonSuspendDelayV2100 标记"; exit 1; }
-          # ③几何静默闸删净：guardTransitionQuiet 与 guardFreezeHoldDeadline 不许残留
           if grep -q 'guardTransitionQuiet\|guardFreezeHoldDeadline' "$WV"; then
             echo "::error::0.2.100 几何静默闸残留（guardTransitionQuiet/guardFreezeHoldDeadline 应删净）"; exit 1
           fi
@@ -4701,7 +4608,6 @@ jobs:
           echo "── V0.3.21/V0.3.22/V0.3.23: 跳上去停住 + 白晕 + 图标 40pt + 进度展开 + 设置门控 ──"
 
           # ①②③ 关键帧：矩阵顺序 / 单峰起跳波形 / 时长上限 —— 一次解析完。
-          #    ⛔ 不许用 `grep -o 't: [0-9.]*'` 取值：`lift: ` 里也含 `t: `，取出来的是 lift
           python3 - "$KF" <<'PYEOF' || exit 1
           import io, re, sys
 
@@ -4826,7 +4732,6 @@ jobs:
             || { echo "::error::V0.3.22 抬起的图标没有 zPosition 置顶"; exit 1; }
           grep -qF "layer.zPosition = 0" "$RM" \
             || { echo "::error::V0.3.22 落地没把 zPosition 归零（层级会一直累加）"; exit 1; }
-          #    ⛔ 写成 if 而不是 `grep && {...}`：`run:` 是 `bash -e`，前半失败会直接把整步判红。
           if grep -qF "haloView.layer.shadowOpacity" "$RM"; then
             echo "::error::V0.3.22 白晕用了 shadow 实现 —— 缩放时模糊核每帧重算，0.3.20 的优化被抵消"; exit 1
           fi
@@ -5249,7 +5154,6 @@ jobs:
             || { echo "::error::V0.3.29 reset 没作废手指身份（指针复用会绑错手指）"; exit 1; }
           sed -n '/^- (void)ownPass:/,/^}/p' "$GH26" | grep -qF 'gAevonOwnTouchID = 0;' \
             || { echo "::error::V0.3.29 ownPass 没作废手指身份"; exit 1; }
-          #   ⛔ ownHandoff 里不许改 state —— 改 state 会让 UIKit 把延迟中的触摸补投给下层。
           #   ⛔ V0.3.31 反转：ownHandoff **不许**再清 `_ownSummoned`。抬手帧是放行的、
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find(chr(10)+'}',i);b=s[i:j] if i>0 else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);ok=(i>0 and 'self.state' not in b and '_ownSummoned = NO' not in b);print('V0.3.29/V0.3.31 ownHandoff 只作废身份（不动 state、不清 _ownSummoned）✓' if ok else '::error::V0.3.29/V0.3.31 ownHandoff 动了 state 或清了 _ownSummoned（前者补投延迟触摸、后者丢吞层判据）');sys.exit(0 if ok else 1)" "$GH26"
 
@@ -5380,7 +5284,6 @@ jobs:
 
           # ── V0.3.32 校验（Aevon(105) 定档「落指扣住 + 系统腿 Began 吊销」）──
           # 用户反馈：「抖音中触发圆盘时还是会让抖音页面左滑」。定量：0.3.31 机制全通
-          #（36 hold → 35 summon → 35 转正，吞层实丢 42~220 帧、中位 97，`未被吞` 哨 0 次），
           # 但 App 手里还剩 **began 与 ended 两帧**，而 ended 带的是抬手那一刻的终点坐标。
           # 零 moved 骗不过滚动视图，「按下(425,750) → 抬起(≈330,690)」这一对本身就是一次
           # 横滑 —— 抖音左滑进博主主页就是靠它判的。桌面不犯是因为 B 项把桌面 pan 判了失败。
@@ -5460,7 +5363,6 @@ jobs:
 
           echo "V0.3.33 校验: 扣住窗口 55ms→110ms + 见到位移帧再延 60ms（慢起手不再被当点击回放）+ 真点击走抬手路径零延迟 ✓"
           # ── V0.3.34 校验（停靠封面 + 吸附降后台 / 回桌面盖帧回收 + 布防前移）──
-          # 停靠小窗是全工程唯一没有守卫的浮窗（checkBackgroundGuard 里 isDocked 直接 return），
           # 全屏 App 前台时场景被置后台 → 92x158 那块纯黑，只能点一下装回才恢复。
           # 回桌面相反：0.3.25 定档 B3「完全不盖帧」让哨命中到 cs=2 之间 1.48 秒是真空窗。
           for s in AevonDockCoverV334 AevonDockSleepV334 AevonDockCoverLiftV334 AevonFreezeBackV334 AevonArmEarlyV334; do
@@ -5596,6 +5498,29 @@ jobs:
             done
           fi
           echo "V0.3.41 校验: C 路线第一步（场景承载通路只读普查：类方法表 + 掉画现场采样）；零写、零行为改动 ✓"
+
+          # ── V0.3.42 校验（写通道修正：前台回收在落地前被改成 YES）──
+          for m42 in AevonWriteGuardV342 AevonWriteGuardHoldV342 AevonWriteGuardPassV342 AevonWriteGuardOffV342; do
+            strings "$MYD28" | grep -qF "$m42" || { echo "::error::V0.3.42 主库缺标记 $m42"; exit 1; }
+          done
+          WG42="$GITHUB_WORKSPACE/Sources/AevonSceneWriteGuard.m"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static id aevg_fix(');j=s.find('/* ---- 三个挂点',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'gWantHold' in b and 'gHoldUntil' in b and 'aevg_scene_held' in b and 0<=b.find('aevg_scene_held')<b.find('setValue:@YES'));print('V0.3.42 改写门齐（想要 + 续期 + 场景登记，且先判后写） ✓' if ok else '::error::V0.3.42 改写门不齐（会误改别人的场景）');sys.exit(0 if ok else 1)" "$WG42"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();n=s.count('@catch (NSException');g=s.count('@try { [target setValue:');ok=(n>=10 and g==2);print('V0.3.42 崩溃防线齐（@catch x%d，setValue 两条均在 @try 内） ✓'%n if ok else '::error::V0.3.42 崩溃防线不足：@catch=%d setValue受保护=%d'%(n,g));sys.exit(0 if ok else 1)" "$WG42"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();bad=[t for t in ['@selector(updateSettings:','[scene updateSettings','[target setForeground:','[settings setForeground:'] if t in s];ok=not bad;print('V0.3.42 零新增写入 ✓（只改系统要交出去的那份）' if ok else '::error::V0.3.42 出现自发写入（归档(14) SIGTRAP 那条路）: '+bad[0]);sys.exit(0 if ok else 1)" "$WG42"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func checkBackgroundGuard() {');j=s.find('if deskHoldActive { return }',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'AevonWriteGuard.refresh()' in b);print('V0.3.42 续期点在所有早退之前 ✓' if ok else '::error::V0.3.42 续期被早退挡住（定格档不续期 = 拦写提前失效）');sys.exit(0 if ok else 1)" "$WV35"
+          FG42="$GITHUB_WORKSPACE/Sources/AevonForegroundManager.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();n=s.count('AevonWriteGuard.setScene');r=('AevonWriteGuard.release()' in s);ok=(n>=4 and r);print('V0.3.42 登记镜像 %d 处 + 转正交接放手 ✓'%n if ok else '::error::V0.3.42 登记镜像不足或缺转正交接放手（会跟 FrontBoard 抢激活 = 归档(13) SIGTRAP）');sys.exit(0 if ok else 1)" "$FG42"
+          WM42="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();n=s.count('AevonWriteGuard.release()');ok=n>=2;print('V0.3.42 放手点 %d 处 ✓'%n if ok else '::error::V0.3.42 放手点不足（关窗/全屏上场都要放）');sys.exit(0 if ok else 1)" "$WM42"
+          grep -qF 'Sources/AevonSceneWriteGuard.m' "$GITHUB_WORKSPACE/Makefile" || { echo "::error::V0.3.42 Makefile 没加拦写文件"; exit 1; }
+          grep -qF 'Sources/AevonWriteGuard.swift' "$GITHUB_WORKSPACE/Makefile" || { echo "::error::V0.3.42 Makefile 没加拦写桥文件"; exit 1; }
+          APPD42="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD42" ]; then
+            for m42 in AevonWriteGuardV342 AevonWriteGuardHoldV342 AevonWriteGuardPassV342 AevonWriteGuardOffV342; do
+              if strings "$APPD42" | grep -qF "$m42"; then echo "::error::V0.3.42 标记漏进 App 库: $m42"; exit 1; fi
+            done
+          fi
+          echo "V0.3.42 校验: 写通道修正（承载中场景的 foreground 回收在落地前改成 YES / dr=0）；零新增写入、三挂点类型编码自检 fail-closed ✓"
 
 
 

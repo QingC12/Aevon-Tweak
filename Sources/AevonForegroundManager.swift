@@ -26,6 +26,12 @@ final class AevonForegroundManager {
         guard !bundleID.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
         handoff[bundleID] = CACurrentMediaTime() + AevonForegroundManager.handoffWindow
+        /* V0.3.42（AevonWriteGuardV342）：转正交接期**必须**把拦写一起撤掉。
+         * 这一小段是 FrontBoard 自己在把同一个场景全屏拉起 —— 我们再去把
+         * `foreground` 改回 YES 就是在跟它的激活状态机抢同一份 settings，
+         * 归档(12)/(13) 的 SIGTRAP 正是这类冲突。宁可让它闪，也不能撞。 */
+        AevonWriteGuard.setScene(bundleID: bundleID, sceneID: nil, add: false)
+        AevonWriteGuard.release()
     }
 
     private func handoffActiveLocked(_ identifier: String) -> Bool {
@@ -45,18 +51,27 @@ final class AevonForegroundManager {
         lock.lock(); defer { lock.unlock() }
         if let bid = bundleID, !bid.isEmpty { bundleIDs.insert(bid) }
         if let sid = sceneID, !sid.isEmpty { sceneIDs.insert(sid) }
+        /* V0.3.42（AevonWriteGuardV342）：同一份集合镜像给写通道修正模块 ——
+         * 只有登记在册的场景才会被拦下「前台回收」这一笔。 */
+        AevonWriteGuard.setScene(bundleID: bundleID, sceneID: sceneID, add: true)
     }
 
     func remove(bundleID: String?, sceneID: String?) {
         lock.lock(); defer { lock.unlock() }
         if let bid = bundleID { bundleIDs.remove(bid) }
         if let sid = sceneID { sceneIDs.remove(sid) }
+        AevonWriteGuard.setScene(bundleID: bundleID, sceneID: sceneID, add: false)
     }
 
     func removeAll() {
         lock.lock(); defer { lock.unlock() }
+        let oldBundles = bundleIDs
+        let oldScenes = sceneIDs
         bundleIDs.removeAll()
         sceneIDs.removeAll()
+        for bid in oldBundles { AevonWriteGuard.setScene(bundleID: bid, sceneID: nil, add: false) }
+        for sid in oldScenes { AevonWriteGuard.setScene(bundleID: nil, sceneID: sid, add: false) }
+        AevonWriteGuard.release()
     }
 
     var isEmpty: Bool {

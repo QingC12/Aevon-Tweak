@@ -104,6 +104,18 @@ private func installExperimentalHooks() {
      *
      * 下面保留的都是只读 / 只影响渲染层的安全 hook。
      */
+    /* V0.3.42（AevonWriteGuardV342）：写通道修正 —— 承载中场景的 `foreground=NO`
+     * 会在**落地之前**被改成 `foreground=YES / deactivationReasons=0`。
+     *
+     * 依据（0.3.41 普查 + Aevon(112) 日志）：三次回桌面掉画的现场全是
+     * `fg=0 dr=0 active=1 cs=0`，而 `pm` / 呈现层 / `clientProcess` 一直健康 ——
+     * 掉的是「内容」这一档，唯一变化的就是 `settings.foreground` 1→0。
+     * 且第三次掉画此前 1.1 秒内**零写入**，证明「我们写得太多」不是原因，
+     * 真正的原因是「系统那一笔 NO 落地了，我们事后才追着改」。
+     * 修法即 Stheno / TrollOpen 的同款：只改系统本来就要交出去的那份 settings，
+     * 不新增任何写入（V0.1.5 归档(14) 的 SIGTRAP 是自发写入，不是这一条）。 */
+    AevonWriteGuard.install()
+
     /* V0.2.78（AevonSceneFgGuardV278，用户 Aevon(50) #2/#3）：
      * 切屏 / 回桌面时浮窗黑屏的老根因（档案 round13）是「系统把 scene 的 foreground
      * 写回 NO → 进程挂起 → layers=0」。开源 MilkyWayReborn（iOS 17-26）的解法是

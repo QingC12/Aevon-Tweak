@@ -162,6 +162,10 @@ enum AevonWindowManager {
     ///   ④ 距开窗不足 5 秒 → 判定为开窗自身的副作用，不动；
     ///   ⑤ 其余情况 → 关窗（`releaseOnly`，不写任何场景状态，避免重演 SIGTRAP）。
     static func handleFullscreenSceneAppeared(sceneIdentifier: String) {
+        /* V0.3.42（AevonWriteGuardV342）：有 App 真的全屏上场了 → 立刻停止替承载场景
+         * 强撑前台。否则我们会在系统把「另一个 App」推上前台的同时，把浮窗里那个
+         * App 也按在前台（两个 App 同时认为自己在前台 = 双份渲染 + 后台生命周期错乱）。 */
+        AevonWriteGuard.release()
         guard !sceneIdentifier.isEmpty else {
             AevonLog.warn("[窗口] 全屏 App 画面出现，但场景标识取不到（探针待补 KVC 路径）；本次不自动关窗（AevonFullscreenCloseV106）")
             return
@@ -1491,6 +1495,9 @@ enum AevonWindowManager {
          * 全在主线程）。垫底图链路退役之后没人再读它，留着纯粹是白付这笔钱 ——
          * 而且关窗瞬间正在转场，抓到的经常是过渡帧（0.2.56 日志就有「窗口区域快照判黑」）。 */
         windowView.teardown()
+        /* V0.3.42（AevonWriteGuardV342）：主窗没了且没有停靠小窗 → 立刻停止拦写，
+         * 让 App 正常回到系统手里（多撑一秒就是多一秒的「不该在前台却在前台」）。 */
+        if dockedViews.isEmpty { AevonWriteGuard.release() }
         // V0.2.56（AevonCloseDisarmV256）：窗没了 → 拖拽吞咽状态必须一并解除，
         // 残留 floatTouchID 只会误吞同槽位的新触摸（pan 死、点按活）。
         AevonEdgeEntry.forceDisarmFloatGesture(reason: "关窗 \(bundleID)")

@@ -2929,8 +2929,24 @@ final class AevonWindowView: UIView {
     ///   · `cs == 2`（在画）→ **立刻撤冻结**（这是 #6「黑屏 1 秒以上」的直接解）；
     ///   · `cs` 是 0/1（确实没在画）→ 确认没画面就盖最后一帧 + 有界重申；
     ///   · `cs == -1`（读不到）→ **一根手指都不动**，既不盖也不撤（绝不把「读不到」当黑）。
+    /// V0.3.42（AevonWriteGuardV342）：这一扇窗此刻是否真的「浮在桌面上」。
+    /// 只认整窗 alpha（让位一律纯 alpha，禁 isHidden —— 见 0.2.60 纪律），
+    /// 再要求承载有内容：还没出过首帧的窗不替它强撑场景。
+    private func windowAlphaForWriteGuard() -> Bool {
+        guard let w = window else { return false }
+        guard sceneHost.hasContent else { return false }
+        return w.alpha >= 0.5
+    }
+
     private func checkBackgroundGuard() {
         guard window != nil, !isTearingDown else { return }
+        /* V0.3.42（AevonWriteGuardV342）：每拍给写通道修正续期。
+         * 为什么要续期而不是开一次就够：Aevon(112) 日志实测「最后一次写之后约 3 秒，
+         * 系统会重新算一次停用原因并把场景收走」（断言 24.238 释放 → 27.136 掉画）。
+         * 只要窗口还在桌面上浮着，就不该有那一笔 NO 落地。
+         * 门在 window.alpha 上：让位/全屏 App 在场时窗口是透明的，此时不续期
+         * （让系统正常把 App 收走，别替别人的 App 硬撑）。 */
+        if windowAlphaForWriteGuard() { AevonWriteGuard.refresh() }
         /* V0.3.39（AevonKeepHoldV339）：保活断言续持到期 → 在这里释放。
          * 放在 deskHoldActive 早退之前：定格保持那条路不接管断言，但到期必须有人放手，
          * 否则断言会一直挂着（一个没人释放的断言 = 该场景永远不被系统收走）。 */

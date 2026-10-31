@@ -22,6 +22,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonKeepAliveProbe.m \
     Sources/AevonSnapProbe.m \
     Sources/AevonSceneCensus.m \
+    Sources/AevonSceneWriteGuard.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
     Sources/AevonCrashCatcher.swift \
@@ -41,6 +42,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonRuntime.swift \
     Sources/AevonSwizzle.swift \
     Sources/AevonForegroundManager.swift \
+    Sources/AevonWriteGuard.swift \
     Sources/AevonAppInfo.swift \
     Sources/AevonAppLayout.swift \
     Sources/AevonSceneHelper.swift \
