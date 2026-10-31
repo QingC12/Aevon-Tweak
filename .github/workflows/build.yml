@@ -2364,8 +2364,10 @@ jobs:
             || { echo "::error::0.2.59/0.2.62 重申延迟表不见了（0.25s 桶距或让位期单发被删）"; exit 1; }
           grep -q '\[0.25, 0.55, 0.85\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.59 非让位离场仍必须保留 0.25/0.55/0.85 三拍（AevonGuardFastV259 定档）"; exit 1; }
-          grep -q 'reason.contains("画面离场") ? \[0.40\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.62 让位期重申没收到一次（多发 = 快速闪）"; exit 1; }
+          #    V0.3.27（AevonReassertBudgetV327）：让位期连那 0.40s 也不要了 —— 只留
+          #    「立即」一发，总预算 1 次。判据形态随之从 `? [0.40]` 变成 `? []`。
+          grep -q 'isLiveWait ? \[\] : \[0.25, 0.55, 0.85\]' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
+            || { echo "::error::0.2.62/0.3.27 让位期重申没收到一次（多发 = 快速闪）"; exit 1; }
           grep -q 'now - lastReassertAt < 0.25' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.59 重申间隔下限必须是 0.25s（V0.2.55 的 0.35s 已被 AevonGuardFastV259 反转）"; exit 1; }
           echo "V0.2.55 校验: 把手物理化+位置30% + 手势探针 + 拖拽残留自愈 + 停靠任意点装回 + 回桌面重申加密 已就位"
@@ -2744,9 +2746,9 @@ jobs:
           # 注意：`if !warmupCanvas {` 本身还保留着 —— 非预热档开窗时的 kickRelayout
           # 是正当代码；退役的只是它**后面**那组 scheduleSeamRepair 定时自查（上一条）。
           # ⑤让位期只重申一次（每多发一次 = 远程表面重建一次 = 一次黑闪）
-          grep -q "reason.contains(\"画面离场\") ? \[0.40\]" \
+          grep -q 'isLiveWait ? \[\] : \[0.25, 0.55, 0.85\]' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
-            || { echo "::error::0.2.62 让位期重申没收到一次（多发会快速闪）"; exit 1; }
+            || { echo "::error::0.2.62/0.3.27 让位期重申没收到一次（多发会快速闪）"; exit 1; }
           # V0.2.65 反转：让位期**不再现场抓帧**（抓帧强迫重绘 = 一次闪），次数上限随之退休
           grep -q 'liveCaptureCount' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             && { echo "::error::0.2.65 让位期又开始现场抓帧计数（抓帧强迫重绘 = 闪）"; exit 1; } || true
@@ -4757,10 +4759,10 @@ jobs:
             || { echo "::error::V0.3.15 启动时没把自建腿写成恒开"; exit 1; }
           grep -q 'AevonGripOwnLegEnable(true,' "$EE" \
             || { echo "::error::V0.3.15 prefschanged 里没把自建腿写成恒开"; exit 1; }
-          # ③严格判据角度式：短滑看绝对量、长滑看 14 度锥形
+          # ③严格判据角度式：短滑看绝对量、长滑看锥形（V0.3.27 起锥角走配置值 cone）
           #   Aevon(92) 那 6 次 strict 放行里，dx=-99/dy=13 的角度只有 7.5 度，却在绝对阈值下被放掉。
-          grep -q 'ady <= 6.0 || ady <= adx \* 0.25' "$OWNM" \
-            || { echo "::error::V0.3.15 边缘候选还是绝对 |dy|<=6（大左滑会被误放：dx=-99/dy=13）"; exit 1; }
+          grep -q 'ady <= 6.0 || ady <= adx \* cone' "$OWNM" \
+            || { echo "::error::V0.3.15/0.3.27 边缘候选还是绝对 |dy|<=6（大左滑会被误放：dx=-99/dy=13）"; exit 1; }
           # ④日志：hold 行的 level 标识必须走 %@（%s 只许接 ASCII，否则 MacRoman 二次编码变乱码）
           grep -q 'L2 strict 边缘候选' "$OWNM" \
             && grep -q 'L1 flush 贴边落点' "$OWNM" \
