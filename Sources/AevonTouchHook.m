@@ -18,11 +18,18 @@
  *   所以当圆盘由全局通道唤起、并且还压着这根手指时，Swift 侧会告诉这里「这根 touch 要吞」，
  *   这一条事件就不再调用原实现（App 收不到），圆盘靠全局通道自己完成旋转 / 选定 / 开窗。
  *
+ * V0.3.32 为什么还要「扣住 began」：
+ *   0.3.31 把 moved 全吞了（实丢 42~220 帧），App 手里只剩 began 与 ended 两帧；
+ *   而 ended 带的是抬手那一刻的**终点坐标**。零 moved 骗不过滚动视图，但「按下(425,750)
+ *   → 抬起(≈330,690)」这一对本身就是一次横滑 —— 抖音左滑进博主主页就是靠它判的。
+ *   要彻底消掉只能让 App 一帧都拿不到，于是 began 也先扣住，55ms 内判出召唤就永不回放。
+ *
  * 安全设计（任何一条不成立就退回原样）：
  *   · 只在圆盘「由全局通道唤起」且「那根手指还没抬起」时丢弃，最多 12 秒（Swift 侧兜底）；
  *   · 圆盘一收起立刻解除（AevonEdgeEntry.ringDidDismiss）；
  *   · 一条事件里只要有任何一个触摸不属于那根手指，就整体照常投递（宁可不吞，也不能误伤）；
- *   · 全程 @try/@catch，任何异常都不外抛；找不到方法时静默跳过并返回 NO。
+ *   · 全程 @try/@catch，任何异常都不外抛；找不到方法时静默跳过并返回 NO；
+ *   · 扣住窗口只有 55ms，右上方 y ≤ 140 的区域（控制中心下拉）一律不扣。
  */
 
 extern void AevonGlobalTouchPhase(NSInteger phase, uintptr_t touchID, CGFloat x, CGFloat y);
@@ -50,9 +57,79 @@ extern void AevonGripOwnSwallowTick(void);
 // 走「收养」分支（只喂不吞），App 就拿到了剩余整段滑动。
 extern void AevonGripOwnExternalMove(uintptr_t tid, double x, double y);
 
+// V0.3.32（AevonHeldBeginV332）：扣住 began 之后的三件事 —— 外部喂落指、退出本轮、外部收尾。
+extern int  AevonGripOwnExternalBegin(uintptr_t tid, double x, double y);
+extern void AevonGripOwnDisarm(void);
+extern void AevonGripOwnExternalEnd(double x, double y);
+extern int  AevonGripOwnSummonedFlag(void);
+extern void AevonGripOwnNote(const char *tag, const char *detail);
+
 static IMP AevonOrigSendEvent = NULL;
 static BOOL AevonTouchHookInstalled = NO;
 static BOOL AevonTouchHookFailed = NO;
+
+/* ---------------------------------------------------------------------------
+ * V0.3.32（AevonHeldBeginV332）：落指扣住状态。
+ *
+ * `gAevonHeldEvent` 是**强引用**：扣住期间这条 `UIEvent` 必须活着，55ms 后可能要用它
+ * 调原 `sendEvent:` 回放。回放失败（event 已失效 / UIKit 抛异常）时只放弃这一次点击，
+ * 绝不向 SpringBoard 冒泡 —— 那样是 SIGABRT。
+ *
+ * 三个状态：
+ *   扣住中（HeldEvent != nil, !Committed）→ 等 55ms 超时，或等判出召唤；
+ *   已召唤（Committed = YES, HeldEvent = nil）→ 这根手指的所有帧全丢，含 ended；
+ *   已回放（HeldEvent = nil, Committed = NO）→ 一切照旧，App 该收什么收什么。
+ * ------------------------------------------------------------------------- */
+static __unsafe_unretained UIApplication *gAevonHeldApp = nil;
+static UIEvent *gAevonHeldEvent = nil;
+static uintptr_t gAevonHeldTid = 0;
+static CGPoint gAevonHeldPoint = CGPointZero;
+static CFTimeInterval gAevonHeldAt = 0;
+static BOOL gAevonHeldCommitted = NO;
+static NSUInteger gAevonHeldDropped = 0;
+
+/// 扣住窗口。55ms ≈ 3~4 帧 @60Hz，足够判出 8pt 召唤（Aevon(105) 实测首帧到场 3~46ms），
+/// 又短到人手最短的一次点击（~60ms）也来得及回放。
+static const double kAevonHeldWindow = 0.055;
+
+static void AevonHeldResetState(void) {
+    gAevonHeldEvent = nil;
+    gAevonHeldTid = 0;
+    gAevonHeldCommitted = NO;
+    gAevonHeldDropped = 0;
+}
+
+/// 把扣住的那条 began 原样回放给 UIKit，并让自建腿退出本轮。
+/// 回放失败只放弃这一次点击，绝不向 SpringBoard 冒泡（那里抛异常就是 SIGABRT）。
+static void AevonHeldReplayNow(const char *why) {
+    UIEvent *event = gAevonHeldEvent;
+    __unsafe_unretained UIApplication *app = gAevonHeldApp;
+    gAevonHeldEvent = nil;
+    gAevonHeldTid = 0;
+    gAevonHeldDropped = 0;
+    if (event == nil) { return; }
+    @try {
+        AevonGripOwnDisarm();
+        if (AevonOrigSendEvent != NULL && app != nil) {
+            ((void (*)(id, SEL, UIEvent *))AevonOrigSendEvent)(app, @selector(sendEvent:), event);
+            AevonGripOwnNote("held", why);
+        }
+    } @catch (NSException *exception) {
+        AevonGripOwnNote("held", "回放失败（异常）→ 放弃这根手指，绝不崩 SpringBoard"
+                                 "（AevonHeldReplayV332）");
+    }
+}
+
+/// 55ms 到点：还没判出召唤 = 不是呼盘手势（点击 / 纵向滚动 / 起手太靠内）→ 原样回放。
+///
+/// 回放前必须 `AevonGripOwnDisarm()`：让自建腿彻底退出这根手指，之后它的帧一路正常投递。
+/// 不退出就是 0.3.3 铁律说的「began 放行、中途改吞」—— App 收不到终止帧，
+/// `UIScrollView` 的触摸延迟队列永久挂起，整个 App 卡屏。
+static void AevonHeldTimerFired(void) {
+    if (gAevonHeldEvent == nil || gAevonHeldCommitted) { return; }
+    AevonHeldReplayNow("55ms 内未召唤 → 已回放 began（App 照常收到这一下）"
+                       "（AevonHeldReplayV332）");
+}
 
 static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
     // CI 标记（V0.0.24）：C 函数符号名只在 LC_SYMTAB，macOS 的 strings 默认不扫符号表，
@@ -62,13 +139,63 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
     if ([AevonTouchSwallowHookV24 isEqualToString:@""]) { return; }
 
     BOOL swallow = NO;
-    // V0.3.31（AevonSwallowFeedV331）：本条事件里被判定要吞、且是 moved 的那根手指。
-    // 整条丢弃之前用它回喂自建识别器 —— App 拿不到位移，判据也不缺帧。
     uintptr_t fedTid = 0;
     CGPoint fedPoint = CGPointZero;
+    BOOL heldRelease = NO;
+    BOOL heldAbort = NO;
+    CGPoint releasePoint = CGPointZero;
+
+    /* 已召唤状态卡住超过 3s（抬手帧被系统吞掉 / App 被切走）→ 自己松绑，
+     * 否则后面每一次右缘落指都不再走扣住这条路，行为静默退回 0.3.31。 */
+    if (gAevonHeldCommitted && gAevonHeldAt > 0 && CACurrentMediaTime() - gAevonHeldAt > 3.0) {
+        AevonHeldResetState();
+    }
+
     @try {
         NSSet<UITouch *> *touches = [event allTouches];
         if (touches.count > 0) {
+            /* ── ① 落指扣住（V0.3.32）──
+             * 单指 began、落点在右缘 40pt 内、y > 140（右上角控制中心下拉绝不扣）时，
+             * 先问自建腿「这根手指归不归你」。归 → 这一帧不投递，留到 55ms 后再决定。 */
+            if (gAevonHeldEvent == nil && !gAevonHeldCommitted && touches.count == 1) {
+                UITouch *only = [touches anyObject];
+                if (only.phase == UITouchPhaseBegan) {
+                    CGPoint p = [only locationInView:nil];
+                    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+                    if (p.y > 140.0 && p.x >= sw - 40.0) {
+                        uintptr_t tid = (uintptr_t)(__bridge void *)only;
+                        int claimed = 0;
+                        @try {
+                            claimed = AevonGripOwnExternalBegin(tid, (double)p.x, (double)p.y);
+                        } @catch (NSException *exception) {
+                            claimed = 0;
+                        }
+                        if (claimed) {
+                            gAevonHeldApp = (__unsafe_unretained UIApplication *)[UIApplication sharedApplication];
+                            gAevonHeldEvent = event;
+                            gAevonHeldTid = tid;
+                            gAevonHeldPoint = p;
+                            gAevonHeldAt = CACurrentMediaTime();
+                            gAevonHeldCommitted = NO;
+                            gAevonHeldDropped = 0;
+                            /* Swift 侧（圆盘指针 / 吞层簿记）照样要看到这一帧，
+                             * 看不到的只有 App —— 这正是本版和 0.3.31 的全部差别。 */
+                            AevonGlobalTouchPhase((NSInteger)only.phase, tid, p.x, p.y);
+                            AevonGlobalTouchShouldSwallow(tid, (NSInteger)only.phase);
+                            /* 这一帧同样没投给 App，计入「吞层实丢」，让 lift 日志的
+                             * 数字等于「App 一共少看见几帧」。 */
+                            AevonGripOwnSwallowTick();
+                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                                         (int64_t)(kAevonHeldWindow * NSEC_PER_SEC)),
+                                           dispatch_get_main_queue(), ^{
+                                AevonHeldTimerFired();
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+
             NSInteger active = 0;
             NSInteger swallowCount = 0;
             for (UITouch *touch in touches) {
@@ -81,6 +208,9 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                 uintptr_t touchID = (uintptr_t)(__bridge void *)touch;
                 // `locationInView:nil` 返回触摸所在窗口的坐标（窗口全屏，等价屏幕坐标）
                 CGPoint point = [touch locationInView:nil];
+                /* V0.3.32：已判出召唤的那根手指 —— 连抬手帧也一起丢。
+                 * 0.3.30 起抬手帧是显式放行的，泄漏就是从这一帧的终点坐标来的。 */
+                BOOL forceHeld = (gAevonHeldCommitted && gAevonHeldTid != 0 && touchID == gAevonHeldTid);
                 /*
                  * 顺序很重要（V0.0.25）：
                  *   · began / moved —— **先上报再询问**。Swift 侧要在 begun 时就登记
@@ -91,14 +221,24 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
                  */
                 BOOL isRelease = (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled);
                 if (isRelease) {
-                    if (AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) { swallowCount += 1; }
+                    if (forceHeld || AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) {
+                        swallowCount += 1;
+                    }
                     AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
+                    if (forceHeld) { heldRelease = YES; releasePoint = point; }
+                    /* 还没判出就抬了（快速点击）→ 立刻回放扣住的 began，再把这条 ended
+                     * 正常投递。不回放 = 带内点击凭空消失；顺序也不能反（先 ended 后
+                     * began 就是一条孤儿）。 */
+                    if (!forceHeld && gAevonHeldEvent != nil && !gAevonHeldCommitted
+                        && gAevonHeldTid != 0 && touchID == gAevonHeldTid) {
+                        heldAbort = YES;
+                    }
                 } else {
                     AevonGlobalTouchPhase((NSInteger)phase, touchID, point.x, point.y);
-                    if (AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) {
+                    if (forceHeld || AevonGlobalTouchShouldSwallow(touchID, (NSInteger)phase)) {
                         swallowCount += 1;
                         /* V0.3.31（AevonSwallowFeedV331）：这一帧即将从投递链上消失，
-                         * 只有位移帧需要回喂（began 已经被识别器收到了，ended 不参与判据）。 */
+                         * 只有位移帧需要回喂（began 已被识别器收到，ended 不参与判据）。 */
                         if (phase == UITouchPhaseMoved) { fedTid = touchID; fedPoint = point; }
                     }
                 }
@@ -110,6 +250,17 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
     } @catch (NSException *exception) {
         // 私有路径出错绝不影响 SpringBoard
         swallow = NO;
+    }
+    /* 快速点击（55ms 内就抬了）：先按原顺序把扣住的 began 补投，再照常投递这条 ended。
+     * 两条都到齐，App 看到的是一次完整的点击 —— 这是「扣住 began」必须付的代价里
+     * 唯一不能妥协的那一条。 */
+    if (heldAbort) {
+        AevonHeldReplayNow("落指 55ms 内抬了（点击）→ 已回放 began，点击照常送达"
+                           "（AevonHeldReplayV332）");
+        if (AevonOrigSendEvent) {
+            ((void (*)(id, SEL, UIEvent *))AevonOrigSendEvent)(self, _cmd, event);
+        }
+        return;
     }
     if (swallow) {
         /* V0.3.30（AevonEarlyBindV330）：真的丢弃了才 +1（判断之外不计数）。 */
@@ -126,6 +277,30 @@ static void AevonHookSendEvent(id self, SEL _cmd, UIEvent *event) {
             } @catch (NSException *exception) {
                 // 回喂失败 = 这一帧判据丢了，下次同构手势照常；绝不向 SpringBoard 冒泡
             }
+        }
+        /* V0.3.32：扣住的那条 began 要不要回放，就在这一刻定。
+         * 判出召唤 → 永不回放（App 连落指帧都没见过，起止坐标差这条泄漏彻底消失）。 */
+        if (gAevonHeldEvent != nil && !gAevonHeldCommitted) {
+            int summoned = 0;
+            @try { summoned = AevonGripOwnSummonedFlag(); } @catch (NSException *exception) { summoned = 0; }
+            if (summoned) {
+                gAevonHeldCommitted = YES;
+                gAevonHeldEvent = nil;      // 强引用放掉：这段 began 从此不存在
+                AevonGripOwnNote("held", "判出召唤 → 扣住的 began 永不回放，App 全程零帧"
+                                         "（AevonHeldBeginV332）");
+            }
+        }
+        if (heldRelease) {
+            /* 已召唤手指的抬手帧：外部收尾（lift 信号 + 清自建腿簿记），然后整个丢弃。
+             * 这根手指从头到尾没进过 UIKit 的触摸序列，`-reset` 不会来 —— 不清场就是
+             * 「呼完一次盘，两秒半内怎么划都没反应」。 */
+            @try {
+                AevonGripOwnExternalEnd((double)releasePoint.x, (double)releasePoint.y);
+            } @catch (NSException *exception) {
+            }
+            AevonGripOwnNote("held", "抬手帧一并丢弃：App 全程未见这根手指"
+                                     "（AevonHeldBeginV332）");
+            AevonHeldResetState();
         }
         return;
     }

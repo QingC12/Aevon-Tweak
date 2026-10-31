@@ -5683,6 +5683,65 @@ jobs:
 
           echo "V0.3.31 校验: 吞层回喂识别器（饿死已消除）+ 判据单份共用 + 吞层实丢判据可读 ✓"
 
+          # ── V0.3.32 校验（Aevon(105) 定档「落指扣住 + 系统腿 Began 吊销」）──
+          # 用户反馈：「抖音中触发圆盘时还是会让抖音页面左滑」。定量：0.3.31 机制全通
+          #（36 hold → 35 summon → 35 转正，吞层实丢 42~220 帧、中位 97，`未被吞` 哨 0 次），
+          # 但 App 手里还剩 **began 与 ended 两帧**，而 ended 带的是抬手那一刻的终点坐标。
+          # 零 moved 骗不过滚动视图，「按下(425,750) → 抬起(≈330,690)」这一对本身就是一次
+          # 横滑 —— 抖音左滑进博主主页就是靠它判的。桌面不犯是因为 B 项把桌面 pan 判了失败。
+          TH32="$GITHUB_WORKSPACE/Sources/AevonTouchHook.m"
+
+          # ① 三个标记必须进主库二进制
+          for s in AevonHeldBeginV332 AevonHeldReplayV332 AevonSysLegRevokeV332; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.32 主库缺标记 $s"; exit 1; }
+          done
+
+          # ② ObjC：落指判据抽成一份，UIKit 入口与外部入口共用
+          grep -qF -- '- (BOOL)ownBeginAtPoint:(CGPoint)p touch:(UITouch *)t tid:(uintptr_t)tid {' "$GH26" \
+            || { echo "::error::V0.3.32 没有抽出 ownBeginAtPoint（判据会被复制成两份）"; exit 1; }
+          grep -qF '[self ownBeginAtPoint:p touch:t tid:(uintptr_t)(__bridge void *)t];' "$GH26" \
+            || { echo "::error::V0.3.32 touchesBegan 没走共用判据"; exit 1; }
+          grep -qF 'int AevonGripOwnExternalBegin(uintptr_t tid, double x, double y)' "$GH26" \
+            || { echo "::error::V0.3.32 缺外部落指入口"; exit 1; }
+          grep -qF 'void AevonGripOwnDisarm(void)' "$GH26" \
+            || { echo "::error::V0.3.32 缺回放前的退出入口（会变成「半路改吞」）"; exit 1; }
+          grep -qF 'void AevonGripOwnExternalEnd(double x, double y)' "$GH26" \
+            || { echo "::error::V0.3.32 缺外部收尾（抬手帧被吞后 _ownSummoned 会粘 2.5s）"; exit 1; }
+          grep -qF 'int AevonGripOwnSummonedFlag(void)' "$GH26" \
+            || { echo "::error::V0.3.32 缺「判出召唤没有」的回执"; exit 1; }
+          #   ⛔ 外部入口没有 UITouch，身份只能由调用方递进来
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (BOOL)ownBeginAtPoint:(CGPoint)p touch:(UITouch *)t tid:(uintptr_t)tid {');j=s.find('- (void)touchesMoved:',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and b.find('if (tid != 0) { gAevonOwnTouchID = tid; }')>0);print('V0.3.32 外部落指沿用调用方给的身份 ✓' if ok else '::error::V0.3.32 外部落指没接住 tid（吞层会认不出这根手指）');sys.exit(0 if ok else 1)" "$GH26"
+          #   ⛔ ownDisarm 必须撤销预绑（否则回放之后吞层还在吞 = 0.3.3 铁律的死锁）
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownDisarm {');j=s.find(chr(10)+'}',i);b=s[i:j] if (i>0 and j>i) else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);ok=(i>0 and 'AevonGripPreBindCancel(0);' in b and 'gAevonOwnTouchID = 0;' in b);print('V0.3.32 ownDisarm 撤销预绑并作废身份 ✓' if ok else '::error::V0.3.32 ownDisarm 没撤销预绑（App 收不到终止帧，整屏卡死）');sys.exit(0 if ok else 1)" "$GH26"
+
+          # ③ 钩子：落指扣住 + 55ms 回放 + 已召唤则连抬手帧一起丢
+          grep -qF 'extern int  AevonGripOwnExternalBegin(uintptr_t tid, double x, double y);' "$TH32" \
+            || { echo "::error::V0.3.32 钩子侧没有声明外部落指入口"; exit 1; }
+          grep -qF 'gAevonHeldEvent = event;' "$TH32" \
+            || { echo "::error::V0.3.32 没有强引用扣住的 UIEvent（55ms 后要回放）"; exit 1; }
+          grep -qF 'if (p.y > 140.0 && p.x >= sw - 40.0) {' "$TH32" \
+            || { echo "::error::V0.3.32 缺右上角保护（会把控制中心下拉一起扣住）"; exit 1; }
+          grep -qF 'if (gAevonHeldEvent == nil || gAevonHeldCommitted) { return; }' "$TH32" \
+            || { echo "::error::V0.3.32 定时回放没判「已召唤就不回放」"; exit 1; }
+          grep -qF 'AevonGripOwnExternalEnd((double)releasePoint.x, (double)releasePoint.y);' "$TH32" \
+            || { echo "::error::V0.3.32 抬手帧没有外部收尾（圆盘收不起来）"; exit 1; }
+          #   ⛔ 已召唤的手指连 ended 一起丢 —— 终点坐标就是本版要消灭的那条泄漏
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('BOOL forceHeld =');j=s.find(chr(10),i);line=s[i:j] if (i>0 and j>i) else '';k=s.find('if (forceHeld || AevonGlobalTouchShouldSwallow');ok=(i>0 and 'gAevonHeldTid' in line and k>0);print('V0.3.32 已召唤手指的 ended 也被强制吞掉 ✓' if ok else '::error::V0.3.32 forceHeld 没覆盖抬手帧（终点坐标照旧漏给 App）');sys.exit(0 if ok else 1)" "$TH32"
+          #   ⛔ 快速点击必须「先回放 began、再投递 ended」：顺序反了就是一条孤儿
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('if (heldAbort) {');c=s.find('if (swallow) {');ok=(0<a<c);print('V0.3.32 快速点击先回放再投递 ✓' if ok else '::error::V0.3.32 heldAbort 分支缺失或位置不对（带内点击会凭空消失）');sys.exit(0 if ok else 1)" "$TH32"
+
+          # ④ 系统边缘手势腿在 Began 阶段就吊销
+          grep -qF 'static BOOL AevonGripSysLegShouldFail(id recog)' "$GH26" \
+            || { echo "::error::V0.3.32 缺系统腿 Began 吊销判据"; exit 1; }
+          grep -qF 'if (state == 1 && AevonGripSysLegShouldFail(self))' "$GH26" \
+            || { echo "::error::V0.3.32 系统腿吊销没接到 setState 钩子上"; exit 1; }
+          #   ⛔ 只认右缘起手，且绝不误伤 SBFluidSwitcherScreenEdgePan（底部上滑切换器）
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static BOOL AevonGripSysLegShouldFail(id recog) {');j=s.find(chr(10)+'}',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and '_UIPendingEdgeSwipe' in b and 'UIScreenEdgePanGestureRecognizer' in b and 'sw - 40.0' in b);print('V0.3.32 系统腿吊销只认右缘两个类 ✓' if ok else '::error::V0.3.32 系统腿判据不全（会误伤底部上滑/侧滑返回）');sys.exit(0 if ok else 1)" "$GH26"
+
+          echo "V0.3.32 校验: 落指扣住（App 连 began 都收不到）+ 55ms 回放（点击不受影响）+ 系统腿 Began 即吊销 ✓"
+
+
 
 
 

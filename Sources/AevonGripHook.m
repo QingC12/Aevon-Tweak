@@ -333,6 +333,9 @@ extern void AevonGripOwnLegKick(void);
  * 而调用点（AevonGripGlobalSetState / Pub）在上方，必须先声明。 */
 static BOOL AevonGripDeskPanShouldFail(id recog);
 static void AevonGripDeskPanGuardNote(void);
+/* V0.3.32（AevonSysLegRevokeV332）：系统边缘手势腿的 Began 吊销 —— 同上，先声明。 */
+static BOOL AevonGripSysLegShouldFail(id recog);
+static void AevonGripSysLegRevokeNote(id recog);
 /* V0.3.12：认领入口的前置声明（定义在自建识别器之后；Swift 侧用 silgen_name 直链符号）。 */
 extern void AevonGripOwnLegClaim(void);
 /* V0.3.11：类型值取证也在 AevonGripLegObserve 里触发（那时边沿识别器实例就在手上）。 */
@@ -545,6 +548,14 @@ static void AevonGripGlobalSetState(id self, SEL _cmd, NSInteger state) {
     if (state == 1 && AevonGripDeskPanShouldFail(self)) {
         state = 4;
         AevonGripDeskPanGuardNote();
+    } else if (state == 1 && AevonGripSysLegShouldFail(self)) {
+        /* V0.3.32（AevonSysLegRevokeV332）：系统边缘手势腿 **Began 就吊销**。
+         * 0.3.29 的借腿让路只在它「达阈值」时才拦，而 Aevon(105) 里抖音那 22 次落指
+         * 100% 都被 `_UIPendingEdgeSwipeGestureRecognizer` 认领过 Began —— 它在我们
+         * 扣住 moved 之前就已经进了 Began，向后端（App 的交互式返回/横滑通道）
+         * 发过「边缘手势已开始」。Began 阶段就掐掉，它连通知都发不出去。 */
+        state = 4;
+        AevonGripSysLegRevokeNote(self);
     }
     if (gAevonOrigPrivSetState) {
         ((void (*)(id, SEL, NSInteger))gAevonOrigPrivSetState)(self, _cmd, state);
@@ -556,6 +567,9 @@ static void AevonGripGlobalSetStatePub(id self, SEL _cmd, NSInteger state) {
     if (state == 1 && AevonGripDeskPanShouldFail(self)) {
         state = 4;
         AevonGripDeskPanGuardNote();
+    } else if (state == 1 && AevonGripSysLegShouldFail(self)) {
+        state = 4;
+        AevonGripSysLegRevokeNote(self);
     }
     if (gAevonOrigPubSetState) {
         ((void (*)(id, SEL, NSInteger))gAevonOrigPubSetState)(self, _cmd, state);
@@ -863,6 +877,15 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
 - (void)ownJudgeMove:(CGPoint)p;
 /// V0.3.31（AevonSwallowFeedV331）：吞层回喂入口 —— 这一帧被丢弃了，但判定不能少这一帧。
 - (void)ownExternalMove:(CGPoint)p;
+/// V0.3.32（AevonHeldBeginV332）：落指判据本体 —— UIKit 派进来的 began 与「吞层扣住
+/// 事件之后外部喂进来的 begun」共用同一份。返回 YES = 这根手指归自建腿。
+- (BOOL)ownBeginAtPoint:(CGPoint)p touch:(UITouch *)t tid:(uintptr_t)tid;
+/// V0.3.32（AevonHeldBeginV332）：回放前「退出本轮」—— 保证绝不半路改吞（0.3.3 铁律）。
+- (void)ownDisarm;
+/// V0.3.32（AevonHeldBeginV332）：外部收尾 —— 抬手帧被吞掉时 UIKit 不会派 ended 进来。
+- (void)ownExternalEndAtPoint:(CGPoint)p;
+/// V0.3.32（AevonHeldBeginV332）：是否已判出召唤（吞层据此决定「继续扣住 / 回放」）。
+- (int)ownSummonedInt;
 @end
 
 @implementation AevonOwnLegGesture {
@@ -1110,6 +1133,22 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     if (_ownSummoned) { _ownSummoned = NO; }
     UITouch *t = touches.anyObject;
     CGPoint p = (t != nil) ? [t locationInView:nil] : CGPointZero;
+    [self ownBeginAtPoint:p touch:t tid:(uintptr_t)(__bridge void *)t];
+}
+
+/* V0.3.32（AevonHeldBeginV332）：落指判据本体 —— **两个入口共用同一份**。
+ *
+ * 为什么必须有外部入口：Aevon(105) 定档「落指扣住」之后，began 那一帧不再投递，
+ * UIKit 也就不会把 began 派进这个识别器 —— 判据却没有少，只是驱动它的人从 UIKit
+ * 变成了 `AevonTouchHook.m`。判据本体一个字不动，只把「坐标打哪来」参数化。
+ *
+ * `tid` 由调用方给：UIKit 入口直接取 `UITouch` 指针；外部入口取吞层遍历
+ * `[event allTouches]` 时算出来的指针。两边必须是同一批实例，0.3.29/0.3.30 已实证。 */
+- (BOOL)ownBeginAtPoint:(CGPoint)p touch:(UITouch *)t tid:(uintptr_t)tid {
+    /* V0.3.28（AevonSummonTTLV328）：同 `-touchesBegan:` 的 TTL 守卫，外部入口也要过 ——
+     * 圆盘还开着的时候不许第二根手指把簿记顶掉。 */
+    if (_ownSummoned && CACurrentMediaTime() - _ownSummonedAt < 2.5) { return NO; }
+    if (_ownSummoned) { _ownSummoned = NO; }
     /* 落点判据在**落指那一刻**做 —— 这才是自建腿相对「借识别器」的本质优势：
      * 0.3.8 只能在达阈值之后用后置几何否决，那时 App 已经跟了 8pt 了。
      *
@@ -1126,7 +1165,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
                        @"落点不在右缘呼出区 x=%.0f y=%.0f（屏 %.0fx%.0f）→ 放行"
                        "（侧滑返回/边缘滚动不受影响）", p.x, p.y, scr.width, scr.height];
         [self ownPass:"pass" bucket:AevonOwnPassBand detail:d];
-        return;
+        return NO;
     }
     /* V0.3.18（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏（含「解锁了但还没上滑
      * 进桌面」）里**不接管这根手指**。
@@ -1142,7 +1181,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     if (AevonGripSystemOverlayBlocked() != 0) {
         [self ownPass:"pass" bucket:AevonOwnPassOverlay
                detail:@"系统浮层在屏（控制中心/通知中心/锁屏）→ 不接管，触摸原样还给系统"];
-        return;
+        return NO;
     }
     _ownStart = p;
     _ownHit = p;
@@ -1150,6 +1189,9 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     /* V0.3.29（AevonOwnSwallowV329）：把这根手指的身份递给 Swift。
      * 只在 `level == 1`（带内）之后写入，带外的落指在上一段已经 ownPass 走了。 */
     gAevonOwnTouchID = (uintptr_t)(__bridge void *)t;
+    /* V0.3.32（AevonHeldBeginV332）：外部入口没有 `UITouch`（began 被吞层扣住、没投递），
+     * 身份只能由调用方递进来。两个来源都是 `[event allTouches]` 里的同一批实例。 */
+    if (tid != 0) { gAevonOwnTouchID = tid; }
     /* V0.3.30（AevonEarlyBindV330）：身份一写下来就**立刻**请求预绑，不等召唤。
      *
      * 这是 Aevon(103) 定位出来的唯一漏点，而且它是**结构性**的，不是时延问题：
@@ -1197,6 +1239,7 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
                     "位移达 8pt 即召唤、不看方向（App 此时收不到 began）",
                     p.x, p.y, scr2.width - p.x];
     AevonGripOwnLog("hold", hd.UTF8String);
+    return YES;
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -1314,6 +1357,66 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     if (_ownSummoned) { return; }
     if (self.state != UIGestureRecognizerStatePossible) { return; }
     [self ownJudgeMove:p];
+}
+
+/* V0.3.32（AevonHeldBeginV332）：吞层扣住 began 之后的三件收尾事。
+ *
+ * 这一段的前提很干净：这根手指**从头到尾没进过 UIKit 的触摸序列**（began 被扣住、
+ * moved 被吞、ended 也被吞），所以 `-touchesEnded:` / `-touchesCancelled:` / `-reset`
+ * 一条都不会来。判据照旧、喂盘照旧（走全局通道），缺的只是「谁来收尾」。 */
+
+- (int)ownSummonedInt {
+    return _ownSummoned ? 1 : 0;
+}
+
+/// 回放前的「退出本轮」：把自建腿从这根手指上摘干净，之后它的帧一路正常投递。
+///
+/// ⛔ 这里必须同时撤销预绑（Swift 侧 `preBindTid/globalTouchID/ownsTouch` 一起清），
+/// 否则回放之后吞层还在吞 moved —— 那正是 0.3.3 铁律说的「began 放行、中途改吞」，
+/// 后果是 App 收不到终止帧、`UIScrollView` 触摸延迟队列永久挂起、全 App 卡屏。
+- (void)ownDisarm {
+    [_ownBail invalidate];
+    _ownBail = nil;
+    [_ownHold invalidate];
+    _ownHold = nil;
+    if (self.state == UIGestureRecognizerStatePossible) {
+        self.state = UIGestureRecognizerStateFailed;
+    }
+    AevonGripPreBindCancel(0);
+    gAevonOwnTouchID = 0;
+    _ownMovedFrames = 0;
+    _ownSummoned = NO;
+    _ownSummonedAt = 0;
+    _ownTouch = nil;
+}
+
+/// 抬手帧被吞掉时的收尾：把 lift 信号照常发出去，然后**自己清场**。
+///
+/// 清场不能省：`_ownSummoned` 本应由 `-reset` 清，而这根手指从没进过 UIKit 的触摸序列，
+/// `-reset` 永远不会来 —— 不清就是「呼完一次盘，两秒半内怎么划都没反应」
+///（2.5s TTL 守卫会把这些落指全部挡掉）。
+- (void)ownExternalEndAtPoint:(CGPoint)p {
+    [_ownBail invalidate];
+    _ownBail = nil;
+    [_ownHold invalidate];
+    _ownHold = nil;
+    if (_ownSummoned) {
+        NSString *feed = [NSString stringWithFormat:
+                          @"本轮识别器喂 %d 帧｜吞层实丢 %lu 帧（实丢 >0 = 吞层与回喂在跑，"
+                          @"前半段 0 是正常的：moved 全被吞了）",
+                          _ownFeedFrames, (unsigned long)gAevonOwnSwallowFrames];
+        AevonGripOwnLog("lift", feed.UTF8String);
+        self.state = UIGestureRecognizerStateEnded;
+        AevonGripOwnLift((double)p.x, (double)p.y, 0);
+    }
+    _ownSummoned = NO;
+    _ownSummonedAt = 0;
+    _ownTouch = nil;
+    gAevonOwnTouchID = 0;
+    _ownMovedFrames = 0;
+    _ownFeedFrames = 0;
+    _ownStartStamp = 0;
+    _ownStart = CGPointZero;
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -2078,6 +2181,77 @@ void AevonGripOwnExternalMove(uintptr_t tid, double x, double y) {
     [g ownExternalMove:CGPointMake((CGFloat)x, (CGFloat)y)];
 }
 
+#pragma mark - V0.3.32（AevonHeldBeginV332）：落指扣住 / 回放
+
+/* Aevon(105) 把 0.3.31 的残留泄漏定死在一个具体位置上：**App 拿到的只剩 began 与 ended 两帧，
+ * 而 ended 带的是手指抬起那一刻的终点坐标。**
+ *
+ *   12:28:20.432  SB sendEvent 右缘 began (425,750)        ← 这一帧必然投给 App
+ *   12:28:20.462  自建腿 summon（位移 20pt）                ← 下一帧起全吞
+ *   12:28:20.479  预绑转正                                  ← 吞层生效
+ *   12:28:21.240  lift：吞层实丢 94 帧                       ← 中间一帧都没漏
+ *
+ * 也就是说 App 看到的是「按下(425,750) → 抬起(≈330,690)、中间零帧」。零 moved 骗不过
+ * 任何滚动视图，但**起止坐标本身就是一次横滑**：抖音的左滑进博主主页判据取的就是它。
+ * 桌面之所以不犯，是因为 B 项（`AevonGripDeskPanShouldFail`）把桌面那只 pan 直接判了失败。
+ *
+ * 要彻底消掉，只能让 App **一帧都拿不到** —— began 也不给。但落指那一刻我们还不知道
+ * 用户要点击还是呼盘，所以这里做「扣住 + 短窗决策」：
+ *   · 扣住 began（不调原 sendEvent），同时把这一帧外部喂给自建腿；
+ *   · 55ms 内判出召唤 → 这段 began 永不回放，之后所有帧（含 ended）一律丢弃；
+ *   · 55ms 内没判出      → 原样回放这段 began，并让自建腿退出本轮（绝不半路改吞）。
+ * 点击与纵向滚动因此完全不受影响，代价只是带内起手多等 ≤55ms（与
+ * `UIScrollView.delaysContentTouches` 同一量级）。
+ *
+ * 返回 1 = 这根手指归自建腿（调用方继续扣住）；0 = 不归我们（照常投递这一帧）。 */
+int AevonGripOwnExternalBegin(uintptr_t tid, double x, double y) {
+    if (!gAevonOwnLegEnabled || gAevonOwnGesture == nil) { return 0; }
+    AevonOwnLegGesture *g = (AevonOwnLegGesture *)gAevonOwnGesture;
+    @try {
+        return [g ownBeginAtPoint:CGPointMake((CGFloat)x, (CGFloat)y)
+                            touch:nil
+                              tid:tid] ? 1 : 0;
+    } @catch (NSException *exception) {
+        return 0;
+    }
+}
+
+/// 回放前退出本轮（见 `-ownDisarm` 的注释）。
+void AevonGripOwnDisarm(void) {
+    if (gAevonOwnGesture == nil) { return; }
+    AevonOwnLegGesture *g = (AevonOwnLegGesture *)gAevonOwnGesture;
+    @try {
+        [g ownDisarm];
+    } @catch (NSException *exception) {
+    }
+}
+
+/// 抬手帧被吞掉时的外部收尾（UIKit 不会派 ended 进来）。
+void AevonGripOwnExternalEnd(double x, double y) {
+    if (gAevonOwnGesture == nil) { return; }
+    AevonOwnLegGesture *g = (AevonOwnLegGesture *)gAevonOwnGesture;
+    @try {
+        [g ownExternalEndAtPoint:CGPointMake((CGFloat)x, (CGFloat)y)];
+    } @catch (NSException *exception) {
+    }
+}
+
+/// 吞层每帧问一次：判出召唤没有。1 = 已召唤（扣住的 began 永不回放）。
+int AevonGripOwnSummonedFlag(void) {
+    if (gAevonOwnGesture == nil) { return 0; }
+    AevonOwnLegGesture *g = (AevonOwnLegGesture *)gAevonOwnGesture;
+    @try {
+        return [g ownSummonedInt];
+    } @catch (NSException *exception) {
+        return 0;
+    }
+}
+
+/// 给 `AevonTouchHook.m` 打日志用（`AevonGripOwnLog` 是文件内 static）。
+void AevonGripOwnNote(const char *tag, const char *detail) {
+    AevonGripOwnLog(tag, detail);
+}
+
 #pragma mark - V0.3.30（AevonEarlyBindV330）：落指预绑
 
 /* 落指那一刻就把这根手指交给全局吞层，**不等召唤**。
@@ -2157,6 +2331,55 @@ static BOOL AevonGripDeskPanShouldFail(id recog) {
     } @catch (NSException *exception) {
         return NO;
     }
+}
+
+/* V0.3.32（AevonSysLegRevokeV332）：系统边缘手势腿在 Began 阶段就吊销。
+ *
+ * Aevon(105) 的抖音段（22 次落指，落点 x=414~426）里，`_UIPendingEdgeSwipeGestureRecognizer`
+ * **22/22 全部认领过右缘 began**。它的 `延迟began=否`，也就是说它在我们扣住 moved
+ * 之前就已经进了 Began —— 系统后端（App 的交互式边缘手势通道）收到过「开始了」，
+ * 之后所有 moved 被吞、它再也收不到帧，那段「已经开始」的交互就悬在半空。
+ * 0.3.29 的借腿让路只在「达阈值」时拦它，拦不到 Began 这一下。
+ *
+ * 判据（全部满足才动手，任何一条不满足就 fail-open）：
+ *   ① 自建腿最近 1.2s 内真的召唤过（`gAevonOwnSummonAtGuard`）；
+ *   ② 类名含 `_UIPendingEdgeSwipe` 或 `UIScreenEdgePanGestureRecognizer`
+ *      （`SBFluidSwitcherScreenEdgePanGestureRecognizer` 不含 `UI` 前缀，不会被误伤）；
+ *   ③ 它当前的点在右缘 40pt 内。
+ * 只在 SpringBoard 里生效：`gAevonOwnSummonAtGuard` 只在 SB 的召唤路径里写，
+ * App 进程里恒为 0 —— 不会吊销注入 App 自己的边缘手势。 */
+static BOOL AevonGripSysLegShouldFail(id recog) {
+    @try {
+        if (gAevonOwnSummonAtGuard <= 0) { return NO; }
+        if (CACurrentMediaTime() - gAevonOwnSummonAtGuard > 1.2) { return NO; }
+        if (![recog isKindOfClass:[UIGestureRecognizer class]]) { return NO; }
+        NSString *cn = NSStringFromClass([recog class]);
+        if ([cn rangeOfString:@"_UIPendingEdgeSwipe"].location == NSNotFound
+            && [cn rangeOfString:@"UIScreenEdgePanGestureRecognizer"].location == NSNotFound) {
+            return NO;
+        }
+        UIGestureRecognizer *g = (UIGestureRecognizer *)recog;
+        CGPoint p = [g locationInView:nil];
+        CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+        if (p.x < sw - 40.0) { return NO; }
+        return YES;
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+/// 被吊销的留痕（0.5s 限流）。出现这一行 = 系统腿确实被我们摁住了。
+static void AevonGripSysLegRevokeNote(id recog) {
+    static CFTimeInterval lastAt = 0;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - lastAt < 0.5) { return; }
+    lastAt = now;
+    NSString *cn = @"?";
+    @try { cn = NSStringFromClass([recog class]); } @catch (NSException *exception) { }
+    NSString *line = [NSString stringWithFormat:
+                      @"系统边缘手势腿 Began 即吊销 类=%@（自建腿刚召唤，右缘 40pt 内）"
+                      @"（AevonSysLegRevokeV332）", cn];
+    AevonGripOwnLog("sysleg", line.UTF8String);
 }
 
 /* V0.3.29（AevonDeskPanGuardV329）：桌面 pan 被强制判失败的留痕（0.5s 限流）。
@@ -2627,6 +2850,20 @@ __attribute__((used)) static const char AevonSwallowTickV330Marker[] = "AevonSwa
  * Aevon(104) 定量：31 次 hold、**0 次**自建腿召唤、21 次全部系统腿呼盘、圆盘时差下限
  * 恰为 ownPass 的 0.28s ⇒「吞层的粒度是整条 UIEvent，它把识别器自己也饿死了」。 */
 __attribute__((used)) static const char AevonSwallowFeedV331Marker[] = "AevonSwallowFeedV331";
+
+/* V0.3.32（Aevon(105)「抖音中触发圆盘时还是会让抖音页面左滑」）：**落指扣住**。
+ *
+ * 0.3.31 把 moved 全堵住了（吞层实丢 42~220 帧、中位 97），但 App 手里还剩两帧：
+ * began(落点) 与 ended(**终点**)。零 moved 骗不过滚动视图，可「起止坐标差 ~100pt」
+ * 本身就是一次横滑 —— 抖音左滑进博主主页就是靠它判的。
+ *
+ * 这一版让 App **一帧都拿不到**：began 先扣住不投递（同时外部喂给自建腿），
+ * 55ms 内判出召唤 → 这段 began 永不回放、之后所有帧（含 ended）一律丢弃；
+ * 没判出 → 原样回放 + 自建腿退出本轮（绝不半路改吞）。点击与纵向滚动因此不受影响。
+ * 同时把系统边缘手势腿的吊销点从「达阈值」提前到 **Began**。 */
+__attribute__((used)) static const char AevonHeldBeginV332Marker[] = "AevonHeldBeginV332";
+__attribute__((used)) static const char AevonHeldReplayV332Marker[] = "AevonHeldReplayV332";
+__attribute__((used)) static const char AevonSysLegRevokeV332Marker[] = "AevonSysLegRevokeV332";
 
 /* V0.3.27（Aevon(100) #1「桌面和全屏 app 中手势触发并不是 100% 成功」）：
  * App 内锥角 14° → 22°（可配，`AevonGripCone327`），并在首帧判不出横向时再看 2 帧
