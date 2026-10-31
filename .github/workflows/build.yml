@@ -4298,8 +4298,6 @@ jobs:
             || { echo "::error::0.3.1 探针广度不完整（全局识别器 + 多类入口 + 签名自检）"; exit 1; }
           echo "V0.3.1 校验③: 探针广度（全局 _setState: + 四类手势入口，签名不符即跳过）✓"
 
-          # ── V0.3.2 校验（Aevon(80)：抖音卡屏版本溯源 → 纯探针，零行为改变）──────────
-          # ①右缘触摸路由探针：回答「发往未注入 App（抖音）的触摸经不经过 SB sendEvent」
           #   这是过去 11 个版本所有修法都没验证过的前提假设。
           grep -q 'AevonTouchRouteV302' "$EE" \
             && grep -q 'private static func touchRouteProbe' "$EE" \
@@ -4307,7 +4305,6 @@ jobs:
             && grep -q 'SB sendEvent 看到右缘 began' "$EE" \
             || { echo "::error::0.3.2 触摸路由探针不完整（AevonTouchRouteV302）"; exit 1; }
           echo "V0.3.2 校验①: 右缘触摸路由探针（只观察，判定 SB sendEvent 是否看得到未注入 App 的手指）✓"
-          # ②事件投递链类普查 + 全局 setState: 补探（只查存在性/签名，不装钩子）
           grep -q 'AevonGripProbe4V302' "$EE" \
             && grep -q 'AevonGripCensusClass' "$GH" \
             && grep -q 'BKSHIDEventDeliveryManager' "$GH" \
@@ -4316,30 +4313,20 @@ jobs:
             || { echo "::error::0.3.2 事件投递链类普查不完整（AevonGripProbe4V302）"; exit 1; }
           echo "V0.3.2 校验②: 事件投递链类普查 + 全局 setState: 补探（零钩子、零行为改变）✓"
 
-          # ── V0.3.3 校验（Aevon(81)：全 App 卡屏真凶 = 两条「中途吞触摸」）────────────
-          # 用户原话：「不是只有抖音会卡屏，是所有的应用都会卡屏。触发圆盘手势、滑动手势条
           # 但不要让圆盘出现（滑动距离短时），然后全屏应用必然会卡住，无法操作。」
-          # 根因①（SB 侧）：AevonGripIntentV297 —— began 已投给 App，中途吞 moved/ended。
-          # 根因②（App 侧）：AevonRingSwallow2V271 的整进程 return —— 圆盘一开，已在屏的
-          #   手指失去 moved/ended。两条都制造「有 began 无 ended」→ UIScrollView 触摸延迟
           #   队列永久挂起 → App 完全无响应。
-          # 上面「V0.3.3 校验①」已查根因①删净；这里查根因②整根认领 + 命中带收窄。
           APPSIDE="$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m"
           # ②整根认领：圆盘在屏时只在 began 帧登记，绝不再整进程 return
           grep -q 'AevonRingOwnV303' "$APPSIDE" \
             && grep -q 'BOOL ringActive = AevonRingActiveNow();' "$APPSIDE" \
             && grep -q '圆盘在屏 → 落指整根不投递' "$APPSIDE" \
             || { echo "::error::V0.3.3 圆盘吞法没改成 begun 整根认领（AevonRingOwnV303）"; exit 1; }
-          # 防回退网：AevonWindowSendEventSwizzled 里不许再有「ringActive 就整段 return」的旧形态。
-          # 判据用调用形态而不是标记名（0.2.100 教训：`! grep 标记名` 会命中注释里的旧名字）。
           if sed -n '/static void AevonWindowSendEventSwizzled/,/^static void AevonGripSwallowInstall/p' "$APPSIDE" \
                | grep -q 'if (AevonRingActiveNow()) {'; then
             echo "::error::V0.3.3 旧的「圆盘在屏整进程 return」回来了（卡屏必然复发）"
             exit 1
           fi
           echo "V0.3.3 校验②: App 侧圆盘吞法 = begun 帧整根认领（旧整进程 return 已删净）✓"
-          # ③命中带收窄两侧同步（SB 12pt / App 12pt），且标记进了两个二进制
-          #   注意：本 step 里 $DYLIB / $APP_DYLIB 未定义（那是「校验产物」step 的局部变量），
           #   这里必须自己 find，否则 strings "" 空跑 → 必然红。
           MDYL="$(find . -name 'Aevon.dylib' -path '*DynamicLibraries*' | head -n1)"
           ADYL="$(find . -name 'AevonApp.dylib' | head -n1)"
@@ -4353,11 +4340,6 @@ jobs:
             || { echo "::error::V0.3.3 App 侧 dylib 缺标记（AevonRingOwnV303 / BandNarrow）"; exit 1; }
           echo "V0.3.3 校验③: 主库+App 侧标记双在位（退役/收窄/整根认领）✓"
 
-          # ── V0.3.4 校验（Aevon(82) 定档「路线 A：真正改成 Stheno 式（挂系统识别器）」）──
-          # 前提数据（Aevon(82) 日志）：右缘落指 +6ms `_UIPendingEdgeSwipe` began、+55ms
-          # `UIScreenEdgePan` / `SBFluidSwitcherScreenEdgePan` began，同拍 `SBScreenEdgePan` /
-          # `SBReachability` failed → 系统边沿管线看得见右缘；而 `SBGrabberTongue._handlePullGesture:`
-          # 10 次命中全在底部手势簇 → Stheno 0.1.23 的「主通道」在 17.3.1 不覆盖右缘，
           # 照抄它的代码路径无效，要照抄它「骑系统识别器」的架构。
           # ①系统腿三件：安装入口 + 边沿族过滤 + 认领（外挂 target）
           grep -q 'AevonGripSystemLegV304' "$GH" \
@@ -4366,11 +4348,9 @@ jobs:
             && grep -q 'AevonGripLegArm' "$GH" \
             && grep -q 'addTarget:p action:@selector(handleGesture:)' "$GH" \
             || { echo "::error::V0.3.4 系统识别器腿不完整（安装/边沿族过滤/认领/外挂 target）"; exit 1; }
-          # ②几何与阈值：只认右缘 24pt 起手（屏幕中部拖动一律不碰）+ 左滑 8pt 与把手腿同口径
           grep -q 'if (p.x < sw - 24.0) { return; }' "$GH" \
             && grep -q 'if (dx <= -8.0 && fabs(dy) < 40.0) {' "$GH" \
             || { echo "::error::V0.3.4 系统腿几何/阈值判据缺失（右缘 24pt + 左滑 8pt）"; exit 1; }
-          # ③fail-open 回退 + Swift 侧三标记（呼盘回调 / 腿标记 / 实例级探针）
           grep -q 'gAevonLegEnabled = NO;' "$GH" \
             && grep -q 'AevonGripSystemLegV304' "$EE" \
             && grep -q 'AevonGripLegTagV304' "$EE" \
@@ -4379,7 +4359,6 @@ jobs:
           # ④常驻安装：引导必须无条件装（装进探针开关里 = 关着探针就永远呼不出圆盘）
           grep -q '_ = AevonGripSystemLegInstall()' "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
             || { echo "::error::V0.3.4 引导没有常驻安装系统腿"; exit 1; }
-          # ⑤防回退网：探针安装里不许再重复装全局 setState:（两次 setImplementation 会覆盖转发指针）
           if sed -n '/BOOL AevonGripHookProbeInstall/,/AevonGripHookInstalled = YES;/p' "$GH" \
                | grep -q 'AevonGripOrigGlobalSetState'; then
             echo "::error::V0.3.4 探针安装里又重复装全局 setState:（转发指针会被覆盖）"
@@ -4391,9 +4370,6 @@ jobs:
             || { echo "::error::V0.3.4 主库缺系统腿/实例探针标记"; exit 1; }
           echo "V0.3.4 校验: 系统识别器腿（右缘 24pt 认领 + 8pt 阈值 + 外挂 target + fail-open 回退 + 常驻安装）✓"
 
-          # ── V0.3.5 校验（Aevon(83) 定档「方案 A：探针升级 + 让路开关」）──
-          # 前提数据（Aevon(83) 日志）：系统腿已装、认领 18 条、呼盘成功 3 次，但 60 次
-          # 呼盘里只占 3/60；那 3 次落点全在把手竖条之外 → 把手腿在场时系统腿抢不到。
           RG="$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"
           grep -q 'let want = true' "$RG" \
             && grep -q 'guard !yieldMode else { return false }' "$RG" \
@@ -4405,11 +4381,9 @@ jobs:
           # ②让路必须在设置变更路径上被调用（否则改开关要注销才生效）
           grep -q 'grip.applyYieldMode()' "$RG" \
             || { echo "::error::V0.3.5 refreshFromPrefs 没调 applyYieldMode（开关不能实时生效）"; exit 1; }
-          # ③探针限流改成时间制：同类 2s 一条 + 全局 240（0.3.4 每类 6 条在 20 秒内打满）
           grep -q 'legProbeTotal >= 240' "$EE" \
             && grep -q 'legProbeLastAt\[cls, default: 0\] < 2.0' "$EE" \
             || { echo "::error::V0.3.5 探针还是旧的按条数限流（会打满即静默）"; exit 1; }
-          # ④结局记账三处：ObjC 记 maxDx/changed 帧 + 统一出口 + Swift 三种结局与拦截原因
           grep -q 'maxDxLeft' "$GH" \
             && grep -q 'changedFrames' "$GH" \
             && grep -q 'AevonGripLegFinish' "$GH" \
@@ -4417,10 +4391,8 @@ jobs:
             && grep -q 'AevonGripLegOutcomeV305' "$EE" \
             && grep -q 'static func legBlocked' "$EE" \
             || { echo "::error::V0.3.5 系统腿结局记账不完整（maxDx/changed/出口/拦截原因）"; exit 1; }
-          # ⑤达阈值那条路必须自己报 done，不能再落进「未达阈值」结局（否则数据全错）
           grep -q 'self.reported = YES;    // 达阈值这条路自己负责呼盘' "$GH" \
             || { echo "::error::V0.3.5 达阈值路径没标 reported（会重复报成未达阈值）"; exit 1; }
-          # ⑥V0.3.15 反转：设置页**不许**再有 GripSystemYield（已写死为常量）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 设置页: GripSystemYield 已移除（代码恒开）✓' if ok else '::error::V0.3.15 Root.plist 还有 GripSystemYield（应与代码一起移除，命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑦标记进主库二进制
           strings "$MDYL" | grep -q 'AevonGripYieldV305' \
@@ -4428,25 +4400,17 @@ jobs:
             || { echo "::error::V0.3.5 主库缺让路/结局标记"; exit 1; }
           echo "V0.3.5 校验: 让路开关（实时生效 + 0.3.7 起默认开）+ 探针时间限流 + 系统腿结局三分类✓"
 
-          # ── V0.3.6 校验（Aevon(84) 定档「方案 A：让路彻底化」）──
-          # 前提数据（Aevon(84) 日志）：让路开关在 11:53:58 打开，之后仍有 37 次
-          # 「把手左滑 → 呼出圆盘（全局通道）」；系统腿 44 次「达阈值但被拦 原因=圆盘已开」
-          # + 7 次「不在右缘 24pt 内」。结论：①让路只摘了可视控件层，SB 侧全局通道没停；
           # ②右缘判据用了当前 x，左滑后 x 变小 → 自我否决。
-          # ①收口：hitTestScreenPoint 必须读静态让路镜像（SB 侧全局通道唯一入口）
           grep -q 'static var yieldActive = false' "$RG" \
             && grep -q 'guard !yieldActive else { return false }' "$RG" \
             && grep -q 'AevonRingGrip.yieldActive = want' "$RG" \
             || { echo "::error::V0.3.6 让路没接到 hitTestScreenPoint（SB 侧全局通道照样呼盘）"; exit 1; }
-          # ②moved 呼盘分支也要让路（防止开关在呼盘手势进行中被打开时残留半截手指）
           grep -q 'if !AevonRingGrip.yieldActive,' "$EE" \
             || { echo "::error::V0.3.6 moved 呼盘分支缺让路判断"; exit 1; }
-          # ③右缘判据必须用 began 起点：ObjC 传 startX + Swift 收 startX + 判据读 edgeRef
           grep -q 'extern void AevonGripSystemSummon(double x, double y, double startX, double startY, const char \*cls)' "$GH" \
             && grep -q 'double sx = (double)self.start.x;' "$GH" \
             && grep -q 'AevonGripSystemSummon(fx, fy, sx, sy,' "$GH" \
             || { echo "::error::V0.3.6 ObjC 没把 began 起点 x/y 传给系统腿（判据会自我否决）"; exit 1; }
-          # V0.3.28：几何来源由 `edgeMinX` 换成 `band.minX`（单一几何源），
           # 但「右缘判据必须用 began 起点而不是当前 x」这条本意原样保留。
           grep -q 'static func systemLegSummon(x: CGFloat, y: CGFloat, startX: CGFloat,' "$EE" \
             && grep -q 'startY: CGFloat, cls: String)' "$EE" \
@@ -4466,11 +4430,6 @@ jobs:
             || { echo "::error::V0.3.6 主库缺让路彻底化标记"; exit 1; }
           echo "V0.3.6 校验: 让路接到全局通道收口点 + 右缘判据用 began 起点（防回退网在位）✓"
 
-          # ── V0.3.7 校验（Aevon(85) 定档「方案 A：让路转正」）──
-          # 前提数据（Aevon(85) 日志）：让路开启的 67 秒（12:09:13.022→12:10:20.526）里
-          # 33 次呼盘 33 次全由系统识别器腿完成，前台全在抖音 com.ss.iphone.ugc.Aweme
-          # （__RESTRICT、Aevon 无注入）；「手指落在把手上」0 条、「（全局通道）」0 条、
-          # 「不在右缘 24pt 内」0 条、0 崩溃、0 错误。→ 判据全部达成，转正为默认开。
           # ①Swift 默认值必须是 true（转正的唯一实质改动）
           grep -q 'let want = true' "$RG" \
             || { echo "::error::V0.3.7 让路默认值没转正（还是 false）"; exit 1; }
@@ -4479,28 +4438,18 @@ jobs:
             echo "::error::V0.3.15 让路又变回读偏好（已写死常量 true，设置页无此开关）"
             exit 1
           fi
-          # ③Root.plist 默认值必须是 true（与 Swift 严格同侧，两侧不一致 = 设置页显示与实际相反）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 设置页: 已移除 ✓' if ok else '::error::V0.3.15 Root.plist 的 GripSystemYield 应已移除');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
-          # ④label 不许再挂「实验」字样（转正后仍标实验会误导用户以为是 A/B 档）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripSystemYield'];ok=(len(h)==0);print('V0.3.15 switch: removed ok' if ok else '::error::V0.3.15 switch GripSystemYield should be removed');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑤转正标记进主库二进制
           strings "$MDYL" | grep -q 'AevonYieldDefaultV307' \
             || { echo "::error::V0.3.7 主库缺让路转正标记"; exit 1; }
           echo "V0.3.7 校验: 让路转正为默认开（Swift 与 Root.plist 同侧 + 防回退网 + label 去实验）✓"
 
-          # ── V0.3.8 校验（Aevon(86) 定档「方案 C：触发区参数化 + 模式开关兜底」）──
-          # 前提数据（Aevon(86) 日志）：68 次呼盘、71 次认领，起点 x 全在 406~425（右缘内），
-          # 但落点 y 从 381 一路铺到 722 —— 系统腿判据里根本没有 y，于是「整个右侧都会触发」，
-          # 还和侧滑返回插件抢手势。另一组数据：71 次认领里 36 次落点落在 App 侧吞带内
-          # （x>=413 且 y 659~750）、35 次在带外 → 正是用户说的「有时带动 App、有时不带动」。
-          # ①SB 侧权威几何函数在位（V0.3.13 起读 GripZoneW/GripZoneH 百分比区域）
           grep -q 'static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect' "$RG" \
             && grep -q 'AevonPrefs.double("GripZoneW"' "$RG" \
             && grep -q 'AevonPrefs.double("GripZoneH"' "$RG" \
             || { echo "::error::V0.3.13 SB 侧缺少触发区几何函数或 GripZoneW/GripZoneH"; exit 1; }
           # ②系统腿判据必须真的用几何函数，且纵向必须判（防止回退成「右缘整条」）
-          # V0.3.28（AevonEdgeBandOnlyV328）：暂扣段退役 —— 借腿与自建腿共用同一条 bandRect。
-          #   反向断言「源码不许再出现 padRect」：留一条第二几何就等于留了一条「带外也抢」的路。
           grep -q 'let band = AevonRingGrip.bandRect(screenW: screen.width, screenH: screen.height)' "$EE" \
             && grep -q 'guard edgeRef >= band.minX else' "$EE" \
             && grep -q 'guard yRef >= band.minY && yRef <= band.maxY else' "$EE" \
@@ -4512,8 +4461,6 @@ jobs:
           grep -q 'AevonPrefs.bool("GripScope", default: false)' "$RG" \
             && grep -q 'if !AevonRingGrip.scopeFullEdge {' "$EE" \
             || { echo "::error::V0.3.8 GripScope 兜底开关没接进判据或默认不是关"; exit 1; }
-          # ④App 侧吞带（V0.3.13 归零 → V0.3.14 整段拆净）：与圆盘呼出相关的 App 侧代码
-          #   现在是 0 行。抖音（未注入）实证证明「App 不跟手」100% 由 SB 侧自建腿提供。
           #   防回退：几何变量名 / 判定函数名一律不许再出现在 App 侧源码里。
           #   （注释里也不写原名，否则这条 grep 会被自己命中。）
           if grep -nE '^static (CGRect|CGSize|BOOL|CFTimeInterval) gAevonGrip(Rect|RealScreen|Cached|CacheAt)' \
@@ -4533,16 +4480,12 @@ jobs:
             || { echo "::error::V0.3.8 主库缺触发区参数化标记"; exit 1; }
           echo "V0.3.8/V0.3.13 校验: 触发区走 bandRect（V0.3.13 起为百分比区域）+ GripScope 兜底 + App 吞带已退役（防回退网在位）✓"
 
-          # ── V0.3.9 校验（Aevon(87) 定档「方案 A：自建识别器一步到位」）──
           OWNM="$GITHUB_WORKSPACE/Sources/AevonGripHook.m"
           OWNB="$GITHUB_WORKSPACE/Aevon-Bridging-Header.h"
           OWNE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
-          # ①自建识别器两个属性必须都设 YES —— 少一个就退化成 0.3.8 的「借识别器」
           grep -q 'self.delaysTouchesBegan = YES;' "$OWNM" \
             && grep -q 'self.cancelsTouchesInView = YES;' "$OWNM" \
             || { echo "::error::V0.3.9 自建识别器缺 delaysTouchesBegan / cancelsTouchesInView"; exit 1; }
-          # ②落点判据必须在 touchesBegan 里 —— 这是与 0.3.8「达阈值后才判」的分水岭
-          # V0.3.14：入口从 AevonGripOwnBandHit（0/1）升级成 AevonGripOwnHitLevel（0/1/2）
           python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("- (void)touchesBegan:"); j=s.find("AevonGripOwnHitLevel",i); k=s.find("- (void)touchesMoved:",i); ok=(i>0 and j>i and (k<0 or j<k)); print("V0.3.9 落点判据在 touchesBegan 内 ✓" if ok else "::error::V0.3.9 落点判据不在 touchesBegan 里（退化成达阈值后才判，App 已跟手）"); sys.exit(0 if ok else 1)' "$OWNM"
           # ③防扣死三闸（0.1.9「只能点不能滑」的复发闸门，一条都不能少）
           grep -q 'scheduledTimerWithTimeInterval:0.28' "$OWNM" \
@@ -4554,7 +4497,6 @@ jobs:
             echo "::error::V0.3.9 出现了 class_copyMethodList（SB 进程全类表枚举，0.2.72 实锤崩）"
             exit 1
           fi
-          # ⑤注册前必须签名 fail-closed（返回 void + 恰好 1 个参数）
           grep -q "enc\[0\] != 'v' || AevonGripEncArgCount(enc) != 1" "$OWNM" \
             || { echo "::error::V0.3.9 注册前没做签名自检（参数个数不符会破坏调用约定）"; exit 1; }
           # ⑥桥接头声明在位（Swift 启动时才调得到开关）
@@ -4562,32 +4504,24 @@ jobs:
           && grep -q 'AevonGripOwnLegEnable(true,' \
                  "$GITHUB_WORKSPACE/Sources/AevonBootstrap.swift" \
             || { echo "::error::V0.3.9 桥接声明或启动调用缺失（0.3.10 起默认值必须是 true）"; exit 1; }
-          # ⑦V0.3.15 反转：设置页不许再有 GripOwnLeg（代码已写死 true）
           python3 -c "import plistlib,sys;d=plistlib.load(open(sys.argv[1],'rb'));h=[i for i in d.get('items',[]) if i.get('key')=='GripOwnLeg'];ok=(len(h)==0);print('V0.3.15 设置页: GripOwnLeg 已移除（代码恒开）✓' if ok else '::error::V0.3.15 Root.plist 还有 GripOwnLeg（代码已写死 true，命中=%d）'%len(h));sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/AevonPrefs/Resources/Root.plist"
           # ⑧标记进主库二进制
           strings "$MDYL" | grep -q 'AevonGripOwnLegV309' \
             || { echo "::error::V0.3.9 主库缺自建识别器腿标记"; exit 1; }
           echo "V0.3.9 校验: 自建识别器（落指即判 + 0.1.9 三闸 + 白名单取证 + 默认关）✓"
 
-          # ── V0.3.10 校验（Aevon(88)：自建腿一行没跑 → 真名注册 + 主动装配 + 实时开关 + 转正）──
           # ①注册必须用 census 实测的真名（两参 withType:）。
-          #   V0.3.12 **反转**了原来的「注册体不许出现 toDisplayWithIdentity」——
-          #   0.3.10 得出「17.3.1 上不存在」是因为拿它去问了 SB 的两个管理器类，
-          #   而它的宿主是 UIKitCore 的 `_UISystemGestureManager`（带下划线）。
           #   现在两条都是正路，防回退网改成「两条都必须留在注册体里」。
           [ "$(grep -c 'addGestureRecognizer:withType:' "$OWNM")" -ge 2 ] \
             || { echo "::error::V0.3.10 真名 addGestureRecognizer:withType: 未同时在取证与注册里出现"; exit 1; }
           python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("static BOOL AevonOwnTryRegister"); j=s.find("static void AevonOwnAttachTo",i); body=s[i:j] if (i>0 and j>i) else ""; ok=("toDisplayWithIdentity" in body and "_UISystemGestureManager" in s and "withType:" in body); print("V0.3.12 注册体两条路并存（toDisplayWithIdentity 宿主 _UISystemGestureManager + withType:）✓" if ok else "::error::V0.3.12 注册体缺一条路（toDisplayWithIdentity / withType: / _UISystemGestureManager）"); sys.exit(0 if ok else 1)' "$OWNM"
-          # ②两参调用前必须签名 fail-closed（参数个数不符会破坏调用约定，arm64e 直接炸）
           grep -q "enc\[0\] != 'v' || AevonGripEncArgCount(enc) != 2" "$OWNM" \
             || { echo "::error::V0.3.10 两参注册前没做签名自检"; exit 1; }
           # ③装配必须主动重试（0.3.9 只在第一次滑动时装配 → 那一次必然白扔）
           grep -q 'void AevonGripOwnLegKick(void)' "$OWNM" \
             && grep -q 'gAevonOwnArmTries >= 15' "$OWNM" \
             || { echo "::error::V0.3.10 装配重试缺失（AevonGripOwnLegKick / 15 次上限）"; exit 1; }
-          # ④开关必须实时生效（走设置变更 Darwin 通道，不再只在 SpringBoard 加载时读一次）
           python3 -c 'import sys,io; s=io.open(sys.argv[1],encoding="utf-8").read(); i=s.find("private func aevonPrefsChangedHandler"); ok=(i>=0 and s.find("AevonGripOwnLegEnable",i)>i); print("V0.3.10 自建腿开关实时生效（prefschanged 里重读）✓" if ok else "::error::V0.3.10 开关仍只在启动时读一次（改了必须注销，是 0.3.9 的缺陷）"); sys.exit(0 if ok else 1)' "$OWNE"
-          # ⑤fail-open：宿主旁听只在探针打开时才允许（旁听无仲裁身份，会让打开开关后比之前更差）
           grep -q 'if (gAevonOwnLegProbeOn && host != nil)' "$OWNM" \
             || { echo "::error::V0.3.10 宿主旁听没被探针门住（注册失败时会把行为改坏）"; exit 1; }
           # ⑥防回退：GripOwnLeg 的默认值不许再写回 false
@@ -4601,23 +4535,19 @@ jobs:
             || { echo "::error::V0.3.10 主库缺自建腿注册/转正标记"; exit 1; }
           echo "V0.3.10 校验: 真名注册（两参 + 签名自检）+ 主动重试装配 + 开关实时生效 + 旁听门控 + 默认转正 ✓"
 
-          # ── V0.3.11 校验（Aevon(89)：38 次 hold / 0 次 moved → 真名 withType: + 类型值实测）──
           # ①类型值必须是「运行时读出来」的，源码里不许出现硬编码的手势类型常量
           grep -q 'static long long gAevonOwnGestureType = -1;' "$OWNM" \
             && grep -q 'AevonOwnBestGestureType(void)' "$OWNM" \
             || { echo "::error::V0.3.11 缺类型值运行时取证（gAevonOwnGestureType / AevonOwnBestGestureType）"; exit 1; }
-          # ②类型值没取到就绝不许调注册（宁可少一轮也不猜常量 —— 0.3.9/0.3.10 猜名字已烧两次 run）
           grep -q 'if (type < 0) {' "$OWNM" \
             && grep -q '本轮不注册' "$OWNM" \
             || { echo "::error::V0.3.11 类型值未知时没拦注册（会拿 -1 当类型值调下去）"; exit 1; }
-          # ③取证钩子必须签名 fail-closed 且装在「已知类名」上（0.2.72：禁全类表枚举）
           grep -q 'method_setImplementation(m, (IMP)AevonOwnAddWithType)' "$OWNM" \
             && grep -q 'enc\[0\] != .v. || AevonGripEncArgCount(enc) != 2' "$OWNM" \
             || { echo "::error::V0.3.11 类型值取证钩子缺失或没做签名自检"; exit 1; }
           # ④moved 首帧探针必须在（这是判「注册到底生效没有」唯一的硬判据）
           grep -q 'AevonGripOwnLog("move"' "$OWNM" \
             || { echo "::error::V0.3.11 缺 moved 首帧探针（无法区分「注册没生效」和「手势没移动」）"; exit 1; }
-          # ⑤闸必须是滚动 0.28s + 总上限 0.9s（0.3.10 的固定 0.28s 会把慢速滑动误放行）
           grep -q '0.9 - (CACurrentMediaTime() - _ownStartStamp)' "$OWNM" \
             && grep -q 'ownBailRearm' "$OWNM" \
             || { echo "::error::V0.3.11 防扣死闸没改成滚动 + 总上限"; exit 1; }
@@ -4631,32 +4561,25 @@ jobs:
             || { echo "::error::V0.3.11 主库缺类型值取证/去重标记"; exit 1; }
           echo "V0.3.11 校验: withType: 真名注册 + 类型值运行时实测（未知不猜）+ moved 首帧探针 + 滚动闸 + 双线去重 ✓"
 
-          # ── V0.3.12 校验（Aevon(90)：只有第一次呼盘不跟手 → 连带认领 + 修正查错类 + ivar 取证）──
-          # ①连带认领：ObjC 侧提供 C 入口，Swift 侧必须真的在「达阈值、守卫全过」那一刻调它
           grep -q 'void AevonGripOwnLegClaim(void)' "$OWNM" \
             && grep -q 'ownClaimNow' "$OWNM" \
             || { echo "::error::V0.3.12 连带认领缺失（AevonGripOwnLegClaim / ownClaimNow）"; exit 1; }
           grep -q '@_silgen_name("AevonGripOwnLegClaim")' "$OWNE" \
             && grep -q 'AevonGripOwnLegClaimBridge()' "$OWNE" \
             || { echo "::error::V0.3.12 Swift 侧没在呼盘前调用认领（「只有第一次生效」的根因没修）"; exit 1; }
-          # ②认领后必须有兜底放行 —— 手指不抬手/ended 没派进来时，绝不能让识别器卡在 Began
           grep -q 'ownHoldFired' "$OWNM" \
             || { echo "::error::V0.3.12 认领后缺兜底放行（识别器可能卡在 Began）"; exit 1; }
           # ③防回退：从旁听升级到正路时必须摘掉旧识别器（否则同一个手势有两个家）
           grep -q 'removeGestureRecognizer:old' "$OWNM" \
             || { echo "::error::V0.3.12 升级到正路时没摘掉旁听识别器"; exit 1; }
-          # ④防回退：0.3.11 的 census 闸从来没被置 YES（每轮 kick 重打一遍）—— 必须改成按类去重
           grep -q 'gAevonOwnCensusSeen' "$OWNM" \
             || { echo "::error::V0.3.12 census 重复输出的缺陷没修"; exit 1; }
-          # ⑤ivar 形状取证在位（KVC 五 key 全 miss + 钩子等不到，这是唯一没读过的取证面）
           grep -q 'AevonOwnDumpIvars' "$OWNM" \
             && grep -q 'class_copyIvarList' "$OWNM" \
             && grep -q 'object_getIvar' "$OWNM" \
             || { echo "::error::V0.3.12 ivar 形状取证缺失"; exit 1; }
-          # ⑥查错类的修正：toDisplayWithIdentity 的宿主是 UIKitCore 的 _UISystemGestureManager
           grep -q '_UISystemGestureManager' "$OWNM" \
             || { echo "::error::V0.3.12 没把 toDisplayWithIdentity 的宿主类找对"; exit 1; }
-          # ⑦新路调用前同样必须签名 fail-closed（参数个数不符会破坏 arm64e 调用约定）
           grep -q "denc\[0\] == 'v' && AevonGripEncArgCount(denc) == 2" "$OWNM" \
             || { echo "::error::V0.3.12 toDisplayWithIdentity 调用前没做签名自检"; exit 1; }
           # ⑧标记进主库二进制
@@ -4666,19 +4589,11 @@ jobs:
             || { echo "::error::V0.3.12 主库缺认领/ivar/宿主类修正标记"; exit 1; }
           echo "V0.3.12 校验: 借腿呼盘连带认领 + 装配可升级 + _UISystemGestureManager 真宿主 + ivar 形状取证 ✓"
 
-          # ── V0.3.13 校验（Aevon(91) 判成功 + Aevon(92) 定几何：把手隐藏 + 右缘底部区域）──
-          # 前提数据（Aevon(91)）：开关打开 55s 内 27 次呼盘 27/27 全走自建腿，关掉 7s 内
-          # 3 次 3/3 全走借腿；28 次 hold 全部有结局、纵向闸与超时闸各 0 次 —— 逻辑零漏洞，
-          # 唯一漏出口是 24pt 窄边。用户定几何：「右边缘底部向上 30% 高度，宽度 25%」。
-          # ①几何必须贴右下：横向 GripZoneW **按 pt**（V0.3.14 起，默认 5），纵向 GripZoneH 按屏高 %
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func bandRect(screenW: CGFloat, screenH: CGFloat) -> CGRect');j=s.find(chr(10)+'    }',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and j>i and 'GripZoneW' in b and 'GripZoneH' in b and 'screenH * hPct / 100.0' in b and 'x: screenW - w' in b and 'y: screenH - h' in b and 'screenW * wPct' not in b and 'GripY' not in b and 'GripLen' not in b and 'GripWidth' not in b);print('V0.3.13/14 触发区 = 右缘底部矩形（横向 pt、纵向 %）✓' if ok else '::error::bandRect 横向又变回百分比，或函数体里仍在读 GripY/GripLen/GripWidth');sys.exit(0 if ok else 1)" "$RG"
-          # ①b V0.3.28（AevonEdgeBandOnly328）：暂扣段（padRect / edgePadPts）整体退役。
-          #    多一条几何就多一条「带外也抢」的路 —— Aevon(101) 的 6 次「两头空」正是
           #    借腿伸到 44pt 抢下了系统本来能接的手指。这里改成反向断言守住。
           if grep -vE '^[[:space:]]*(//|/\*|\*)' "$RG" | grep -qE 'func padRect|edgePadPts'; then
             echo "::error::V0.3.28 暂扣段回潮了（padRect / edgePadPts 必须保持退役）"; exit 1
           fi
-          # ②把手可隐藏：开关默认开 + alpha 走同一套通道（禁 isHidden）+ 两腿都没就绪时 fail-open 显形
           grep -q 'AevonPrefs.bool("GripHandleHidden", default: true)' "$RG" \
             && grep -q 'static var gripShownAlpha' "$RG" \
             && grep -q 'aevonOwnLegReadyFlag() != 0 || aevonSystemLegReadyFlag() != 0' "$RG" \
@@ -4688,23 +4603,16 @@ jobs:
             exit 1
           fi
           # ③释手指顺序：召唤必须排在续闸**之前**（否则慢速滑动会被当成滚动放掉）。
-          #   V0.3.28 判据只剩 `hypot >= 8pt` 一条，旧的 `BOOL horizontal` / `42pt` 兜底
-          #   都已退役，所以锚「hypot 挡在前面、ownBailRearm 落在后面」这个结构。
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('double dist = hypot((double)dx, (double)dy);');b=s.find('[self ownBailRearm];',a if a>0 else 0);ok=(a>0 and b>a);print('V0.3.13/28 召唤判据排在续闸之前 ✓' if ok else '::error::V0.3.13/28 续闸跑到了召唤判据前面（慢速滑动会被放掉）');sys.exit(0 if ok else 1)" "$OWNM"
           # ④借腿降为纯兜底：**本手势**自建腿真的接管了，借腿才闭嘴上交。
-          #   V0.3.28（AevonYieldGuardV328）把判据从静态「识别器已注册」改成动态
-          #   「0.15s 内打出过 hold」。Aevon(101) 的 6 次「两头空」= 静态判据拦住了
           #   系统腿、自建腿又没接这根手指 —— 带外落指本来就该原样交给系统。
           grep -q 'let holdAge = AevonGripOwnHoldAgeBridge()' "$OWNE" \
             && grep -q 'if holdAge < 0.15 {' "$OWNE" \
             && grep -q '@_silgen_name("AevonGripOwnHoldAge")' "$OWNE" \
             || { echo "::error::V0.3.28 借腿让路没接上「本手势已 hold」动态判据（会两头空）"; exit 1; }
           # ④b防回退：ready 判据必须同时要求「走的是管理器注册那条路」——
-          # `AevonOwnAttachTo` 的旁听退路也会给 gAevonOwnGesture 赋值，但它一条 moved 都收不到
-          # （0.3.11 实测 38 hold / 0 moved）。若把它算成就绪，借腿被让路 = 完全没有入口。
           grep -q 'return (gAevonOwnGesture != nil && gAevonOwnRegistered) ? 1 : 0;' "$OWNM" \
             || { echo "::error::V0.3.13 就绪判据把旁听退路也算成就绪（会让借腿闭嘴导致无入口）"; exit 1; }
-          # ⑤放行四分类探针在位（带外/纵向/超时/抬手）—— 「很小的几率」下一轮要能数出来
           for k in AevonOwnPassBand AevonOwnPassVert AevonOwnPassBail AevonOwnPassTap; do
             grep -q "$k" "$OWNM" \
               || { echo "::error::V0.3.13 放行原因分桶缺 $k"; exit 1; }
@@ -4718,11 +4626,8 @@ jobs:
             || { echo "::error::V0.3.13 App 库缺吞带退役标记"; exit 1; }
           echo "V0.3.13 校验: 右缘底部矩形 + 把手可隐藏（fail-open）+ 召唤先于续闸 + 借腿让路动态化 + 放行四分类 + App 吞带退役 ✓"
 
-          # ── V0.3.14 校验（Aevon(93) 定档：贴边窄带 + 暂扣段 + App 侧吞带拆净）──
-          # 用户原话：「边缘触发条的宽度能不能改成只要手指贴着右侧底部 30% 高度中向左滑动时触发，
           # 而不要任何宽度？」以及「同时做清理 App 侧 150 行空转代码这一刀」。
           # ①落点判定在位：0 不接管 / 1 带内，ObjC 侧按返回值分岔。
-          #   V0.3.28（AevonEdgeBandOnly328）：0.3.14 的「2 = 边缘候选」已删 ——
           #   暂扣段不存在了，落点在带外就是 0，一律原样交给系统。
           grep -q 'static func ownLegHitLevel(x: CGFloat, y: CGFloat) -> Int32' "$OWNE" \
             && grep -q 'return (x >= core.minX) ? 1 : 0' "$OWNE" \
@@ -4753,10 +4658,6 @@ jobs:
             || { echo "::error::V0.3.14 主库缺贴边+暂扣标记"; exit 1; }
           echo "V0.3.14 校验: 贴边窄带（0.3.28 起 15pt 默认、可调 6~25、0=关）+ 暂扣段已退役 + App 侧吞带拆净（浮窗边带保留）✓"
 
-          # ── V0.3.15 校验（Aevon(93)：呼出手势写死 + 隐藏把手提到一级 + 滑条实时 + 高度 35%）──
-          # 用户原话：「将设置中的默认开启的呼出手势开关选项添加到代码中，不再显示开关选项（并且
-          # 移除没有使用的开关选项）。然后把默认隐藏把手开关移动到一级菜单中，并且保证所有的滑条
-          # 滑动时都能实时显示和更新位置。最后把触发圆盘区域的默认高度改为右边缘从底部向上计算 35%。」
           # ①呼出手势写死：源码里不许再读这两个偏好
           if grep -rn 'GripOwnLeg", default' "$GITHUB_WORKSPACE/Sources/" >/dev/null 2>&1; then
             echo "::error::V0.3.15 GripOwnLeg 又变回读偏好（已写死常量 true，设置页无此开关）"
@@ -4771,9 +4672,6 @@ jobs:
             || { echo "::error::V0.3.15 启动时没把自建腿写成恒开"; exit 1; }
           grep -q 'AevonGripOwnLegEnable(true,' "$EE" \
             || { echo "::error::V0.3.15 prefschanged 里没把自建腿写成恒开"; exit 1; }
-          # ③（V0.3.28 反转）方向判据整体退役：带内只看位移量，不许再出现角度/锥形判据。
-          #   历史：|dy|<=6 → 14° 锥（0.25）→ 22° 锥（0.40）→ 续判 2 帧，五版都在挪切点。
-          #   Aevon(101) 证明这条路走不通：被锥放掉的样本第 2 帧更斜，续判一帧都救不回来。
           if grep -vE '^[[:space:]]*(//|/\*|\*)' "$OWNM" | grep -qE 'ady <= adx \*|ady <= 6\.0'; then
             echo "::error::V0.3.28 方向角度判据回潮了（带内只许看位移 hypot(dx,dy)）"; exit 1
           fi
@@ -4797,15 +4695,8 @@ jobs:
           done
           echo "V0.3.15 校验: 呼出手势写死（一级页 5 开关）+ 隐藏把手提一级 + 高度 35% + 滑条拖动实时刷新 + 严格判据角度化 + 日志去乱码 ✓"
 
-          # ── V0.3.16 校验（Aevon(94)：自建腿活到抬手，抬手即收圆盘）──
-          # 用户原话：「圆盘出现后，手指移动到右侧边缘时并离开屏幕。圆盘会固定展示大约 1 秒。」
-          # Aevon(93) 桌面段 64 次呼盘实测：48 次抬手即收（531~1356ms），16 次由静默看门狗
           # 收起且时长恒定 1003~1008ms —— 那 1 秒是时钟，不是手感。
-          # 根因：两个召唤点后面紧跟的 `state = Ended` 让 UIKit 立刻 -reset，这根手指此后再无
-          # 任何帧派给识别器 → -touchesEnded: 永不触发 → 「抬手」信息结构性丢失。
-          # 本版对齐 Stheno SCArcGestureRecognizer（活到抬手 → sc_finishTracking → dismiss）。
           RM="$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift"
-          # ①召唤体里不许再出现 state = Ended（本版唯一核心：防它被顺手加回去）
           if sed -n '/- (void)ownSummonAtPoint:/,/^}/p' "$OWNM" | grep -q 'UIGestureRecognizerStateEnded'; then
             echo "::error::V0.3.16 ownSummonAtPoint 又置 Ended（UIKit 会立刻 reset，抬手事件丢失，圆盘必僵 1 秒）"
             exit 1
@@ -4814,7 +4705,6 @@ jobs:
           CNT=$(grep -cF 'ownSummonAtPoint' "$OWNM" || true)
           [ "$CNT" -ge 3 ] \
             || { echo "::error::V0.3.16 召唤没有统一走 ownSummonAtPoint（定义 + 贴边 + 边缘候选 共 3 处）"; exit 1; }
-          # ③抬手回调必须三处都在（extern 声明 + ended + cancelled）
           CNT=$(grep -cF 'AevonGripOwnLift(' "$OWNM" || true)
           [ "$CNT" -ge 3 ] \
             || { echo "::error::V0.3.16 AevonGripOwnLift 调用点不足（extern + ended + cancelled 至少 3 处）"; exit 1; }
@@ -4835,12 +4725,9 @@ jobs:
           # ⑥被闸拒必须留痕（下一份日志要能区分「ended 没到」与「到了被拒」）
           grep -q '抬手帧被通道交换闸拒' "$RM" \
             || { echo "::error::V0.3.16 抬手被拒时仍然静默 return（下次又分不清根因）"; exit 1; }
-          # ⑦看门狗参数本版不动（抬手已能当场收；改它们只会把 0.2.69「按住不动自己收」带回来）
           grep -q 'pointerIdleDismissInterval: CFTimeInterval = 0.8' "$RM" \
             || { echo "::error::V0.3.16 看门狗 0.8s 被动了（未验证的改动，会回归「按住不动圆盘自己收」）"; exit 1; }
           # ⑦.5 识别器必须自己实现 -reset 并清掉 _ownSummoned。
-          #     本版识别器活到抬手，`touchesBegan` 顶部的「召唤中…」守卫会在清标记前
-          #     return —— 少了 -reset，第一次呼盘之后自建腿永久哑火，且日志上一片空白。
           if ! sed -n '/^- (void)reset {/,/^}/p' "$OWNM" | grep -q '_ownSummoned = NO;'; then
             echo "::error::V0.3.16 -reset 没清 _ownSummoned（第一次呼盘后自建腿会永久哑火）"
             exit 1
@@ -4852,8 +4739,6 @@ jobs:
             || { echo "::error::V0.3.16 主库缺标记 AevonOwnLiftV316"; exit 1; }
           echo "V0.3.16 校验: 自建腿活到抬手（召唤不置 Ended + -reset 清标记）+ AevonGripOwnLift 双路 + 权威抬手绕开 0.12s 交换闸 + 被拒留痕 + 看门狗未动 ✓"
 
-          # ── V0.3.17 校验（AevonOwnFeedV317）：自建识别器腿每帧喂盘 ──
-          # ①召唤成功后 touchesMoved 必须先喂盘，再考虑状态判据（顺序反了等于没喂）
           MOVED_SEG="$(sed -n '/^- (void)touchesMoved:/,/^- (void)touchesEnded:/p' "$OWNM")"
           echo "$MOVED_SEG" | grep -q 'AevonGripOwnMove(' \
             || { echo "::error::V0.3.17 touchesMoved 没有喂盘（圆盘又只能等 SB 全局通道，0.12s 盲区回来）"; exit 1; }
@@ -4877,7 +4762,6 @@ jobs:
           SYS_CNT=$(grep -c 'presentRing(source: "system")' "$EE" || true)
           [ "$SYS_CNT" -eq 1 ] \
             || { echo "::error::V0.3.17 presentRing(source: system) 应只剩系统腿那 1 处，实为 $SYS_CNT"; exit 1; }
-          # ⑤moved 也要有权威通道，且换通道必须重设角度基线（否则指针一动圆盘就转）
           grep -q 'private func handlePointerMoved(to point: CGPoint, source: String,' "$RM" \
             || { echo "::error::V0.3.17 handlePointerMoved 缺 authoritative 参数"; exit 1; }
           sed -n '/private func handlePointerMoved/,/let currentAngle/p' "$RM" | grep -q 'pointerAngle = angle(from: ringCenter, to: point)' \
@@ -4886,8 +4770,6 @@ jobs:
           [ "$AUTH_CNT" -ge 2 ] \
             || { echo "::error::V0.3.17 moved 与 ended 应各有一条 authoritative 声明，实为 $AUTH_CNT"; exit 1; }
           # ⑥划过取证（本版唯一验收判据：分不清「没喂到」与「喂到了没高亮」）
-          # V0.3.19（AevonHoverTrailV319）反转：逐条「划过 X」日志已合并成**抬手汇总**。
-          #   原因见 Aevon(95) 定量 —— 逐条日志每次都要新建 DateFormatter + 开关文件 + stat，
           #   峰值 62 行/秒全落在触摸热路径上。判据本身没丢：
           #   「本轮划过 N 次」的 N 就是原来逐条日志的条数。
           grep -q '划过' "$RM" \
@@ -4910,7 +4792,6 @@ jobs:
             || { echo "::error::V0.3.20 主库缺标记 AevonKeyframeHoverV320"; exit 1; }
           echo "V0.3.17 校验: 自建腿每帧喂盘（召唤后先喂再判状态 + 只认本指）+ 来源改 ownleg + 权威 moved 换通道重设基线 + 划过留痕 + 看门狗未动 ✓"
 
-          # ── V0.3.18 校验（AevonSceneGateV318）：控制中心 / 通知中心 / 锁屏里不接管右缘手指 ──
           # ①判据只有一份（自建腿与借腿共用同一个函数；两边各写一套必然漂）
           grep -q 'static func systemOverlayBlockingRing() -> String' "$RG" \
             || { echo "::error::V0.3.18 缺 systemOverlayBlockingRing（判据必须唯一）"; exit 1; }
@@ -4929,7 +4810,6 @@ jobs:
           BLK_CNT=$(grep -c 'AevonRingGrip.systemOverlayBlockingRing()' "$EE" || true)
           [ "$BLK_CNT" -ge 2 ] \
             || { echo "::error::V0.3.18 系统浮层闸只装在 $BLK_CNT 处（应 ≥2：ownLegSummon + systemLegSummon）"; exit 1; }
-          # ④主闸：落指那一刻判，判到就 Failed（不 Failed 会把手指扣到抬手 → CC 里右缘划不动）
           grep -q 'extern int AevonGripSystemOverlayBlocked(void);' "$OWNM" \
             || { echo "::error::V0.3.18 ObjC 侧缺 AevonGripSystemOverlayBlocked 声明"; exit 1; }
           grep -q '@_cdecl("AevonGripSystemOverlayBlocked")' "$EE" \
@@ -4950,7 +4830,6 @@ jobs:
             || { echo "::error::V0.3.18 主库缺标记 AevonSceneGateV318"; exit 1; }
           echo "V0.3.18 校验: 系统浮层闸（窗口表判据唯一 + alpha 门槛 + 落指即 Failed + 两条腿各一道 + RingAnywhere 退路）✓"
 
-          # ── V0.3.18 校验（AevonSpringUnifyV318）：圆盘弹簧统一到 (response, ζ) ──
           SP="$GITHUB_WORKSPACE/Sources/AevonSpring.swift"
           [ -s "$SP" ] || { echo "::error::V0.3.18 缺 Sources/AevonSpring.swift"; exit 1; }
           grep -q 'static func params(response: Double,' "$SP" \
@@ -4963,7 +4842,6 @@ jobs:
           fi
           # ② 收起仍走 params —— **入场已退役**。
           #   V0.3.20：≥3 → ≥2（划过换成关键帧）；
-          #   V0.3.23：入场也换成 AevonRingUnfold 的进度驱动 ⇒ 只剩收起 1 处。
           #   降到 0 说明收起那条也被顺手删了（收起会变成硬切）。
           PARAM_CNT=$(grep -c 'AevonSpring.params(' "$RM" || true)
           [ "$PARAM_CNT" -ge 1 ] \
@@ -4973,15 +4851,9 @@ jobs:
           if grep -qE 'let stiffness: CGFloat = 140' "$RM"; then
             echo "::error::V0.3.18 旋转积分器还写死 140"; exit 1
           fi
-          # ③弹道归属：V0.3.20（AevonKeyframeHoverV320）**再反转** —— 弹道这个概念本身没了。
           #
-          #   历史：0.3.18 整盘一个 animator（每次切换定格全部 20 个图标的动画）；
-          #        0.3.19 每图标一条弹簧（每次切换重建 5 条，每条 finishAnimation(at: .current)
           #        取呈现值 = 60 次/秒的渲染服务器往返）；
-          #        0.3.20 只剩两条定长关键帧，挂在 layer 的同一把动画键上。
           #
-          #   所以这里断言的是「一个 UIViewPropertyAnimator 都不许出现在图标动画路径里」：
-          #   图标上不许再有 animator 字段，也不许再出现 stopAnimation / finishAnimation。
           if grep -q 'hoverAnimator' "$RM"; then
             echo "::error::V0.3.20 图标动画路径上又出现了 hoverAnimator（0.3.20 起只有定长关键帧）"; exit 1
           fi
@@ -5000,30 +4872,17 @@ jobs:
             || { echo "::error::V0.3.18 主库缺标记 AevonSpringUnifyV318"; exit 1; }
           echo "V0.3.18 校验: 弹簧统一（response+ζ → mass/stiffness/damping）+ 一条弹道 retarget + 阻尼单次读 + 标记进主库 ✓"
 
-          # ── V0.3.19 校验（AevonHoverTrailV319）：划过 = 每图标一条弹道 + 时间序余韵波 ──
           #
-          # 用户 Aevon(95)：「阻尼调节后更 Q 弹，但是不流畅，手指划过时没有明显的图标
-          # 抖动或者波浪形的起伏」，并明确波浪是「手指划过图标时**依据先后顺序**使图标
           # 先后起伏」，不是圆盘展开时自动跳一下。
           #
-          # 定量依据（Aevon(95) 765 次划过）：间隔中位 50ms / p25 25ms / p10 9ms，
-          # 66% < 60ms；A→B→A 回跳 112 次（15%），最短 8ms 一个来回。
           # 四条对策分别钉在下面：
-          #   ① response 0.40 → 0.28（50ms 停留从 21% 抬到 41%，才看得见）
           #   ② 每图标一条弹道 + 指向新目标的初速（不再整盘定格重发）
           #   ③ 余韵波：按划过顺序排队，越早划过回得越慢（波往身后铺开）
           #   ④ 命中滞回 + 划过日志改汇总（62 行/秒的同步 I/O 出热路径）
           #
-          # ① V0.3.20（AevonKeyframeHoverV320）**反转** 0.3.19 的整套弹簧 / 余韵。
           #
-          #    Aevon(96)：余韵按队列下标取振幅，而实测划过间隔只有 72~100ms、弹簧沉降
-          #    却要 0.34~0.63s ⇒ 每个图标还没走到目标就被改目标，身后形成一条**永不落地
-          #    的人形扇**（用户原话「上一个还在空中」）。而且每图标一条弹道 × 每次切换
-          #    5 个 × 12 次/秒 = 60 次/秒的 finishAnimation(at: .current)，每次都要取
           #    当前呈现值（渲染服务器往返）—— 这就是「丢帧」。
           #
-          #    下面这九个标识符在源码里**一个都不许有**（注释也不行，注释已改写）；
-          #    动画全部搬到 Sources/AevonHoverKeyframes.swift 的定长关键帧。
           for gone in hoverSpringResponse hoverTrailAmplitudes hoverTrailResponseScale \
                       hoverTrailDelay hoverRiseVelocity hoverFallVelocity \
                       hoverAnimator hoverAmplitude applyHoverWave; do
@@ -5044,7 +4903,6 @@ jobs:
           CAND_LINE=$(grep -n 'guard let candidate = best else { return nil }' "$RM" | head -1 | cut -d: -f1)
           { [ -n "$HYST_LINE" ] && [ -n "$CAND_LINE" ] && [ "$HYST_LINE" -lt "$CAND_LINE" ]; } \
             || { echo "::error::V0.3.19 命中滞回排在 guard candidate 之后（顺序反了等于没滞回，且高亮会闪灭）"; exit 1; }
-          # ④ 划过关账：定义 + clearPointer + dismiss = 3 处（少一处丢数，多一处就是重复写）
           SUM_CNT=$(grep -c 'flushHoverSummary()' "$RM" || true)
           [ "$SUM_CNT" -eq 3 ] \
             || { echo "::error::V0.3.19 flushHoverSummary 出现 $SUM_CNT 次（应为 3：定义 + clearPointer + dismiss）"; exit 1; }
@@ -5052,7 +4910,6 @@ jobs:
             || { echo "::error::V0.3.19 present 没清余韵队列（上一局残留会带到新盘）"; exit 1; }
           grep -q 'static let defaultDampingFraction: Double = 0.60' "$SP" \
             || { echo "::error::V0.3.19 默认阻尼不是 0.60（0.72 的过冲只有 3.8%，看不出「弹」）"; exit 1; }
-          # ⑤ 日志降载：formatter 必须是静态单例（每条日志新建 DateFormatter 是重活）
           LG="$GITHUB_WORKSPACE/Sources/AevonLog.swift"
           grep -q 'private static let formatter: DateFormatter' "$LG" \
             || { echo "::error::V0.3.19 AevonLog 的 DateFormatter 不是静态单例"; exit 1; }
@@ -5064,18 +4921,10 @@ jobs:
             || { echo "::error::V0.3.20 主库缺标记 AevonKeyframeHoverV320"; exit 1; }
           echo "V0.3.19 校验: 命中滞回（现任优先）+ 划过日志改抬手汇总 + DateFormatter 静态单例 ✓"
 
-          # ── V0.3.20 校验（AevonKeyframeHoverV320）：划过 = 定长关键帧（squash & stretch）──
           #
-          # 用户 Aevon(96)：「动画依旧不流畅，感觉像是丢帧一样，手指划过时弹起来了，然后手指
-          # 继续划到下一个时，上一个还在空中」，并点名参考 animate__shakeY / animate__rubberBand。
           #
-          # 定量：6 个展开周期，moved 帧率 103~117fps（事件侧没问题，掉帧在渲染侧），
           #       划过 7.1~14.4 次/秒（中位间隔 72~100ms）。
           # 四条对策：
-          #   ① 结构：删掉 4 拍余韵队，每个图标只剩 rise / land 两态（「永不落地的人形扇」消失）
-          #   ② 语言：rise 借 shakeY 的衰减抖动，land 借 rubberBand 的非等比挤压 + 一记余弹
-          #   ③ 引擎：CAKeyframeAnimation + 解析求值接住中途改目标（不碰 presentation()）
-          #   ④ GPU：shadowPath / 固定 shadowRadius / 去掉圆角 mask / 帧率自证
           KF="$GITHUB_WORKSPACE/Sources/AevonHoverKeyframes.swift"
           [ -s "$KF" ] || { echo "::error::V0.3.20 缺 Sources/AevonHoverKeyframes.swift（定长关键帧引擎）"; exit 1; }
 
@@ -5091,9 +4940,6 @@ jobs:
             || { echo "::error::V0.3.20 关键帧播完必须摘掉（模型值已是终点；不摘会盖住 dismiss 的 transform）"; exit 1; }
 
           # ② 关键帧表自洽：帧数 / 首帧为 0 / t 严格递增。
-          #    V0.3.22（AevonGifHoverV322）：rise **6 帧（100ms，爬上 46pt 并停住）**、
-          #    land **8 帧（170ms，单调沉回 0）**、entrance **5 帧（260ms，无过冲）**。
-          #    0.3.21 的 7/3/4 是「冲上去 32pt 再砸回地面」，已被 Aevon(97) 判为「原地抖动」。
           awk '
             /static let (riseKeys|landKeys)/ { tbl=$3; n=0; prev=-1; mono=1; next }
             tbl != "" && /AevonHoverKey\(t:/ {
@@ -5113,18 +4959,15 @@ jobs:
             }
             END { exit bad }
           ' "$KF" || exit 1
-          # 停住时的姿态必须是 46pt / 1.250，且 rise 末帧与 land 首帧**完全一致**（两段要接得上）
           REST_CNT=$(grep -c 'lift: 46.0, scale: 1.250' "$KF" || true)
           [ "$REST_CNT" -eq 2 ] \
             || { echo "::error::V0.3.22 rise 末帧 / land 首帧必须是 (46.0, 1.250)，实际 $REST_CNT 处（应 2）"; exit 1; }
 
-          # ③ 图标侧：只有 rise / land / reset / entrance 四个入口
           for fn in 'func riseHover()' 'func landHover()' 'func resetHover(snap: Bool = true)' \
                     'func hoverSample()' 'func applyUnfold(' 'func finishUnfold()'; do
             grep -q "$fn" "$RM" \
               || { echo "::error::V0.3.20 AevonRingIcon 缺 $fn"; exit 1; }
           done
-          # 中途改目标的接住方式必须是**解析求值**，不许换成 presentation()
           if grep -vE '^[[:space:]]*(//|\*|/\*)' "$RM" | grep -q 'presentation()'; then
             echo "::error::V0.3.20 图标动画路径上出现 presentation()（同步渲染服务器往返 = 丢帧）"; exit 1
           fi
@@ -5161,18 +5004,11 @@ jobs:
           done
           echo "V0.3.20 校验: 定长关键帧（shakeY 抖动 + rubberBand 挤压 + 一记余弹）+ 解析求值接住中途改目标 + shadowPath/去 mask + 帧率自证 ✓"
 
-          # ══════════════════════════════════════════════════════════════════
-          # V0.3.21 校验（AevonHoverJumpV321 / AevonRingIcon35V321 / AevonPrefsGateV321）
-          # ══════════════════════════════════════════════════════════════════
-          # 用户 Aevon(97)：「这次滑动时的动画还可以，但是图标只在原地抖动，而不是向上
           # 跳起然后回落」+「修复自建腿 enable 96 秒 202 次」。
-          # 帧率那一半 0.3.20 已经满分（119.8fps / 最大间隔 35.9ms / >16.7ms 只有 2 帧），
-          # 本版只解决三件事：波形（单峰起跳）、矩阵顺序（平移被 sy 放大）、设置链路空转。
           echo "── V0.3.21/V0.3.22/V0.3.23: 跳上去停住 + 白晕 + 图标 40pt + 进度展开 + 设置门控 ──"
 
           # ①②③ 关键帧：矩阵顺序 / 单峰起跳波形 / 时长上限 —— 一次解析完。
           #    ⛔ 不许用 `grep -o 't: [0-9.]*'` 取值：`lift: ` 里也含 `t: `，取出来的是 lift
-          #      （0.3.20 就在这个坑上栽过一次，三张表全报「首帧不为 0」）。
           python3 - "$KF" <<'PYEOF' || exit 1
           import io, re, sys
 
@@ -5183,9 +5019,6 @@ jobs:
           src = io.open(sys.argv[1], encoding="utf-8").read()
 
           # ① 矩阵顺序：⛔ 必须先缩放再平移。
-          #    CATransform3DConcat(a, b) = a·b，点走 p' = p·a·b ⇒ a 先生效。
-          #    写成 Concat(Translation, Scale) 等于先平移再缩放 —— 平移量被 sy 乘一遍，
-          #    而 sy 在振荡 ⇒ 垂直位置被叠了一层同频抖动。这是「原地抖」的放大来源。
           i = src.find("func transform3D()")
           if i < 0:
               err("V0.3.21 找不到 transform3D()")
@@ -5200,8 +5033,6 @@ jobs:
 
           # ② 划过起跳：**单调爬到稳态并停住**（GIF 的「跳上去」）。
           #    ⛔ 0.3.21 的做法（冲到 32pt 就砸回地面、66ms 触地）已被 Aevon(97) 否掉：
-          #      66ms ≈ 4 帧，眼睛读不到「跳」，只读得到「抖一下」；而且稳态贴地，
-          #      「跳」在整段交互里只占 4 帧。GIF 是跳上去就一直停着，离开才慢慢沉。
           i = src.find("static let riseKeys")
           if i < 0:
               err("V0.3.22 找不到 riseKeys")
@@ -5253,9 +5084,7 @@ jobs:
                 % (peak, raise_ms, land_ms))
           PYEOF
 
-          # ④ 图标 40pt + 环距参数（46 / 64 / 44 / 0.86）—— V0.3.23（AevonRingIcon40V323）
           #    ⛔ 五个数必须一起动：只放大图标不放环径，21 个图标会互相压住；
-          #      只放环径不放大图标，盘会散掉。CI 把五个常量 + 日志串钉在一起查。
           grep -qF 'private static let iconSize: CGFloat = 40' "$RM" \
             || { echo "::error::V0.3.23 图标不是 40pt（用户本轮要求 35 → 40）"; exit 1; }
           grep -qF 'let spacing: CGFloat = 46' "$RM" \
@@ -5269,7 +5098,6 @@ jobs:
           grep -qF '间距 46pt 恒定 / 内圈贴中心 64' "$RM" \
             || { echo "::error::V0.3.23 展开日志串没跟着改（间距 46 / 内圈 64）"; exit 1; }
 
-          # ⑤ 设置变更门控三处 —— 用户 Aevon(96) 的 202 次/96 秒
           #    ⛔ 三处都必须「值没变就先返回」，缺一处就还是一帧一次空转。
           grep -qF 'if (on && was) {' "$GITHUB_WORKSPACE/Sources/AevonGripHook.m" \
             || { echo "::error::V0.3.21 AevonGripOwnLegEnable 没有「已启用就直接返回」（拖滑条每帧刷一条装配日志）"; exit 1; }
@@ -5294,8 +5122,6 @@ jobs:
             strings "$MDYL" | grep -q "$m321" \
               || { echo "::error::V0.3.21 主库缺标记 $m321"; exit 1; }
           done
-          # ⑦ 白晕 + z 序 + 新标记进主库 —— V0.3.22 的「跳出来」读感
-          #    GIF 里每个图标脚下都有一圈白色柔光底盘，被压住的更亮；抬起的那个画在邻居上面。
           grep -qF "static let haloImage" "$RM" \
             || { echo "::error::V0.3.22 没有白色柔光底盘位图（GIF 的「跳出来」读感全靠它）"; exit 1; }
           grep -qF "private let haloView = UIImageView()" "$RM" \
@@ -5307,7 +5133,6 @@ jobs:
             || { echo "::error::V0.3.22 抬起的图标没有 zPosition 置顶"; exit 1; }
           grep -qF "layer.zPosition = 0" "$RM" \
             || { echo "::error::V0.3.22 落地没把 zPosition 归零（层级会一直累加）"; exit 1; }
-          #    反向：白晕不许用 shadow 实现（模糊核会跟着 layer.transform 每帧重算 = 丢帧回潮）
           #    ⛔ 写成 if 而不是 `grep && {...}`：`run:` 是 `bash -e`，前半失败会直接把整步判红。
           if grep -qF "haloView.layer.shadowOpacity" "$RM"; then
             echo "::error::V0.3.22 白晕用了 shadow 实现 —— 缩放时模糊核每帧重算，0.3.20 的优化被抵消"; exit 1
@@ -5317,7 +5142,6 @@ jobs:
           grep -qF "static let hoverScale: CGFloat = 1.25" "$RM" \
             || { echo "::error::V0.3.22 hoverScale 不是 1.25（GIF 量出来正好 1.25）"; exit 1; }
           
-          # ⑧ 展开：**一个标量驱动的径向展开**（V0.3.23 / AevonRingUnfoldV323）
           #    录屏事实：整簇图标先叠在同一个点，然后一起铺开、边铺边长大，
           #    「间距 ÷ 图标尺寸」全程不变 ⇒ 最终布局的等比缩小版在放大。
           #    ⛔ 因此半径与图标缩放必须共用同一个 s；写成两条独立曲线就会走形。
@@ -5354,7 +5178,6 @@ jobs:
           fi
           grep -qF 'if target > unfoldProgress {' "$RM" \
             || { echo "::error::V0.3.23 进度不是只增不减（直接赋值），拖动回撤时盘面会往回缩"; exit 1; }
-          #    反向：entranceKeys / playHoverEntrance 必须已退役，不许留下第二个 transform 主人
           if grep -q 'static let entranceKeys' "$KF"; then
             echo "::error::V0.3.23 entranceKeys 还在 —— 入场已由展开引擎接管，留着就是两套并行的入场"; exit 1
           fi
@@ -5362,7 +5185,6 @@ jobs:
             echo "::error::V0.3.23 playHoverEntrance 还在（死代码，且和 applyUnfold 抢 layer.transform）"; exit 1
           fi
 
-          # ⑩ 中心面板与外圈图标**两种视觉语言**（AevonHubPanelV323）
           grep -qF 'private static let centerSize: CGFloat = 52' "$RM" \
             || { echo "::error::V0.3.23 中心面板不是 52pt（要比 40pt 图标明显大一圈）"; exit 1; }
           grep -qF 'centerButton.layer.cornerRadius = AevonRingMenu.centerSize * 0.34' "$RM" \
@@ -5372,21 +5194,15 @@ jobs:
 
           echo "V0.3.22 校验: 跳上去停住（46pt/100ms）+ 170ms 单调回落 + 白色柔光底盘 + zPosition 置顶 + 全程等比 ✓"
           echo "V0.3.23 校验: 进度驱动径向展开（等比铺开 / 拖动跟手 / 时间兜底）+ 图标 40pt 环径重算 + 中心面板差异化 ✓"
-          # ── V0.3.24 校验（Aevon(98) 三项：上滑关闭 / 定时模糊 / 双黑窗）──────────────
           WV="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
           EE="$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift"
           WM="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
           SH="$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"
-          # 本 step 里 `$DYLIB` 是「校验产物」那个 step 的局部变量，这里**自己 find**
-          #（已有段落同样的教训写在 4332 行：strings "" 空跑 → 必然红）。
-          # 0.3.24 首次构建就是栽在这条上：`strings: can't open file:` 被当成
           # 「标记没编进去」。用绝对路径 + 独立变量名 MYD，不依赖任何上游变量。
           MYD="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
           [ -n "$MYD" ] && [ -f "$MYD" ] || { echo "::error::V0.3.24 定位不到主库 dylib"; exit 1; }
           echo "V0.3.24 断言用主库: $MYD"
 
-          # ① 底边 = 上滑关闭（AevonBottomFlickV324）；按 Stheno 的
-          #    __bottomLikeTouchRegions + sc_addTerminationGestureToRegion: 模型
           strings "$MYD" | grep -q 'AevonBottomFlickV324' \
             || { echo "::error::V0.3.24 主库缺标记 AevonBottomFlickV324（底边上滑关闭没编进去）"; exit 1; }
           grep -qF 'func handleTerminationPress' "$WV" \
@@ -5408,7 +5224,6 @@ jobs:
           fi
 
           # ② 盖帧：缓存入库清晰度闸 + 历史基线门槛 + 可信首帧
-          #    （AevonSharpCacheGateV324 / AevonSharpPrimeV324）
           for s in AevonSharpCacheGateV324 AevonSharpPrimeV324; do
             strings "$MYD" | grep -q "$s" \
               || { echo "::error::V0.3.24 主库缺标记 $s"; exit 1; }
@@ -5426,8 +5241,6 @@ jobs:
           grep -qF 'private var sharpBaseline: Double = 0' "$WV" \
             || { echo "::error::V0.3.24 缺历史清晰基线变量"; exit 1; }
 
-          # ③ 开窗单飞 + 按 bundleID 去重 + 场景占用 + presenter 重建
-          #    （AevonOpenSingleFlightV324 / AevonOpenDedupV324 / AevonSceneOwnedV324 /
           #     AevonPresenterRebuildV324）
           for s in AevonOpenSingleFlightV324 AevonOpenDedupV324 AevonSceneOwnedV324 AevonPresenterRebuildV324; do
             strings "$MYD" | grep -q "$s" \
@@ -5454,17 +5267,13 @@ jobs:
 
           echo "V0.3.24 校验: 底边上滑关闭（抬手执行，取代双击）+ 盖帧清晰度闸/历史基线/可信首帧 + 开窗单飞/场景占用/presenter 重建 ✓"
 
-          # ── V0.3.25 校验（Aevon(99)：底边移动+长按上甩关闭 / 回桌面完全不盖帧）─────
-          # 本段自己定位主库（0.3.24 栽过「复用上游 step 局部变量 → strings: can't open file」）
           MYD25="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
           [ -n "$MYD25" ] && [ -f "$MYD25" ] || { echo "::error::V0.3.25 定位不到主库 dylib"; exit 1; }
 
-          # ① 底边双功能：移动 + 长按后上甩关闭（AevonBottomSplitV325）
           for s in AevonBottomSplitV325 AevonTermHoldV325 AevonTermLiftV325 AevonTermVelV325; do
             strings "$MYD25" | grep -q "$s" \
               || { echo "::error::V0.3.25 主库缺标记 $s"; exit 1; }
           done
-          #    Stheno 逐参数：0.4s / 12pt / 24pt / 260pt·s⁻¹ / 1.35 锥角
           for k in 'terminationHold: TimeInterval = 0.4' 'terminationSlop: CGFloat = 12' \
                    'terminationLift: CGFloat = 24' 'terminationVelocity: CGFloat = 260' \
                    'terminationCone: CGFloat = 1.35'; do
@@ -5513,15 +5322,12 @@ jobs:
 
           echo "V0.3.25 校验: 底边移动+长按0.4s上甩关闭（Stheno 同参数）+ 回桌面完全不盖帧（B3）✓"
 
-          # ── V0.3.26 校验（Aevon(99)：底边跟手+窗口测速 / 桌面呼盘放宽 / 场景保活探针）──
-          # 本段自己定位主库（0.3.24 栽过「复用上游 step 局部变量 → strings: can't open file」）
           MYD26="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
           [ -n "$MYD26" ] && [ -f "$MYD26" ] || { echo "::error::V0.3.26 定位不到主库 dylib"; exit 1; }
           GH26="$GITHUB_WORKSPACE/Sources/AevonGripHook.m"
           KA26="$GITHUB_WORKSPACE/Sources/AevonKeepAliveProbe.m"
           MF26="$GITHUB_WORKSPACE/Makefile"
 
-          # ① 底边：窗口测速 + 跟手 + 三条出口（AevonTermFollowV326 / AevonTermWinVelV326）
           for s in AevonTermFollowV326 AevonTermWinVelV326 AevonHomeLooseV326 AevonNoMidPassV326; do
             strings "$MYD26" | grep -q "$s" \
               || { echo "::error::V0.3.26 主库缺标记 $s"; exit 1; }
@@ -5552,10 +5358,6 @@ jobs:
           grep -qF 'win.beginTerminationFollow()' "$EE" \
             || { echo "::error::V0.3.26 全局通道进预备态没接跟手"; exit 1; }
 
-          # ②（V0.3.28 改写）桌面/App 差异化整个取消 —— 0.3.26 的「桌面首帧横向占优即呼盘、
-          #    灰带扣到抬手」随 padRect 一起退役。现在两条路径共用同一条判据，不可能再分叉。
-          #    保留 `AevonGripHomeScreenNow` 的声明与导出（将来要按场景分档时直接用），
-          #    但**不许**再在 moved 路径里按前台分叉 —— 用「if (home)」这个字面量做反向断言。
           grep -qF 'AevonGripHomeScreenNow' "$GH26" \
             || { echo "::error::V0.3.26/28 桌面判定桥被整体删掉了（留着备用，别删）"; exit 1; }
           grep -qF '@_cdecl("AevonGripHomeScreenNow")' "$EE" \
@@ -5563,7 +5365,6 @@ jobs:
           if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qF 'if (home)'; then
             echo "::error::V0.3.28 moved 路径又按前台分叉了（0.3.28 起只看落点，不分 App/桌面）"; exit 1
           fi
-          #    （V0.3.28 反转）锥角整套退役：桌面/App 不再有任何方向差异，
           #    统一成「带内位移 ≥8pt 即召唤」。这两个函数与两个键都不许回潮。
           if grep -vE '^[[:space:]]*(//|/\*|\*)' "$GH26" | grep -qE 'ady <= adx \*|aev_grip_cone_value|aev_grip_widen_off'; then
             echo "::error::V0.3.28 锥角/续判回潮了（方向判据已在 0.3.28 整体删除）"; exit 1
@@ -5574,9 +5375,6 @@ jobs:
             || { echo "::error::V0.3.26 Makefile 漏了 AevonKeepAliveProbe.m（显式 FILES 清单）"; exit 1; }
           [ -f "$KA26" ] || { echo "::error::V0.3.26 探针源文件不存在"; exit 1; }
           #    ⛔ 不许查函数符号名：release dylib 被 strip 到只剩导出符号，
-          #    `strings` 捞的是 __cstring 字面量，nlist 符号名那条路 0.3.26 首次构建就是栽在
-          #    「主库缺探针符号 AevonKeepAliveProbeBegin」这个假红上（链接是通的，符号确实存在）。
-          #    改查**探针自己的 ObjC 选择子串**：它们躺在 __objc_methname 里，只要 .m 被编进来
           #    就一定在，这才是「探针真的参与了编译」的硬证据。
           for s in 'AevonKeepAliveProbeV326' 'AevonKeepAliveMatrixV326' \
                    'newAssertionWithReason:' 'predicateMatchingAllScenes' \
@@ -5602,10 +5400,8 @@ jobs:
 
           echo "V0.3.26 校验: 底边窗口测速+跟手三出口 / 桌面呼盘取消锥角且绝不半截放行 / 场景保活多探针 ✓"
 
-          # ── V0.3.27 校验（Aevon(100)：手势命中率 / 回桌面闪两次 / 底部把手隐藏）──
           MYD27="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
           [ -n "$MYD27" ] && [ -f "$MYD27" ] || { echo "::error::V0.3.27 定位不到主库 dylib"; exit 1; }
-          #    本 step 没有 EH（AevonEntryHost.swift）的变量，自己定义 —— 别复用别的 step 的局部量
           EH27="$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift"
           for s in AevonGripConeV327 AevonGripWidenV327 AevonReassertBudgetV327 \
                    AevonReassertGateV327 AevonBottomBarHideV327 AevonKeepAliveCensusV327 \
@@ -5614,12 +5410,9 @@ jobs:
               || { echo "::error::V0.3.27 主库缺标记 $s"; exit 1; }
           done
 
-          # ①（V0.3.28 删除）0.3.27 的锥角函数 / 续判窗口断言已随判据退役一并删除，
           #    反向断言见上方的「锥角回潮」检查。
-          #    （V0.3.28 删除）桌面分支本身已不存在，上面那条「不许出现 if (home)」的反向断言
           #    覆盖了原本的这两条检查。
 
-          # ② 回桌面闪两次（AevonReassertBudgetV327 / AevonReassertGateV327）
           grep -qF 'private var liveWaitReassertBudget = -1' "$WV" \
             || { echo "::error::V0.3.27 没有让位期重申预算"; exit 1; }
           grep -qF 'liveWaitReassertBudget = isLiveWait ? 1 : -1' "$WV" \
@@ -5644,7 +5437,6 @@ jobs:
             echo "::error::V0.3.27 把手还在用 32% 白常显"; exit 1
           fi
 
-          # ④ 保活探针 v2（AevonKeepAliveCensusV327 / PredicateV327 / EarlyV327）
           grep -qF 'static id aev_scene_predicate(void)' "$KA26" \
             || { echo "::error::V0.3.27 探针没有「只命中本场景」的谓词"; exit 1; }
           grep -qF 'class_copyMethodList' "$KA26" \
@@ -5664,14 +5456,12 @@ jobs:
 
           echo "V0.3.27 校验: 见上（判据已由 V0.3.28 取代）✓"
 
-          # ── V0.3.28 校验（Aevon(101)：单层贴边带 / 方向判据退役 / 系统手势断言）──
           MYD28="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
           [ -n "$MYD28" ] && [ -f "$MYD28" ] || { echo "::error::V0.3.28 定位不到主库 dylib"; exit 1; }
           RG28="$GITHUB_WORKSPACE/Sources/AevonRingGrip.swift"
           GA28="$GITHUB_WORKSPACE/Sources/AevonGripAssert.m"
           MF28="$GITHUB_WORKSPACE/Makefile"
 
-          # ① 六个标记必须进主库（release strip 后只剩 __cstring，标记是唯一硬证据）
           for s in AevonEdgeBandOnlyV328 AevonNoConeV328 AevonYieldGuardV328 AevonSummonTTLV328 AevonSysAssertV328 AevonSysAssertFailsafeV328; do
             strings "$MYD28" | grep -qF "$s" \
               || { echo "::error::V0.3.28 主库缺标记 $s"; exit 1; }
@@ -5701,7 +5491,6 @@ jobs:
           fi
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('if (dist >= 8.0) {');j=s.find('[self ownBailRearm];',i);k=s.find('[self ownSummonAtPoint:p];',i);ok=(i>0 and k>i and (j<0 or k<j));print('V0.3.28 判据顺序：先召唤后放行 ✓' if ok else '::error::V0.3.28 召唤排在放行之后（顺序反了等于不判）');sys.exit(0 if ok else 1)" "$GH26"
 
-          # ④ 配套 A：借腿让路改成「本手势真的接管了」（AevonYieldGuardV328）
           grep -qF 'double AevonGripOwnHoldAge(void)' "$GH26" \
             || { echo "::error::V0.3.28 缺接管时刻读取函数"; exit 1; }
           grep -qF 'void AevonGripOwnStampHold(void)' "$GH26" \
@@ -5716,11 +5505,9 @@ jobs:
             echo "::error::V0.3.28 静态让路判据回潮（会造成「系统被拦 + 自建腿无 hold」两头空）"; exit 1
           fi
 
-          # ⑤ 配套 B：_ownSummoned 粘住保险（AevonSummonTTLV328）
           grep -qF '_ownSummoned && CACurrentMediaTime() - _ownSummonedAt < 2.5' "$GH26" \
             || { echo "::error::V0.3.28 _ownSummoned 没有 2.5s 上限"; exit 1; }
 
-          # ⑥ Stheno 第④层：跟踪期压制系统手势（AevonSysAssertV328）
           grep -qF 'Sources/AevonGripAssert.m' "$MF28" \
             || { echo "::error::V0.3.28 Makefile 漏了 AevonGripAssert.m（显式 FILES 清单）"; exit 1; }
           [ -f "$GA28" ] || { echo "::error::V0.3.28 AevonGripAssert.m 不存在"; exit 1; }
@@ -5742,18 +5529,13 @@ jobs:
             || { echo "::error::V0.3.28 断言释放点不足（至少 ownPass 与 reset 两处）"; exit 1; }
           grep -qF 'AevonGripAssertTick();' "$GH26" \
             || { echo "::error::V0.3.28 没有周期性超时检查"; exit 1; }
-          #    释放点必须覆盖 reset —— UIKit 保证 Ended/Cancelled/Failed 之后一定调它
           sed -n '/^- (void)reset {/,/^}/p' "$GH26" | grep -qF 'AevonGripAssertRelease();' \
             || { echo "::error::V0.3.28 reset 里没有释放断言（最可靠的一道收尾）"; exit 1; }
 
           echo "V0.3.28 校验: 单层 15pt 贴边带 + 带内只看位移不看方向 + 借腿动态让路 + 系统手势断言（5s 超时兜底）✓"
 
           # ── V0.3.29 校验（Aevon(102) 定档「A + B」）──
-          # 用户反馈：「桌面触发圆盘手势时百分百触发桌面滑动」「抖音中触发手势时因为贴边，
-          # 大几率会触发抖音的左滑进入视频博主主页」。定量：92 hold → 92 summon（100%），
           # 桌面 40 / 抖音 37 / QQ 12 / 设置 2 / 微信 1。
-          # 根因：`presentRing` 无条件把 ringSource 写成 "global"，自建腿的手指下一帧被
-          # 「收养」分支接走（只喂不吞）→ 手指裸奔到桌面与 App。Aevon(101) 日志同构，
           # 说明不是新版引入的病，是召唤率涨到 100% 之后每次都能看见。
           # ① 三个标记必须进主库二进制
           for s in AevonOwnSwallowV329 AevonOwnTouchBindV329 AevonDeskPanGuardV329; do
@@ -5774,8 +5556,6 @@ jobs:
             || { echo "::error::V0.3.29 ownPass 没作废手指身份"; exit 1; }
           #   ⛔ ownHandoff 里不许改 state —— 改 state 会让 UIKit 把延迟中的触摸补投给下层。
           #   ⛔ V0.3.31 反转：ownHandoff **不许**再清 `_ownSummoned`。抬手帧是放行的、
-          #      `-reset` 会来，清了会让 `-touchesEnded:` 走哑分支，
-          #      `吞层实丢 N 帧` 这条唯一的吞层判据会被静默跳过（0.3.29/0.3.30 就是这样丢的）。
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find(chr(10)+'}',i);b=s[i:j] if i>0 else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);ok=(i>0 and 'self.state' not in b and '_ownSummoned = NO' not in b);print('V0.3.29/V0.3.31 ownHandoff 只作废身份（不动 state、不清 _ownSummoned）✓' if ok else '::error::V0.3.29/V0.3.31 ownHandoff 动了 state 或清了 _ownSummoned（前者补投延迟触摸、后者丢吞层判据）');sys.exit(0 if ok else 1)" "$GH26"
 
           # ③ 方案 A：Swift 侧真绑 + 堵住「收养降级」
@@ -5818,11 +5598,6 @@ jobs:
 
           # ── V0.3.30 校验（Aevon(103) 定档「落指即预绑」）──
           # 用户反馈：「修复没有效果，甚至更加严重了，现在设置、QQ、抖音全屏时呼出圆盘
-          # 手势都会带动 app 内操作」。定量：63 hold → 36 召唤 → **36 次绑定成功**、
-          # 0 次「身份为空」，抬手帧 37 次全部从全局通道回来 → 0.3.29 的「识别器 UITouch
-          # 与 SB sendEvent 同一批实例」假设成立；桌面 pan 被吊销 21 次。
-          # 真因是结构性漏帧：吞层判据在 SB `-sendEvent:`，识别器在**同一次** sendEvent
-          # 内部才判定，所以「began + 首帧 moved」必然先投给 App（首帧位移中位 18pt、
           # 最大 49pt），之后才被吞 —— App 拿到一个高速横向帧后彻底静止。
           TH30="$GITHUB_WORKSPACE/Sources/AevonTouchHook.m"
 
@@ -5870,14 +5645,8 @@ jobs:
 
           echo "V0.3.30 校验: 落指即预绑（漏帧从 18~49pt 降到 0）+ 抬手帧放行（消孤儿触摸）+ 吞帧计数 ✓"
 
-          # ── V0.3.31 校验（Aevon(104) 定档「吞层回喂识别器」）──
           # 用户反馈：「全屏还是会被呼出手势带动操作，然后是最严重一点，圆盘不在跟手，
-          # 滑动手势后，圆盘会在 2 秒以后出现」。定量：31 次自建腿 hold → **0 次**自建腿
-          # 召唤；21 次圆盘全部由系统 `_UIPendingEdgeSwipeGestureRecognizer` 呼出；
-          # 前 6 次 hold 结局全是「0.28s 内未达阈值（本手势 moved 共 0 帧）→ 放行」；
-          # `本轮识别器喂 N 帧` 一条都没打；hold → 圆盘时差 31 次全部 ≥ 0.285s，
           # 下限恰为 ownPass 的 0.28s 墙。
-          # 真因：0.3.30 把「开始吞」提前到落指，而吞层丢的是**整条 UIEvent** ——
           # 自建识别器自己也在那条链上，被一起饿死，永远判不出 8pt。
           TH31="$GITHUB_WORKSPACE/Sources/AevonTouchHook.m"
 
@@ -5899,7 +5668,6 @@ jobs:
           #   ⛔ ownExternalMove 必须对已召唤的手指早退，否则每帧重复走判据、重复打 summon
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownExternalMove:(CGPoint)p {');j=s.find('\n}',i);b=s[i:j] if (i>0 and j>i) else '';ok=(i>0 and b.find('if (_ownSummoned) { return; }')>0);print('V0.3.31 ownExternalMove 对已召唤手指早退 ✓' if ok else '::error::V0.3.31 ownExternalMove 缺 _ownSummoned 早退（会重复喂盘）');sys.exit(0 if ok else 1)" "$GH26"
           #   ⛔ ownHandoff 不许再清 _ownSummoned：抬手帧是放行的，-reset 会来；
-          #     清掉会让 -touchesEnded: 走哑分支，「吞层实丢 N 帧」这条唯一判据又没了
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('- (void)ownHandoff {');j=s.find('\n}',i);b=s[i:j] if (i>0 and j>i) else '';b=chr(10).join([l for l in b.split(chr(10)) if l.strip() and not l.strip().startswith(('/*','*','//'))]);bad='_ownSummoned = NO' in b;print('V0.3.31 ownHandoff 保留 _ownSummoned（lift 统计打得出）✓' if (i>0 and not bad) else '::error::V0.3.31 ownHandoff 又清了 _ownSummoned（吞层判据会被静默跳过）');sys.exit(0 if (i>0 and not bad) else 1)" "$GH26"
           grep -qF '吞层实丢 %lu 帧（实丢 >0 = 吞层与回喂在跑' "$GH26" \
             || { echo "::error::V0.3.31 lift 日志判据文案没更新（会把「喂 0 帧」误读成吞层没生效）"; exit 1; }
@@ -5918,12 +5686,7 @@ jobs:
 
 
 
-      # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。
-      # 为什么要它：真机崩溃日志里只有「模块 + 偏移」，而发布用的 dylib 被 strip 到只剩
-      # 60 个导出符号、0 个本地函数符号 —— 0.2.82 那份崩溃栈就是这么废掉的（连帧 1 都
-      # 是 AevonBacktrace 的调用者，整条栈不是现场）。有了这份带符号的副本，
       # 下次拿到 pc 就能一条命令对出函数名，不用再靠反汇编猜。
-      # 注意：这些文件**不进 deb**（deb 在打包时就已从 .theos/_ 取好），只随 artifact 上传。
       - name: 导出符号副本（未 strip dylib + dSYM）
         run: |
           mkdir -p packages/_sym
