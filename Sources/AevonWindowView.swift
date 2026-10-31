@@ -871,12 +871,25 @@ final class AevonWindowView: UIView {
     /// 用 0.2s 隐式动画过渡（参考视频里窗口被拖动缩放时圆角是渐变的，不突变）。
     private func updateCornerRadius(animated: Bool) {
         let width = contentClip.bounds.width > 1 ? contentClip.bounds.width : frame.width
-        let radius = AevonWindowView.cornerRadius(for: width)
-        guard abs(radius - appliedCornerRadius) > 0.4 else { return }
+        /* V0.3.38（AevonDockCornerV338，用户 Aevon(109) #1「吸附小窗四角存在黑边」）：
+         * 停靠态单独一档 12pt（比主窗公式算出的 20pt 更方）。
+         * ⛔ 黑边的真因不在圆角大小：`installDockCover` 装封面时窗口还是 297 宽（33pt），
+         * 停靠缩到 92 宽后只更新了 contentClip 的圆角，**封面永远是 33pt** ——
+         * 33pt 圆角画在 92pt 宽的图上，四角切掉一大块，露出 contentClip 的深灰底。
+         * 所以这里必须把封面也一起改（下面 apply 块里那一行）。 */
+        let radius = isDocked && !AevonWindowView.dockCornerDisabled
+            ? AevonDock.cornerRadius
+            : AevonWindowView.cornerRadius(for: width)
+        guard abs(radius - appliedCornerRadius) > 0.4 else {
+            // 圆角没变也要兜一次封面同步：装封面发生在停靠之后（圆角早已定档）时会漏
+            syncDockCoverCorner()
+            return
+        }
         appliedCornerRadius = radius
         let apply = { [weak self] in
             guard let self else { return }
             self.contentClip.layer.cornerRadius = radius
+            self.syncDockCoverCorner()
         }
         if animated, !isLiveResizing, window != nil {
             // 用 CATransaction 而不是 UIView.animate：只改 layer 的 cornerRadius，
@@ -891,6 +904,29 @@ final class AevonWindowView: UIView {
             CATransaction.setDisableActions(true)
             apply()
             CATransaction.commit()
+        }
+    }
+
+    /// V0.3.38（AevonDockCornerV338）：封面圆角 / 尺寸跟内容层对齐。
+    ///
+    /// 停靠过渡是 0.22s 的 frame 动画，contentClip 的 bounds 逐帧在变；封面挂在
+    /// contentClip 上（autoresizing 会跟 frame），但 `cornerRadius` 是 layer 属性、
+    /// 不参与 autoresizing —— 不显式同步就一直停在安装那一刻的值。
+    private func syncDockCoverCorner() {
+        guard let cover = dockCoverView else { return }
+        let radius = contentClip.layer.cornerRadius
+        let changed = abs(cover.layer.cornerRadius - radius) > 0.2
+        if changed {
+            cover.layer.cornerRadius = radius
+        }
+        if cover.frame != contentClip.bounds {
+            cover.frame = contentClip.bounds
+        }
+        if changed {
+            AevonLog.info("[停靠] 封面圆角跟随内容层 \(Int(radius))pt"
+                + "（\(Int(cover.frame.width))x\(Int(cover.frame.height))，"
+                + "\(isDocked ? "停靠态档 12pt" : "主窗公式")）"
+                + "（AevonDockCornerV338）")
         }
     }
 
@@ -2104,6 +2140,9 @@ final class AevonWindowView: UIView {
     /// 连续「cs=2 且现场抓得到真画面」的拍数（0.1s 一拍）：要求稳定 2 拍才淡入，
     /// Aevon(34) 日志里 cs 会 2→0→2 抖一次，第一拍就淡入会「亮一下又黑」。
     private var liveWaitTicks = 0
+    /// V0.3.38（AevonDeskNoCoverV338）：让位期连续「掉出画」的拍数。
+    /// 零定格档里画面掉了要抢，抢不回（0.2s）就兜底盖帧 —— 绝不留一块真空窗。
+    private var liveWaitMissTicks = 0
     /// V0.2.65（AevonNoVanishV265）：让位期**不再现场抓帧**，次数计数器随之退休。
     /// V0.2.94（AevonQuietRevealV294，用户确认方案 M）：加「转场静默」闸后多占拍数
     /// （连续 2 拍静止才放行），fail-open 上限 1.0 → 1.5s —— 冻结帧全程在盖，
@@ -2171,6 +2210,27 @@ final class AevonWindowView: UIView {
     /// 写 `AevonDeskHoldOff335 = true` 可整条回退到 0.3.34 的布防 + 重申路径。
     static let deskHoldEnabled: Bool = {
         let v = UserDefaults.standard.object(forKey: "AevonDeskHoldOff335") as? Bool
+        return !(v ?? false)
+    }()
+
+    /// V0.3.38（AevonDeskNoCoverV338）：回桌面「零定格」总开关。默认 **开**。
+    ///
+    /// 用户 Aevon(109) #2/#3：「返回桌面时会出现悬浮窗显示定格的模糊快照，然后等 1 秒
+    /// 才会出现实时画面」，并拍板选「B 零定格」。
+    ///
+    /// Aevon(109) 日志把这条链的因果写死了：
+    ///   44.685 盖清晰帧（此时 **cs=2，画面还活着**）
+    ///   44.736 我们自己写 fg=NO（AevonDeskHoldV335 第三步「主动降后台」）
+    ///   45.579 守卫读回 **cs=0**（画面被这一笔推掉了）
+    ///   46.687 才允许第 1 轮唤醒（deskHoldWakeDelay = 1.9s）
+    ///   47.564 撤帧交接 —— 从盖帧到实时共 2.88 秒
+    /// 也就是说那 1 秒定格**不是系统给的，是我们主动关掉画面 + 延迟唤醒换来的**。
+    ///
+    /// 现在的行为：回桌面**不盖帧、不降后台、不停止布防**。画面活着就一直实时；
+    /// 真被系统收走（cs≠2）才由常驻看门在第一拍盖帧兜底，并立刻补前台。
+    /// 回退：`AevonDeskNoCoverOff338` = true → 恢复 0.3.35 的定格保持（盖帧 + 降后台 + 1.9s 唤醒）。
+    static let deskNoCoverEnabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDeskNoCoverOff338") as? Bool
         return !(v ?? false)
     }()
 
@@ -2404,7 +2464,11 @@ final class AevonWindowView: UIView {
         // 不再盖定格帧（Aevon(34) #1：定格 1 秒观感比晚出现 0.3 秒差得多）。
         // V0.3.27（AevonReassertBudgetV327）：让位期总预算 1 发（见 liveWaitReassertBudget 注释）
         let isLiveWait = reason.contains("画面离场")
-        liveWaitReassertBudget = isLiveWait ? 1 : -1
+        /* V0.3.38（AevonDeskNoCoverV338）：零定格档下让位期不再只有 1 发预算 ——
+         * 那条纪律是「先垫一张定格、只补一次别闪」，而零定格档是「先实时、掉了就抢」，
+         * 掉了不补就真的黑了。改成走通用上限（reassertCount < 4，间隔 0.25s）。 */
+        let liveBudget = AevonWindowView.deskNoCoverEnabled ? -1 : 1
+        liveWaitReassertBudget = isLiveWait ? liveBudget : -1
         liveWaitReassertSkipLogged = false
         if isLiveWait {
             beginLiveWait(reason: reason)
@@ -2477,14 +2541,23 @@ final class AevonWindowView: UIView {
         liveWaitStartedAt = now
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
+        liveWaitMissTicks = 0
         liveAwaitingContent = false
         frameMatchTried = false   // V0.2.93（AevonFrameMatchRevealV293）每次让位重置比对额度
         guardHoldLogged = false   // V0.2.100（AevonReturnDeadlineV2100）限流日志重置
         alpha = 1
         liveSettleUntil = 0
         /* 尽量先盖住：能抓到最后一帧就盖（此时窗口还是可见的，盖上去 = 画面「停住」），
-         * 抓不到就保持现状 —— 但**绝不隐藏窗口**。 */
-        if darkFreezeView == nil {
+         * 抓不到就保持现状 —— 但**绝不隐藏窗口**。
+         *
+         * V0.3.38（AevonDeskNoCoverV338）：零定格档下，画面还在画就**不垫** ——
+         * 让位期本来就是「先实时、后出现」，垫一张旧帧等于把实时画面换成定格。 */
+        let skipPad = AevonWindowView.deskNoCoverEnabled && sceneHost.contentLooksRendering == true
+        if darkFreezeView == nil, skipPad {
+            AevonLog.info("[窗口] 让位期零定格：画面还在画（cs=2）→ 不垫帧，直接把实时画面留在屏上"
+                + "（\(reason)）（\(sceneHost.stateSummary())）（AevonDeskNoCoverV338）")
+        }
+        if darkFreezeView == nil, !skipPad {
             liveWaitFreezeAllowed = true
             installDarkFreeze(reason: "回桌面垫最后一帧")
             liveWaitFreezeAllowed = false
@@ -2502,6 +2575,7 @@ final class AevonWindowView: UIView {
         liveWaitDeadline = 0
         liveWaitStartedAt = 0
         liveWaitTicks = 0
+        liveWaitMissTicks = 0
         let rendering = sceneHost.contentLooksRendering
         liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
         if rendering == true {
@@ -2535,6 +2609,10 @@ final class AevonWindowView: UIView {
     /// 顺序铁律：**先盖帧，再降后台**。反了就是抓到一张已回收的空表面。
     @discardableResult
     func enterDeskHold(reason: String) -> Bool {
+        /* V0.3.38（AevonDeskNoCoverV338）：零定格档 —— 直接不接管。
+         * 不盖帧 ⇒ 画面活着就是实时；不降后台 ⇒ 场景不会因为我们自己那一笔被推掉；
+         * 也不停布防 / 不断言 ⇒ 真被系统收走时，常驻看门第一拍就盖帧兜底。 */
+        if AevonWindowView.deskNoCoverEnabled { return false }
         guard AevonWindowView.deskHoldEnabled else { return false }
         guard window != nil, !isTearingDown, sceneHost.hasContent else { return false }
         /* 停靠窗不参与定格保持：它已经有自己的封面（dockCoverView），
@@ -2564,6 +2642,7 @@ final class AevonWindowView: UIView {
         liveWaitDeadline = 0
         liveWaitStartedAt = 0
         liveWaitTicks = 0
+        liveWaitMissTicks = 0
         liveWaitReassertBudget = 0
         liveSettleUntil = 0
         idleDarkTicks = 0
@@ -2789,6 +2868,23 @@ final class AevonWindowView: UIView {
              * 判定只看场景的 contentState（cs=2 = 在画），足够了。 */
             let live = (sceneHost.contentLooksRendering == true)
             liveWaitTicks = live ? liveWaitTicks + 1 : 0
+            /* V0.3.38（AevonDeskNoCoverV338）：零定格档下让位期就是「实时画面在屏」，
+             * 画面一掉就是真空窗 —— 这里必须当场补前台，不能等让位结束才交给布防。
+             * 补写受 reassertContentForeground 自己的上限（4 次 / 间隔 0.25s）约束。 */
+            if !live, AevonWindowView.deskNoCoverEnabled {
+                reassertContentForeground(tag: "让位期掉出画")
+                liveWaitMissTicks += 1
+                /* 抢了一次还没回来（下一拍仍不在画）→ 兜底盖帧，宁可定格也不留空窗。
+                 * 这就是「零定格」的真实边界：正常回桌面完全不定格，只有系统真把
+                 * 场景收走时才退回定格兜底。 */
+                if liveWaitMissTicks >= 2, darkFreezeView == nil {
+                    liveWaitFreezeAllowed = true
+                    installDarkFreeze(reason: "让位期零定格：掉出画 0.2s 未回 → 兜底盖帧")
+                    liveWaitFreezeAllowed = false
+                }
+            } else {
+                liveWaitMissTicks = 0
+            }
             /* V0.2.100（AevonReturnDeadlineV2100）：0.2.94 的转场静默几何采样与 0.2.97 的
              * 静默重抓整体退役 —— Aevon(77) 实锤：几何静止 ≠ 画面清晰；静默重抓从模糊
              * 表面抓回来的还是模糊帧（3~7 拍重抓多条命中，用户仍见模糊→清晰）。
@@ -2836,8 +2932,7 @@ final class AevonWindowView: UIView {
             // 已经不成立 —— 现在撤帧前画面一直是冻结帧，多等 1 拍（0.1s）无感；
             // 而撤早了 = cs 先报 2、远程表面还没真画上 → 用户看到黑一瞬。收回 2 拍。
             if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12, transitionQuiet {
-                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍，盖帧已过 returnDeadline）"
-                    + "（AevonQuietRevealV294 AevonReturnDeadlineV2100）")
+                finishLiveWait(reason: "实时画面已回来（\(liveWaitTicks) 拍，盖帧已过 returnDeadline）"                    + "（AevonQuietRevealV294 AevonReturnDeadlineV2100）")
             } else if now > liveWaitDeadline {
                 finishLiveWait(reason: "上限到达")
             }
@@ -2939,6 +3034,19 @@ final class AevonWindowView: UIView {
                 installDarkFreeze(reason: "巡查发现不出画（布防期第一拍即垫）")
             }
             reassertContentForeground(tag: "发现不出画")
+            /* V0.3.38（AevonDeskQuickV338）：零定格档的提速 —— 布防期连续 4 拍（0.4s）
+             * 仍不出画 → 直接重建 presenter。0.3.35 实测「重建 → 0.23 秒 cs=2」，
+             * 而常驻看门那条重建要等 8 拍（1.6s），太慢。
+             * 零定格把「盖帧」推迟到掉出之后，就必须把「救回来」提速到同一量级，
+             * 否则用户看到的是「实时 → 黑 → 一直黑」。每窗仍上限 1 次（sceneHost 内记账）。 */
+            if AevonWindowView.deskNoCoverEnabled, darkTicks == 4,
+               sceneHost.hasContent, alpha > 0.5,
+               sceneHost.rebuildPresenter(reason: "零定格：布防期 0.4s 不出画") {
+                AevonLog.info("[窗口] 零定格提速：布防期 0.4s 仍不出画 → 重建 presenter"
+                    + "（\(sceneHost.stateSummary())）（AevonDeskQuickV338）")
+                darkTicks = 0
+                return
+            }
             /* V0.2.85（AevonIdleRewakeV285，Aevon(58)「浮窗开启期间切换全屏应用时，
              * 浮窗内画面会定格，并且不会自动恢复，只能关掉浮窗再打开」）：
              *
@@ -3121,6 +3229,17 @@ final class AevonWindowView: UIView {
     func installTransitionFreeze(reason: String) {
         guard window != nil, !isTearingDown, darkFreezeView == nil else {
             AevonLog.info("[窗口] 过渡哨冻结未装（窗不在/销毁中/已有冻结）（AevonHomeFreezeV291）")
+            return
+        }
+        /* V0.3.38（AevonDeskNoCoverV338）：零定格档 —— 画面还在画就**不盖**。
+         *
+         * Aevon(109) 日志 44.685 这一拍 cs 明明是 2（真画面活着），旧代码却无条件盖帧，
+         * 0.05 秒后又主动降后台把自己推掉，于是 2.88 秒的定格由我们自己造出来。
+         * 零定格档只做一件事：**在画就别碰它**；真掉出画时由常驻看门第一拍兜底盖帧
+         *（那条路径的语义就是「内容不出画」，盖上去才有意义）。 */
+        if AevonWindowView.deskNoCoverEnabled, sceneHost.contentLooksRendering == true {
+            AevonLog.info("[窗口] 过渡哨零定格：画面还在画（cs=2）→ 不盖帧，保持实时"
+                + "（\(reason)）（\(sceneHost.stateSummary())）（AevonDeskNoCoverV338）")
             return
         }
         AevonLog.info("[窗口] 过渡哨冻结入口放行：\(reason)（AevonHomeFreezeV291）")
@@ -3374,8 +3493,8 @@ final class AevonWindowView: UIView {
     ///   ② **内容不再接收触摸** —— 停靠窗只是一个「活缩略图」，点它的语义是「装回主窗」，
     ///      绝不能把这次点击转发进 App（历史上正是这条把抖音点跑了）；
     ///   ③ 不落盘几何（`persistFrame` 里拦掉）—— 停靠坐标不是用户想要的「主窗位置」。
-    func enterDock(side: AevonDockSide, index: Int, animated: Bool) {
-        let target = AevonDock.frame(side: side, index: index)
+    func enterDock(side: AevonDockSide, index: Int, count: Int = 1, animated: Bool) {
+        let target = AevonDock.frame(side: side, index: index, count: count)
         guard !isDocked || frame != target else {
             isDocked = true
             dockedSide = side
@@ -3415,8 +3534,11 @@ final class AevonWindowView: UIView {
             apply()
         }
         AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧第 \(index + 1) 格"
-            + "（\(Int(target.width))x\(Int(target.height))，顶部起向下排列，最多 \(AevonDock.maxCount) 格，"
-            + "过渡期光晕隐藏）（AevonDockColumnV250 AevonDockHaloOffV259）")
+            + "（\(Int(target.width))x\(Int(target.height))，"
+            + "\(count >= 2 ? "整列竖直居中、间距 \(Int(AevonDock.gap))pt" : "从顶部 10% 处起")"
+            + "，最多 \(AevonDock.maxCount) 格，圆角 \(Int(contentClip.layer.cornerRadius))pt，"
+            + "过渡期光晕隐藏）（AevonDockColumnV250 AevonDockHaloOffV259"
+            + " AevonDockSpreadV338 AevonDockCornerV338）")
     }
 
     /// V0.2.64（AevonMainAvoidV264，用户 Aevon(38) #2）：主窗避让停靠栏时的平滑位移。
@@ -3562,6 +3684,20 @@ final class AevonWindowView: UIView {
         return v ?? false
     }()
 
+    /// V0.3.38（AevonDockCornerV338）：停靠小窗圆角是否走独立档（12pt）。
+    /// `AevonDockCornerOff338` = true → 回到主窗公式（92 宽算出 20pt）。
+    static let dockCornerDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDockCornerOff338") as? Bool
+        return v ?? false
+    }()
+
+    /// V0.3.38（AevonDockSpreadV338）：停靠列是否「整列竖直居中」。
+    /// `AevonDockSpreadOff338` = true → 回到「从顶部 10% 起依次向下堆」。
+    static let dockSpreadDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDockSpreadOff338") as? Bool
+        return v ?? false
+    }()
+
     /// 停靠期盖在内容层上的静态封面。
     private var dockCoverView: UIImageView?
     /// V0.3.37（AevonDockLiveV337）：封面图留一份 —— 实时画面被系统收走、补前台也
@@ -3609,7 +3745,10 @@ final class AevonWindowView: UIView {
         cover.frame = contentClip.bounds
         cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         cover.isUserInteractionEnabled = false
-        cover.layer.cornerRadius = AevonWindowView.cornerRadius(for: contentClip.bounds.width)
+        /* V0.3.38（AevonDockCornerV338）：圆角取内容层的**当前**值（此刻还没停靠 = 33pt），
+         * 停靠缩窗时由 updateCornerRadius → syncDockCoverCorner 一次性改成 12pt。
+         * 旧代码在这里把 33pt 写死成「按 297 宽算」，之后永不更新 —— 就是四角黑边。 */
+        cover.layer.cornerRadius = contentClip.layer.cornerRadius
         cover.layer.masksToBounds = true
         contentClip.addSubview(cover)
         dockCoverView = cover
@@ -3764,8 +3903,9 @@ final class AevonWindowView: UIView {
         dockLiveTimer = timer
         AevonLog.info("[停靠] \(bundleID) 停靠期实时画面探针已布防：+0.55s 起每 0.15s 判 cs，"
             + "连续 3 拍在画就撤封面露实时视频；3s 起不来则封面永久顶住；"
-            + "画面被系统收走时立即补前台、之后每 1s 一次（最多 6 次），"
-            + "3 秒救不回就用备份帧重新顶住（AevonDockLiveV337）")
+            + "画面被系统收走时立即补前台、之后每 0.35s 一次（最多 6 次），"
+            + "1.5s 不出画就重建 presenter，3 秒救不回再用备份帧顶住"
+            + "（AevonDockLiveV337 AevonDeskQuickV338）")
     }
 
     /// 停表（装回 / 离开停靠列 / 关窗三条出口都必须调，否则会对着已装回的窗乱写）。
@@ -3802,11 +3942,14 @@ final class AevonWindowView: UIView {
             return
         }
         dockLiveMissTicks += 1
-        /* ① 补前台抢回：首次立即，之后每 1.0 秒一次，最多 6 次。
+        /* ① 补前台抢回：首次立即，之后每 0.35 秒一次，最多 6 次。
          * 每次 `updateSettings` 都会让远程表面重建一次（实时画面下能看到一下），
-         * 但这是用户 Aevon(108) 定档的取舍：宁可闪一下，也不要「视频停住只剩声音」。 */
+         * 但这是用户 Aevon(108) 定档的取舍：宁可闪一下，也不要「视频停住只剩声音」。
+         * V0.3.38（AevonDeskQuickV338）：间隔 1.0 → 0.35 秒 —— 用户 Aevon(109) #3
+         * 「吸附小窗回桌面也会出现和主悬浮窗一样的情况」，1 秒一档的间隔本身就是
+         * 「等 1 秒才出现实时画面」的直接来源。 */
         if dockReassertTries < 6,
-           dockLastReassertAt == 0 || now - dockLastReassertAt >= 1.0 {
+           dockLastReassertAt == 0 || now - dockLastReassertAt >= 0.35 {
             dockReassertTries += 1
             dockLastReassertAt = now
             let before = sceneHost.stateSummary()
@@ -3814,6 +3957,14 @@ final class AevonWindowView: UIView {
             AevonLog.info("[停靠] 停靠期画面掉出 → 补前台抢回（第 \(dockReassertTries) 次/6，"
                 + "\(ok ? "已提交" : "失败")）\(before) → \(sceneHost.stateSummary())"
                 + "（AevonDockLiveV337）")
+            return
+        }
+        /* ①-B V0.3.38（AevonDeskQuickV338）：抢了 1.5 秒（10 拍）仍不出画 → 重建 presenter。
+         * 0.3.35 实测「重建 → 0.23 秒 cs=2」，比继续补写有效率得多；每窗上限 1 次
+         *（sceneHost 内部记账，重复调用返回 false 不会再进）。 */
+        if dockLiveMissTicks == 10, sceneHost.hasContent,
+           sceneHost.rebuildPresenter(reason: "停靠期 1.5s 不出画") {
+            AevonLog.info("[停靠] 停靠期 1.5 秒不出画 → 重建 presenter（AevonDeskQuickV338）")
             return
         }
         /* ② 抢了 3 秒（20 拍）还是没回来 → 用**备份帧**重新顶住。
@@ -3824,7 +3975,8 @@ final class AevonWindowView: UIView {
             cover.frame = contentClip.bounds
             cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             cover.isUserInteractionEnabled = false
-            cover.layer.cornerRadius = AevonWindowView.cornerRadius(for: contentClip.bounds.width)
+            // V0.3.38（AevonDockCornerV338）：跟内容层当前圆角（停靠态 = 12pt）
+            cover.layer.cornerRadius = contentClip.layer.cornerRadius
             cover.layer.masksToBounds = true
             contentClip.addSubview(cover)
             dockCoverView = cover
@@ -4129,6 +4281,7 @@ final class AevonWindowView: UIView {
             liveWaitDeadline = 0
             liveWaitStartedAt = 0
             liveWaitTicks = 0
+            liveWaitMissTicks = 0
             alpha = 1
             AevonLog.info("[窗口] 让位期关窗：先撤销让位再抓离场帧（AevonLiveFirstV260）")
         }

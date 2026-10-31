@@ -49,6 +49,14 @@ enum AevonDock {
     static let minWidth: CGFloat = 56
     /// 贴边时的外沿留白（用户 Aevon(41) 定档：直接贴边 = 0）
     static let edgeInset: CGFloat = 0
+    /// V0.3.38（AevonDockCornerV338）：停靠小窗的圆角。
+    ///
+    /// 用户 Aevon(109) #1：「吸附小窗的四角存在黑边」，并定档「在现在的基础上再次方一点」。
+    /// 黑边的成因与圆角大小无关 —— 是**封面圆角没跟着窗宽更新**（安装时长 33pt，
+    /// 停靠后窗宽 92pt 仍画 33pt 圆角，四角露出 contentClip 的深灰底）。这里把停靠态
+    /// 单独定一档 12pt：比主窗公式（92 × 11.1% 夹底 20pt）更方，符合「再方一点」。
+    /// 回退：`AevonDockCornerOff338` = true → 回到主窗公式（92 宽算出 20pt）。
+    static let cornerRadius: CGFloat = 12
 
     /// 停靠小窗尺寸（宽, 高）—— 5 格反算，全列共用同一个尺寸。
     static var size: CGSize {
@@ -78,11 +86,26 @@ enum AevonDock {
     }
 
     /// 某一格的 frame（屏幕坐标）。
-    static func frame(side: AevonDockSide, index: Int) -> CGRect {
+    ///
+    /// V0.3.38（AevonDockSpreadV338）：用户 Aevon(109) 要求「给吸附后的小窗一个布局形状，
+    /// 让它们在吸附侧均匀排列」。旧规则是「从顶部 10% 起依次向下、间距 8pt」——
+    /// 只有一个窗时贴着顶部，两个以上就全挤在上半屏、下半屏空一大片。
+    /// 新规则：**整列在可用区内竖直居中**（上下留白相等、格间仍是 8pt），
+    ///   · 1 个窗：保持旧行为（顶部 10% 处），不破坏 V0.0.50 定档的「右上角第一个」；
+    ///   · 2 个以上：居中对齐，视觉上是一条整齐的列。
+    /// 回退：`AevonDockSpreadOff338` = true → 回到「从顶部起向下堆」。
+    static func frame(side: AevonDockSide, index: Int, count: Int = 1) -> CGRect {
         let screen = UIScreen.main.bounds
         let slot = size
         let top = floor(screen.height * topRatio)
-        let y = top + CGFloat(max(0, index)) * (slot.height + gap)
+        let n = max(1, min(count, maxCount))
+        var lead: CGFloat = 0
+        if n >= 2, !AevonWindowView.dockSpreadDisabled {
+            let avail = max(slot.height, (screen.height - bottomMargin) - top)
+            let total = CGFloat(n) * slot.height + CGFloat(n - 1) * gap
+            lead = floor(max(0, avail - total) / 2)
+        }
+        let y = top + lead + CGFloat(max(0, index)) * (slot.height + gap)
         let x: CGFloat = (side == .left) ? edgeInset : (screen.width - slot.width - edgeInset)
         return CGRect(x: x, y: y, width: slot.width, height: slot.height)
     }

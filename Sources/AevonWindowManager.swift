@@ -1679,8 +1679,9 @@ enum AevonWindowManager {
         AevonNotifySetFloatStage("")
         AevonLog.info("[停靠] \(bundleID) 已吸附到屏幕\(side.title)侧"
             + "（该侧现有 \(dockedViews.filter { $0.dockedSide == side }.count) 个，"
-            + "尺寸 \(Int(AevonDock.size.width))x\(Int(AevonDock.size.height))，顶部起依次向下）"
-            + "（AevonDockColumnV250 AevonDockDropV250 AevonDockSideFirstV271）")
+            + "尺寸 \(Int(AevonDock.size.width))x\(Int(AevonDock.size.height))，"
+            + "\(dockedViews.filter { $0.dockedSide == side }.count >= 2 ? "整列竖直居中" : "从顶部 10% 处起")）"
+            + "（AevonDockColumnV250 AevonDockDropV250 AevonDockSideFirstV271 AevonDockSpreadV338）")
         // V0.2.53（AevonDockArbiterV253）：记录本次停靠，供 0.8s 防抖窗用。
         lastDockAt = CACurrentMediaTime()
         lastDockedBundleID = bundleID
@@ -1940,7 +1941,7 @@ enum AevonWindowManager {
             + column.map { "\($0.bundleID)=\($0.dockedSide.title)" }.joined(separator: " ")
             + "）（AevonDockDiagV273）")
         for (index, view) in column.enumerated() {
-            view.enterDock(side: side, index: index, animated: animated)
+            view.enterDock(side: side, index: index, count: column.count, animated: animated)
         }
     }
 

@@ -128,3 +128,11 @@ NSString *AevonViewHostChain(id view, NSInteger depth) {
  * 独立成一条纯 ASCII C 串：Swift 日志串里的标记虽然也能被 strings 抓到，
  * 但 __cstring 里有一条独立串最稳（0.3.33 的教训：夹在中文串里本地审计抓不到）。 */
 __attribute__((used, unused)) static const char AevonDockLiveMark337[] = "AevonDockLiveV337";
+
+/* ── V0.3.38 二进制标记（AevonDockCornerV338 / AevonDockSpreadV338）─────────
+ * 停靠小窗圆角档（12pt）+ 吸附侧整列竖直居中。两者都只在过场日志里出现，
+ * 这里各补一条独立纯 ASCII C 串，保证 strip 之后 strings 仍能抓到。 */
+__attribute__((used, unused)) static const char AevonDockCornerMark338[] = "AevonDockCornerV338";
+__attribute__((used, unused)) static const char AevonDockSpreadMark338[] = "AevonDockSpreadV338";
+__attribute__((used, unused)) static const char AevonDeskNoCoverMark338[] = "AevonDeskNoCoverV338";
+__attribute__((used, unused)) static const char AevonDeskQuickMark338[] = "AevonDeskQuickV338";

@@ -393,15 +393,6 @@ jobs:
           grep -q 'AevonShieldRun' "$GITHUB_WORKSPACE/Sources/AevonProbeSupport.m" \
             || { echo "::error::ObjC @try 兜底 AevonShieldRun 被删"; exit 1; }
           echo "V0.1.14 校验: 宿主审计五组 + 只读纪律 + ObjC @try 兜底（行为与 0.1.13 一致）"
-          # V0.1.15（Aevon(82) 的 P7 结论 → 右缘做成「第二个热区」）：
-          # P7 四条实测把所有旧假设推翻：
-          #   · P7-1 右缘 (424,400) 最高命中 = AevonGestureBandView（在 SBMainSwitcherWindow
-          #     level=5 里压着 SBDeviceApplicationSceneView）→ 命中早就赢了，不是瓶颈；
-          #   · P7-2 入口窗口三个落点全 nil（穿透）→ 它不参与裁决；
-          #   · P7-3 我们的识别器与 14 个系统识别器同宿 UISystemGestureView(0,0,430,932)；
-          #   · P7-5 BKSHIDEventDeferringPredicate 只有 environment/display/token，无几何 → 判死。
-          # 所以本版只做一件事：右缘在 UIApplication -sendEvent: 层 began 即整指接管，
-          # 与热区共用 ownsTouch 生命周期；不再碰识别器、不再扣移动帧。
           for s in AevonRightEdgeTakeoverV115 AevonRightEdgeWidthV115 AevonBandTouchBeganV115; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::V0.1.15 标记 $s 未编入"; exit 1; }
@@ -417,13 +408,6 @@ jobs:
           strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
             || { echo "::error::识别器停手标记丢失 —— 会退回 0.1.12 的延迟补投"; exit 1; }
           echo "V0.1.15 校验: 右缘接管带（began 整指吞）+ 宽高可调 + 抬手清状态 + 识别器仍停手"
-          # V0.1.16（AevonRightEdgeShowBandV116）：接管带可视化 —— 只画，不改触摸行为。
-          #
-          # Aevon(83) 给的结论是「机制已经通了」（右缘 3/3 起手→判向→呼出），
-          # 但也暴露两件事：① 28pt 宽在真机上根本看不见，三次落点全在 y=656~671 那一小段，
-          # 用户无法确认带在哪；② 0.1.15 的「命中共」取证结构性不可能出现 ——
-          # 总入口在 began 就 return 掉了原 sendEvent，hitTest 不跑，bandView 永远收不到 touches。
-          # 本版只加绘制：画出带的真实范围 + 接管时闪一下，并把「命中共为空是预期」写进交付说明。
           for s in AevonRightEdgeShowBandV116 AevonBandIndicatorV116; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::V0.1.16 标记 $s 未编入"; exit 1; }
@@ -912,13 +896,6 @@ jobs:
             | grep -q 'AevonAppProbeWideV205' \
             || { echo "::error::桥接动态域被删 —— 第三方 App 的 App 侧日志将不可见"; exit 1; }
           echo "V0.2.5 校验: 权威判向（失败要求）+ 两帧确认 + 抬手快判 + 桥接动态域 已就位"
-          # V0.2.6（AevonAppFailNotifyV206 / AevonEdgeFailGateV206 / AevonEdgePointerUnifyV206）：
-          #   Aevon(92) 判读：8 次兜底呼盘发生在 App 已判失败之后（兜底只看 dx 不看纵向）；
-          #   appedge 呼盘后圆盘收不到手指移动（pointer source 不一致）→ 只能抬手二次点选。
-          #   ① App 侧失败回传 rightedgefail 必须在（4 个失败分支 + 卡死自愈）；
-          #   ② SB 侧失败闸（1.5s 内 global 兜底闭嘴）必须在；
-          #   ③ appedge 指针 source 统一为 "global"（跟手 + 松手在图标上直接开窗）；
-          #   ④ 场景标识解析必须剥 "sceneID:" 前缀与 "-default" 后缀。
           strings "$APP_DYLIB" | grep -q "AevonAppFailNotifyV206" \
             || { echo "::error::AevonApp.dylib 缺少 0.2.6 标记 AevonAppFailNotifyV206"; exit 1; }
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEntryHost.swift" \
@@ -1020,15 +997,6 @@ jobs:
             || { echo "::error::浮窗拖拽的吞摸被一起删了 —— 拖窗会拖着桌面"; exit 1; }
           # V0.2.51：断言退役 —— 桌面手势条 hitTest 又变成恒 nil —— 桌面呼盘会彻底消失
           echo "V0.2.15 校验: SB 侧吞摸下线（只留浮窗拖拽）+ 桌面手势条自己接触摸 + App 侧跟随总开关"
-          # ---- V0.2.16（Aevon(102)）：圆盘指针不再死绑在一条通道上 ----
-          #
-          # 15 次呼盘：`systemgesture` 9 / `appedge` 4 / `strip` 2。
-          # `presentRing` 把圆盘指针绑成呼盘来源的字符串，而 `systemgesture` 这个字符串
-          # 只被 0.1.13 就停手的 `AevonSystemGestureV105` 使用（P7-4「愿接=0」）——
-          # 绑上去就等于绑到一条死通道：
-          #   · 手指继续往圆心滑 → 一条 moved 都进不来，图标不高亮也不旋转 =「选不中」；
-          #   · 抬手 → ended 也进不来 → 指针一直挂着，只能等 1.2 秒超时后由下一次
-          #     触摸（圆盘自己的 touchesBegan）接管 =「必须抬手再摸一次」。
           grep -q 'AevonRingPointerHandoffV216' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::圆盘缺指针通道交接 —— 呼盘通道一死，手指就再也选不中"; exit 1; }
           test "$(grep -c 'AevonRingPointerHandoffV216' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift")" -ge 2 \
@@ -1513,14 +1481,6 @@ jobs:
           grep -q 'AevonSelfSceneAppBinarySupport' "$GITHUB_WORKSPACE/AevonSceneDriverShim.m" \
             || { echo "::error::垫片缺二进制扫描函数"; exit 1; }
           echo "V0.2.40 校验: App 二进制扫描判据（configurationForConnectingSceneSession）已就位"
-          # ── V0.2.41 校验（AevonSceneCapsV241）：判据落 App 进程内 + 落盘登记表。
-          # 0.2.40 真机证伪静态扫描：Sileo/Filza 含该选择子串仍黑屏、贴吧纯净版扫不到
-          # 却本可成功、设置 manifest 无 delegate 类名却成功 → 静态判据五版全错。
-          # 唯一与五轮真机成败 100% 对齐 = App delegate 是否实现
-          # application:configurationForConnectingSceneSession:options:（进程内
-          # respondsToSelector）。App 侧 AevonAppSceneCapRegistry 启动时算完合并写
-          # /var/mobile/aevon_caps.txt，SB 侧 AevonSelfSceneAppCapVerdict 开窗前读。
-          # 只加不改。
           strings "$DYLIB" | grep -q 'AevonSceneCapsV241' \
             || { echo "::error::0.2.41 SB 侧缺标记 AevonSceneCapsV241"; exit 1; }
           grep -q 'AevonAppSceneCapV241' "$GITHUB_WORKSPACE/Sources/AppSide/AevonAppSide.m" \
@@ -1534,16 +1494,6 @@ jobs:
           grep -q 'AevonSelfSceneAppCapVerdict' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧未切到能力登记判据"; exit 1; }
           echo "V0.2.41 校验: 能力登记表判据（进程内 respondsToSelector + 落盘 aevon_caps）已就位"
-          # ── V0.2.42 校验（AevonMainSceneResizeV242 / AevonSceneRouteV242 /
-          #    AevonSceneGateV242）：一轮同时验 S1 + S2、开关分档。
-          # 0.2.41 真机（Aevon(17)）三点：①能力登记表工作正常（caps：Sileo/Filza/
-          # BatteryInfo=0，设置/Spotlight=1）；②cap=-1（旧 dylib 进程）照样走自建 →
-          # 老式 App 又黑一次，-1 不能再当可自建；③旧路径整屏裁切 = 「显示不全」。
-          # S2（默认开｜MainSceneResize）= 改已在运行的主场景 settings.frame
-          # （MilkyWayReborn scaleMode 同款 updateSettings 通路，不需要第二场景，
-          # 老式 App 也收得到），关窗还原全屏画布。S1（试验档｜SceneRouteForceSelf，
-          # 默认关）= 老式 App 也自建 + App 侧场景闸（supportsMultipleScenes 强制 YES
-          # + 补 configurationForConnecting）。只加不改。
           for s in AevonMainSceneResizeV242 AevonSceneRouteV242; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.42 SB 侧缺标记 $s"; exit 1; }
@@ -1581,16 +1531,6 @@ jobs:
           grep -q 'SceneRouteForceSelf' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
             || { echo "::error::Swift 侧未读 S1 档开关"; exit 1; }
           echo "V0.2.42 校验: S2 主场景改画布（默认开）+ S1 场景闸试验档（默认关）已就位"
-          # ── V0.2.43 校验（AevonCanvasScaleV243 / AevonMainCanvasGuardV243 /
-          #    AevonContentTreeV243）：Aevon(18) 真机定论 —— S2 = 真重排成立
-          #    （所有 App 都重排了）。剩两个问题都在「画布尺寸」层：
-          #    ① 画布 = 窗口（272pt 逻辑宽，比任何 iPhone 都窄）→ 字大内容少；
-          #       修法 = 逻辑画布 × k（1.00/1.30/1.58）、容器 scale(1/k) 缩回，5:3 不变。
-          #    ② 抖音右侧栏不显示 = 按 UIScreen 全屏宽排版、右侧落到画布外被裁，
-          #       只读取证一级子视图宽 vs 画布宽（超宽即证实），1.58 档才治得了。
-          #    另修一处真 bug：0.2.42 防回弹三拍排在 WindowManager 里捕获裸 scene，
-          #    关窗还原 430x932 后 +2.5s 那拍又把 272x454 写回去（日志两处置实）；
-          #    三拍已挪进承载器，invalidated 后一律不写。只加不改。
           for s in AevonCanvasScaleV243 AevonMainCanvasGuardV243 AevonContentTreeV243; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.43 SB 侧缺标记 $s"; exit 1; }
@@ -1619,13 +1559,6 @@ jobs:
             echo "::error::0.2.47 反转：设置页仍残留画布倍数滑杆"; exit 1
           fi
           echo "V0.2.43 校验: 画布倍数（1.00/1.30/1.58）+ 关窗残留复查修复 + 超宽取证已就位"
-          # ── V0.2.44 校验（AevonScreenAspectV244）：窗口比例跟随屏幕。
-          # Aevon(19) 判读：1.58 档后抖音右侧栏回来了，但「内容整体上移、视频不在
-          # 正中、底部黑一大片」——5:3 的逻辑画布 430×716 比整屏 430×932 矮 216pt，
-          # 抖音这类按整屏高度排整页的 App 只能露出上半页。5:3（0.6）与「整屏完整
-          # 可见」（0.4614）数学上互斥，本档把窗口比例换成屏幕比例、画布 = 整屏原生
-          # 尺寸、呈现层 1/k 等比缩进 → 顶栏/底栏/右侧栏全在位、视频居中、黑边等量。
-          # 只加不改：5:3 常量与 contentAspect 行原样保留（上面 1785 行断言仍在钉它）。
           for s in AevonScreenAspectV244; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.44 SB 侧缺标记 $s"; exit 1; }
@@ -1757,18 +1690,6 @@ jobs:
             exit 1
           fi
           echo "V0.2.46 校验: 画布倍数默认 1.30（+老值回写）+ 窗比例 7:12 + 深色边缘发光 + 全屏 App 手柄接管 已就位"
-          # ── V0.2.47 校验（AevonDarkGuardV247 / AevonGlowEdgeV247 /
-          #    AevonPrefsFixedV247 / AevonRingGripGuardV247）
-          # Aevon(22) 真机四项：
-          #   ① 全屏 App 里开浮窗 → 上滑回桌面 → 浮窗**有概率黑屏**，必须关掉重开。
-          #      机制：浮窗承载的是 App 的主场景，回桌面时系统把这个 App 置后台、
-          #      远程表面回收（cs/layers 归 0）；开窗时的前台补偿只补 8 次（约 7 秒），
-          #      于是「7 秒内回桌面能活、过一会儿回桌面就黑」= 「有概率」。
-          #      修法：全屏 App 画面离场 → 浮窗布防 4 秒 + 有界重申前台（0/0.75/2.0s）
-          #      + 真的不出画时盖最后一帧（点一下可手动再要）；全程 fail-open。
-          #   ② 发光圈太明显 → 外扩 12pt → 2pt、0.90 → 0.42、半径 9 → 5，只留贴边光晕。
-          #   ③ 画布倍数 / 内容比例「改回默认 + 删设置开关」（上面几段已反转旧断言）。
-          #   ④ 拖右下角缩放误呼圆盘 → 系统手势通道起手落在浮窗上就 Failed 归还。
           for s in AevonDarkGuardV247 AevonGlowEdgeV247 AevonPrefsFixedV247 AevonRingGripGuardV247; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.47 SB 侧缺标记 $s"; exit 1; }
@@ -1820,23 +1741,6 @@ jobs:
             && { echo "::error::0.2.49 发光外扩 2pt 已是历史档（用户定档 1pt）"; exit 1; }
           # V0.2.51：断言退役 —— 0.2.47 浮窗让路排在热区判定之前（GRIP/BAND 行号比对，锚的旧热区代码已删）
           echo "V0.2.47 校验: 回桌面黑屏守卫（事件布防+有界重申+最后一帧）+ 发光贴边压暗 + 偏好定档删项 + 圆盘浮窗让路 已就位"
-          # ── V0.2.48 校验（AevonCanvasFixedV248 / AevonNoAutoLockV248 /
-          #    AevonFrameMemoryV248 / AevonMainSceneFixedV248 /
-          #    AevonMainCanvasRestoreV248 / AevonSelfSceneRestoreV248）
-          # Aevon(23) 十项，本轮落地其中八项（①~④⑥⑧⑨⑩；⑤ 见交付说明分析）：
-          #   ① 缩到最小「字体反而变大」② 抖音右侧栏显示不全/不显示 —— **同一根因**：
-          #      画布 = 窗口 × 1.30，窗口越小画布越窄（240 → 312），而字号是固定 pt、
-          #      抖音右侧栏按 UIScreen 屏宽摆位 → 字占比变大、右栏被裁到画布外。
-          #      修法：画布恒定 = 屏宽 × 屏宽/比例（430×737），与窗口尺寸彻底脱钩。
-          #   ③ 缩放时整窗黑屏 → 缩放不再改画布（原来每次都写 settings 触发 App 重排），
-          #      改为实时改 window.frame + 呈现层 scale，画面全程是活的。
-          #   ④ 播放视频时按系统锁屏时间暗屏 → 浮窗存在期间禁用空闲锁屏，关窗还原。
-          #   ⑥ 位置/大小记忆 + 永不移出屏幕 → 落盘 synchronize + 完整夹屏。
-          #   ⑧ 有时自动跑到右下角 → 旧逻辑允许「只露 60pt」并把那个位置写进记忆，
-          #      恢复时 x/y 就是 86%/92%；夹屏后不可能再出现。
-          #   ⑨ 主场景改画布开关写死 + 删设置项。
-          #   ⑩ 关窗后全屏打开 App 黑屏 → 主场景还原后抖动复位两拍；自建场景销毁前
-          #      先把画布还原成整屏并等 0.35 秒，让 App 完成一次「回到大尺寸」的重排。
           for s in AevonCanvasFixedV248 AevonNoAutoLockV248 AevonFrameMemoryV248 \
                    AevonMainSceneFixedV248 AevonMainCanvasRestoreV248 AevonSelfSceneRestoreV248; do
             strings "$DYLIB" | grep -q "$s" \
@@ -2138,13 +2042,6 @@ jobs:
             || { echo "::error::0.2.51 系统手势垫片应已删除"; exit 1; }
           echo "V0.2.51 校验: 把手-only（呼盘唯一入口）+ 边条轻点停靠（双通道）+ 场景停用闸（回桌面守画，Stheno 方向）+ 抖音整屏预热 + 三通道退役 + App 侧识别器退役 + 设置页瘦身 已就位"
 
-          # ---- V0.2.52 → V0.2.53（AevonDeactGateRetiredV253）：停用登记 hook 整建制退役 ----
-          # 【历史】0.2.51 把 uint64 位掩码形参写成对象指针 → ARC retain 野指针 →
-          #   SIGSEGV → 安全模式（连崩 4 次）；0.2.52 签名纠错后真机日志实锤：
-          #   闸一次都没拦到（场景照常 deactivation），却持续站在 SpringBoard 场景
-          #   状态机的登记路径上 —— 用户 Aevon(27) 第 4 条「系统手势无辜失效、桌面
-          #   无法滑动」的头号嫌疑。与 V0.1.3「安全模式崩溃源」的历史结论第三次一致，
-          #   0.2.53 起整建制退役（下面的正向断言全部翻转为防回退网）。
           strings "$DYLIB" | grep -q 'AevonDeactGateV252' \
             || { echo "::error::0.2.52 缺标记 AevonDeactGateV252（历史校验串，退役后仍须收容在产物）"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonDeactGateRetiredV253' \
@@ -2204,14 +2101,6 @@ jobs:
             || { echo "::error::0.2.53 缺守卫第一拍现场验证（captureSnapshotImage 验证后撤冻结）"; exit 1; }
           echo "V0.2.53 校验: 停靠手势仲裁 + 视图轻点退役 + 预热条件修正（!usedSelfScene）+ 守卫第一拍验证 已就位"
 
-          # ---- V0.2.54（Aevon(28)：系统手势失效修复）----
-          # 【根因】三拍重申自建场景前台是裸 asyncAfter、关窗不撤销：用户 3 秒内关窗
-          #   （底边双击常态）时 +1.2s/+3.0s 两拍落在「自建场景已销毁」之后，对已销毁
-          #   FBScene 继续写 updateSettings{foreground=YES, deactivationReasons=0}
-          #   （Aevon(28) 日志 19.920 已销毁 → 19.980 +1.2s 已提交 铁证）。关窗后唯一
-          #   还在碰 FrontBoard 场景状态机的路径 → 场景呈现/激活状态被幽灵更新卡住 →
-          #   系统手势（主屏翻页/上滑/通知中心，全经场景呈现层判定）失效；点按走
-          #   hit-test 不受影响。修法 = 弱持有 + 开火前核对登记表身份。
           strings "$DYLIB" | grep -q 'AevonReassertGuardV254' \
             || { echo "::error::0.2.54 缺标记 AevonReassertGuardV254（重申前台幽灵写入防护）"; exit 1; }
           grep -q 'for delay in \[0.3, 1.2, 3.0\]' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -2282,14 +2171,6 @@ jobs:
             || { echo "::error::0.2.59 重申间隔下限必须是 0.25s（V0.2.55 的 0.35s 已被 AevonGuardFastV259 反转）"; exit 1; }
           echo "V0.2.55 校验: 把手物理化+位置30% + 手势探针 + 拖拽残留自愈 + 停靠任意点装回 + 回桌面重申加密 已就位"
 
-          # ── V0.2.56 校验（AevonDedupBeganV256 / AevonStaleShieldV256 / AevonDblTapHealV256 / AevonCloseDisarmV256 / AevonGestureProbeV2V256）──
-          # Aevon(30)：pan 失效未闭合 —— 吞咽状态机三处实锤修复 + 探针 V2 取证。
-          # ①底边双击关窗路径（最高频关法）缺自愈锚点 lastFloatMovedAt：ended 丢帧时
-          #   floatTouchID 带 30s deadline 残留且 0.2.55 自愈（lastFloatMovedAt > 0 才生效）
-          #   完全不触发；②UITouch 槽位地址复用已实锤（同一地址 64441673984 在 2.4s 内
-          #   两次登记），残留+复用 = 新手指 began/moved 整段被吞 = pan 死点按活；
-          # ③重投 began（真机实锤 3ms 两条）走「交回浮窗（不吞）」分支却被吞，自相矛盾；
-          # ④关窗不解除拖拽吞咽状态；⑤0.2.55 探针 prefix(12) 截断 = 取证失败。
           for s in AevonDedupBeganV256 AevonStaleShieldV256 AevonDblTapHealV256 AevonCloseDisarmV256 AevonGestureProbeV2V256; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.56 缺标记 $s"; exit 1; }
@@ -2314,14 +2195,6 @@ jobs:
             || { echo "::error::0.2.56 旧探针 prefix(12) 截断必须移除（取证失败根源）"; exit 1; }
           echo "V0.2.56 校验: 重投began静默 + 残留盾 + 双击自愈锚点 + 关窗强制解除 + 探针V2 已就位"
 
-          # ── V0.2.57 校验（AevonZombieSealV257 / AevonTouchProbeV257）──
-          # Aevon(31)：探针 V2 周期采样全健康（识别器无一卡住）→ 杀手不在识别器层，
-          # 机制锁定为「吞过 began 的触摸中途弃管后，后续帧以孤儿身份漏给 UIKit」
-          #（began/moved 先上报再询问 + 吞咽=整条不投递 + 中途清场 = UIKit 收到
-          # 没 began 簿记的帧序列，污染手势环境 → pan 死点按活）。
-          # ①封印：七个弃管点（自愈残留/接管盾/超时清场/拖拽超时/角块失配/边条放弃/
-          #   关窗强制解除）一律先把该指针封印到抬手，began/moved 绝不漏孤儿帧；
-          # ②失效瞬间探针：每根 began 触发（3s 节流），点按可达 → 取证必中失效瞬间。
           for s in AevonZombieSealV257 AevonTouchProbeV257; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.57 缺标记 $s"; exit 1; }
@@ -2339,15 +2212,6 @@ jobs:
             || { echo "::error::0.2.57 缺失效瞬间探针实现"; exit 1; }
           echo "V0.2.57 校验: 孤儿帧封印(七弃管点) + 失效瞬间探针(began触发/3s节流) 已就位"
 
-          # ── V0.2.58 校验（AevonGripFeedCleanV258 / AevonGripToggleV258）──
-          # Aevon(32) 用户定位实锤：不开浮窗、只碰把手 → 桌面滑动失效。
-          # 机制定论：把手滑动呼盘那根手指的 began 已投递 UIKit（把手是真实控件，
-          # 投递发生在圆盘展开之前），但圆盘展开期间收养逻辑把它的 moved/ended
-          # 全吞（shouldSwallow 圆盘在场段 + 抬手帧也吞）= 每次滑动呼盘给 UIKit
-          # 留一根「有 began 无 ended」的在途触摸 + 把手 pan 收不到收尾帧。
-          # 0.2.49 干净的根本原因：呼盘走纯 sendEvent 通道，began 也吞，整根触摸
-          # 对 UIKit 不可见。修复：收养指纹（gripAdoptedTouchID）全程放行补全投递
-          # —— 该触摸窗口恒为入口窗口，物理上不可能漏给桌面/App。
           for s in AevonGripFeedCleanV258 AevonGripToggleV258; do
             strings "$DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.58 缺标记 $s"; exit 1; }
@@ -2420,14 +2284,6 @@ jobs:
             || { echo "::error::0.2.59 SB 启动清场缺失（notify state 残留）"; exit 1; }
           echo "V0.2.59 校验: 回桌面提速 + 停靠光晕隐藏 + 把手竖条自定义 + 停靠触摸拦截(App侧关交互+保险丝) 已就位"
 
-          # ── V0.2.60 校验（Aevon(34) 五项）────────────────────────────────────
-          # ①回桌面「先实时、后出现」（AevonLiveFirstV260）
-          # ②停靠：只保留点击装回 + 装回不闪光晕（AevonDockTapOnlyV260 / AevonDockHaloBackV260
-          #   / AevonDockArbiterNarrowV260）
-          # ③把手：只认滑动 + 全屏 App 也能呼盘（AevonGripSwipeOnlyV260 / AevonGripSwipeGlobalV260
-          #   / AevonGripFrontV260）
-          # ④抖音断层：预热闸门 + 断层自愈（AevonWarmupGateV260 / AevonDouyinHealV260）
-          # ⑤深色光晕降档（AevonGlowDimV260）
           for s in AevonLiveFirstV260 AevonDockTapOnlyV260 AevonDockHaloBackV260 \
                    AevonDockArbiterNarrowV260 AevonGripSwipeOnlyV260 AevonGripSwipeGlobalV260 \
                    AevonGripFrontV260 AevonWarmupGateV260 AevonDouyinHealV260 AevonGlowDimV260; do
@@ -2444,13 +2300,6 @@ jobs:
           grep -q 'liveWaitLimit: TimeInterval = 1.5' "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.94 让位上限必须是 1.5 秒（AevonQuietRevealV294，0.2.60 的 1.0 已反转）"; exit 1; }
           # cs 会 2→0→2 抖一次：必须连续 2 拍都抓到真画面才淡入，否则「亮一下又黑」
-          # V0.2.62 反转（AevonLiveQuietV262）：从「连续 2 拍」放宽成「>=1 拍 + 让位已过
-          # 0.12s」—— Aevon(36) 实测让位 0.43/0.65 秒才淡入，这段「窗口消失」本身就是
-          # 用户说的闪；0.12s 足够避开系统回桌面首帧，又不会让窗口看起来「没了」。
-          # V0.2.92（AevonStableRevealV292）反转：让位揭幕从「>=1 拍」收回「连续 2 拍」——
-          # 0.2.62 放宽的前提（窗口消失感）在瞬时显形+冻结帧全程在盖之后已不成立；
-          # Stheno 揭幕纪律 = 连续采样判就绪（Aevon(61) #3 闪/黑屏）。
-          # V0.2.94（AevonQuietRevealV294）扩展：2 拍之外再加 transitionQuiet 静默闸。
           grep -q 'if liveWaitTicks >= 2, now - liveWaitStartedAt > 0.12, transitionQuiet {' \
             "$GITHUB_WORKSPACE/Sources/AevonWindowView.swift" \
             || { echo "::error::0.2.94 让位揭幕必须 2 拍稳定 + 转场静默（AevonQuietRevealV294）"; exit 1; }
@@ -2496,17 +2345,6 @@ jobs:
             || { echo "::error::0.2.60 深色光晕 0.30 未落地"; exit 1; }
           echo "V0.2.60 校验: 回桌面先实时后出现 + 停靠只点击装回 + 把手只认滑动(全屏可用) + 抖音预热闸门/断层自愈 + 深色光晕降档 已就位"
 
-          # ── V0.2.61 校验（Aevon(35) 九项）──────────────────────────────────────
-          # ①设置页重排（AevonGripPageV261）：把手滑条搬进 Grip.plist 独立页
-          #   —— plist 侧断言在上面；它的标记在**设置 bundle** 里（PREFS_BIN），不在主库
-          # ②全屏启动设置黑屏（AevonDockFullscreenCloseV261）
-          # ③拖到边缘不再自动停靠（AevonNoAutoDockV261）
-          # ④底边双击误触（AevonDblTapGuardV261）
-          # ⑤Sileo 图标退役 —— control 侧断言在上面（必须不存在 Icon:）
-          # ⑥停靠小窗点击装回（AevonDockTapFixV261 + AevonDockRestoreOnPickV261）
-          # ⑦回桌面闪烁（AevonLiveFirstFixV261）
-          # ⑧把手滑动不再带动 App（AevonGripSwallowV261，在 App 侧 dylib 里）
-          # ⑨抖音断层（AevonDouyinRepairV261）
           for s in AevonDockFullscreenCloseV261 AevonNoAutoDockV261 \
           AevonDblTapGuardV261 AevonDockTapFixV261 AevonDockRestoreOnPickV261 \
           AevonLiveFirstFixV261 AevonDouyinRepairV261; do
@@ -2602,15 +2440,6 @@ jobs:
             || { echo "::error::0.2.61 把手吞咽缺键盘闸（打字时键盘右列会按不出来）"; exit 1; }
           echo "V0.2.61 校验: 把手页独立 + 停靠小窗全屏关窗/点击装回 + 无自动吸附 + 双击收紧 + 让位同步隐形 + 把手吞咽 + 抖音画面判定修复 已就位"
 
-          # ── V0.2.62 校验（Aevon(36) 八项）──────────────────────────────────────
-          # ①开窗延迟（AevonWarmupFastV262 / AevonKickFastV262 / AevonKickExactV262）
-          # ②截图 + 录屏进圆盘（AevonQuickActionV262 / AevonQuickScreenshotV262 / AevonQuickRecordingV262）
-          # ③键盘完整显示（AevonKeyFitV262，App 侧）
-          # ④多主窗野窗（AevonDockNoOrphanV262）
-          # ⑤回桌面闪烁（AevonLiveQuietV262）
-          # ⑥设置黑屏（AevonHandoffFastV262）
-          # ⑦把手仍带动 App（AevonGripSwallowWinV262，App 侧）
-          # ⑧抖音后段上移（AevonSeamRepairFixedV262 / AevonWarmupForegroundV262）
           for s in AevonWarmupFastV262 AevonWarmupForegroundV262 AevonKickFastV262 \
           AevonKickExactV262 AevonLiveQuietV262 AevonSeamRepairFixedV262 \
           AevonDockNoOrphanV262 AevonHandoffFastV262 AevonQuickActionV262 \
@@ -2719,14 +2548,6 @@ jobs:
             || { echo "::error::0.2.62 没链接 ReplayKit（录屏链接期失败）"; exit 1; }
           echo "V0.2.62 校验: 开窗提速 + 圆盘截图/录屏 + 键盘画布底对齐 + 野窗清扫 + 让位静默 + 交接前清标记 + 窗口层吞咽 + 预热推前台/整屏往返 已就位"
 
-          # ── V0.2.63 校验（Aevon(37) 七项）──────────────────────────────────────
-          # ①抖音画面居中（AevonCenterContentV263，App 侧）
-          # ②停靠小窗被误关（AevonDockNoVanishV263）
-          # ③截图/录屏走系统入口 + 可在设置页增删排序（AevonQuickSystemV263 / AevonQuickEditableV263）
-          # ④键盘完整显示（AevonKeyFitV263 / AevonKeyboardVisibleFixV263）
-          # ⑤关窗后全屏启动设置黑屏（AevonFullscreenRecoverV263）
-          # ⑥回桌面闪烁（AevonLiveHiddenV263 / AevonFlashDampV263）
-          # ⑦滑把手带动 App（AevonGripBusyV263 + AevonGripSwallowFixV263）
           for s in AevonCenterContentV263; do
             strings "$APP_DYLIB" | grep -q "$s" \
               || { echo "::error::0.2.63 App 侧 dylib 缺标记 $s"; exit 1; }
@@ -3492,13 +3313,6 @@ jobs:
             || { echo "::error::0.2.81 缺死代码清理标记（AevonDeadCodeV281）"; exit 1; }
           echo "V0.2.81 校验: 切换器让位下线 + 自建默认关 + 学习降级修正 + 多场景判据 + 探针退役 已就位"
 
-          # ── V0.2.82 校验（Aevon(55)：闪 + 自动注销）────────────────────────────
-          # 依据 Aevon(55) 三份现场：
-          #   ① Aevon.crash.log.old：SIGSEGV=11，帧1 = sendEvent 钩子、帧3-10 紧随其后的判定
-          #      → 崩溃在触摸链上；两次崩溃分别紧跟「开窗完成 0.53s」「让位 0.285s」。
-          #   ② 12:35:00 时序：00.227 占位直显（窗已可见）→ 00.427 写 429x736
-          #      → 00.692 写回 430x737 → 00.694 才摘遮罩 = 中间 467ms 重排两次（闪）。
-          #   ③ 触摸链上唯一遍历系统窗口视图树的是「失效瞬间探针」的 hitTest。
 
           # ① V0.2.83 反转：0.2.82 在这里要求「遮罩必须提到窗口之上」。0.2.83 把遮罩
           #    整体摘除（AevonNoShroudV283）—— 遮罩遮的是我们自己造的画布抖动，代价是用户
@@ -3546,14 +3360,6 @@ jobs:
             || { echo "::error::0.2.82 缺「让位改 alpha」标记"; exit 1; }
           echo "V0.2.82 校验: 遮罩退役 + 触摸链零 hitTest + 让位触点闸门 + 让位改 alpha 已就位"
 
-          # ── V0.2.83 校验（Aevon(56)：摘遮罩 / 取证换 SA_SIGINFO / App 侧交互自愈）────────
-          # 依据 Aevon(56) 归档(18) 四件事：
-          #   ① 「选中图标要等 2 秒才出现」= 遮罩盖着 + 每次开窗两次整屏截图（同步）。
-          #   ② 「0.2.81 起系统触摸手势失效」= App 侧 gripBusy 的两条「不该关」判据是直接
-          #      return，已经关掉的 userInteractionEnabled 再也没机会打开。
-          #   ③ 「自动注销多个方面都会触发」= 旧崩溃栈帧 1 就是 AevonBacktrace 的调用者
-          #      （反汇编 0xf700 确认），整条栈没有现场 → 换 ucontext 读 pc。
-          #   ④ `_setLayers` 的 Swift 参数写成非可选 Any，nil 会在桥接 thunk 里 trap。
 
           # ① 遮罩退役（AevonNoShroudV283）+ 开窗路径不许再截图
           grep -q 'AevonNoShroudV283' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
@@ -3631,16 +3437,6 @@ jobs:
           fi
           echo "V0.2.83 校验: 遮罩退役 + SA_SIGINFO 取证 + App侧交互自愈 + setLayers可空 + 前台改写下线 已就位"
 
-          # ── V0.2.84 校验（Aevon(57)：闪回来 / 全屏 App 触摸死区）────────────────
-          # 依据 Aevon(57) 日志（1042 行，0.2.83 版）：
-          #   ① 「悬浮窗打开时又出现闪一下」= 一次开窗**并发两条 kick 链**（预热切换 /
-          #      断层修复尾排），0.2.83 的定稿回调只等第一条链的尾笔就 fire，第二条链的
-          #      尾笔在显窗后 234~249ms 才落 —— 那一下重排露在用户眼前就是「闪一下」。
-          #      四连实锤（显窗 → 第二条链尾笔）：设置 14.556→14.796 / 电池 29.112→29.361
-          #      / Sileo 33.755→33.989 / 抖音 45.698→45.941。
-          #   ② 「全屏 App 触摸失效」= 浮窗矩形**跨 respring 残留**（notify state 活在
-          #      notifyd、floatframe.txt 在磁盘上），13:25:01~13:25:40 设置 App 里 44 次
-          #      点击被整根丢弃、**0 次合法吞**，而首次开窗是 13:26:13。
 
           # ① 重排在途计数（AevonKickDrainV284）
           grep -q 'AevonKickDrainV284' "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift" \
@@ -3686,19 +3482,6 @@ jobs:
           fi
           echo "V0.2.84 校验: kick在途计数 + 内容定稿闸门 + 浮窗心跳 + 启动清残留 已就位"
 
-          # ── V0.2.85 校验（Aevon(58)：闪 / 桌面点图标与下拉控制中心必崩 / 画面定格 / 抖音手势）──
-          # 依据 Aevon(58) 归档(19) 1565 行日志 + 4 份崩溃摘录：
-          #   ① 「打开悬浮窗时依旧会闪一下悬浮窗，然后出现最终悬浮窗和内容」→ 摘掉遮罩以后，
-          #      0.2.64 的入场编排（0.34s 弹簧淡入 + 0.965→1.0 缩放）本身成了那个「闪」。
-          #   ② 「浮窗开设置时桌面点设置图标 100% 注销」「浮窗开启后下拉控制中心/通知中心
-          #      100% 注销」→ 让位链是唯一在这两个动作上都会跑的东西，而它里面还留着
-          #      两处会 cancel 已在屏手指的开关（浮窗 isUserInteractionEnabled / 把手 isHidden）。
-          #   ③ 「浮窗开启期间切全屏应用，画面定格不自动恢复」→ reassertContentForeground 的
-          #      guardArmedUntil 4 秒后归零，常驻看门的重申一次都发不出去。
-          #   ④ 「抖音滑动圆盘 → 视频暂停 + 跳主页 + 手势卡死」→ 0.6 秒硬超时兜底在长手势中途
-          #      把 userInteractionEnabled 开回去，同一根手指被抖音收到。
-          #
-          # ① 让位链不许再出现「会 cancel 触摸」的开关
           if grep -vE '^[[:space:]]*(//|\*|/\*)' "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift" \
                | grep -q 'isUserInteractionEnabled = !yielding'; then
             echo "::error::0.2.85 让位又去关 userInteractionEnabled 了（UIKit 会 cancel 已在屏的手指 → 野指针）"
@@ -5325,8 +5108,10 @@ jobs:
 
           grep -qF 'private var liveWaitReassertBudget = -1' "$WV" \
             || { echo "::error::V0.3.27 没有让位期重申预算"; exit 1; }
-          grep -qF 'liveWaitReassertBudget = isLiveWait ? 1 : -1' "$WV" \
-            || { echo "::error::V0.3.27 布防没把让位期预算设成 1"; exit 1; }
+          grep -qF 'liveWaitReassertBudget = isLiveWait' "$WV" \
+            || { echo "::error::V0.3.27 布防没按让位期分预算"; exit 1; }
+          grep -qF 'AevonWindowView.deskNoCoverEnabled ? -1 : 1' "$WV" \
+            || { echo "::error::V0.3.38 让位期预算没接零定格开关（掉出后真黑）"; exit 1; }
           grep -qF 'let reassertDelays: [Double] = isLiveWait ? [] : [0.25, 0.55, 0.85]' "$WV" \
             || { echo "::error::V0.3.27 让位期还在排 +0.40s 那一发（第二下黑就是它）"; exit 1; }
           grep -qF 'if liveWaitReassertBudget == 0 { return }' "$WV" \
@@ -5743,6 +5528,22 @@ jobs:
           APPD37="$(find . -name 'AevonApp.dylib' | head -n1)"
           if [ -n "$APPD37" ] && strings "$APPD37" | grep -qF 'AevonDockLiveV337'; then echo "::error::V0.3.37 标记漏进 App 库"; exit 1; fi
           echo "V0.3.37 校验: 停靠保持前台（视频继续解码）+ 3 拍撤封面露实时 + 掉画补前台（首次立即/1s 闸/6 次，3 秒救不回用备份帧顶住）✓"
+          # ── V0.3.38 校验（回桌面零定格 + 停靠圆角 12pt + 吸附侧整列居中）──
+          strings "$MYD28" | grep -qF 'AevonDeskNoCoverV338' || { echo "::error::V0.3.38 主库缺零定格标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonDockCornerV338' || { echo "::error::V0.3.38 主库缺圆角标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonDockSpreadV338' || { echo "::error::V0.3.38 主库缺排列标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonDeskQuickV338' || { echo "::error::V0.3.38 主库缺提速标记"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func enterDeskHold(reason: String) -> Bool {');j=s.find('guard AevonWindowView.deskHoldEnabled',i);b=s[i:j] if 0<i<j else '';ok=('if AevonWindowView.deskNoCoverEnabled { return false }' in b);print('V0.3.38 零定格早退在定格保持之前 ✓' if ok else '::error::V0.3.38 零定格没挡住定格保持（仍会盖帧+降后台）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func installTransitionFreeze(reason: String) {');j=s.find('liveWaitFreezeAllowed = true',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'deskNoCoverEnabled' in b and 'contentLooksRendering == true' in b);print('V0.3.38 过渡哨在画不盖帧 ✓' if ok else '::error::V0.3.38 过渡哨仍无条件盖帧（回桌面立刻定格）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func updateCornerRadius(animated: Bool) {');j=s.find('private func syncDockCoverCorner()',i);b=s[i:j] if 0<i<j else '';ok=('AevonDock.cornerRadius' in b and 'self.syncDockCoverCorner()' in b);print('V0.3.38 停靠圆角档 + 封面同步 ✓' if ok else '::error::V0.3.38 封面圆角不跟随（吸附格四角黑边）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func syncDockCoverCorner()');j=s.find('cover.layer.cornerRadius = radius',i);ok=(0<i<j);print('V0.3.38 封面圆角写回 ✓' if ok else '::error::V0.3.38 syncDockCoverCorner 没写圆角');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func frame(side: AevonDockSide, index: Int, count: Int = 1)');j=s.find('static let dropThreshold',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'var lead' in b and 'dockSpreadDisabled' in b);print('V0.3.38 吸附列整列居中 ✓' if ok else '::error::V0.3.38 吸附列还是从顶部堆（没有 count/居中）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonDock.swift"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func beginLiveWait(reason: String) {');j=s.find('func finishLiveWait',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'skipPad' in b and 'deskNoCoverEnabled' in b);print('V0.3.38 让位期在画不垫帧 ✓' if ok else '::error::V0.3.38 让位期仍无条件垫帧');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();ok=('liveWaitMissTicks >= 2' in s and 'AevonDeskQuickV338' in s and 'if !live, AevonWindowView.deskNoCoverEnabled' in s);print('V0.3.38 掉出兜底+走位提速在位 ✓' if ok else '::error::V0.3.38 掉出后没有兜底/提速');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func dockLiveTick() {');j=s.find('override func traitCollectionDidChange',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and '>= 0.35' in b and 'rebuildPresenter' in b);print('V0.3.38 停靠期补前台 0.35s + 1.5s 重建 ✓' if ok else '::error::V0.3.38 停靠期补前台仍是 1 秒一档');sys.exit(0 if ok else 1)" "$WV35"
+          APPD38="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD38" ] && strings "$APPD38" | grep -qF 'AevonDeskNoCoverV338'; then echo "::error::V0.3.38 标记漏进 App 库"; exit 1; fi
+          echo "V0.3.38 校验: 回桌面零定格（在画不盖帧/不降后台，掉出 0.2s 兜底盖帧 + 0.4s 重建 presenter）+ 停靠圆角 12pt 封面同步 + 吸附侧整列竖直居中 ✓"
 
 
 
