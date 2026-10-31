@@ -5581,6 +5581,22 @@ jobs:
           fi
           echo "V0.3.40 校验: cs=2 零写铁律（回桌面动画期一笔都不写）+ 掉画 0.2s 重建优先（重建成功不盖帧）+ 常驻看门 0.3s 重建 + 停靠期补写 2 次即重建 ✓"
 
+          # ── V0.3.41 校验（C 路线第一步：场景承载通路只读普查，零行为改动）──
+          strings "$MYD28" | grep -qF 'AevonSceneCensusV341' || { echo "::error::V0.3.41 主库缺普查标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonCensusNoWriteV341' || { echo "::error::V0.3.41 主库缺零写标记"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();bad=[l.strip() for l in s.split(chr(10)) if 'NSSelectorFromString' in l and any(k in l for k in ['updateSettings','setForeground','destroyScene','createScene','setSuspended'])];ok=not bad;print('V0.3.41 普查文件零写 ✓' if ok else '::error::V0.3.41 普查里有写选择子（SB 里一次写就是一次闪）: '+bad[0][:60]);sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonSceneCensus.m"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func checkBackgroundGuard() {');j=s.find('if deskHoldActive { return }',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'censusWatchTick()' in b);print('V0.3.41 采样点在所有早退之前 ✓' if ok else '::error::V0.3.41 采样点被 deskHold 早退挡住（定格档永远采不到）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func censusWatchTick() {');j=s.find('/// 每 0.2 秒一拍',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'censusLastContentState == 2' in b and 'censusDropSamplesLeft = 3' in b);print('V0.3.41 只在掉画瞬间起采 3 拍 ✓' if ok else '::error::V0.3.41 采样条件写错（会刷屏或采不到掉画现场）');sys.exit(0 if ok else 1)" "$WV35"
+          grep -qF 'Sources/AevonSceneCensus.m' "$GITHUB_WORKSPACE/Makefile" \
+            || { echo "::error::V0.3.41 Makefile 没加普查文件（链接会缺符号）"; exit 1; }
+          APPD41="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD41" ]; then
+            for m41 in AevonSceneCensusV341 AevonCensusNoWriteV341 AevonCensusSampleV341; do
+              if strings "$APPD41" | grep -qF "$m41"; then echo "::error::V0.3.41 标记漏进 App 库: $m41"; exit 1; fi
+            done
+          fi
+          echo "V0.3.41 校验: C 路线第一步（场景承载通路只读普查：类方法表 + 掉画现场采样）；零写、零行为改动 ✓"
+
 
 
 

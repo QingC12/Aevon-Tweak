@@ -21,6 +21,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonGripAssert.m \
     Sources/AevonKeepAliveProbe.m \
     Sources/AevonSnapProbe.m \
+    Sources/AevonSceneCensus.m \
     Sources/Aevon.swift \
     Sources/AevonLog.swift \
     Sources/AevonCrashCatcher.swift \

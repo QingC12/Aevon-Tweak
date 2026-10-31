@@ -2247,6 +2247,15 @@ final class AevonWindowView: UIView {
         return v ?? false
     }()
 
+    /// V0.3.41（AevonSceneCensusV341）：C 路线只读取证开关。
+    ///
+    /// 默认开：只读、零写，**不改变 0.3.40 的任何行为** —— 所以这份日志可以直接
+    /// 当作「0.3.40 行为下」的现场证据。`AevonSceneCensusOff341` = true 时整段不跑。
+    static let censusEnabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonSceneCensusOff341") as? Bool
+        return !(v ?? false)
+    }()
+
     /// 自动唤醒起点（从过渡哨算起）。Aevon(107) 两轮实测系统回桌面转场在 +1.80s 收尾
     /// （让位 1.59 / 1.61 秒，保活持有 1799 / 1812ms），1.9s 起推前台正好落在转场之后。
     static let deskHoldWakeDelay: Double = 1.90
@@ -2885,6 +2894,35 @@ final class AevonWindowView: UIView {
 
     }
 
+    // MARK: - V0.3.41（AevonSceneCensusV341）掉画现场采样
+
+    /// 上一拍读到的 contentState（-1 = 还没读过 / 读不到）。
+    private var censusLastContentState = -1
+    /// 掉画后还要再采几拍（0 = 不在采样窗口里）。
+    private var censusDropSamplesLeft = 0
+
+    /// 只做判读、**不做任何写**：cs 从 2 掉到非 2 的那一拍起连采 3 拍（看门 0.1s/拍）。
+    ///
+    /// 为什么要这段：0.3.40 已经证明「断言还在，cs 照样 2→0；补写只到 1；重建才回 2」，
+    /// 但**没有一行现场数据**说明掉画那一刻到底少的是什么 —— 是远程层被清空
+    /// （layerManager.layers 归零）、还是场景被 deactivate（dr 变大 / fg 归 0）、
+    /// 还是 presenter 被系统摘了（pm 没了）。C 路线落哪种形态，取决于这个判读。
+    private func censusWatchTick() {
+        guard AevonWindowView.censusEnabled else { return }
+        let cs = sceneHost.contentStateNow
+        if censusLastContentState == 2, cs != 2 {
+            censusDropSamplesLeft = 3
+            AevonLog.warn("[census] 掉画：cs 2→\(cs)，开始采现场"
+                + "（AevonSceneCensusV341 AevonCensusSampleV341）")
+            sceneHost.censusSample("掉画-0")
+            censusDropSamplesLeft -= 1
+        } else if censusDropSamplesLeft > 0 {
+            sceneHost.censusSample("掉画+\(3 - censusDropSamplesLeft)")
+            censusDropSamplesLeft -= 1
+        }
+        censusLastContentState = cs
+    }
+
     /// 每 0.2 秒一拍（V0.2.49）：布防期里盯 contentState。
     ///
     /// 三档判读，全部沿用 0.2.47 的 fail-open 纪律：
@@ -2903,6 +2941,9 @@ final class AevonWindowView: UIView {
             AevonLog.info("[保活] 断言续持到期 → 释放（\(sceneHost.stateSummary())）"
                 + "（AevonKeepHoldV339）")
         }
+        /* V0.3.41（AevonSceneCensusV341）：C 路线取证 —— 掉画前后各采几拍只读现场。
+         * 放在所有早退之前：定格保持那条回退档也要能看到现场。 */
+        censusWatchTick()
         /* V0.3.35（AevonDeskHoldV335）：定格保持期内一拍都不判 —— 不盖、不撤、不重申、
          * 不重建 presenter。这段里唯一该发生的事由 deskHoldWakeTick 自己管，
          * 少一次判断就少一次误写（每次写 = 一次表面重提交 = 一次黑）。 */

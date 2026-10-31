@@ -6,6 +6,20 @@ import UIKit
 @_silgen_name("AevonSnapProbeRun")
 private func AevonSnapProbeRun(_ scene: UnsafeMutableRawPointer?) -> Int32
 
+/// V0.3.41（AevonSceneCensusV341）：C 路线第一步 —— SB 场景承载通路只读普查
+/// （实现见 `AevonSceneCensus.m`）。
+///   · `Run`：类方法表 + 首采样，每进程一次；
+///   · `Sample`：单次现场采样，回桌面掉画前后各打几拍。
+///
+/// ⛔ 两者都**零写**：不碰 settings、不碰 presenter。普查期间行为与 0.3.40 逐字一致，
+/// 所以这份日志可以放心当作「0.3.40 行为下」的现场证据来判读。
+@_silgen_name("AevonSceneCensusRun")
+private func AevonSceneCensusRun(_ scene: UnsafeMutableRawPointer?) -> Int32
+
+@_silgen_name("AevonSceneCensusSample")
+private func AevonSceneCensusSample(_ scene: UnsafeMutableRawPointer?,
+                                    _ tag: UnsafePointer<CChar>?)
+
 /// 单个 App 场景的承载器（V0.0.10 重写）。
 ///
 /// V0.0.9 的做法是错的，两处都被真机日志证明：
@@ -145,6 +159,11 @@ final class AevonSceneHost {
          * 要的正是 handle。早一步可能反查不到，晚一步则要另找调用点。
          * ObjC 侧每进程只跑一次（gRan），失败只留日志，绝不影响承载。 */
         _ = AevonSnapProbeRun(Unmanaged.passUnretained(scene).toOpaque())
+
+        /* V0.3.41（AevonSceneCensusV341）：C 路线第一步 —— 场景承载通路只读普查。
+         * 放在同一处：此刻 presenter 已激活、场景已被推前台，现场最有代表性。
+         * 每进程只跑一次，纯只读，失败只留日志。 */
+        _ = AevonSceneCensusRun(Unmanaged.passUnretained(scene).toOpaque())
     }
 
     deinit {
@@ -660,14 +679,33 @@ final class AevonSceneHost {
     }
 
     /// 一行状态串（fg / cs / layers），给守卫日志做前后对照。
-    func stateSummary() -> String {
-        guard !invalidated else { return "已释放" }
+    func stateSummary() -> String {        guard !invalidated else { return "已释放" }
         var fg = "?"
         if let settings = AevonRuntime.send(scene, Selector(("settings"))),
            let value = AevonRuntime.bool(settings, key: "foreground") {
             fg = value ? "1" : "0"
         }
         return "fg=\(fg) cs=\(contentStateNow) layers=\(layerCountNow)"
+    }
+
+    /// V0.3.41（AevonSceneCensusV341）：只读现场采样。
+    ///
+    /// 只做一件事：把这一刻场景的 fg / deactivationReasons / cs / layers / 层类名 /
+    /// client / 呈现管理器 / 句柄反查结果打一行出去。**零写**，不碰 presenter、
+    /// 不碰 settings，所以采样本身不会制造任何一次黑闪。
+    /// 调用点：回桌面期间看门检测到 cs 2→非2 的那一拍起，连采 3 拍。
+    func censusSample(_ tag: String) {
+        guard !invalidated else { return }
+        /* Swift 侧这一行是 ObjC 侧看不到的那一半：呈现视图里还剩几个子视图 / 几层。
+         * 和 ObjC 侧的 `layerCls`（场景 layerManager 里的远程层）放在一起对照，
+         * 就能分清「是场景侧把层撤了」还是「我们这侧的呈现者被摘了」。 */
+        AevonLog.info("[census] Swift 侧 tag=\(tag)"
+            + " 呈现视图子视图=\(presentationView.subviews.count)"
+            + " 呈现层=\(presentationView.layer.sublayers?.count ?? 0)"
+            + " 呈现尺寸=\(Int(presentationView.bounds.width))x\(Int(presentationView.bounds.height))"
+            + "（AevonCensusSampleV341）")
+        let ptr = Unmanaged.passUnretained(scene).toOpaque()
+        tag.withCString { AevonSceneCensusSample(ptr, $0) }
     }
 
     /// 重申浮窗里这个场景的前台。
@@ -761,4 +799,15 @@ final class AevonSceneHost {
             self.presenter = nil
         }
     }
+}
+
+// MARK: - V0.3.41（AevonSceneCensusV341）日志桥
+
+/// 由 ObjC 侧 `AevonSceneCensus.m` 调用，统一走 AevonLog（带 `[census]` 前缀便于 grep）。
+/// `cdetail` 是 UTF-8 的 C 串：这里**不**用 `%@` 直接塞 `const char *`
+/// （`stringWithFormat:` 的 `%s` 按非 UTF-8 解释，0.3.28 的教训）。
+@_cdecl("AevonSceneCensusLog")
+public func AevonSceneCensusLog(_ detail: UnsafePointer<CChar>?) {
+    guard let detail else { return }
+    AevonLog.info("[census] \(String(cString: detail))")
 }
