@@ -35,6 +35,7 @@ Aevon_FILES = AevonAssertionShim.m \
     Sources/AevonHoverKeyframes.swift \
     Sources/AevonRingUnfold.swift \
     Sources/AevonSpring.swift \
+    Sources/AevonFloatMotion.swift \
     Sources/AevonRingStore.swift \
     Sources/AevonAppList.swift \
     Sources/AevonAppIcon.swift \

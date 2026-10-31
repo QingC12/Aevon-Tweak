@@ -172,3 +172,17 @@ __attribute__((used, unused)) static const char AevonReturnCoverOffMark343[] = "
 __attribute__((used, unused)) static const char AevonHomeLeaveLockMark344[] = "AevonHomeLeaveLockV344";
 __attribute__((used, unused)) static const char AevonAncestorVisibleMark344[] = "AevonAncestorVisibleV344";
 __attribute__((used, unused)) static const char AevonHomeLeaveLockOffMark344[] = "AevonHomeLeaveLockOffV344";
+
+/* V0.3.45（AevonFloatMotionV345 / AevonDragInertiaV345 / AevonDockSpringV345 /
+ * AevonCloseFadeV345）──────────────────────────────────────────────────────────
+ * 浮窗交互动画（用户 Aevon(115)「接下来开始为悬浮窗的所有交互制作动画」）。
+ * 分层：A 装饰（白条/脉冲/光晕，零几何）· B 物理（惯性/回弹/停靠，改 frame）
+ * · C 内容（关窗离场帧 / 开窗纯缩放，alpha 恒 1）。
+ * 四个独立回退开关：AevonFloatMotionOff345 / AevonMotionPhysicsOff345 /
+ * AevonMotionDecorOff345 / AevonMotionRevealOff345 / AevonCloseFadeOff345。
+ * 各一条纯 ASCII C 串，保证 strip 后 strings 仍能抓到。 */
+__attribute__((used, unused)) static const char AevonFloatMotionMark345[] = "AevonFloatMotionV345";
+__attribute__((used, unused)) static const char AevonDragInertiaMark345[] = "AevonDragInertiaV345";
+__attribute__((used, unused)) static const char AevonDockSpringMark345[] = "AevonDockSpringV345";
+__attribute__((used, unused)) static const char AevonCloseFadeMark345[] = "AevonCloseFadeV345";
+__attribute__((used, unused)) static const char AevonRevealScaleMark345[] = "AevonRevealScaleV345";

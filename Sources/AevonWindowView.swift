@@ -91,8 +91,19 @@ final class AevonGlowRingView: UIView {
     /// 位移时把 shadowOpacity 归零（同时清掉 shadowPath，省一次路径光栅化），
     /// 抬手再按当前外观重新 `apply` 回来。光晕只有 1pt，位移中看不见它，观感无损。
     func setShadowSuppressed(_ suppressed: Bool) {
+        /* V0.3.45（AevonGlowFadeV345，装 11 · A 装饰层）：
+         * **关**必须瞬时（0.2.50 的降载纪律：位移第一帧就开始算离屏模糊 = 前 1 秒掉帧），
+         * **恢复**给 0.16s 渐显 —— 松手那一拍投影「啪」地跳回来很扎眼。
+         * 调用时序天然安全：恢复发生在落位弹簧的 completion 里（`setMovingWindow(false)`），
+         * 那时窗口已经静止，渐显不会和逐帧几何撞在一起。 */
+        let fade = !suppressed && AevonFloatMotion.readSwitches().decor
         CATransaction.begin()
-        CATransaction.setDisableActions(true)
+        if fade {
+            CATransaction.setAnimationDuration(0.16)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        } else {
+            CATransaction.setDisableActions(true)
+        }
         if suppressed {
             layer.shadowOpacity = 0
             layer.shadowPath = nil
@@ -1145,7 +1156,12 @@ final class AevonWindowView: UIView {
             isBarHoldMoving = true
             moveOriginFrame = frame
             moveOriginPoint = point
-            AevonLog.info("[窗口] 边条落指即拖 → 移动（AevonFloatEdgeGripV227）")
+            // V0.3.45（AevonDragInertiaV345）：新一段拖动 —— 清测速样本、刷新开关、
+            // 掐掉可能还在跑的落位动画（否则它会把窗口拽回上一个目标）
+            dragTrack.removeAll(keepingCapacity: true)
+            refreshMotionSwitches()
+            cancelMotion()
+            AevonLog.info("[窗口] 边条落指即拖 → 移动（AevonFloatEdgeGripV227 AevonDragInertiaV345）")
         case .changed:
             if terminationArmed {
                 // V0.3.26（AevonTermFollowV326）：关闭预备态里窗口跟着手指上移（0.55 倍）。
@@ -1166,7 +1182,7 @@ final class AevonWindowView: UIView {
                     && terminationShouldClose(upward: upward, velocity: velocity, dragX: dragX)
                 terminationArmed = false
                 terminationTrack.removeAll(keepingCapacity: true)
-                flickBar.alpha = 0   // V0.3.27：松手即回隐藏（AevonBottomBarHideV327）
+                setFlickBarVisible(false)
                 isBarHoldMoving = false
                 if fire {
                     frame = terminationHoldFrame   // Stheno sc_applyRestoredFrame: 回位再关
@@ -1192,6 +1208,9 @@ final class AevonWindowView: UIView {
                 return
             }
             applyBarMove(to: point)
+            /* V0.3.45（AevonDragInertiaV345）：先看能不能用弹簧收尾（动量投影 / 越界回弹）。
+             * 接管了就不再往下走 —— 尤其**不能再 persistFrame**，那是动画中途的几何。 */
+            if settleAfterDrag(velocity: gesture.velocity(in: superview)) { break }
             setMovingWindow(false)
             // V0.2.61（AevonNoAutoDockV261，用户 Aevon(35) #3）：「移除拖动悬浮窗到屏幕两侧时
             // 自动吸附停靠（只有点击悬浮窗左右边缘才会触发停靠手势）」——
@@ -1206,6 +1225,44 @@ final class AevonWindowView: UIView {
     }
 
     // MARK: - 全局触摸驱动（V0.0.41，AevonFloatGlobalV41）
+
+    // MARK: - 交互动画（V0.3.45，AevonFloatMotionV345）
+
+    /// 本窗当前生效的动画开关。**只在动作起点刷新**（拖动开始 / 停靠 / 关窗 / 开窗），
+    /// 不进逐帧路径 —— AevonPrefs 走 CFPreferences，是跨进程 IPC。
+    private var motion = AevonFloatMotion.Switches()
+
+    /// 正在跑的那条几何/transform 动画（同一时刻只允许一条）。
+    private var motionAnimator: UIViewPropertyAnimator?
+
+    /// 拖动加速度采样（全局通道拿不到 UIPanGestureRecognizer.velocity，只能自己测）。
+    private var dragTrack: [(CFTimeInterval, CGPoint)] = []
+
+    /// 手势起点刷新开关。油门可以在动作里调，但开关只在起点读一次。
+    private func refreshMotionSwitches() {
+        motion = AevonFloatMotion.readSwitches()
+    }
+
+    /// 停掉在跑的动画（用户中途抓住窗口时用）。`layer.removeAllAnimations()` 兜底
+    /// 是为了保证 model 值立刻生效 —— 否则后续 `self.center = …` 会和残留动画打架。
+    private func cancelMotion() {
+        motionAnimator?.stopAnimation(true)
+        motionAnimator = nil
+        layer.removeAllAnimations()
+    }
+
+    /// 把最近 ≤100ms 的采样换算成速度（pt/s）。样本不足 2 个 → 0。
+    private func dragVelocity() -> CGPoint {
+        guard let last = dragTrack.last else { return .zero }
+        var first = last
+        for sample in dragTrack.reversed() {
+            if last.0 - sample.0 > 0.1 { break }
+            first = sample
+        }
+        let dt = last.0 - first.0
+        guard dt >= 0.008 else { return .zero }
+        return CGPoint(x: (last.1.x - first.1.x) / dt, y: (last.1.y - first.1.y) / dt)
+    }
 
     /// 当前正被全局通道拖着的手柄（nil = 没在拖）
     private(set) var activeGrab: AevonFloatGrab?
@@ -1262,11 +1319,18 @@ final class AevonWindowView: UIView {
             activeGrab = grab
             moveOriginFrame = frame
             moveOriginPoint = layerPoint
+            // V0.3.45（AevonDragInertiaV345）：与视图层同一条口径 —— 清测速样本、
+            // 刷新开关、掐掉残留的落位动画
+            dragTrack.removeAll(keepingCapacity: true)
+            refreshMotionSwitches()
+            cancelMotion()
         case .corner(let edges):
             activeGrab = grab
             resizeOriginFrame = frame
             resizeOriginPoint = layerPoint
             resizeOriginEdges = edges
+            refreshMotionSwitches()   // V0.3.45：缩放橡皮筋要用
+            cancelMotion()
             // 锚点取「不动的那些边」的交点：拖右 → 锚在左（x=0）；拖左 → 锚在右（x=1）
             let ax: CGFloat = edges.contains(.left) ? 1.0
                 : (edges.contains(.right) ? 0.0 : 0.5)
@@ -1301,7 +1365,12 @@ final class AevonWindowView: UIView {
                 AevonWindowManager.restoreDocked(bundleID: bundleID)
                 return
             }
+            /* V0.3.45（AevonDragInertiaV345）：全局通道拿不到 gesture.velocity，
+             * 用 dragTrack 自己测的最近 100ms 速度做动量投影；同视图层一样，
+             * 动画接管收尾后一律不再 persistFrame。 */
+            let velocity = dragVelocity()
             applyBarMove(to: layerPoint)
+            if settleAfterDrag(velocity: velocity) { return }
             setMovingWindow(false)
             // V0.2.61（AevonNoAutoDockV261）：与视图层同一条口径 —— 拖到边缘松手不再吸附停靠。
             // 停靠唯一入口 = 点主窗左/右边条（AevonDockTapV251）。
@@ -1403,6 +1472,16 @@ final class AevonWindowView: UIView {
     /// V0.3.24 起保留的视觉条（36×4pt，不参与触摸）
     private let flickBar = UIView()
 
+    /// 白条显隐（V0.3.45，AevonBarFadeV345 · A 装饰层）。
+    /// 只改一个 UIView 的 alpha，不触发 layoutSubviews、不碰呈现层 —— 结构上不可能掉画。
+    private func setFlickBarVisible(_ visible: Bool) {
+        guard motion.decor else {
+            flickBar.alpha = visible ? 1 : 0
+            return
+        }
+        AevonFloatMotion.animateAlpha(flickBar, to: visible ? 1 : 0, duration: 0.12)
+    }
+
     /// 底边长按 → 关闭预备态。0.4s 内位移 ≤12pt 才成立（Stheno 同参数）。
     @objc private func handleTerminationPress(_ gesture: UILongPressGestureRecognizer) {
         guard let superview = superview else { return }
@@ -1411,9 +1490,14 @@ final class AevonWindowView: UIView {
             terminationArmed = true
             terminationHoldPoint = gesture.location(in: superview)
             terminationTrack = [(CACurrentMediaTime(), terminationHoldPoint)]
+            refreshMotionSwitches()   // V0.3.45：预备态要读装饰层开关（白条淡入 / 触觉）
             // 0.4s 内的微移已让 pan 挪过窗口 → 回位，关闭从原位起（Stheno sc_applyRestoredFrame:）
             _ = beginTerminationFollow()
-            flickBar.alpha = 1   // V0.3.27：进关闭预备态才显形（AevonBottomBarHideV327）
+            /* V0.3.45（AevonBarFadeV345，装 4 · A 装饰层）：白条淡入 + 一次轻触觉。
+             * 旧行为是 alpha 瞬变 —— 长按成立那一瞬屏幕上「啪」地多出一条，
+             * 读作「弹出来」而不是「长出来」。0.12s easeOut 足够，零几何零重算。 */
+            setFlickBarVisible(true)
+            if motion.decor { AevonFloatMotion.hapticLight() }
             AevonLog.info("[窗口] 底边长按成立（0.4s / ≤12pt）→ 关闭预备态：上移 "
                 + "\(Int(AevonWindowView.terminationLift))pt 且速度 "
                 + "\(Int(AevonWindowView.terminationVelocity))pt/s 以上才关；"
@@ -1428,7 +1512,7 @@ final class AevonWindowView: UIView {
             if termFollowActive { endTerminationFollow(restore: true) }
             terminationArmed = false
             terminationTrack.removeAll(keepingCapacity: true)
-            flickBar.alpha = 0   // V0.3.27：松手即回隐藏（AevonBottomBarHideV327）
+            setFlickBarVisible(false)
         default:
             break
         }
@@ -1469,7 +1553,18 @@ final class AevonWindowView: UIView {
     func updateTerminationFollow(upward: CGFloat) {
         guard termFollowActive, !AevonWindowView.terminationFollowDisabled else { return }
         let scale = AevonWindowView.terminationFollowScale
-        let offset = min(max(0, upward) * scale,
+        /* V0.3.45（AevonTermResistV345）：**阻力渐增**。前 48pt 仍按 0.55 倍跟手
+         * （「已经在关」的确认），之后按 0.55 × 0.55 ≈ 0.30 倍跟在后面 ——
+         * 手指继续推、窗口越推越慢，读作「到底了」。判据用的 upward 是原始值，
+         * 不受这层软化影响，关窗门槛一点没变。 */
+        var effective = max(0, upward)
+        if motion.physics {
+            let soft = AevonWindowView.terminationLift * 2
+            if effective > soft {
+                effective = soft + (effective - soft) * 0.55
+            }
+        }
+        let offset = min(effective * scale,
                          max(0, terminationHoldFrame.origin.y))
         guard abs(offset - terminationFollowOffset) >= 0.5 else { return }
         terminationFollowOffset = offset
@@ -1480,11 +1575,21 @@ final class AevonWindowView: UIView {
 
     /// 结束跟手。`restore` = true 则弹回长按成立时的几何。
     func endTerminationFollow(restore: Bool) {
-        if restore, terminationFollowOffset > 0.5 {
-            frame = terminationHoldFrame
-        }
+        let needsRestore = restore && terminationFollowOffset > 0.5
         terminationFollowOffset = 0
         termFollowActive = false
+        guard needsRestore else { return }
+        /* V0.3.45（AevonTermReboundV345，装 6）：未达判据的松手不再硬跳回原位，
+         * 用 rebound 弹簧弹回去 —— 这一段是「拉了一下、没拉开」的收尾，
+         * 硬跳会让人怀疑刚才那一下到底有没有生效。 */
+        if motion.physics {
+            motionAnimator = AevonFloatMotion.animateGeometry(
+                self, to: terminationHoldFrame,
+                spec: AevonFloatMotion.rebound,
+                completion: { [weak self] in self?.motionAnimator = nil })
+        } else {
+            frame = terminationHoldFrame
+        }
     }
 
     /// 窗口测速（V0.3.26 AevonTermWinVelV326）：取最近 ≤100ms 内首尾两点做 Δ。
@@ -1548,8 +1653,58 @@ final class AevonWindowView: UIView {
                             width: moveOriginFrame.width,
                             height: moveOriginFrame.height)
         let clamped = AevonWindowView.clampedToScreen(target)
+        /* V0.3.45（AevonRubberV345，用户 Aevon(115)「为悬浮窗的所有交互制作动画」）：
+         * 撞屏幕边的**橡皮筋**。旧行为是夹住即停 —— 手指还在推、窗口一动不动，
+         * 读作「卡住了」。越界量按 0.12 倍跟手、上限 24pt：手柄的压边只有 10pt
+         * 且在窗内，24pt 之内四条边条仍然抓得到，不会重演 0.2.48 之前的「拖丢」。
+         * 松手由 `settleAfterDrag` 弹回夹好的位置（弹簧 rebound）。 */
+        var shown = clamped
+        if motion.physics {
+            let rx = min(max((target.midX - clamped.midX) * AevonFloatMotion.rubberFactor,
+                             -AevonFloatMotion.rubberMax), AevonFloatMotion.rubberMax)
+            let ry = min(max((target.midY - clamped.midY) * AevonFloatMotion.rubberFactor,
+                             -AevonFloatMotion.rubberMax), AevonFloatMotion.rubberMax)
+            shown.origin.x += rx
+            shown.origin.y += ry
+        }
         // 只改 center：bounds 不变，UIKit 不会触发 layoutSubviews
-        self.center = CGPoint(x: clamped.midX, y: clamped.midY)
+        self.center = CGPoint(x: shown.midX, y: shown.midY)
+        dragTrack.append((CACurrentMediaTime(), point))
+        while dragTrack.count > 8 { dragTrack.removeFirst() }
+    }
+
+    /// 拖动松手落位（V0.3.45，AevonDragInertiaV345）。
+    ///
+    /// 两件事一起收：① 动量投影 —— 快速甩动时窗口继续滑一段再停，落点按
+    /// Apple 的 `v/1000 × r/(1-r)` 投影（减速率 0.996、上限 220pt）后夹屏；
+    /// ② 越界橡皮筋回弹 —— 撞边被拉出去的那 ≤24pt 弹回夹好的位置。
+    ///
+    /// 返回 true = 动画接管了收尾（调用方**不要**再自己 `persistFrame`，
+    /// 否则会把动画中间值写进主窗位置记忆）；false = 无需动画，走原路径。
+    @discardableResult
+    private func settleAfterDrag(velocity: CGPoint) -> Bool {
+        guard motion.physics else { return false }
+        let target = AevonWindowView.clampedToScreen(
+            frame.offsetBy(dx: AevonFloatMotion.project(velocity.x),
+                           dy: AevonFloatMotion.project(velocity.y)))
+        guard target != frame else { return false }
+        // 动画期间继续降载：熄屏重申拍子停着、抓帧停着（每帧合成不能被运行时探测撞上）
+        setMovingWindow(true)
+        motionAnimator = AevonFloatMotion.animateGeometry(
+            self, to: target,
+            spec: AevonFloatMotion.settle,
+            velocity: velocity,
+            completion: { [weak self] in
+                guard let self else { return }
+                self.motionAnimator = nil
+                self.setMovingWindow(false)
+                self.persistFrame()
+            })
+        AevonLog.info("[动效] \(bundleID) 拖动落位：速度 \(Int(velocity.x)),\(Int(velocity.y))pt/s"
+            + " → 投影落点 (\(Int(target.minX)),\(Int(target.minY)))"
+            + "，弹簧 \(Int(AevonFloatMotion.settle.response * 1000))ms/ζ\(AevonFloatMotion.settle.damping)"
+            + "（AevonDragInertiaV345）")
+        return true
     }
 
     /// 位移开始 / 结束时的投影开关（幂等）。
@@ -1605,6 +1760,8 @@ final class AevonWindowView: UIView {
             resizeOriginFrame = frame
             resizeOriginPoint = point
             resizeOriginEdges = edges
+            // V0.3.45（AevonZoomRubberV345）：缩放起点刷新开关（橡皮筋要用）
+            refreshMotionSwitches()
             // 锚点取「不动的那些边」的交点：拖右 → 锚在左（x=0）；拖左 → 锚在右（x=1）；
             // 只拖上下 → x 居中；y 同理。
             let ax: CGFloat = edges.contains(.left) ? 1.0
@@ -1684,7 +1841,21 @@ final class AevonWindowView: UIView {
         // 上限：不超屏高 92%，宽度不超屏宽 95%
         let maxWidth = max(AevonWindowView.minContentWidth,
                            min(screen.width * 0.95, screen.height * 0.92 * aspect))
-        result = max(AevonWindowView.minContentWidth, min(result, maxWidth))
+        /* V0.3.45（AevonZoomRubberV345）：撞上下限的**橡皮筋**。
+         * 旧行为是夹住即停 —— 手指还在拖、窗口尺寸一动不动，读作「卡住了」。
+         * 超出部分按 0.2 倍继续跟手、最多再放宽 24pt（比拖动橡皮筋的 0.12/24 稍软，
+         * 缩放是双向渐变，用户对「到头」的容忍度更低）；松手由
+         * `finishEdgeResize` 弹簧弹回合法区间。 */
+        let lo = AevonWindowView.minContentWidth
+        if motion.physics {
+            if result > maxWidth {
+                result = maxWidth + min((result - maxWidth) * 0.2, AevonFloatMotion.rubberMax)
+            } else if result < lo {
+                result = lo - min((lo - result) * 0.2, AevonFloatMotion.rubberMax)
+            }
+        } else {
+            result = max(lo, min(result, maxWidth))
+        }
         return result
     }
 
@@ -2041,6 +2212,26 @@ final class AevonWindowView: UIView {
         isLiveResizing = false
         let clamped = AevonWindowView.clampedToScreen(frame)
         if clamped != frame {
+            /* V0.3.45（AevonZoomRubberV345）：越界（橡皮筋拉出去的那 ≤24pt）
+             * 用弹簧弹回合法区间，而不是硬跳。几何每帧变 → layoutSubviews
+             * 会自动跟着刷光晕；圆角与落盘放在 completion 里。 */
+            if motion.physics {
+                motionAnimator = AevonFloatMotion.animateGeometry(
+                    self, to: clamped,
+                    spec: AevonFloatMotion.rebound,
+                    completion: { [weak self] in
+                        guard let self else { return }
+                        self.motionAnimator = nil
+                        self.layoutIfNeeded()
+                        self.updateCornerRadius(animated: false)
+                        self.persistFrame()
+                    })
+                AevonLog.info("[动效] \(bundleID) 缩放越界回弹：宽 "
+                    + "\(Int(frame.width)) → \(Int(clamped.width))pt，"
+                    + "弹簧 \(Int(AevonFloatMotion.rebound.response * 1000))ms"
+                    + "/ζ\(AevonFloatMotion.rebound.damping)（AevonZoomRubberV345）")
+                return
+            }
             frame = clamped
             layoutIfNeeded()
         }
@@ -3868,9 +4059,24 @@ final class AevonWindowView: UIView {
             self.layoutIfNeeded()
         }
         if animated, window != nil {
-            UIView.animate(withDuration: 0.22, delay: 0,
-                           options: [.curveEaseOut, .allowUserInteraction],
-                           animations: apply, completion: nil)
+            /* V0.3.45（AevonDockSpringV345，装 7 · B 物理层）：0.22s curveEaseOut →
+             * snap 弹簧（response 0.34 / ζ0.85）。原来是纯减速曲线，起手没有加速段，
+             * 观感是「被推过去」；弹簧是「被吸过去」。
+             * 光晕仍在过渡开始就整圈隐藏（0.2.59 的同步纪律不变），装回才恢复。 */
+            refreshMotionSwitches()
+            if motion.physics {
+                motionAnimator = AevonFloatMotion.animateGeometry(
+                    self, to: target,
+                    spec: AevonFloatMotion.snap,
+                    animations: { [weak self] in
+                        guard let self else { return }
+                        self.layoutIfNeeded()
+                    })
+            } else {
+                UIView.animate(withDuration: 0.22, delay: 0,
+                               options: [.curveEaseOut, .allowUserInteraction],
+                               animations: apply, completion: nil)
+            }
         } else {
             apply()
         }
@@ -3943,6 +4149,13 @@ final class AevonWindowView: UIView {
         catcher.isMultipleTouchEnabled = false
         catcher.addTarget(self, action: #selector(handleDockCatcherTap(_:)),
                           for: .touchUpInside)
+        /* V0.3.45（AevonDockPressV345，装 9 · A 装饰层）：按下 / 抬起三个事件都要接 ——
+         * .touchUpInside 只覆盖「按在窗内松手」，手指划出去再抬起也必须把缩回去的
+         * 窗弹回来，否则停靠小窗会永久停在 0.965 的尺寸上。 */
+        catcher.addTarget(self, action: #selector(handleDockCatcherDown(_:)),
+                          for: .touchDown)
+        catcher.addTarget(self, action: #selector(handleDockCatcherUp(_:)),
+                          for: [.touchUpOutside, .touchCancel, .touchDragExit])
         addSubview(catcher)
         bringSubviewToFront(catcher)
         dockTapCatcher = catcher
@@ -3958,8 +4171,33 @@ final class AevonWindowView: UIView {
 
     @objc private func handleDockCatcherTap(_ sender: UIControl) {
         guard isDocked else { return }
-        AevonLog.info("[停靠] 小窗轻点（命中层）→ 装回主窗（AevonDockTapFixV261）")
+        restoreDockPressVisual()
+        AevonLog.info("[停靠] 小窗轻点（命中层）→ 装回主窗（AevonDockTapFixV261 AevonDockPressV345）")
         AevonWindowManager.restoreDocked(bundleID: bundleID)
+    }
+
+    /* V0.3.45（AevonDockPressV345）：停靠小窗的按压反馈。
+     * 92x158 的小窗上「按下去有没有反应」全靠这一点 —— 停靠态内容层已关交互、
+     * 只剩一张静态封面，缩放它不会触发任何场景重采样（重采样风险只存在于活画布）。 */
+    @objc private func handleDockCatcherDown(_ sender: UIControl) {
+        refreshMotionSwitches()
+        guard motion.decor else { return }
+        motionAnimator = AevonFloatMotion.animateTransform(
+            self, to: CGAffineTransform(scaleX: 0.965, y: 0.965),
+            spec: AevonFloatMotion.press)
+        AevonFloatMotion.hapticLight()
+    }
+
+    @objc private func handleDockCatcherUp(_ sender: UIControl) {
+        guard motion.decor else { return }
+        restoreDockPressVisual()
+    }
+
+    /// 把按压缩放弹回 1.0（幂等）。
+    private func restoreDockPressVisual() {
+        guard !transform.isIdentity else { return }
+        motionAnimator = AevonFloatMotion.animateTransform(
+            self, to: .identity, spec: AevonFloatMotion.press)
     }
 
     /// V0.2.55（AevonDockTapAnywhereV255，用户 Aevon(29) #2）：停靠小窗任意位置
@@ -3974,6 +4212,11 @@ final class AevonWindowView: UIView {
     func leaveDock(animated: Bool) {
         guard isDocked else { return }
         isDocked = false
+        /* V0.3.45（AevonDockPressV345）：装回前先把按压缩放复位 —— transform 不是
+         * identity 时 `frame = target` 的语义会偏（frame = bounds × transform），
+         * 在弹簧启动的同一拍复位，视觉上看不出来。 */
+        cancelMotion()
+        transform = .identity
         sceneHost.setContentInteraction(true)
         // V0.2.60（AevonDockTapOnlyV260）：停靠期被摘除的窗外手势手柄立刻恢复。
         setDockHandlesEnabled(true)
@@ -4000,9 +4243,26 @@ final class AevonWindowView: UIView {
             self.layoutIfNeeded()
         }
         if animated, window != nil {
-            UIView.animate(withDuration: 0.22, delay: 0,
-                           options: [.curveEaseOut, .allowUserInteraction],
-                           animations: apply, completion: { _ in restoreGlow() })
+            /* V0.3.45（AevonDockSpringV345）：与进入停靠同一条 spring。
+             * 光晕仍等几何定格才恢复（0.2.60 的纪律：早恢复会在小窗位置先冒一圈光）。 */
+            refreshMotionSwitches()
+            if motion.physics {
+                motionAnimator = AevonFloatMotion.animateGeometry(
+                    self, to: target,
+                    spec: AevonFloatMotion.snap,
+                    animations: { [weak self] in
+                        guard let self else { return }
+                        self.layoutIfNeeded()
+                    },
+                    completion: { [weak self] in
+                        self?.motionAnimator = nil
+                        restoreGlow()
+                    })
+            } else {
+                UIView.animate(withDuration: 0.22, delay: 0,
+                               options: [.curveEaseOut, .allowUserInteraction],
+                               animations: apply, completion: { _ in restoreGlow() })
+            }
         } else {
             apply()
             restoreGlow()
@@ -4426,12 +4686,36 @@ final class AevonWindowView: UIView {
          * 「内容已定稿（第 0 次复查）」之后，此刻内容就是终态，任何 alpha 渐变
          * 都只是把终态画面盖上一层半透明再揭掉 = 用户读作「从虚到实」。显形只有
          * 一个正确姿势：定稿了就 alpha=1，零动画、零过渡、零渐变。 */
-        alpha = 0
-        transform = .identity
+        /* V0.3.45（AevonRevealScaleV345，装 12 · C 内容层）：用户 Aevon(115)
+         * 「加入整个悬浮窗动画，不要淡入淡出」。所以只做**整窗缩放**，
+         * alpha 从第一帧就是 1：0.92 → 1.00，spring response 0.34 / ζ0.85。
+         *
+         * ⛔ 与 0.2.85 的区别必须说清：那次是「0.965→1 缩放 + 0.34s alpha 0→1」，
+         * 而且发生在**内容还没定稿**的空壳上 —— 用户先看到空壳从小到大淡入，
+         * 再看到内容出来，读作「先闪一下悬浮窗」。现在的时序是「画布定稿之后才显形」，
+         * 幕布上已经是终态画面，缩放只是落位，不存在渐显这一拍。
+         * alpha 一行不碰 —— 淡入在这条链路上被用户打回过两次（0.2.85 / 0.2.87）。 */
         alpha = 1
-        AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 瞬时上屏，无淡入无缩放"
-            + "（AevonRevealPlainV285 AevonRevealInstantOnV287）")
+        transform = .identity
+        /* ⛔ 顺序是硬的：**先抓可信首帧，再做缩放**。`captureSnapshotImage` 走
+         * `contentClip.drawHierarchy`，它会把父视图的 transform 一起烘进图里 ——
+         * 在 0.92 缩放下抓出来的就是一张缩小过的「清晰帧」，之后回桌面盖帧、
+         * 撤帧门槛全按这张图算，等于把模糊固化进缓存。 */
         primeSharpSnapshot(reason: reason)
+        refreshMotionSwitches()
+        if motion.reveal {
+            transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            motionAnimator = AevonFloatMotion.animateTransform(
+                self, to: .identity,
+                spec: AevonFloatMotion.reveal,
+                completion: { [weak self] in self?.motionAnimator = nil })
+            AevonLog.info("[动效] 开窗入场（\(reason)）：\(bundleID) 整窗 0.92→1.00 缩放，"
+                + "alpha 恒 1，弹簧 \(Int(AevonFloatMotion.reveal.response * 1000))ms"
+                + "/ζ\(AevonFloatMotion.reveal.damping)（AevonRevealScaleV345）")
+        } else {
+            AevonLog.info("[窗口] 开窗入场（\(reason)）：\(bundleID) 瞬时上屏，无淡入无缩放"
+                + "（AevonRevealPlainV285 AevonRevealInstantOnV287）")
+        }
     }
 
     /// V0.3.24（AevonSharpPrimeV324）：开窗定稿后强制建立一张**可信清晰帧**。
@@ -4619,6 +4903,8 @@ final class AevonWindowView: UIView {
     func teardown() {
         guard !isTearingDown else { return }
         isTearingDown = true
+        // V0.3.45（AevonCloseFadeV345）：关窗开关在这里读一次（离场帧要不要抓）
+        refreshMotionSwitches()
         // V0.2.77（AevonRevealOnceV277）：垫底图别跟着面板一起被强引用住（每窗一份）
         reopenPlaceholderView?.removeFromSuperview()
         reopenPlaceholderView = nil
@@ -4658,7 +4944,17 @@ final class AevonWindowView: UIView {
             alpha = 1
             AevonLog.info("[窗口] 让位期关窗：先撤销让位再抓离场帧（AevonLiveFirstV260）")
         }
-        // V0.2.89（AevonCloseInstantV289）：离场帧抓取已随关闭动画退役。
+        /* V0.3.45（AevonCloseFadeV345，装 10 · C 内容层）：关窗离场帧回来了。
+         * 位置仍是 0.2.49 定的那一个 —— **场景销毁之前**、**让位撤销之后**
+         *（隐形窗口上抓帧只会得到一块空壳，淡出就成了硬切）。0.2.89 把这一段
+         * 整建制退役，是因为当时定档「移除浮窗所有交互动画」；用户 Aevon(115)
+         * 已把这条定档反转，恢复成「有离场帧就淡出，没有就硬摘」。
+         * 成本：一次 drawHierarchy 约 10~30ms，只在关窗这一拍。 */
+        let exitImage = motion.closeFade ? captureSnapshotImage() : nil
+        if motion.closeFade, exitImage == nil {
+            AevonLog.info("[窗口] 离场帧抓取失败（远程表面异常）→ 本次关窗退回瞬时摘除"
+                + "（AevonCloseFadeV345）")
+        }
         // V0.2.44（AevonScreenAspectV244）：比例监听到此为止
         aspectWatchTimer?.invalidate()
         aspectWatchTimer = nil
@@ -4668,12 +4964,50 @@ final class AevonWindowView: UIView {
         sceneHost.invalidate()
         sceneHost.container.removeFromSuperview()
 
-        /* V0.2.89（AevonCloseInstantV289）：**关闭瞬时化** —— 原离场帧 + 0.18s 淡出缩放
-         * 整段退役（用户 2026-10-29 定档：移除悬浮窗的所有交互动画；圆盘动画不在此列）。
-         * 承载容器已 invalidate、画布已还原，直接摘视图，无任何 alpha/transform 渐变；
-         * exitFreezeView（离场帧抓取，只为给淡出动画供画面）随之整体删除。 */
-        AevonLog.info("[窗口] 浮窗已关：瞬时摘除，无离场帧无淡出（AevonCloseInstantV289）")
-        removeFromSuperview()
+        if let exitView = installExitCover(exitImage) {
+            /* V0.3.45（AevonCloseFadeV345）：0.16s 淡出 + 0.94 缩放（ζ0.92，几乎不过冲）。
+             * 只在我方视图上做 alpha / transform，内容层已经 invalidate —— 
+             * 垫底的就是画面而不是一块黑。 */
+            let animator = UIViewPropertyAnimator(
+                duration: 0,
+                timingParameters: AevonSpring.params(response: 0.28, dampingFraction: 0.92))
+            animator.addAnimations { [weak self] in
+                self?.alpha = 0
+                self?.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+            }
+            animator.addCompletion { [weak self] _ in
+                // 离场帧是 self 的子视图，self 摘掉时它跟着一起走，不用单独 remove
+                self?.removeFromSuperview()
+            }
+            motionAnimator = animator
+            animator.startAnimation()
+            AevonLog.info("[窗口] 浮窗离场：离场帧 "
+                + "\(Int(exitView.frame.width))x\(Int(exitView.frame.height)) 垫底，"
+                + "0.28s 淡出 + 0.94 缩放后摘除（AevonCloseFadeV345）")
+        } else {
+            /* V0.2.89（AevonCloseInstantV289）仍然是无帧时的唯一正确姿势：
+             * 承载容器已 invalidate、画布已还原，直接摘视图，任何渐变都是在淡一块黑。 */
+            AevonLog.info("[窗口] 浮窗已关：瞬时摘除，无离场帧无淡出"
+                + "（AevonCloseInstantV289 AevonCloseFadeV345）")
+            removeFromSuperview()
+        }
+    }
+
+    /// 把离场帧垫到窗根最上层（V0.3.45，AevonCloseFadeV345）。
+    ///
+    /// 只盖内容区 —— 光晕、窗外手柄不进这张图，它们在淡出里跟着整窗一起走。
+    private func installExitCover(_ image: UIImage?) -> UIImageView? {
+        guard let image = image else { return nil }
+        let iv = UIImageView(image: image)
+        iv.contentMode = .scaleToFill
+        iv.isUserInteractionEnabled = false
+        iv.tag = 0xAE345
+        let clip = contentClip.frame
+        iv.frame = clip.width > 1 && clip.height > 1 ? clip : bounds
+        iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(iv)
+        bringSubviewToFront(iv)
+        return iv
     }
 
     /* V0.2.89（AevonCloseInstantV289）：exitFreezeView（离场帧）已随关闭动画整体退役。
