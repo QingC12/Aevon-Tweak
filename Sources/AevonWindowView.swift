@@ -3564,6 +3564,9 @@ final class AevonWindowView: UIView {
 
     /// 停靠期盖在内容层上的静态封面。
     private var dockCoverView: UIImageView?
+    /// V0.3.37（AevonDockLiveV337）：封面图留一份 —— 实时画面被系统收走、补前台也
+    /// 救不回来时用它重新顶住（此刻远程表面是空的，现场抓帧只会抓到黑图）。
+    private var dockCoverBackup: UIImage?
     /// 封面撤帧闸的计时起跑点（吸附那一刻；装回时重置）。
     private var dockCoverArmedAt: CFTimeInterval = 0
     private var dockCoverTimer: Timer?
@@ -3610,6 +3613,7 @@ final class AevonWindowView: UIView {
         cover.layer.masksToBounds = true
         contentClip.addSubview(cover)
         dockCoverView = cover
+        dockCoverBackup = image
         dockCoverArmedAt = CACurrentMediaTime()
         dockCoverTicks = 0
         AevonLog.info("[停靠] 已装封面（图 \(Int(image.size.width))x\(Int(image.size.height))，"
@@ -3618,6 +3622,24 @@ final class AevonWindowView: UIView {
         return true
     }
 
+    /// V0.3.37（AevonDockLiveV337）：停靠期是否还主动把场景降后台。默认 **否**。
+    ///
+    /// 用户 Aevon(108)：「吸附时抖音视频还是实时播放的，而不是只有声音」。
+    /// 0.3.34 的 `setForeground(false)` 让 App 走后台播放语义 —— 抖音保留后台音频、
+    /// 停掉视频解码，吸附格里就只剩声音。停靠期保持前台身份，视频继续解码。
+    /// 回退：`AevonDockSleepOn337` = true → 恢复 0.3.34/0.3.36 的降后台行为。
+    static let dockSleepEnabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDockSleepOn337") as? Bool
+        return v ?? false
+    }()
+
+    /// V0.3.37（AevonDockLiveV337）：停靠期「实时画面探针」总开关。
+    /// `AevonDockLiveOff337` = true → 不撤封面、不补前台，行为等同 0.3.36。
+    static let dockLiveDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDockLiveOff337") as? Bool
+        return v ?? false
+    }()
+
     /// 吸附完成 → 把该场景主动置后台。
     ///
     /// 停靠小窗不显示实时画面（封面已经顶住），继续占着前台身份只有一个后果：
@@ -3625,6 +3647,9 @@ final class AevonWindowView: UIView {
     /// 主动降后台把状态说清楚，装回时由 `restoreDocked` 推回前台。
     ///
     /// ⛔ 顺序铁律：**先抓封面，再降后台**。反了就抓到一张空表面（表面已被回收）。
+    ///
+    /// V0.3.37：本函数默认**不再被调用**（见 `dockSleepEnabled`）—— 降价换来的防抖
+    /// 不值得停掉视频解码。留着是为了回退通道与历史断言。
     func suspendSceneForDock() {
         guard !isTearingDown, sceneHost.hasContent else { return }
         AevonSceneHelper.setForeground(sceneHost.scene, false, reason: "吸附降后台 \(bundleID)")
@@ -3639,6 +3664,9 @@ final class AevonWindowView: UIView {
     /// 「cs 先报 2、远程表面还没真画上」），提前撤就是「静止图 → 黑一瞬 → 实时」。
     /// 上限 1.5 秒必撤 —— 宁可露实时，也不许永久盖着。
     func beginDockCoverLift() {
+        /* V0.3.37（AevonDockLiveV337）：装回 = 停靠期结束，停靠探针必须立刻停表 ——
+         * 否则它会在主窗上继续「画面掉出就补前台」，和装回后的布防链抢同一个场景。 */
+        stopDockLiveProbe()
         guard dockCoverView != nil else { return }
         dockCoverArmedAt = CACurrentMediaTime()
         dockCoverTicks = 0
@@ -3688,6 +3716,125 @@ final class AevonWindowView: UIView {
         view.removeFromSuperview()
         AevonLog.info("[停靠] 撤封面（\(reason)，\(sceneHost.stateSummary())）"
             + "（AevonDockCoverLiftV334）")
+    }
+
+    // MARK: - 停靠期实时画面（V0.3.37，AevonDockLiveV337）
+
+    /// 实时画面探针的计时器（0.15s 一拍，停靠期专管两件事：
+    /// ① 实时画面回来了就撤封面露出活的视频；② 画面被系统收走时补前台抢回来）。
+    /// ⛔ 与 `dockCoverTimer`（装回用的撤帧闸）互斥：装回一开始就把它停掉。
+    private var dockLiveTimer: Timer?
+    /// 探针起跑点（吸附完成那一刻）。
+    private var dockLiveStartAt: CFTimeInterval = 0
+    /// 连续「在画」的拍数（要 3 拍才撤封面，撤早一拍 = 黑一瞬）。
+    private var dockLiveTicks = 0
+    /// 补前台已经用掉的次数（上限 6）与上一次的时间（首次立即，之后间隔 ≥1.0s）。
+    private var dockReassertTries = 0
+    private var dockLastReassertAt: CFTimeInterval = 0
+    /// 封面已撤之后「画面掉出去」连续了多少拍（≥20 拍 = 3 秒没救回来 → 重新顶住）。
+    private var dockLiveMissTicks = 0
+
+    /// 吸附完成 → 布防停靠期实时画面探针。
+    ///
+    /// 为什么不沿用 `checkBackgroundGuard`：那条链在停靠期整段早退
+    /// （`guard !isDocked else { return }`），而且它的预算是按「开窗/回桌面」那一次
+    /// 布防算的（4 发），停靠期一挂就是几分钟，必须有自己的、有界的一套。
+    ///
+    /// 三段时间轴（全部可回退）：
+    ///   · +0.55s 之前不判 —— 停靠重排动画 0.22s + App 重排一次，early 判会判到半成品；
+    ///   · +0.55s 起连续 3 拍 `cs=2` → 撤封面，露出实时视频（抖音继续放）；
+    ///   · 到 +3.0s 仍没到 3 拍 → 封面永久顶住并停表（画面压根没起来，写也没用）。
+    func armDockLiveProbe() {
+        guard window != nil, !isTearingDown, isDocked else { return }
+        if AevonWindowView.dockLiveDisabled {
+            AevonLog.info("[停靠] 实时画面探针已停用（AevonDockLiveOff337）→ 封面永久保留（\(bundleID)）"
+                + "（AevonDockLiveV337）")
+            return
+        }
+        dockLiveStartAt = CACurrentMediaTime()
+        dockLiveTicks = 0
+        dockLiveMissTicks = 0
+        dockReassertTries = 0
+        dockLastReassertAt = 0
+        guard dockLiveTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
+            self?.dockLiveTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dockLiveTimer = timer
+        AevonLog.info("[停靠] \(bundleID) 停靠期实时画面探针已布防：+0.55s 起每 0.15s 判 cs，"
+            + "连续 3 拍在画就撤封面露实时视频；3s 起不来则封面永久顶住；"
+            + "画面被系统收走时立即补前台、之后每 1s 一次（最多 6 次），"
+            + "3 秒救不回就用备份帧重新顶住（AevonDockLiveV337）")
+    }
+
+    /// 停表（装回 / 离开停靠列 / 关窗三条出口都必须调，否则会对着已装回的窗乱写）。
+    func stopDockLiveProbe() {
+        dockLiveTimer?.invalidate()
+        dockLiveTimer = nil
+        dockLiveTicks = 0
+    }
+
+    private func dockLiveTick() {
+        guard window != nil, !isTearingDown, isDocked else {
+            stopDockLiveProbe()
+            return
+        }
+        let now = CACurrentMediaTime()
+        let alive = sceneHost.contentLooksRendering
+        if alive == true { dockLiveTicks += 1 } else { dockLiveTicks = 0 }
+        if dockCoverView != nil {
+            // ── 封面还在：等实时画面 ──────────────────────────────────────
+            if now - dockLiveStartAt >= 0.55, dockLiveTicks >= 3 {
+                dropDockCover(reason: "停靠期实时画面连续 3 拍在画（AevonDockLiveV337）")
+            } else if now - dockLiveStartAt > 3.0 {
+                AevonLog.info("[停靠] 停靠期 3 秒内实时画面没回来 → 封面永久顶住"
+                    + "（\(sceneHost.stateSummary())）（AevonDockLiveV337）")
+                stopDockLiveProbe()
+            }
+            /* 封面在的时候**不补写**：封面已经顶住这一格，写一次只是让远程表面
+             * 多重建一次，而用户此刻看不到任何收益。 */
+            return
+        }
+        // ── 封面已撤（实时画面在屏）：只在画面掉出去时才抢救 ────────────
+        if alive == true {
+            dockLiveMissTicks = 0
+            return
+        }
+        dockLiveMissTicks += 1
+        /* ① 补前台抢回：首次立即，之后每 1.0 秒一次，最多 6 次。
+         * 每次 `updateSettings` 都会让远程表面重建一次（实时画面下能看到一下），
+         * 但这是用户 Aevon(108) 定档的取舍：宁可闪一下，也不要「视频停住只剩声音」。 */
+        if dockReassertTries < 6,
+           dockLastReassertAt == 0 || now - dockLastReassertAt >= 1.0 {
+            dockReassertTries += 1
+            dockLastReassertAt = now
+            let before = sceneHost.stateSummary()
+            let ok = sceneHost.reassertForegroundForFloat()
+            AevonLog.info("[停靠] 停靠期画面掉出 → 补前台抢回（第 \(dockReassertTries) 次/6，"
+                + "\(ok ? "已提交" : "失败")）\(before) → \(sceneHost.stateSummary())"
+                + "（AevonDockLiveV337）")
+            return
+        }
+        /* ② 抢了 3 秒（20 拍）还是没回来 → 用**备份帧**重新顶住。
+         * ⛔ 绝不在这里抓新帧：此刻远程表面是空的，抓回来就是一张黑图。 */
+        if dockLiveMissTicks >= 20, let backup = dockCoverBackup {
+            let cover = UIImageView(image: backup)
+            cover.contentMode = .scaleToFill
+            cover.frame = contentClip.bounds
+            cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            cover.isUserInteractionEnabled = false
+            cover.layer.cornerRadius = AevonWindowView.cornerRadius(for: contentClip.bounds.width)
+            cover.layer.masksToBounds = true
+            contentClip.addSubview(cover)
+            dockCoverView = cover
+            dockLiveMissTicks = 0
+            dockLiveTicks = 0
+            AevonLog.info("[停靠] 补前台 6 次没救回 → 用备份帧重新顶住这一格"
+                + "（不抓新帧：此刻表面是空的，抓回来就是黑的）（\(sceneHost.stateSummary())）"
+                + "（AevonDockLiveV337）")
+            stopDockLiveProbe()
+        }
     }
 
     /// V0.2.66（AevonTraitWakeV266，用户 Aevon(39) #1「悬浮窗画面不跟随系统深浅色」）：
@@ -3973,6 +4120,9 @@ final class AevonWindowView: UIView {
         removeDarkFreeze(reason: "关窗收尾")
         // V0.3.34（AevonDockCoverV334）：停靠封面与它的撤帧闸一起收尾
         dropDockCover(reason: "关窗收尾")
+        // V0.3.37（AevonDockLiveV337）：停靠期实时画面探针一起收尾
+        stopDockLiveProbe()
+        dockCoverBackup = nil
         // V0.2.60（AevonLiveFirstV260）：让位期（整窗 alpha 0）里关窗 → 先撤销让位。
         // 否则离场帧是在一个隐形窗口上抓的（抓到空壳 → 淡出动画被跳过，硬切一下）。
         if liveWaitDeadline > 0 {

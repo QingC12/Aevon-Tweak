@@ -137,17 +137,6 @@ jobs:
             strings "$DYLIB" | grep -q "$m" \
               || { echo "::error::0.2.80 二进制里缺标记 $m"; exit 1; }
           done
-          # V0.2.82（Aevon(55) 闪 + 自动注销）：三条修复必须各自带着标记进二进制。
-          # 注意 Swift 日志串是 UTF-8，strings 能查到；ObjC 中文串则查不到（0.2.68/0.2.81 教训）。
-          # V0.2.83：AevonShroudOnTopV282 随遮罩整体退役（见 0.2.83 校验块），
-          # 二进制 must 列表改用 AevonNoShroudV283 —— 它证明「不再截图、不再盖遮罩」这一版
-          # 的代码真的被编进去了（而不是只改了注释）。
-          # V0.3.3 反转：AevonGripIntentV297 已整条退役（全 App 卡屏真凶，见 V0.3.3 校验①），
-          # 从 must 清单移除 —— 它的名字只剩注释里的历史说明，**注释不进二进制**，
-          # 留着这一项 strings 必然查不到 = 每次构建必红。退役事实改由
-          # AevonGripIntentRetireV303 承载（清单末尾）。
-          # 注意：注释绝不能插在 `for m in ...` 的续行列表中间 —— `\` 续行 + `#` 会把
-          # 后面的标记一起吃掉（本节踩过）。
           for m in AevonProbeHitRetireV282 AevonYieldTouchGuardV282 \
                    AevonYieldAlphaV282 AevonNoShroudV283 AevonCrashPCV283 \
                    AevonLayerNilSafeV283 AevonFgGuardRetireV283 \
@@ -338,16 +327,6 @@ jobs:
               || { echo "::error::0.2.81 退役标记 $m 没在断言垫片里收容"; exit 1; }
           done
           echo "V0.1.7 校验: 探针六组 + ObjC @try 兜底 + 类表扫描在 ObjC + ivar 安全读取"
-          # V0.1.8（Aevon(75) 日志给出的答案）：
-          # P1 探针把三个手势管理器一次列清，能力位一目了然：
-          #   _UISystemGestureManager.sharedInstance            [two:1 one:0 acq:0]
-          #   SBMainDisplaySystemGestureManager.sharedInstance  [two:0 one:0 acq:1]
-          #   SBSystemGestureManager.mainDisplayManager         [two:0 one:0 acq:1]
-          # 也就是唯一支持 addGestureRecognizer:toDisplayWithIdentity: 的是 UIKit 私有的
-          # _UISystemGestureManager。0.1.5~0.1.7 三版都在 SB 那两个类上找这个方法，
-          # 所以每版都「登记失败」——管线一直在，是敲错了门。
-          # 本版把它排到候选首位，并加「反证降级」：登记成功却从没被 shouldReceiveTouch
-          # 问过两次，就自动退回 0.1.3 延迟接管，绝不把右缘呼出做成哑巴。
           strings "$DYLIB" | grep -q '_UISystemGestureManager' \
             || { echo "::error::V0.1.8 没用 _UISystemGestureManager —— 它是唯一支持两参登记的管理器"; exit 1; }
           echo "V0.1.8 校验: 登记改走 _UISystemGestureManager + 反证降级"
@@ -372,19 +351,6 @@ jobs:
             | grep -q 'shouldSwallowGlobalTouch(_ touchID: UInt, phase: Int)' \
             || { echo "::error::Swift 侧判据签名与 hook 不一致"; exit 1; }
           echo "V0.1.12 校验: 右缘只扣移动帧 + 抬手必放行 + 纵向立刻放行 + 判定期 0.6s"
-          # V0.1.13（Aevon(80) 日志）：
-          # 这份日志 20 次右缘呼出**全部落在右下角热区**、全部干净，起手窗只落进 1 次（x=394）
-          # 且那根手指 0.3 秒内几乎没动 —— 没抓到故障现场。但复盘出一个机制漏洞：
-          # 识别器一旦 shouldReceiveTouch 返回 true，因为 delaysTouchesBegan=true，
-          # App 的 began 就被扣在 UIKit 手势环境里；而 shouldBegin 在「老通道持有这根手指」时
-          # 直接 false → 识别器必然 failed → UIKit 把被扣住的 began 连同其后全部移动一次性补投给 App。
-          # 这次补投发生在手势环境内部，UIApplication -sendEvent: 看不见，吞不掉 ——
-          # 热区（识别器在 shouldReceiveTouch 就拒，20 条「原因=落在热区」）因此一直干净，
-          # 起手窗（识别器接了）才会「圆盘出来了、抖音也跟动」。
-          # 本版：①识别器整条停手（不再接收任何触摸，补投链断掉）；
-          #       ②起手窗两态化 —— 默认整段交回 App（0.1.12 的「扣移动帧」判死：
-          #         began 与 ended 都给了 App，ended 的落点就是抬起位置，位移照样算得出来）；
-          #         打开「右缘全域接管」则按下即吞（App 连 began 都收不到）。
           strings "$DYLIB" | grep -q 'AevonPipelineStandDownV113' \
             || { echo "::error::V0.1.13 标记 AevonPipelineStandDownV113 未编入"; exit 1; }
           strings "$DYLIB" | grep -q 'AevonBandTakeoverBeganV113' \
@@ -1018,15 +984,6 @@ jobs:
               || { echo "::error::V211 标记 $s 未收容进 AevonAssertionShim.m"; exit 1; }
           done
           echo "V0.2.11 校验: ⓘ 首次不压字 + 带区间 8~140pt/6~100% + 成立后保持在场直到抬手 + ringclose 收尾 + 心圆不压图标 已就位"
-          # ---- V0.2.12（Aevon(98) 事故）：圆盘自动收起后整机只剩点击 ----
-          # 事故现象：呼出圆盘后不在盘上选，圆盘自动收起 → 全屏 App 划不动，
-          # 且系统手势（顶部下拉控制中心 / 底部上滑进后台 / 锁屏上滑解锁）全部失效，
-          # 屏幕只剩点击可用。根因是两处状态泄漏同时发生，都必须有结构性的兜底：
-          #   ① SpringBoard 侧 ownsTouch / globalTouchID 漏清 → 按 UITouch 指针吞摸，
-          #      指针被池化复用后每一根新手指都命中 → SpringBoard 这一份触摸整体消失
-          #      → 系统手势全废（App 那份是 backboardd 直投，所以点击还在）。
-          #   ② App 侧识别器停在 .began 永不收尾 → 失败要求对本 App 所有带内平移恒 YES
-          #      → App 内一切滚动被压死。
           grep -q 'AevonSwallowSelfHealV212' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             || { echo "::error::接管状态自愈被删 —— 圆盘收起后 SpringBoard 会继续吞触摸（整机只剩点击）"; exit 1; }
           grep -q 'healGlobalTakeoverIfNeeded()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
@@ -1052,20 +1009,6 @@ jobs:
           echo "V0.2.13 校验: 系统手势 withType 接口 + 私有 init + UIKit 默认触摸策略 + 纵向 Failed 归还 + 一键回退 已就位"
           # V0.2.51：断言退役 —— 热区又开始「按下即接管」—— 底部/顶部系统手势会被一起吞掉
           echo "V0.2.14 校验: 热区改观察（不吞系统手势区）+ 呼盘后才吞（0.6s 时限）+ 系统手势 began 0.12s 看门狗 + 默认关与一次性迁移 已就位"
-          # ---- V0.2.15（Aevon(101)）：SB 侧吞摸整条链路下线 ----
-          #
-          # 证据链：
-          #   · 12:31:18~12:31:30 十二秒零触摸日志，但 30 秒一次的窗口栈照常打印 → 主线程活着；
-          #   · 12:31:30 三指急救生效 → 三指事件确实穿过了 sendEvent（swallowCount < active 不吞），
-          #     而单指全被吞 → 桌面翻页 / Dock / 图标一起死。这就是 `ownsTouch` 泄漏的那一类表现；
-          #   · 全屏 App 侧的「圆盘出来、页面不跟滚」是 App 内识别器的功劳
-          #     （12:30:56 / 12:32:55 两次「App 触摸已被合法取消」），跟 SB 吞不吞无关。
-          # 结论：SB 侧吞摸对 App 收益为 0，代价是整个桌面与系统手势 → 焊死。
-          # V0.2.71 曾反转转正 default: true；V0.2.72（AevonSBSwallowSealV272）重新焊死
-          # —— Aevon(44) 实锤：转正后圆盘内触摸走进接管分支（死代码），SB 进程
-          # main queue 上 swift_dynamicCast SIGTRAP = 注销。此断言为**最终定档**：
-          # SB 侧 Swift 吞路径永久 default:false；盘上滑动覆盖由 App 侧 bit39 全吞
-          # （AevonRingActiveNow，纯 ObjC）承担，无注入 App 场景不再追求。
           grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
             | grep -q 'AevonPrefs.bool("SBSwallow", default: false)' \
             || { echo "::error::0.2.72 SBSwallow 必须焊死（转正会踩 SB 进程 dynamicCast 崩溃）"; exit 1; }
@@ -1097,16 +1040,6 @@ jobs:
             echo "::error::圆盘又按 source 死绑指针 —— 绑到死通道就等于手指断粮"; exit 1
           fi
           echo "V0.2.16 校验: 圆盘指针通道交接（0.12s 静默可换道）+ 源名统一 + 圆盘开启后只喂指针 已就位"
-          # ---- V0.2.17（Aevon(103) 判读）：圆盘松手即收 + 设置页精简 + 圆盘手势定档 ----
-          #
-          # 用户的账只有两条：
-          #   ① 「划出圆盘后松手在盘外时自动收起圆盘（不要圆盘保持开启）」；
-          #   ② 「插件设置中的一些选项并没有用到，或者可以在插件代码中设置为默认开启，精简选项」。
-          #
-          # ① 的沿革：0.0.28 起 `handlePointerEnded` 有一条「从没进过圆盘 = 呼盘那一下抬手 →
-          #   圆盘保持展开」（AevonRingKeepOpenV28）。0.2.16 把指针通道交接做完之后，正确用法
-          #   已经是「按住不松、直接滑到图标再松」，那个分支只剩一个后果：随手划一下、抬手，
-          #   屏上多一个必须再点一次才消失的圆盘。本版删掉该分支。
           grep -q 'AevonRingLiftDismissV217' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::圆盘松手不再无条件收起（缺 AevonRingLiftDismissV217）"; exit 1; }
           if grep -v '^[[:space:]]*//' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" | grep -q '!everInside'; then
@@ -1132,15 +1065,6 @@ jobs:
           #    V0.2.58（AevonGripToggleV258）反转：新增隔离实验开关 RingGripEnabled
           #    （用户 Aevon(32) 要求可临时屏蔽把手做 A/B 定位）→ 下限改 5。
           ROOT_SW="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(sum(1 for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
-          # V0.2.81（AevonDeadCodeV281）：ProbeV107 随探针退役 → 5 个改 4 个。
-          # V0.2.99（AevonGripProbeV299）：方案 A 灰度新增 GripHookProbe（SBGrabberTongue 探测，
-          # 默认关）→ 4 个改 5 个。
-          # V0.3.5（AevonGripYieldV305）：+GripSystemYield（右缘呼盘交给系统手势）→ 5 个改 6 个。
-          # V0.3.7（AevonYieldDefaultV307）：该项默认值 false → true（转正，不再是 A/B 档）。
-          # V0.3.9（AevonGripOwnLegV309）：+GripOwnLeg（自建手势接管右缘；0.3.10 起默认开）→ 6 个改 7 个。
-          # V0.3.15（AevonGripHardcodeV315）：7 → 5。GripHookProbe / GripSystemYield / GripOwnLeg
-          # 三个默认开启的呼出手势开关全部写进代码、从设置页移除；GripHandleHidden 从二级页提上来。
-          # V0.3.18（AevonSceneGateV318）：+RingAnywhere（系统浮层里也能呼盘，默认关）→ 5 个改 6 个。
           [ "$ROOT_SW" -eq 6 ] || { echo "::error::一级页开关数不是 6（实际 $ROOT_SW）—— 0.3.18 清单：Enabled/RingGripEnabled/GripHandleHidden/RingAnywhere/LogEnabled/CrashGuard"; exit 1; }
           ROOT_KEYS="$(python3 -c "import plistlib,os;d=plistlib.load(open(os.environ['GITHUB_WORKSPACE']+'/AevonPrefs/Resources/Root.plist','rb'));print(','.join(i['key'] for i in d['items'] if i.get('cell')=='PSSwitchCell'))")"
           # V0.2.51（AevonGripOnlyV251）：定档清单 6 → 4（边缘呼出 / App 内右缘接管退役）
@@ -1170,20 +1094,6 @@ jobs:
             echo "::error::多任务长按 hook 又被装上（0.2.17 已撤）"; exit 1
           fi
           echo "V0.2.17 校验: 松手即收（AevonRingLiftDismissV217）+ 一级页锁定 6 个开关 + 系统手势常开与一次性迁移 + 浮窗恒可触摸 + 探针默认关 已就位"
-          # ---- V0.2.18（Aevon(104)）：划过图标的跳跃 +50% / 放大加大 / 关闭只认抬手 ----
-          #
-          # 用户这次的账有三条，前两条是手感，第三条是把规则讲清楚：
-          #   ① 「图标跳动的高度增加 50%」；
-          #   ② 「划过图标时放大效果再大一点，让圆盘看起来更 Q 弹」；
-          #   ③ 「手指没离开屏幕就算在圆盘里，只有离开屏幕时在盘外 / 在图标间隙里才收」。
-          #
-          # ①② 落在 AevonRingMenu 的常量上（8 → 12pt、1.18 → 1.30）。
-          #   V0.3.18（AevonSpringUnifyV318）：弹簧参数（阻尼 .42 → .34、初速 2.8 → 3.4）
-          #   已整体退役 —— 那三个数是 iOS 7 老 API 的组合，和 Stheno 用的 SwiftUI
-          #   `spring(response:dampingFraction:)` 不是同一个物理量。现在由 AevonSpring
-          #   换算，改那三条断言为**反转**（不许再长回来）。
-          #   V0.3.22（AevonGifHoverV322）：这两个数按用户给的 Stheno 录屏重新定档 ——
-          #   稳态是**停在空中**（跳上去就不下来了），不是 0.3.21 的「贴地」。
           grep -q 'static let hoverLift: CGFloat = 46' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
             || { echo "::error::V0.3.22 稳态抬起必须 46pt（录屏峰值 1.9×，我们环距只够 1.31×）"; exit 1; }
           grep -q 'static let hoverScale: CGFloat = 1.25' "$GITHUB_WORKSPACE/Sources/AevonRingMenu.swift" \
@@ -5824,6 +5734,16 @@ jobs:
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('AevonSceneHelper.setForeground(scene, true)');j=s.find('AevonSnapProbeRun(',i);ok=(0<i<j and j-i<700);print('V0.3.36 探针在场景推前台之后才跑 ✓' if ok else '::error::V0.3.36 探针早于推前台（handle 还没建立）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonSceneHost.swift"
           grep -qF '@_cdecl("AevonSnapProbeLog")' "$WV35" || { echo "::error::V0.3.36 缺日志出口（探针打印无处可去）"; exit 1; }
           echo "V0.3.36 校验: 系统快照接口只读探针（类/方法/签名/ivar/句柄反查）✓"
+          # ── V0.3.37 校验（停靠期回到实时画面：不降后台 + 3 拍撤封面 + 掉画补前台）──
+          strings "$MYD28" | grep -qF 'AevonDockLiveV337' || { echo "::error::V0.3.37 主库缺标记"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();n=['static let dockSleepEnabled','static let dockLiveDisabled','func armDockLiveProbe()','func stopDockLiveProbe()','private func dockLiveTick()'];m=[x for x in n if x not in s];print('V0.3.37 停靠实时链完整 ✓' if not m else '::error::V0.3.37 缺件 '+str(m));sys.exit(0 if not m else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func dockLiveTick() {');j=s.find('override func traitCollectionDidChange',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'dockLiveTicks >= 3' in b and 'dropDockCover' in b and 'reassertForegroundForFloat' in b and b.find('dockLiveTicks >= 3')<b.find('> 3.0'));print('V0.3.37 三拍撤封面+掉画补前台 ✓' if ok else '::error::V0.3.37 撤封面/补前台逻辑不对');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func beginDockCoverLift() {');j=s.find('guard dockCoverView != nil',i);ok=(0<i<j and 'stopDockLiveProbe()' in s[i:j]);print('V0.3.37 装回先停探针 ✓' if ok else '::error::V0.3.37 装回后探针还在跑（和布防链抢场景）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('static func dockCurrent(side: AevonDockSide, force: Bool = false) -> Bool {');j=s.find('armDockLiveProbe',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'if AevonWindowView.dockSleepEnabled' in b and b.find('if AevonWindowView.dockSleepEnabled')<b.find('view.suspendSceneForDock()'));print('V0.3.37 降后台已被开关包住 ✓' if ok else '::error::V0.3.37 停靠仍无条件降后台（视频解码被停）');sys.exit(0 if ok else 1)" "$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
+          APPD37="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD37" ] && strings "$APPD37" | grep -qF 'AevonDockLiveV337'; then echo "::error::V0.3.37 标记漏进 App 库"; exit 1; fi
+          echo "V0.3.37 校验: 停靠保持前台（视频继续解码）+ 3 拍撤封面露实时 + 掉画补前台（首次立即/1s 闸/6 次，3 秒救不回用备份帧顶住）✓"
+
 
 
 

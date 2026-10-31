@@ -1690,7 +1690,19 @@ enum AevonWindowManager {
         /* V0.3.34（AevonDockSleepV334）：封面已就位 → 把场景主动置后台。
          * 停靠小窗不显示实时画面（封面顶住），继续占着前台身份只会和用户正在用的
          * 全屏 App 抢同一个前台位，两边都在 cs 0/1 之间抖 = 小窗黑屏的直接来源。 */
-        view.suspendSceneForDock()
+        /* V0.3.37（AevonDockLiveV337）：用户 Aevon(108)「吸附时抖音视频还是实时播放的，
+         * 而不是只有声音」—— 0.3.34 这一笔降后台让 App 走后台播放语义（抖音保留音频、
+         * 停掉视频解码），吸附格就只剩声音。改为默认**不降后台**：场景保持前台身份，
+         * 视频继续解码，封面只负责吸附瞬间的遮黑，实时画面回来后由停靠探针撤掉。
+         * 回退开关 `AevonDockSleepOn337` = true（恢复 0.3.36 行为）。 */
+        if AevonWindowView.dockSleepEnabled {
+            view.suspendSceneForDock()
+        } else {
+            AevonLog.info("[停靠] \(bundleID) 停靠期保持前台身份（不降后台）→ 视频继续解码，"
+                + "封面只在实时画面回来前顶住（AevonDockLiveV337）")
+        }
+        // V0.3.37（AevonDockLiveV337）：布防停靠期实时画面探针（撤封面 / 补前台）。
+        view.armDockLiveProbe()
         return true
     }
 
