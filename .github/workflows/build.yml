@@ -5795,6 +5795,25 @@ jobs:
             || { echo "::error::V0.3.34 过渡哨没前移布防（或 reason 丢了画面离场 → 退化成三拍重申）"; exit 1; }
           python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func armBackgroundGuard(reason: String) {');j=s.find('beginGuardWindow(reason: reason)',i);b=s[i:j] if 0<i<j else '';ok=('sentryArmedAt' in b);print('V0.3.34 哨已布防时跳过二次布防 ✓' if ok else '::error::V0.3.34 缺哨跳过闸（场景消失事件会再发一发 = 第二次黑）');sys.exit(0 if ok else 1)" "$WV34"
           echo "V0.3.34 校验: 停靠封面（先抓帧→缩窗→降后台，装回按 cs 撤）+ 回桌面盖帧恢复 + 布防前移 0.7s ✓"
+          # ── V0.3.35 校验（回桌面定格保持 + 自动唤醒 / 停靠封面计时器作废）──
+          for s in AevonDeskHoldV335 AevonDeskHoldLiftV335 AevonDeskNoKickV335 AevonDockCoverTokenV335; do
+            strings "$MYD28" | grep -qF "$s" \
+              || { echo "::error::V0.3.35 主库缺标记 $s"; exit 1; }
+          done
+          WV35="$GITHUB_WORKSPACE/Sources/AevonWindowView.swift"
+          WM35="$GITHUB_WORKSPACE/Sources/AevonWindowManager.swift"
+          grep -qF 'static let deskHoldEnabled: Bool = {' "$WV35" \
+            || { echo "::error::V0.3.35 缺定格保持开关（回退通道没了）"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func enterDeskHold(reason: String) -> Bool {');j=s.find('scheduleDeskHoldWake()',i);b=s[i:j] if 0<i<j else '';ok=('installTransitionFreeze' in b and 'setForeground(self.sceneHost.scene, false' in b and b.find('installTransitionFreeze')<b.find('setForeground(self.sceneHost.scene, false'));print('V0.3.35 先盖帧再降后台 ✓' if ok else '::error::V0.3.35 降后台早于盖帧（抓到空表面 = 黑）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();a=s.find('private func checkBackgroundGuard() {');b=s.find('if checkAwaitingContent()',a);c=s.find('private func reassertContentForeground(tag: String) {');d=s.find('if liveWaitReassertBudget == 0',c);ok=(0<a<b and 'if deskHoldActive { return }' in s[a:b] and 0<c<d and 'if deskHoldActive { return }' in s[c:d]);print('V0.3.35 定格期零写（看门与重申双早退）✓' if ok else '::error::V0.3.35 定格期仍会写（每写一次 = 一次黑）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func deskHoldWakeTick() {');j=s.find('private func finishDeskHold',i);b=s[i:j] if 0<i<j else '';ok=('AevonSceneHelper.wakeUp' in b and 'rebuildPresenter' in b and 'deskHoldWakeTries == 2' in b and 'deskHoldSettleTicks >= 2' in b);print('V0.3.35 自动唤醒含重建 presenter + 2 拍交接 ✓' if ok else '::error::V0.3.35 唤醒链不完整（进不了画就只能一直定格）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('func installDockCover() -> Bool {');j=s.find('guard let image = captureSnapshotImage()',i);b=s[i:j] if 0<i<j else '';ok=('dockCoverTimer?.invalidate()' in b);print('V0.3.35 装新封面先作废旧计时器 ✓' if ok else '::error::V0.3.35 旧计时器会撤掉新封面（小窗露空 = 黑）');sys.exit(0 if ok else 1)" "$WV35"
+          grep -qF 'AevonWindowManager.notifyFloatTouched()' "$GITHUB_WORKSPACE/Sources/AevonEdgeEntry.swift" \
+            || { echo "::error::V0.3.35 触摸浮窗没接唤醒入口"; exit 1; }
+          grep -qF 'view.enterDeskHold(reason: "全屏 App 画面离场（过渡哨命中）")' "$WM35" \
+            || { echo "::error::V0.3.35 过渡哨没交给定格保持"; exit 1; }
+          echo "V0.3.35 校验: 回桌面定格保持（清晰帧 + 主动降后台 + 零写）→ 1.9s 自动唤醒交接 + 停靠封面计时器作废 ✓"
+
 
 
 

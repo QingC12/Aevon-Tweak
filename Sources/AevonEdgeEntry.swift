@@ -391,6 +391,9 @@ enum AevonEdgeEntry {
             if AevonEntryHost.pointHitsFloatingWindow(at: point) {
                 lastTouchPoint = point
                 let nowFloat = CACurrentMediaTime()
+                /* V0.3.35（AevonDeskHoldLiftV335）：回桌面定格保持期间，用户一碰浮窗就
+                 * 立刻推前台唤醒实时画面（比 1.9 秒的自动点还快）。不在定格保持时是空操作。 */
+                AevonWindowManager.notifyFloatTouched()
                 if nowFloat - globalLastLogAt > 2.0 {
                     globalLastLogAt = nowFloat
                     AevonLog.info("[边缘] 触摸落在浮窗上 (x=\(Int(point.x)), y=\(Int(point.y))) → 整个交回浮窗（不接管、不吞、不判向）（AevonFloatPassV209 AevonFloatStandDownV209 AevonFloatGripFirstV266）")

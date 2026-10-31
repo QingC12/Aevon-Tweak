@@ -351,6 +351,26 @@ enum AevonWindowManager {
     static func noteTransitionFreeze() {
         guard let view = currentView else { return }
         view.installTransitionFreeze(reason: "回桌面过渡哨")
+        /* V0.3.35（AevonDeskHoldV335）：先试「定格保持」接管。
+         *
+         * Aevon(107) 两轮完整回桌面实测的形态完全一致：
+         *   +0.21s 布防 / +0.93s 清晰度就绪得分 4938（真画面确实回来过）
+         *   +1.32s 活画面 0（cs=0，那 0.4 秒真画面又掉了）
+         *   +1.80s 让位结束 cs=0，保活结束 fg=0 cs=0（deactivation 已归零却仍 fg=0
+         *          ⇒ 挡住我们的不是 deactivation，是场景被系统收走）
+         *   +2.81s 重申只把 cs 拉到 1，拉不回 2
+         * 用户读到的是「黑一下 → 由虚变清晰 → 卡住」，中间那次真画面插入就是新的闪。
+         *
+         * 接管成功后：不布防、不起跑保活、不重申 —— 全程零写，画面只靠一张清晰帧顶住，
+         * 到 +1.9s 转场收尾后由 deskHoldWakeTick 自动推前台唤醒。
+         * 保活必须跳过：它写 deactivationReasons 就是一次表面重提交 = 一次黑
+         * （逆向报告第 10/17 轮结论，Aevon(107) 14.291 那笔写入前后正是画面掉 0 的位置）。 */
+        if view.enterDeskHold(reason: "全屏 App 画面离场（过渡哨命中）") {
+            AevonLog.info("[窗口] 布防前移跳过：定格保持已接管（回桌面全程零写）"
+                + "（AevonDeskHoldV335 AevonDeskNoKickV335）")
+            return
+        }
+        // 定格保持没接住（没有可用清晰帧）→ 退回 0.3.34 的原路径，fail-open
         // V0.3.27（AevonKeepAliveEarlyV327）：同一拍起跑场景保活探针。
         // 布防要等 0.95 秒之后才来，那时候先手已经丢了。
         view.kickKeepAliveProbeOnTransition()
@@ -359,6 +379,13 @@ enum AevonWindowManager {
          * 守卫拍在跑。reason 必须含「画面离场」—— armBackgroundGuard 用它决定
          * 走「让位期 1 发预算」，写成别的会退化成三拍重申 = 自己制造三次黑。 */
         view.armBackgroundGuardSoon(reason: "全屏 App 画面离场（过渡哨前移）", delay: 0.2)
+    }
+
+    /// V0.3.35（AevonDeskHoldLiftV335）：任何落在浮窗上的触摸 → 定格保持立即唤醒。
+    ///
+    /// 用户不想等 1.9 秒的自动点时，一碰就推前台，比自动点还快。
+    static func notifyFloatTouched() {
+        currentView?.leaveDeskHold(reason: "用户触碰浮窗")
     }
 
     /// V0.3.27：过渡哨误报（控制中心半拉等）→ 收掉保活探针，别留悬空断言。

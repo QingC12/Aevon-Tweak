@@ -2163,6 +2163,29 @@ final class AevonWindowView: UIView {
         let v = UserDefaults.standard.object(forKey: "AevonFreezeOff325") as? Bool
         return v ?? false
     }()
+
+    // MARK: - V0.3.35 回桌面定格保持（AevonDeskHoldV335）
+
+    /// 定格保持总开关。走 UserDefaults —— Swift -O 会把「从未被写过的 static let 恒为该值」
+    /// 推成编译期常量，把整个函数体判为不可达并删除，连带标记串一起消失（0.3.25 教训）。
+    /// 写 `AevonDeskHoldOff335 = true` 可整条回退到 0.3.34 的布防 + 重申路径。
+    static let deskHoldEnabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonDeskHoldOff335") as? Bool
+        return !(v ?? false)
+    }()
+
+    /// 自动唤醒起点（从过渡哨算起）。Aevon(107) 两轮实测系统回桌面转场在 +1.80s 收尾
+    /// （让位 1.59 / 1.61 秒，保活持有 1799 / 1812ms），1.9s 起推前台正好落在转场之后。
+    static let deskHoldWakeDelay: Double = 1.90
+
+    /// 唤醒轮询间隔 0.4s：推前台 → 表面重建 → cs=2 的实测耗时是 0.23~0.6s
+    /// （Aevon(107) 16:03:18.083 presenter 重建 → 18.312 cs=2，0.23 秒）。
+    static let deskHoldWakeInterval: Double = 0.40
+
+    /// 唤醒轮数上限 4 轮（到 3.5s）。到点仍不进 cs=2 就不再写 —— 每写一次 = 一次表面
+    /// 重提交 = 一次黑（逆向第 10/17 轮），宁可让定格帧一直保着，也不许撤了露空。
+    static let deskHoldWakeLimit = 4
+
     /// 「盖帧已停用」日志只打前 3 条，避免每次内容掉出画刷一行
     private static var freezeSkipLogCount = 0
     /// V0.3.24（AevonSharpCacheGateV324）：同窗历史**最清晰**帧的拉普拉斯方差 —— 撤帧门槛的
@@ -2189,6 +2212,19 @@ final class AevonWindowView: UIView {
     private var sharpHoldLogged = false
     /// 「清晰度就绪 → 准撤」只记一次
     private var sharpOpenLogged = false
+
+    // MARK: - V0.3.35 定格保持状态（AevonDeskHoldV335）
+    /// 定格保持是否生效。true 期间 `checkBackgroundGuard` 一拍都不判、
+    /// `reassertContentForeground` 一次都不写 —— 这是「零写 = 零闪」的唯一保证。
+    private var deskHoldActive = false
+    /// 定格保持起点（过渡哨那一拍）
+    private var deskHoldStartedAt: CFTimeInterval = 0
+    /// 唤醒轮询计时器
+    private var deskHoldWakeTimer: Timer?
+    /// 已发出的唤醒轮数
+    private var deskHoldWakeTries = 0
+    /// cs=2 连续拍数（要满 2 拍才交接，防「先报 2、表面还没画上」）
+    private var deskHoldSettleTicks = 0
 
     /// V0.3.1（AevonSharpGateV301）：**画面清晰度评分** —— 96x96 灰度 + 3x3 拉普拉斯方差。
     /// 模糊 = 高频丢失 = 拉普拉斯响应方差显著变小；清晰画面（文字边缘、图标、视频细节）
@@ -2482,6 +2518,160 @@ final class AevonWindowView: UIView {
             + "（\(sceneHost.stateSummary())）（AevonNoVanishV265 AevonStableRevealV292）")
     }
 
+    // MARK: - V0.3.35 回桌面定格保持（AevonDeskHoldV335）
+    //
+    // 为什么不再走「布防 + 有界重申」那条链：
+    //   Aevon(107) 两轮完整回桌面形态一致 —— +0.93s 真画面回来过（得分 4938），
+    //   +1.32s 又掉到 0，+1.80s 让位结束时 cs=0 且保活结束 fg=0，+2.81s 重申只到 cs=1。
+    //   保活读数 `settings.deactivation` 已归零却仍 fg=0 ⇒ 场景是被系统收走（挂起），
+    //   不是被 deactivation 挡住。逆向报告第 8/13 轮早有结论：根因是进程被挂起，
+    //   写 settings 无效；第 10/17 轮：每写一次 = 一次表面重提交 = 一次闪。
+    //   既然抢不回来，就不抢 —— 盖一张清晰帧、主动退到后台、全程零写，
+    //   等转场收尾后一次性推前台交接。对照 Stheno（报告一 §4.4）：
+    //   SCWSNativeFullReturnHost 回桌面也是立一个静止承接物等收尾，不是实时画面。
+
+    /// 进入定格保持。返回 true = 已接管（调用方不许再布防 / 起跑保活）。
+    ///
+    /// 顺序铁律：**先盖帧，再降后台**。反了就是抓到一张已回收的空表面。
+    @discardableResult
+    func enterDeskHold(reason: String) -> Bool {
+        guard AevonWindowView.deskHoldEnabled else { return false }
+        guard window != nil, !isTearingDown, sceneHost.hasContent else { return false }
+        /* 停靠窗不参与定格保持：它已经有自己的封面（dockCoverView），
+         * 而且吸附时已经主动降过后台 —— 再盖一层 darkFreeze 只会挡住那张封面。 */
+        guard !isDocked else { return false }
+        guard !deskHoldActive else { return true }
+        if darkFreezeView == nil {
+            installTransitionFreeze(reason: reason)
+        }
+        /* 没有可用清晰帧就不接管 ——「盖不住」比「盖一张糊的」更糟，
+         * 那样用户会看到「由虚变清晰」。退回 0.3.34 的布防路径，fail-open。 */
+        guard darkFreezeView != nil else {
+            AevonLog.warn("[窗口] 定格保持放弃：没有可用清晰帧 → 退回布防 + 重申路径"
+                + "（\(reason)）（AevonDeskHoldV335）")
+            return false
+        }
+        deskHoldActive = true
+        deskHoldStartedAt = CACurrentMediaTime()
+        deskHoldWakeTries = 0
+        deskHoldSettleTicks = 0
+        /* 停掉一切「写一笔 = 一次表面重建 = 一次黑」的通道：
+         * 布防窗口、让位窗口、重申预算、保活断言。
+         * ⛔ 不 stopGuardTimer —— 那个计时器是**常驻看门**，一旦停掉没人重启，
+         * 定格保持结束后浮窗就永久失去画面守卫。这里只把它判空（guardArmedUntil = 0），
+         * 让 checkBackgroundGuard 走「常驻看门」分支，而该分支被 deskHoldActive 挡住。 */
+        guardArmedUntil = 0
+        liveWaitDeadline = 0
+        liveWaitStartedAt = 0
+        liveWaitTicks = 0
+        liveWaitReassertBudget = 0
+        liveSettleUntil = 0
+        idleDarkTicks = 0
+        darkTicks = 0
+        renderTicks = 0
+        AevonKeepAliveProbeEnd()
+        /* 让常驻看门计时器在位（此刻被 deskHoldActive 挡着，零开销）—— 定格保持结束后
+         * 它要立刻接手「画面掉了就盖帧」的职责，这里不启动就见不到那一拍。 */
+        startGuardTimerIfNeeded()
+        AevonLog.info("[窗口] 回桌面定格保持：已盖清晰帧，停止一切重申与保活"
+            + "（\(sceneHost.stateSummary())）（AevonDeskHoldV335 AevonDeskNoKickV335）")
+        /* 主动退到后台。系统本来就会在 +1.4s 把场景收走，抢它只会多一次重提交；
+         * 退出来之后「抽搐」消失，装回时由 deskHoldWakeTick 一次性推回。
+         * 停靠小窗已用同一条路（吸附降后台 → 装回推前台 → cs=2 两拍）实测 6/6 成功。 */
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, self.deskHoldActive, !self.isTearingDown else { return }
+            AevonSceneHelper.setForeground(self.sceneHost.scene, false,
+                                           reason: "回桌面定格保持 \(self.bundleID)")
+            AevonLog.info("[窗口] 定格保持：场景已主动置后台（不再与系统抢前台，"
+                + "少一次重提交）（AevonDeskHoldV335）")
+        }
+        scheduleDeskHoldWake()
+        return true
+    }
+
+    private func scheduleDeskHoldWake() {
+        deskHoldWakeTimer?.invalidate()
+        let timer = Timer(timeInterval: AevonWindowView.deskHoldWakeInterval,
+                          repeats: true) { [weak self] _ in
+            self?.deskHoldWakeTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        deskHoldWakeTimer = timer
+    }
+
+    /// 唤醒拍：转场收尾后推前台 → 等 cs=2 连续 2 拍 → 交接。
+    private func deskHoldWakeTick() {
+        guard deskHoldActive else { stopDeskHoldTimer(); return }
+        guard !isTearingDown, window != nil else { stopDeskHoldTimer(); return }
+        let elapsed = CACurrentMediaTime() - deskHoldStartedAt
+        if elapsed < AevonWindowView.deskHoldWakeDelay { return }
+        if sceneHost.contentLooksRendering == true {
+            deskHoldSettleTicks += 1
+            if deskHoldSettleTicks >= 2 {
+                finishDeskHold(reason: "实时画面连续 2 拍到位")
+            }
+            return
+        }
+        deskHoldSettleTicks = 0
+        deskHoldWakeTries += 1
+        if deskHoldWakeTries > AevonWindowView.deskHoldWakeLimit {
+            /* 写够次数还不回来就不再写 —— 每写一次都是「黑一下再亮一下」，
+             * 定格帧保着反而干净。用户碰浮窗会重新起一轮（leaveDeskHold）。 */
+            AevonLog.warn("[窗口] 定格保持：唤醒 \(AevonWindowView.deskHoldWakeLimit) 轮仍未出画"
+                + " → 停止写入，定格帧继续保着（\(sceneHost.stateSummary())）（AevonDeskHoldV335）")
+            stopDeskHoldTimer()
+            return
+        }
+        AevonSceneHelper.wakeUp(bundleID)
+        AevonSceneHelper.setForeground(sceneHost.scene, true,
+                                       reason: "定格保持唤醒 \(bundleID)")
+        /* 第 2 轮还不行 → 重建 presenter。Aevon(107) 实证：16:03:18.083 重建，
+         * 0.23 秒后 18.312 就撤帧成功（cs=2）。每窗上限 1 次，由 sceneHost 自己记。 */
+        if deskHoldWakeTries == 2, sceneHost.rebuildPresenter(reason: "定格保持唤醒不进画") {
+            AevonLog.info("[窗口] 定格保持：唤醒不进画 → 重建 presenter（第 2 轮）"
+                + "（AevonDeskHoldV335）")
+        }
+        AevonLog.info("[窗口] 定格保持唤醒（第 \(deskHoldWakeTries) 轮，"
+            + String(format: "%.2f", elapsed) + "s）（\(sceneHost.stateSummary())）"
+            + "（AevonDeskHoldV335）")
+    }
+
+    /// 交接：摘掉定格帧，交还实时画面。
+    private func finishDeskHold(reason: String) {
+        guard deskHoldActive else { return }
+        deskHoldActive = false
+        stopDeskHoldTimer()
+        deskHoldSettleTicks = 0
+        /* 交接前比对一次「定格帧 vs 实时帧」：一致 ⇒ 用户看不到任何变化；
+         * 不一致（视频在动）⇒ 反正实时已在画，直接摘。这条只记日志，不改行为。 */
+        if let freeze = darkFreezeImage, let live = captureSnapshotImage() {
+            let matched = freezeMatchesLive(freeze, live)
+            AevonLog.info("[窗口] 定格保持交接：帧比对"
+                + "\(matched ? "一致（零跳变）" : "不一致（内容在动，直接交接）")"
+                + "（AevonDeskHoldLiftV335）")
+        }
+        removeDarkFreeze(reason: "定格保持结束：\(reason)（AevonDeskHoldLiftV335）")
+        liveSettleUntil = CACurrentMediaTime() + AevonWindowView.liveSettleWindow
+        guardArmedUntil = 0
+        AevonLog.info("[窗口] 回桌面定格保持结束（\(reason)，画面=实时）"
+            + "（\(sceneHost.stateSummary())）（AevonDeskHoldLiftV335）")
+    }
+
+    private func stopDeskHoldTimer() {
+        deskHoldWakeTimer?.invalidate()
+        deskHoldWakeTimer = nil
+    }
+
+    /// 用户碰浮窗 → 立刻唤醒，不等 1.9 秒的自动点。
+    func leaveDeskHold(reason: String) {
+        guard deskHoldActive else { return }
+        deskHoldStartedAt = CACurrentMediaTime() - AevonWindowView.deskHoldWakeDelay
+        deskHoldWakeTries = 0
+        deskHoldSettleTicks = 0
+        AevonLog.info("[窗口] 用户碰浮窗 → 定格保持立即唤醒（\(reason)）（AevonDeskHoldLiftV335）")
+        deskHoldWakeTick()
+    }
+
     /// V0.2.63（AevonLiveHiddenV263）：藏着等真画面 —— 连续 2 拍在画才淡入。
     /// V0.2.88（AevonLiveInstantV288，Aevon(61)「悬浮窗的内容依旧存在由虚到实的过渡」）：
     /// **0.22s 浮现 + 0.985→1.0 缩放整段退役**。此刻实时画面已在位（cs=2 连续 2 拍），
@@ -2538,6 +2728,10 @@ final class AevonWindowView: UIView {
     private func reassertContentForeground(tag: String) {
         guard guardArmedUntil > 0, window != nil else { return }
         guard reassertCount < 4 else { return }
+        /* V0.3.35（AevonDeskHoldV335）：定格保持期内一次都不写。
+         * 每次 updateSettings 都让远程表面重建一次，屏幕上就是黑一下再亮一下 ——
+         * 这正是 Aevon(107) 里 +1.32s 那次「真画面掉回 0」的位置。 */
+        if deskHoldActive { return }
         /* V0.3.27（AevonReassertGateV327，用户 Aevon(100) #2）：两道闸，都在**写之前**。
          *
          *   ① 让位期预算用完 → 一发都不再写（这是「闪两次」变「闪一次」的直接来源）；
@@ -2575,6 +2769,10 @@ final class AevonWindowView: UIView {
     ///   · `cs == -1`（读不到）→ **一根手指都不动**，既不盖也不撤（绝不把「读不到」当黑）。
     private func checkBackgroundGuard() {
         guard window != nil, !isTearingDown else { return }
+        /* V0.3.35（AevonDeskHoldV335）：定格保持期内一拍都不判 —— 不盖、不撤、不重申、
+         * 不重建 presenter。这段里唯一该发生的事由 deskHoldWakeTick 自己管，
+         * 少一次判断就少一次误写（每次写 = 一次表面重提交 = 一次黑）。 */
+        if deskHoldActive { return }
         // V0.2.63（AevonLiveHiddenV263）：藏着等真画面的状态优先处理（此时 alpha=0，
         // 屏幕上看不到这个窗口，任何判定都不会造成闪烁）。
         if checkAwaitingContent() { return }
@@ -3390,6 +3588,14 @@ final class AevonWindowView: UIView {
             return false
         }
         guard dockCoverView == nil, window != nil, !isTearingDown else { return false }
+        /* V0.3.35（AevonDockCoverTokenV335）：装新封面必须先作废旧计时器。
+         * Aevon(107) 实测 10 次装封面里 5 次被误撤，其中三次只活了 0.45 / 0.11 / 0.31 秒 ——
+         * 「点小窗装回（起 1.5s 计时）→ 立刻又吸附另一个（装新封面）」这种交错操作里，
+         * 上一次装回起的计时器还在跑，到点就把刚装上的新封面撤了，小窗露出无内容表面 = 黑。 */
+        dockCoverTimer?.invalidate()
+        dockCoverTimer = nil
+        dockCoverTicks = 0
+        AevonLog.info("[停靠] 装封面前先作废旧撤帧计时器（\(bundleID)）（AevonDockCoverTokenV335）")
         guard let image = captureSnapshotImage() else {
             AevonLog.warn("[停靠] 抓不到可用画面 → 不装封面，退化成无兜底（\(bundleID)）"
                 + "（AevonDockCoverV334）")
@@ -3759,6 +3965,11 @@ final class AevonWindowView: UIView {
         // V0.2.47（AevonDarkGuardV247）：守卫与冻结层一起收尾
         guardArmedUntil = 0
         stopGuardTimer()
+        /* V0.3.35（AevonDeskHoldV335）：定格保持的唤醒计时器必须一起收，
+         * 否则关窗后它还会对着已销毁的场景推前台。 */
+        deskHoldActive = false
+        deskHoldSettleTicks = 0
+        stopDeskHoldTimer()
         removeDarkFreeze(reason: "关窗收尾")
         // V0.3.34（AevonDockCoverV334）：停靠封面与它的撤帧闸一起收尾
         dropDockCover(reason: "关窗收尾")
