@@ -80,7 +80,10 @@ static BOOL aev_responds(id obj, NSString *sel) {
     return [obj respondsToSelector:aev_sel(sel)];
 }
 
-/* 安全调用：0 参 / 1 参（对象） / 2 参（对象 + 对象）。全部 @try。 */
+/* 安全调用：0 参 / 1 参（对象） / 2 参（对象 + 对象）。全部 @try。
+ * 三个都是探针公共封装：当前只用到 0 参那个，其余两个留作后续探针直接调用，
+ * 所以必须显式 unused —— 本工程开了 -Werror,-Wunused-function，不标就编译失败。 */
+__attribute__((unused))
 static id aev_call0(id obj, NSString *sel) {
     if (!aev_responds(obj, sel)) { return nil; }
     @try {
@@ -91,6 +94,7 @@ static id aev_call0(id obj, NSString *sel) {
     }
 }
 
+__attribute__((unused))
 static id aev_call1(id obj, NSString *sel, id a) {
     if (!aev_responds(obj, sel)) { return nil; }
     @try {
@@ -101,6 +105,7 @@ static id aev_call1(id obj, NSString *sel, id a) {
     }
 }
 
+__attribute__((unused))
 static id aev_call2(id obj, NSString *sel, id a, id b) {
     if (!aev_responds(obj, sel)) { return nil; }
     @try {
