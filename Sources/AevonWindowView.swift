@@ -3379,7 +3379,7 @@ final class AevonWindowView: UIView {
     /// 92x158 那一块就是纯黑，只能点一下装回才恢复。封面不依赖远程表面，
     /// 场景死没死都有画面。
     ///
-    /// 抓帧点必须在「窗口还是大尺寸、画面还是活的」那一拍 —— `dockCurrent` 里
+    /// 抓帧点必须在「窗口还是大尺寸、画面还是活的」那一拍 —— 停靠入口
     /// 钉 dockedSide / relayout 之前。用 `captureSnapshotImage`（drawHierarchy，
     /// 能取到远程表面；`layer.render(in:)` 抓不到，见 AevonDarkGuardV249）。
     @discardableResult
