@@ -818,8 +818,7 @@ enum AevonEdgeEntry {
                 // V0.3.26（AevonTermFollowV326）：不再只是 grabCancel 回位 —— 进预备态后
                 // 让窗口跟着手指上移（0.55 倍），用户能看见「正在准备关闭」。
                 // beginTerminationFollow 内部先 grabCancel（回位），再接管跟手。
-                let took = win?.beginTerminationFollow() ?? false
-                if !took { win?.grabCancel() }
+                if !win.beginTerminationFollow() { win.grabCancel() }
                 floatTermTrack = [(now, floatTermPoint)]
                 AevonLog.info("[窗口] 底边长按成立（全局通道 0.4s / ≤12pt）→ 关闭预备态："
                     + "上移 \(Int(AevonEdgeEntry.floatTermLift))pt 且速度 "
@@ -836,7 +835,7 @@ enum AevonEdgeEntry {
                 floatTermTrack.removeFirst()
             }
             // 跟手上移（两腿共用窗口级 API，先到者独占，防双倍位移）
-            win?.updateTerminationFollow(upward: max(0, floatTermPoint.y - point.y))
+            win.updateTerminationFollow(upward: max(0, floatTermPoint.y - point.y))
             floatDeadline = now + floatDragLimit
             return true
         }

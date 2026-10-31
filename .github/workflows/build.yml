@@ -5533,7 +5533,7 @@ jobs:
             grep -qF "$k" "$EE" \
               || { echo "::error::V0.3.26 全局通道缺常量 $k（与视图侧不同源）"; exit 1; }
           done
-          grep -qF 'win?.beginTerminationFollow()' "$EE" \
+          grep -qF 'win.beginTerminationFollow()' "$EE" \
             || { echo "::error::V0.3.26 全局通道进预备态没接跟手"; exit 1; }
 
           # ② 桌面呼盘放宽 + 绝不半截放行（AevonHomeLooseV326 / AevonNoMidPassV326）
