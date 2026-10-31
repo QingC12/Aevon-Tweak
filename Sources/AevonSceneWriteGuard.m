@@ -186,7 +186,7 @@ static id aevg_fix(id settings, id scene) {
         if (gRewrites == 1 || gRewrites == 2 || gRewrites == 3 || (gRewrites % 100) == 0) {
             aevg_log([NSString stringWithFormat:@"拦下前台回收第 %ld 笔：%@（dr %llu→0，fg→YES，%@）"
                                                 "（AevonWriteGuardV342 AevonWriteGuardHoldV342）",
-                                                (long)gRewrites, identifier ?: @"?",
+                                                (long)gRewrites, (identifier.length > 0) ? identifier : @"?",
                                                 drNow, (target == settings) ? @"原地" : @"副本"]);
         }
         return target;
@@ -253,9 +253,11 @@ static BOOL aevg_install(NSString *className, SEL original, SEL replacement,
         return NO;
     }
     const char *enc = method_getTypeEncoding(m);
+    /* ⛔ ObjC 里不要用 GNU 的 `?:`（0.3.42 实测：`enc ?: "?"` 直接 error: expected ']'）。 */
+    const char *encText = (enc != NULL) ? enc : "?";
     if (enc == NULL || enc[0] != 'v') {
         aevg_log([NSString stringWithFormat:@"跳过 %@ %@：返回类型不是 void（%s）（AevonWriteGuardV342）",
-                                            className, NSStringFromSelector(original), enc ?: "?");
+                                            className, NSStringFromSelector(original), encText]);
         return NO;
     }
     NSUInteger colons = 0;
@@ -264,7 +266,7 @@ static BOOL aevg_install(NSString *className, SEL original, SEL replacement,
     if (colons != argCount) {
         aevg_log([NSString stringWithFormat:@"跳过 %@ %@：参数个数 %lu ≠ %lu（%s）（AevonWriteGuardV342）",
                                             className, NSStringFromSelector(original),
-                                            (unsigned long)colons, (unsigned long)argCount, enc]);
+                                            (unsigned long)colons, (unsigned long)argCount, encText]);
         return NO;
     }
 
@@ -314,17 +316,17 @@ void AevonWriteGuardInstall(int enabled) {
             /* ① 停用原因收口：4 个参数（reasons / scene / settings / reason） */
             BOOL h1 = aevg_install(@"UIApplicationSceneDeactivationManager",
                                    NSSelectorFromString(@"_setDeactivationReasons:onScene:withSettings:reason:"),
-                                   @selector(aevg_deactSet:onScene:withSettings:reason:"),
+                                   @selector(aevg_deactSet:onScene:withSettings:reason:),
                                    4, 3);
             /* ② SBSceneManager 写前通道：3 个参数（scene / settings / context） */
             BOOL h2 = aevg_install(@"SBSceneManager",
                                    NSSelectorFromString(@"_scene:willUpdateWithSettings:transitionContext:"),
-                                   @selector(aevg_willUpdate:withSettings:transitionContext:"),
+                                   @selector(aevg_willUpdate:withSettings:transitionContext:),
                                    3, 3);
             /* ③ FBScene 自己的写通道（历史上从未命中，接着挂着不花钱） */
             BOOL h3 = aevg_install(@"FBScene",
                                    NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"),
-                                   @selector(aevg_sceneUpdate:withTransitionContext:completion:"),
+                                   @selector(aevg_sceneUpdate:withTransitionContext:completion:),
                                    3, 4);
             BOOL any = (h1 || h2 || h3);
 
@@ -340,7 +342,7 @@ void AevonWriteGuardInstall(int enabled) {
     } @catch (NSException *exception) {
         gInstalled = NO;
         aevg_log([NSString stringWithFormat:@"安装异常，已放弃拦写：%@（AevonWriteGuardV342）",
-                                            exception.name ?: @"?"]);
+                                            (exception.name != nil) ? exception.name : @"?"]);
     }
 }
 
