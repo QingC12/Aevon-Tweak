@@ -5566,6 +5566,20 @@ jobs:
             done
           fi
           echo "V0.3.39 校验: 断言续持 3s（让位结束不放手，看门到期释放，期内掉出先补前台不盖帧）+ 盖帧保护期 0.9→0.35s + 吸附列一律从顶部起 ✓"
+          # ── V0.3.40 校验（cs=2 零写铁律 + 掉画重建优先）──
+          strings "$MYD28" | grep -qF 'AevonZeroWriteV340' || { echo "::error::V0.3.40 主库缺零写标记"; exit 1; }
+          strings "$MYD28" | grep -qF 'AevonRebuildFirstV340' || { echo "::error::V0.3.40 主库缺重建优先标记"; exit 1; }
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func reassertContentForeground(tag: String) {');j=s.find('let now = CACurrentMediaTime()',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'if sceneHost.contentLooksRendering == true,' in b and 'liveWaitReassertBudget >= 0, sceneHost.contentLooksRendering' not in b);print('V0.3.40 cs=2 零写闸无条件 ✓' if ok else '::error::V0.3.40 cs=2 零写闸仍被预算档绕过（回桌面动画期自造一次表面重提交）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('case .some(false):\n            renderTicks = 0\n            darkTicks += 1');j=s.find('let quiet = AevonWindowView.freezeQuietWindow',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'AevonRebuildFirstV340' in b and 'darkTicks >= 2' in b and 'installDarkFreeze' not in b);print('V0.3.40 布防期重建优先于盖帧 ✓' if ok else '::error::V0.3.40 布防期仍先盖帧再等重建（模糊快照 + 等 1 秒）');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();ok=('idleDarkTicks == 3' in s and 'idleDarkTicks == 8' not in s);print('V0.3.40 常驻看门 0.3s 就重建 ✓' if ok else '::error::V0.3.40 常驻看门重建仍要等 1.6s');sys.exit(0 if ok else 1)" "$WV35"
+          python3 -c "import io,sys;s=io.open(sys.argv[1],encoding='utf-8').read();i=s.find('private func dockLiveTick() {');j=s.find('override func traitCollectionDidChange',i);b=s[i:j] if 0<i<j else '';ok=(0<i<j and 'dockReassertTries < 2' in b and 'dockLiveMissTicks == 2' in b and 'dockReassertTries < 6' not in b);print('V0.3.40 停靠期补写 2 次即重建 ✓' if ok else '::error::V0.3.40 停靠期仍补写 6 次才重建（0.35s 白黑）');sys.exit(0 if ok else 1)" "$WV35"
+          APPD40="$(find . -name 'AevonApp.dylib' | head -n1)"
+          if [ -n "$APPD40" ]; then
+            for m40 in AevonZeroWriteV340 AevonRebuildFirstV340; do
+              if strings "$APPD40" | grep -qF "$m40"; then echo "::error::V0.3.40 标记漏进 App 库: $m40"; exit 1; fi
+            done
+          fi
+          echo "V0.3.40 校验: cs=2 零写铁律（回桌面动画期一笔都不写）+ 掉画 0.2s 重建优先（重建成功不盖帧）+ 常驻看门 0.3s 重建 + 停靠期补写 2 次即重建 ✓"
 
 
 

@@ -2239,6 +2239,14 @@ final class AevonWindowView: UIView {
         return !(v ?? false)
     }()
 
+    /// V0.3.40（AevonZeroWriteV340）：`cs=2 零写` 的兜底开关。
+    /// 默认 false = 铁律生效（画面在画就一笔都不写）；`AevonZeroWriteOff340` = true
+    /// 才回到 0.3.38 的旧行为（让位期预算 -1 时绕过这条闸）。
+    static let zeroWriteDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonZeroWriteOff340") as? Bool
+        return v ?? false
+    }()
+
     /// 自动唤醒起点（从过渡哨算起）。Aevon(107) 两轮实测系统回桌面转场在 +1.80s 收尾
     /// （让位 1.59 / 1.61 秒，保活持有 1799 / 1812ms），1.9s 起推前台正好落在转场之后。
     static let deskHoldWakeDelay: Double = 1.90
@@ -2841,11 +2849,25 @@ final class AevonWindowView: UIView {
          *      远程表面重建一次，屏幕上就是黑一下再亮一下；画面明明在，写它只是自伤。
          *  ⛔ 读不到 cs（nil / -1）时**照常写**：fail-open，不把「读不到」当「在画」。 */
         if liveWaitReassertBudget == 0 { return }
-        if liveWaitReassertBudget >= 0, sceneHost.contentLooksRendering == true {
+        /* V0.3.40（AevonZeroWriteV340，用户 Aevon(111) 三次「还是这个问题」）：
+         * **cs=2 零写铁律 —— 无条件，不受预算档影响。**
+         *
+         * 0.3.27 这条闸本来带着 `liveWaitReassertBudget >= 0` 的前置条件；0.3.38 把
+         * 零定格档的让位期预算放开成 -1（为了让「掉了就抢」能多抢几发），副作用是
+         * **这条闸被一起绕过了** —— 布防那拍画面明明是 cs=2，照样写了一笔
+         * `updateSettings`。Aevon(111) 日志 19:45:29.522 就是那一笔，它落在回桌面
+         * 动画第 0.21 秒，而 1.0 秒后（30.702）场景就被收走（cs 2→0）。
+         * 每次 updateSettings 都让远程表面重建一次 = 屏幕上黑一下再亮一下，
+         * 画面明明在画的时候写它，纯属自伤。
+         *
+         * ⛔ 读不到 cs（nil）时照常写：fail-open，不把「读不到」当「在画」。
+         * 回退：`AevonZeroWriteOff340` = true → 回到「只有预算 ≥0 时才拦」。 */
+        if sceneHost.contentLooksRendering == true,
+           !(AevonWindowView.zeroWriteDisabled && liveWaitReassertBudget < 0) {
             if !liveWaitReassertSkipLogged {
                 liveWaitReassertSkipLogged = true
-                AevonLog.info("[窗口] 重申跳过：实时画面已在画（cs=2），写一次就是多黑一次"
-                    + "（\(tag)）（AevonReassertGateV327）")
+                AevonLog.info("[窗口] 重申跳过：实时画面已在画（cs=2）→ 一笔都不写"
+                    + "（\(tag)）（AevonReassertGateV327 AevonZeroWriteV340）")
             }
             return
         }
@@ -3007,9 +3029,12 @@ final class AevonWindowView: UIView {
                  * 且这扇窗**曾经有过画面** → 判定 presenter 侧已死（重申多少次都没用），
                  * 重建一次。每窗上限 1 次（sceneHost 内部计数）。
                  * 排除让位期（窗口 alpha 极低）与首次加载（hasContent=false）。 */
+                /* V0.3.40（AevonRebuildFirstV340）：0.2s 一拍 → 3 拍（0.3s）就重建。
+                 * 0.3.24 定的 8 拍（1.6s）是当时「先补写、写无效再重建」的余量；
+                 * 现在零写铁律已经不再指望补写，1.6 秒纯属白等。 */
                 if sceneHost.hasContent, alpha > 0.5, liveWaitDeadline == 0,
-                   idleDarkTicks == 8,
-                   sceneHost.rebuildPresenter(reason: "看门：连续 1.6s 不出画") {
+                   idleDarkTicks == 3,
+                   sceneHost.rebuildPresenter(reason: "看门：连续 0.3s 不出画") {
                     idleDarkTicks = 0
                     return
                 }
@@ -3067,8 +3092,23 @@ final class AevonWindowView: UIView {
                     reassertContentForeground(tag: "断言持有期掉出画")
                     return
                 }
-                AevonLog.warn("[保活] 断言持有期内掉出画 0.2s 未回 → 盖帧兜底"
-                    + "（\(sceneHost.stateSummary())）（AevonKeepHoldV339）")
+                AevonLog.warn("[保活] 断言持有期内掉出画 0.2s 未回 → 走重建"
+                    + "（\(sceneHost.stateSummary())）（AevonKeepHoldV339 AevonRebuildFirstV340）")
+            }
+            /* V0.3.40（AevonRebuildFirstV340，用户 Aevon(111) 第三次「还是这个问题」）：
+             * 补写 0.2 秒无效就**当场重建 presenter**，不再「先盖帧、再等 4~8 拍才重建」。
+             * 同一份日志里两条救法的实效对比：
+             *   · 30.707 补写一笔 → cs 只到 1（救不回来）
+             *   · 17.872 重建 presenter → 18.102 cs=2（共 0.23 秒）
+             * 重建成功就**不盖帧** —— 盖上去那张静止图正是用户说的「模糊快照」。
+             * 每窗上限 1 次（sceneHost 内部记账），用尽后照旧走下面的盖帧兜底。 */
+            if darkTicks >= 2, sceneHost.hasContent, alpha > 0.5,
+               sceneHost.rebuildPresenter(reason: "掉出画 0.2s 补写无效 → 重建 presenter") {
+                AevonLog.info("[窗口] 重建优先：掉出画 0.2s 补写无效 → 重建 presenter"
+                    + "（重建成功就不盖帧，避免那张定格图）（\(sceneHost.stateSummary())）"
+                    + "（AevonRebuildFirstV340）")
+                darkTicks = 0
+                return
             }
             // V0.2.63/269：布防的语义就是「画面离场事件已实锤」，第一拍就垫帧；
             // 静默期压到 0.6s（只防 cs 抖动引发的反复盖撤，第一次盖不受静默期限制）。
@@ -3079,19 +3119,8 @@ final class AevonWindowView: UIView {
                 installDarkFreeze(reason: "巡查发现不出画（布防期第一拍即垫）")
             }
             reassertContentForeground(tag: "发现不出画")
-            /* V0.3.38（AevonDeskQuickV338）：零定格档的提速 —— 布防期连续 4 拍（0.4s）
-             * 仍不出画 → 直接重建 presenter。0.3.35 实测「重建 → 0.23 秒 cs=2」，
-             * 而常驻看门那条重建要等 8 拍（1.6s），太慢。
-             * 零定格把「盖帧」推迟到掉出之后，就必须把「救回来」提速到同一量级，
-             * 否则用户看到的是「实时 → 黑 → 一直黑」。每窗仍上限 1 次（sceneHost 内记账）。 */
-            if AevonWindowView.deskNoCoverEnabled, darkTicks == 4,
-               sceneHost.hasContent, alpha > 0.5,
-               sceneHost.rebuildPresenter(reason: "零定格：布防期 0.4s 不出画") {
-                AevonLog.info("[窗口] 零定格提速：布防期 0.4s 仍不出画 → 重建 presenter"
-                    + "（\(sceneHost.stateSummary())）（AevonDeskQuickV338）")
-                darkTicks = 0
-                return
-            }
+            /* V0.3.38 的「布防期 darkTicks==4 才重建」在 V0.3.40 被 AevonRebuildFirstV340
+             * 取代：重建点提前到掉画后第 2 拍（0.2s）且优先于盖帧。 */
             /* V0.2.85（AevonIdleRewakeV285，Aevon(58)「浮窗开启期间切换全屏应用时，
              * 浮窗内画面会定格，并且不会自动恢复，只能关掉浮窗再打开」）：
              *
@@ -4021,23 +4050,25 @@ final class AevonWindowView: UIView {
          * V0.3.38（AevonDeskQuickV338）：间隔 1.0 → 0.35 秒 —— 用户 Aevon(109) #3
          * 「吸附小窗回桌面也会出现和主悬浮窗一样的情况」，1 秒一档的间隔本身就是
          * 「等 1 秒才出现实时画面」的直接来源。 */
-        if dockReassertTries < 6,
+        if dockReassertTries < 2,
            dockLastReassertAt == 0 || now - dockLastReassertAt >= 0.35 {
             dockReassertTries += 1
             dockLastReassertAt = now
             let before = sceneHost.stateSummary()
             let ok = sceneHost.reassertForegroundForFloat()
-            AevonLog.info("[停靠] 停靠期画面掉出 → 补前台抢回（第 \(dockReassertTries) 次/6，"
+            AevonLog.info("[停靠] 停靠期画面掉出 → 补前台抢回（第 \(dockReassertTries) 次/2，"
                 + "\(ok ? "已提交" : "失败")）\(before) → \(sceneHost.stateSummary())"
-                + "（AevonDockLiveV337）")
+                + "（AevonDockLiveV337 AevonRebuildFirstV340）")
             return
         }
-        /* ①-B V0.3.38（AevonDeskQuickV338）：抢了 1.5 秒（10 拍）仍不出画 → 重建 presenter。
-         * 0.3.35 实测「重建 → 0.23 秒 cs=2」，比继续补写有效率得多；每窗上限 1 次
-         *（sceneHost 内部记账，重复调用返回 false 不会再进）。 */
-        if dockLiveMissTicks == 10, sceneHost.hasContent,
-           sceneHost.rebuildPresenter(reason: "停靠期 1.5s 不出画") {
-            AevonLog.info("[停靠] 停靠期 1.5 秒不出画 → 重建 presenter（AevonDeskQuickV338）")
+        /* ①-B V0.3.38（AevonDeskQuickV338）/ V0.3.40（AevonRebuildFirstV340）：
+         * 补写 2 次还不出画 → 重建 presenter。0.3.35 实测「重建 → 0.23 秒 cs=2」；
+         * Aevon(111) 又证明补写只能到 cs=1。原来等 1.5 秒（10 拍）纯属白黑，
+         * 现在第 2 拍就重建。每窗上限 1 次（sceneHost 内部记账）。 */
+        if dockLiveMissTicks == 2, sceneHost.hasContent,
+           sceneHost.rebuildPresenter(reason: "停靠期 0.35s 不出画") {
+            AevonLog.info("[停靠] 停靠期补写 2 次无效 → 重建 presenter"
+                + "（AevonDeskQuickV338 AevonRebuildFirstV340）")
             return
         }
         /* ② 抢了 3 秒（20 拍）还是没回来 → 用**备份帧**重新顶住。

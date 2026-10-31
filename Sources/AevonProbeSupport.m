@@ -143,3 +143,10 @@ __attribute__((used, unused)) static const char AevonDeskQuickMark338[] = "Aevon
 __attribute__((used, unused)) static const char AevonKeepHoldMark339[] = "AevonKeepHoldV339";
 __attribute__((used, unused)) static const char AevonFreezeShortMark339[] = "AevonFreezeShortV339";
 __attribute__((used, unused)) static const char AevonDockTopMark339[] = "AevonDockTopV339";
+
+/* ── V0.3.40 二进制标记（AevonZeroWriteV340 / AevonRebuildFirstV340）──────────
+ * ① cs=2 零写铁律（画面在画就一笔都不写，去掉回桌面动画期自造的表面重提交）
+ * ② 掉画后重建优先（补写 0.2s 无效就重建 presenter，重建成功不盖帧）。
+ * 各一条纯 ASCII C 串，保证 strip 后 strings 仍能抓到。 */
+__attribute__((used, unused)) static const char AevonZeroWriteMark340[] = "AevonZeroWriteV340";
+__attribute__((used, unused)) static const char AevonRebuildFirstMark340[] = "AevonRebuildFirstV340";
