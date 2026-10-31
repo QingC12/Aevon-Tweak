@@ -5477,7 +5477,7 @@ jobs:
           done
           grep -qF 'floatTermCandidate = true' "$EE" \
             || { echo "::error::V0.3.25 全局通道没登记底边长按候选"; exit 1; }
-          grep -qF 'win.grabCancel()' "$EE" \
+          grep -qF 'win?.grabCancel()' "$EE" \
             || { echo "::error::V0.3.25 全局通道进预备态没回位"; exit 1; }
           if grep -v '^[[:space:]]*//' "$EE" | grep -q 'floatFlickCandidate = true'; then
             echo "::error::V0.3.25 全局通道又回到「底边只关闭」（吞住整根手指、不移动）"; exit 1
@@ -5496,6 +5496,83 @@ jobs:
           done
 
           echo "V0.3.25 校验: 底边移动+长按0.4s上甩关闭（Stheno 同参数）+ 回桌面完全不盖帧（B3）✓"
+
+          # ── V0.3.26 校验（Aevon(99)：底边跟手+窗口测速 / 桌面呼盘放宽 / 场景保活探针）──
+          # 本段自己定位主库（0.3.24 栽过「复用上游 step 局部变量 → strings: can't open file」）
+          MYD26="$(find "$GITHUB_WORKSPACE" -name 'Aevon.dylib' -path '*DynamicLibraries*' -not -path '*_sym*' | head -n1)"
+          [ -n "$MYD26" ] && [ -f "$MYD26" ] || { echo "::error::V0.3.26 定位不到主库 dylib"; exit 1; }
+          GH26="$GITHUB_WORKSPACE/Sources/AevonGripHook.m"
+          KA26="$GITHUB_WORKSPACE/Sources/AevonKeepAliveProbe.m"
+          MF26="$GITHUB_WORKSPACE/Makefile"
+
+          # ① 底边：窗口测速 + 跟手 + 三条出口（AevonTermFollowV326 / AevonTermWinVelV326）
+          for s in AevonTermFollowV326 AevonTermWinVelV326 AevonHomeLooseV326 AevonNoMidPassV326; do
+            strings "$MYD26" | grep -q "$s" \
+              || { echo "::error::V0.3.26 主库缺标记 $s"; exit 1; }
+          done
+          for k in 'terminationFollowScale: CGFloat = 0.55' 'terminationFollowLift: CGFloat = 48' \
+                   'terminationFollowVelocity: CGFloat = 200' 'terminationBigLift: CGFloat = 120' \
+                   'terminationWindow: TimeInterval = 0.10'; do
+            grep -qF "$k" "$WV" \
+              || { echo "::error::V0.3.26 视图侧缺常量 $k（AevonTermFollowV326）"; exit 1; }
+          done
+          grep -qF 'func terminationWindowVelocity()' "$WV" \
+            || { echo "::error::V0.3.26 视图侧没有窗口测速（AevonTermWinVelV326）"; exit 1; }
+          grep -qF 'func beginTerminationFollow()' "$WV" \
+            || { echo "::error::V0.3.26 视图侧没有跟手入口（AevonTermFollowV326）"; exit 1; }
+          grep -qF 'endTerminationFollow(restore: !fire)' "$WV" \
+            || { echo "::error::V0.3.26 未关窗时没弹回原位"; exit 1; }
+          #    ⛔ 0.3.25 的「最后一对采样」不许回潮（125pt/s 量化痕迹 = 20% 成功率的直接来源）
+          if grep -vE '^[[:space:]]*(///|//|\*|/\*)' "$EE" | grep -qF 'floatTermLastPoint.y - point.y'; then
+            echo "::error::V0.3.26 全局通道单点测速回潮（AevonTermWinVelV326）"; exit 1
+          fi
+          grep -qF 'func floatTermWindowVelocity' "$EE" \
+            || { echo "::error::V0.3.26 全局通道没有窗口测速"; exit 1; }
+          for k in 'floatTermFollowLift: CGFloat = 48' 'floatTermBigLift: CGFloat = 120' \
+                   'floatTermWindow: CFTimeInterval = 0.10'; do
+            grep -qF "$k" "$EE" \
+              || { echo "::error::V0.3.26 全局通道缺常量 $k（与视图侧不同源）"; exit 1; }
+          done
+          grep -qF 'win?.beginTerminationFollow()' "$EE" \
+            || { echo "::error::V0.3.26 全局通道进预备态没接跟手"; exit 1; }
+
+          # ② 桌面呼盘放宽 + 绝不半截放行（AevonHomeLooseV326 / AevonNoMidPassV326）
+          grep -qF 'AevonGripHomeScreenNow()' "$GH26" \
+            || { echo "::error::V0.3.26 自建腿没接桌面判定"; exit 1; }
+          grep -qF 'extern int AevonGripHomeScreenNow(void);' "$GH26" \
+            || { echo "::error::V0.3.26 桌面判定缺 extern 声明"; exit 1; }
+          grep -qF '@_cdecl("AevonGripHomeScreenNow")' "$EE" \
+            || { echo "::error::V0.3.26 桌面判定缺 Swift 导出"; exit 1; }
+          #    桌面灰带必须扣到抬手：>=2 帧就撤闸，不许再排 0.28s 放行
+          sed -n '/if (home) {/,/^        }/p' "$GH26" | grep -qF '[_ownBail invalidate]' \
+            || { echo "::error::V0.3.26 桌面灰带还在半截放行（那一下就是翻页）"; exit 1; }
+          #    App 内 14 度锥必须保留（R2 差异化的前提）
+          grep -qF 'ady <= adx * 0.25' "$GH26" \
+            || { echo "::error::V0.3.26 App 内严格锥被一起放宽了（R2 要求差异化）"; exit 1; }
+
+          # ③ 场景保活探针（AevonKeepAliveProbeV326）
+          grep -qF 'Sources/AevonKeepAliveProbe.m' "$MF26" \
+            || { echo "::error::V0.3.26 Makefile 漏了 AevonKeepAliveProbe.m（显式 FILES 清单）"; exit 1; }
+          [ -f "$KA26" ] || { echo "::error::V0.3.26 探针源文件不存在"; exit 1; }
+          for s in AevonKeepAliveProbeBegin AevonKeepAliveProbeEnd; do
+            strings "$MYD26" | grep -q "$s" \
+              || { echo "::error::V0.3.26 主库缺探针符号 $s"; exit 1; }
+          done
+          strings "$MYD26" | grep -q 'AevonKeepAliveLog' \
+            || { echo "::error::V0.3.26 主库缺探针日志桥"; exit 1; }
+          grep -qF 'AevonKeepAliveProbeBegin(Unmanaged.passUnretained(sceneHost.scene).toOpaque())' "$WV" \
+            || { echo "::error::V0.3.26 回桌面没起跑保活探针"; exit 1; }
+          grep -qF 'AevonKeepAliveProbeEnd()' "$WV" \
+            || { echo "::error::V0.3.26 让位结束没释放探针断言"; exit 1; }
+          #    ⛔ 探针必须全程 @try（Swift 抓不到 NSException，未知选择子会直接打崩）
+          for k in 'newAssertionWithReason:' '_setDeactivationReasons:onScene:withSettings:reason:'; do
+            grep -qF "$k" "$KA26" \
+              || { echo "::error::V0.3.26 探针缺探针点 $k"; exit 1; }
+          done
+          grep -qF '@try' "$KA26" \
+            || { echo "::error::V0.3.26 探针没有 @try 防线"; exit 1; }
+
+          echo "V0.3.26 校验: 底边窗口测速+跟手三出口 / 桌面呼盘取消锥角且绝不半截放行 / 场景保活多探针 ✓"
 
 
       # V0.2.83（AevonSymExportV283）：导出**未 strip** 的 dylib + dSYM，只给离线符号化用。

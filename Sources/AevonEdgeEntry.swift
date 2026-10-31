@@ -110,6 +110,17 @@ enum AevonEdgeEntry {
     private static let floatTermLift: CGFloat = 24
     private static let floatTermVelocity: CGFloat = 260
     private static let floatTermCone: CGFloat = 1.35
+    /* V0.3.26（AevonTermWinVelV326 / AevonTermFollowV326，用户 Aevon(99) #1）：
+     * 与视图侧 `AevonWindowView.terminationWindowVelocity()` 同源 —— 8 帧环形缓冲、
+     * 取 ≤100ms 首尾两点算速度，替掉「最后一对采样」。0.3.25 那套的量化痕迹是
+     * 125pt/s（= 10pt ÷ 0.08s）反复出现 8 次：手指在抬手前减速就被判死。
+     * 另外三条出口（跟手短距快甩 48pt/200、大位移慢推 120pt）与视图侧完全一致。 */
+    private static let floatTermFollowLift: CGFloat = 48
+    private static let floatTermFollowVelocity: CGFloat = 200
+    private static let floatTermBigLift: CGFloat = 120
+    private static let floatTermWindow: CFTimeInterval = 0.10
+    private static let floatTermWindowFrames = 8
+    private static var floatTermTrack: [(CFTimeInterval, CGPoint)] = []
 
     /* V0.3.24（AevonBottomFlickV324）：双击候选三件套（floatLastTapAt / floatLastTapPoint
      * / floatLastTapWindow）与两个常量（floatDoubleTapGap / floatDoubleTapRadius）整体退役。
@@ -747,12 +758,15 @@ enum AevonEdgeEntry {
             floatTermPoint = point
             floatTermLastPoint = point
             floatTermLastAt = now
+            floatTermTrack = [(now, point)]
             AevonLog.info("[窗口] 底边落指（\(Int(point.x)),\(Int(point.y))）→ 可移动；"
-                + "按住 0.4s 不动后上甩 \(Int(AevonEdgeEntry.floatTermLift))pt 才关闭"
-                + "（AevonBottomSplitV325）")
+                + "按住 0.4s 不动后上甩 \(Int(AevonEdgeEntry.floatTermLift))pt 才关闭，"
+                + "推过 \(Int(AevonEdgeEntry.floatTermBigLift))pt 也算"
+                + "（AevonBottomSplitV325 AevonTermFollowV326）")
         } else {
             floatTermCandidate = false
             floatTermArmed = false
+            floatTermTrack.removeAll(keepingCapacity: true)
         }
 
         floatTouchID = touchID
@@ -801,15 +815,28 @@ enum AevonEdgeEntry {
             let moved = hypot(point.x - floatTermPoint.x, point.y - floatTermPoint.y)
             if held >= AevonEdgeEntry.floatTermHold, moved <= AevonEdgeEntry.floatTermSlop {
                 floatTermArmed = true
-                win.grabCancel()
+                // V0.3.26（AevonTermFollowV326）：不再只是 grabCancel 回位 —— 进预备态后
+                // 让窗口跟着手指上移（0.55 倍），用户能看见「正在准备关闭」。
+                // beginTerminationFollow 内部先 grabCancel（回位），再接管跟手。
+                let took = win?.beginTerminationFollow() ?? false
+                if !took { win?.grabCancel() }
+                floatTermTrack = [(now, floatTermPoint)]
                 AevonLog.info("[窗口] 底边长按成立（全局通道 0.4s / ≤12pt）→ 关闭预备态："
                     + "上移 \(Int(AevonEdgeEntry.floatTermLift))pt 且速度 "
-                    + "\(Int(AevonEdgeEntry.floatTermVelocity))pt/s 以上才关（AevonBottomSplitV325）")
+                    + "\(Int(AevonEdgeEntry.floatTermVelocity))pt/s 以上才关；"
+                    + "推过 \(Int(AevonEdgeEntry.floatTermBigLift))pt 也算"
+                    + "（AevonBottomSplitV325 AevonTermFollowV326）")
             }
         }
         if floatTermArmed {
             floatTermLastPoint = point
             floatTermLastAt = now
+            floatTermTrack.append((now, point))
+            while floatTermTrack.count > AevonEdgeEntry.floatTermWindowFrames {
+                floatTermTrack.removeFirst()
+            }
+            // 跟手上移（两腿共用窗口级 API，先到者独占，防双倍位移）
+            win?.updateTerminationFollow(upward: max(0, floatTermPoint.y - point.y))
             floatDeadline = now + floatDragLimit
             return true
         }
@@ -840,6 +867,23 @@ enum AevonEdgeEntry {
         return true
     }
 
+    /// 窗口测速（V0.3.26 AevonTermWinVelV326）：取最近 ≤100ms 内首尾两点做 Δ。
+    /// 与视图侧 `AevonWindowView.terminationWindowVelocity()` 同源；样本不足 → 返回 .zero
+    /// （判据自然不成立，绝不误关）。
+    private static func floatTermWindowVelocity(final: CGPoint, at now: CFTimeInterval) -> CGPoint {
+        floatTermTrack.append((now, final))
+        while floatTermTrack.count > floatTermWindowFrames { floatTermTrack.removeFirst() }
+        guard let last = floatTermTrack.last else { return .zero }
+        var first = last
+        for sample in floatTermTrack.reversed() {
+            if last.0 - sample.0 > floatTermWindow { break }
+            first = sample
+        }
+        let dt = last.0 - first.0
+        guard dt >= 0.008 else { return .zero }
+        return CGPoint(x: (last.1.x - first.1.x) / dt, y: (last.1.y - first.1.y) / dt)
+    }
+
     /// 抬手 / 取消。返回 true = 已消费，调用方 return。
     private static func handleFloatGestureEnded(point: CGPoint, touchID: UInt,
                                                cancelled: Bool) -> Bool {
@@ -853,27 +897,42 @@ enum AevonEdgeEntry {
         if floatTermCandidate {
             let now = CACurrentMediaTime()
             let upward = floatTermPoint.y - point.y
-            let dt = min(max(now - floatTermLastAt, 0.016), 0.08)
-            let rise = (floatTermLastPoint.y - point.y) / dt
-            let vx = (point.x - floatTermLastPoint.x) / dt
+            let dragX = floatTermPoint.x - point.x
+            let velocity = floatTermWindowVelocity(final: point, at: now)
+            let rise = -velocity.y
+            let vx = velocity.x
+            let frames = floatTermTrack.count
             let armed = floatTermArmed
             floatTermCandidate = false
             floatTermArmed = false
             if armed {
                 clearFloatGesture()
+                /* V0.3.26（AevonTermWinVelV326）：三条出口，方向锥对三条都生效 ——
+                 *   ① Stheno 原式：上移 ≥24 且窗口测速 ≥260；
+                 *   ② 跟手后短距快甩：上移 ≥48 且 ≥200；
+                 *   ③ 大位移慢推：上移 ≥120 且方向对（不看速度）。
+                 * 0.3.25 只有 ①，实测 25 次才关掉 5 次。 */
+                let coneOK = rise > 0 && abs(vx) * AevonEdgeEntry.floatTermCone <= rise
                 let fire = !cancelled
                     && upward >= AevonEdgeEntry.floatTermLift
-                    && rise >= AevonEdgeEntry.floatTermVelocity
-                    && abs(vx) * AevonEdgeEntry.floatTermCone <= rise
+                    && (coneOK
+                        && (rise >= AevonEdgeEntry.floatTermVelocity
+                            || (upward >= AevonEdgeEntry.floatTermFollowLift
+                                && rise >= AevonEdgeEntry.floatTermFollowVelocity))
+                        || (upward >= AevonEdgeEntry.floatTermBigLift
+                            && abs(dragX) * AevonEdgeEntry.floatTermCone <= upward))
+                // 关窗路径不需要回位（窗要没了）；未关则弹回长按成立时的几何
+                win?.endTerminationFollow(restore: !fire)
                 if fire, let w = win {
                     AevonLog.info("[窗口] 底边上甩 → 关闭浮窗（上移 \(Int(upward))pt / "
-                        + "速度 \(Int(rise))pt/s）"
-                        + "（AevonBottomSplitV325；收容 AevonFloatBottomDblCloseV221"
+                        + "速度 \(Int(rise))pt/s / 横向 \(Int(dragX))pt / 窗口测速 \(frames) 帧）"
+                        + "（AevonBottomSplitV325 AevonTermFollowV326；收容 AevonFloatBottomDblCloseV221"
                         + " AevonDblTapHealV256 AevonDblTapGuardV261）")
                     AevonWindowManager.close(bundleID: w.bundleID)
                 } else {
                     AevonLog.info("[窗口] 底边长按后未达上甩判据 → 不关窗（上移 \(Int(upward))pt"
-                        + " / 速度 \(Int(rise))pt/s）（AevonBottomSplitV325）")
+                        + " / 速度 \(Int(rise))pt/s / 横向 \(Int(dragX))pt）"
+                        + "（AevonBottomSplitV325 AevonTermFollowV326）")
                     win?.grabCancel()
                 }
                 return true
@@ -924,9 +983,11 @@ enum AevonEdgeEntry {
         floatBarHoldDeadline = 0
         lastFloatMovedAt = 0
         // V0.3.25（AevonBottomSplitV325）：底边长按/预备态随手势一起清（丢 ended 时不残留）
+        // V0.3.26（AevonTermWinVelV326）：测速环形缓冲一并清空
         floatTermCandidate = false
         floatTermArmed = false
         floatTermBeganAt = 0
+        floatTermTrack.removeAll(keepingCapacity: true)
     }
 
     /// V0.2.57（AevonZombieSealV257）：把一根「began 已被本通道吞掉」的触摸封印到抬手。
@@ -1478,6 +1539,16 @@ public func AevonGripOwnMove(_ x: Double, _ y: Double) {
 @_cdecl("AevonGripSystemOverlayBlocked")
 public func AevonGripSystemOverlayBlocked() -> Int32 {
     return AevonRingGrip.systemOverlayBlockingRing().isEmpty ? 0 : 1
+}
+
+/// V0.3.26（AevonHomeLooseV326）：桌面判定，给 ObjC 自建腿用。返回 1 = 前台无 App。
+///
+/// 读 `AevonEntryHost.currentForegroundBundleID` —— 那是场景钩子已经维护好的缓存值
+/// （`appSceneDisappeared` 里清空），热路径上只是一次内存读，不查窗口表、不读 prefs。
+/// 桌面上没有横向滚动内容可抢，只有翻页，所以判据可以比 App 内宽得多。
+@_cdecl("AevonGripHomeScreenNow")
+public func AevonGripHomeScreenNow() -> Int32 {
+    return AevonEntryHost.currentForegroundBundleID.isEmpty ? 1 : 0
 }
 
 /// V0.3.9（AevonGripOwnLegV309）：自建腿的取证/结局日志桥（类普查、挂载、放行原因）。

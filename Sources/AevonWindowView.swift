@@ -1101,28 +1101,41 @@ final class AevonWindowView: UIView {
             moveOriginPoint = point
             AevonLog.info("[窗口] 边条落指即拖 → 移动（AevonFloatEdgeGripV227）")
         case .changed:
-            guard !terminationArmed, isBarHoldMoving else { break }
+            if terminationArmed {
+                // V0.3.26（AevonTermFollowV326）：关闭预备态里窗口跟着手指上移（0.55 倍）。
+                // 0.3.25 这里是 `break` —— 手指推 400pt 屏幕上纹丝不动，用户读不到任何
+                // 「已经在关」的反馈，这正是「不易触发」的一半。
+                applyTerminationFollow(point)
+                break
+            }
+            guard isBarHoldMoving else { break }
             applyBarMove(to: point)
         case .ended, .cancelled, .failed:
             if terminationArmed {
-                let velocity = gesture.state == .ended
-                    ? gesture.velocity(in: superview) : CGPoint.zero
+                let velocity = terminationWindowVelocity()
                 let upward = terminationHoldPoint.y - point.y
+                let dragX = terminationHoldPoint.x - point.x
+                let samples = terminationTrack.count
                 let fire = gesture.state == .ended
-                    && terminationShouldClose(upward: upward, velocity: velocity)
+                    && terminationShouldClose(upward: upward, velocity: velocity, dragX: dragX)
                 terminationArmed = false
+                terminationTrack.removeAll(keepingCapacity: true)
                 flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
                 isBarHoldMoving = false
                 if fire {
                     frame = terminationHoldFrame   // Stheno sc_applyRestoredFrame: 回位再关
-                    AevonLog.info("[窗口] 底边上甩关闭（上移 \(Int(upward))pt / 速度 \(Int(-velocity.y))pt/s）"
-                        + "（AevonBottomSplitV325；收容 AevonFloatBottomDblCloseV221"
+                    AevonLog.info("[窗口] 底边上甩关闭（上移 \(Int(upward))pt / 速度 \(Int(-velocity.y))pt/s"
+                        + " / 横向 \(Int(dragX))pt / 窗口测速 \(samples) 帧）"
+                        + "（AevonBottomSplitV325 AevonTermFollowV326；收容 AevonFloatBottomDblCloseV221"
                         + " AevonDblTapHealV256 AevonDblTapGuardV261）")
                     closeTapped()
                 } else {
                     AevonLog.info("[窗口] 底边长按后未达上甩判据 → 不关窗（上移 \(Int(upward))pt"
-                        + " / 速度 \(Int(-velocity.y))pt/s）（AevonBottomSplitV325）")
+                        + " / 速度 \(Int(-velocity.y))pt/s / 横向 \(Int(dragX))pt）"
+                        + "（AevonBottomSplitV325 AevonTermFollowV326）")
                 }
+                // 跟手期间窗口被挪走了 → 弹回长按成立时的几何（关窗路径不需要，窗要没了）
+                endTerminationFollow(restore: !fire)
                 return
             }
             guard isBarHoldMoving else { break }
@@ -1309,6 +1322,33 @@ final class AevonWindowView: UIView {
     private static let terminationVelocity: CGFloat = 260
     /// 实证：|vx| × 1.35 ≤ 上滑速度（±36.5° 锥角）
     private static let terminationCone: CGFloat = 1.35
+    /* V0.3.26（AevonTermFollowV326 / AevonTermWinVelV326，用户 Aevon(99) #1「底边上甩有点
+     * 不易触发」）：0.3.25 实测 25 次长按成立只关掉 5 次（20%），失败样本的速度清一色
+     * 83 / 104 / 125pt/s（125 = 10pt ÷ 0.08s 的量化痕迹），而上移却有 260~404pt。
+     *
+     * 两个独立病灶：
+     *   ① **测速只取最后一对采样**（Δy ÷ dt，dt 夹 0.016~0.08）。手指抬手前 30~80ms
+     *      自然一减速就被判死；UIKit 的 `velocityInView:`（Stheno 用的那个）取的是最近
+     *      ~100ms 的窗口估计，抗单帧抖动。这里改成 8 帧环形缓冲、取 ≤100ms 首尾两点。
+     *   ② **长按成立后窗口一动不动**。用户推了 400pt 屏幕上什么都没发生 —— 那不只是
+     *      「判据严」，是「没有任何反馈」。改成跟手上移（0.55 倍）+ 松手不过判据就弹回，
+     *      与 iOS 的 sheet 下拉同一套语义。
+     *
+     * 判据仍以 Stheno 原式为主（24pt / 260pt·s⁻¹ / 1.35 锥），另加两条更容易命中的
+     * 出口：跟手后的短距快甩（48pt + 200pt/s）、大位移慢推（120pt + 方向对）。
+     * 回退：`AevonTermFollowOff326` 写 true 即整段退回 0.3.25 行为。 */
+    private static let terminationFollowScale: CGFloat = 0.55
+    private static let terminationFollowLift: CGFloat = 48
+    private static let terminationFollowVelocity: CGFloat = 200
+    private static let terminationBigLift: CGFloat = 120
+    private static let terminationWindow: TimeInterval = 0.10
+    private static let terminationWindowFrames = 8
+    private static let terminationFollowDisabled: Bool = {
+        let v = UserDefaults.standard.object(forKey: "AevonTermFollowOff326") as? Bool
+        return v ?? false
+    }()
+    private var terminationTrack: [(CFTimeInterval, CGPoint)] = []
+    private var terminationFollowOffset: CGFloat = 0
     /// 长按已成立 = 本次触摸进入关闭预备态（此时 pan 不再移动窗口）
     private var terminationArmed = false
     private var terminationHoldPoint: CGPoint = .zero
@@ -1324,33 +1364,125 @@ final class AevonWindowView: UIView {
         case .began:
             terminationArmed = true
             terminationHoldPoint = gesture.location(in: superview)
+            terminationTrack = [(CACurrentMediaTime(), terminationHoldPoint)]
             // 0.4s 内的微移已让 pan 挪过窗口 → 回位，关闭从原位起（Stheno sc_applyRestoredFrame:）
-            grabCancel()
-            terminationHoldFrame = frame
+            _ = beginTerminationFollow()
             flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.9)
             AevonLog.info("[窗口] 底边长按成立（0.4s / ≤12pt）→ 关闭预备态：上移 "
                 + "\(Int(AevonWindowView.terminationLift))pt 且速度 "
-                + "\(Int(AevonWindowView.terminationVelocity))pt/s 以上才关"
-                + "（AevonBottomSplitV325；收容 AevonFloatBottomDblCloseV221"
+                + "\(Int(AevonWindowView.terminationVelocity))pt/s 以上才关；"
+                + "推得够多（≥\(Int(AevonWindowView.terminationBigLift))pt）也算"
+                + "（AevonBottomSplitV325 AevonTermFollowV326；收容 AevonFloatBottomDblCloseV221"
                 + " AevonDblTapHealV256 AevonDblTapGuardV261）")
         case .ended, .cancelled, .failed:
             if terminationArmed {
                 AevonLog.info("[窗口] 底边长按松开（未上甩）→ 不关窗，恢复底边普通移动"
-                    + "（AevonBottomSplitV325）")
+                    + "（AevonBottomSplitV325 AevonTermFollowV326）")
             }
+            if termFollowActive { endTerminationFollow(restore: true) }
             terminationArmed = false
+            terminationTrack.removeAll(keepingCapacity: true)
             flickBar.backgroundColor = UIColor.white.withAlphaComponent(0.32)
         default:
             break
         }
     }
 
-    /// 底边抬手判据（Stheno `sc_shouldCloseForBottomUpwardFlick:` 三条同时成立）。
-    private func terminationShouldClose(upward: CGFloat, velocity: CGPoint) -> Bool {
+    /// 关闭预备态里窗口跟手上移（V0.3.26 AevonTermFollowV326）。
+    ///
+    /// 只向上跟（手指下拉不动窗），比例 0.55 —— 手感与 iOS 的 sheet 下拉一致：
+    /// 摸到窗口在动就知道「已经进预备态了」，不会再出现「推了 400pt 什么都没发生」。
+    /// 两腿（视图识别器 / 全局通道）都调这里，`termFollowActive` 保证只有先到的那个动窗。
+    private func applyTerminationFollow(_ point: CGPoint) {
+        updateTerminationFollow(upward: max(0, terminationHoldPoint.y - point.y))
+        let now = CACurrentMediaTime()
+        terminationTrack.append((now, point))
+        while terminationTrack.count > AevonWindowView.terminationWindowFrames {
+            terminationTrack.removeFirst()
+        }
+    }
+
+    // MARK: - 关闭预备态跟手（V0.3.26，AevonTermFollowV326）
+
+    private var termFollowActive = false
+
+    /// 进入跟手。返回 false = 另一条腿已经在跟（同一次触摸只允许一个移动者，防双倍位移）。
+    /// 内部先 `grabCancel()`：长按成立前的 ≤12pt 微移要回位，跟手一律从长按成立时的几何起算。
+    @discardableResult
+    func beginTerminationFollow() -> Bool {
+        guard !termFollowActive else { return false }
+        termFollowActive = true
+        // 先回位（长按成立前的 ≤12pt 微移），再以回位后的几何当跟手原点
+        grabCancel()
+        terminationHoldFrame = frame
+        terminationFollowOffset = 0
+        return true
+    }
+
+    /// 跟手上移（upward = 长按落点 − 当前落点，只取正）。
+    func updateTerminationFollow(upward: CGFloat) {
+        guard termFollowActive, !AevonWindowView.terminationFollowDisabled else { return }
+        let scale = AevonWindowView.terminationFollowScale
+        let offset = min(max(0, upward) * scale,
+                         max(0, terminationHoldFrame.origin.y))
+        guard abs(offset - terminationFollowOffset) >= 0.5 else { return }
+        terminationFollowOffset = offset
+        var next = terminationHoldFrame
+        next.origin.y -= offset
+        frame = next
+    }
+
+    /// 结束跟手。`restore` = true 则弹回长按成立时的几何。
+    func endTerminationFollow(restore: Bool) {
+        if restore, terminationFollowOffset > 0.5 {
+            frame = terminationHoldFrame
+        }
+        terminationFollowOffset = 0
+        termFollowActive = false
+    }
+
+    /// 窗口测速（V0.3.26 AevonTermWinVelV326）：取最近 ≤100ms 内首尾两点做 Δ。
+    ///
+    /// 替代 0.3.25 的「最后一对采样」：单帧减速不再一票否决。
+    /// 样本不足 2 个 → 退回 0（判据自然不成立，不会误关）。
+    private func terminationWindowVelocity() -> CGPoint {
+        guard let last = terminationTrack.last else { return .zero }
+        var first = last
+        for sample in terminationTrack.reversed() {
+            if last.0 - sample.0 > AevonWindowView.terminationWindow { break }
+            first = sample
+        }
+        let dt = last.0 - first.0
+        guard dt >= 0.008 else { return .zero }
+        return CGPoint(x: (last.1.x - first.1.x) / dt, y: (last.1.y - first.1.y) / dt)
+    }
+
+    /// 底边抬手判据。
+    ///
+    /// 三条出口，方向锥（Stheno `|vx| × 1.35 ≤ 上滑速度`）对三条都生效：
+    ///   ① Stheno 原式：上移 ≥24pt 且窗口测速 ≥260pt/s；
+    ///   ② 跟手后的短距快甩：上移 ≥48pt 且 ≥200pt/s（V0.3.26 跟手引入，门槛随之降）；
+    ///   ③ 大位移慢推：上移 ≥120pt 且方向对 —— 不看速度。
+    ///      （Aevon(99) 实测 260 / 304 / 333 / 404pt 的慢推全被判失败，用户读到的就是
+    ///      「推了半天关不掉」。）
+    private func terminationShouldClose(upward: CGFloat, velocity: CGPoint, dragX: CGFloat) -> Bool {
         guard upward >= AevonWindowView.terminationLift else { return false }
         let rise = -velocity.y
-        guard rise >= AevonWindowView.terminationVelocity else { return false }
-        return abs(velocity.x) * AevonWindowView.terminationCone <= rise
+        let cone = AevonWindowView.terminationCone
+        if rise > 0, abs(velocity.x) * cone <= rise,
+           rise >= AevonWindowView.terminationVelocity {
+            return true
+        }
+        if rise > 0, abs(velocity.x) * cone <= rise,
+           upward >= AevonWindowView.terminationFollowLift,
+           rise >= AevonWindowView.terminationFollowVelocity {
+            return true
+        }
+        if upward >= AevonWindowView.terminationBigLift,
+           abs(dragX) * cone <= upward {
+            return true
+        }
+        return false
     }
 
     // MARK: - 边条移动
@@ -2209,6 +2341,11 @@ final class AevonWindowView: UIView {
     /// 连续的浮窗，没有"空窗"帧，也就不可能闪。
     private func beginLiveWait(reason: String) {
         let now = CACurrentMediaTime()
+        /* V0.3.26（AevonKeepAliveProbeV326）：回桌面同一拍起跑场景保活探针。
+         * 为什么必须在这一拍起跑、而不是等 0.9s 后的布防：Aevon(99) 实测布防比过渡哨
+         * 晚 0.9 秒，那 0.9 秒里 cs 已经是 0（浮窗是黑的）。探针要把「先手」拿到手，
+         * 才有机会让场景根本不掉。整个探针 fail-open，任何一步失败都不影响既有路径。 */
+        _ = AevonKeepAliveProbeBegin(Unmanaged.passUnretained(sceneHost.scene).toOpaque())
         liveWaitStartedAt = now
         liveWaitDeadline = now + AevonWindowView.liveWaitLimit
         liveWaitTicks = 0
@@ -2241,6 +2378,8 @@ final class AevonWindowView: UIView {
         if rendering == true {
             removeDarkFreeze(reason: "让位结束且实时画面已回来")
         }
+        // V0.3.26（AevonKeepAliveProbeV326）：让位结束 → 释放保活断言，记本轮持有时长
+        AevonKeepAliveProbeEnd()
         /* rendering != true 时保留定格帧（宁可停住，也不露一块空窗）；
          * 常驻看门会在 cs=2 时撤掉它。 */
         AevonLog.info("[窗口] 回桌面让位结束（\(String(format: "%.2f", held))s，\(reason)，"
@@ -3405,4 +3544,23 @@ final class AevonWindowView: UIView {
 
     /* V0.2.89（AevonCloseInstantV289）：exitFreezeView（离场帧）已随关闭动画整体退役。
      * V0.2.49（AevonFloatAnimV249）的关闭动画 era 至此结束。 */
+}
+
+/* V0.3.26（AevonKeepAliveProbeV326）：场景保活探针的 C 桥。
+ *
+ * 实现在 Sources/AevonKeepAliveProbe.m —— 之所以放在 ObjC 而不是 Swift：内部要
+ * `objc_msgSend` 直调一大批**不确定是否存在**的私有选择子（UIApplicationScene
+ * DeactivationManager 的断言 API），未知选择子抛的 NSException **Swift 抓不到**，
+ * 会直接打成 SIGABRT。ObjC 的 @try/@catch 是这层唯一的崩溃防线。 */
+@_silgen_name("AevonKeepAliveProbeBegin")
+private func AevonKeepAliveProbeBegin(_ scene: UnsafeMutableRawPointer?) -> Int32
+
+@_silgen_name("AevonKeepAliveProbeEnd")
+private func AevonKeepAliveProbeEnd()
+
+/// ObjC 探针的统一日志出口（探针自己拼中文，这里只负责落盘 + 带标记串）。
+@_cdecl("AevonKeepAliveLog")
+public func AevonKeepAliveLog(_ detail: UnsafePointer<CChar>?) {
+    let d = detail.map { String(cString: $0) } ?? ""
+    AevonLog.info("[保活] \(d)（AevonKeepAliveProbeV326）")
 }

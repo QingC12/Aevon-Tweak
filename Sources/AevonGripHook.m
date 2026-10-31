@@ -712,6 +712,9 @@ extern void AevonGripOwnSummon(double x, double y, double startX, double startY)
 /// 判据在 Swift 侧（`AevonRingGrip.systemOverlayBlockingRing`，复用 0.2.78 让位那套
 /// 窗口栈实证），这里只要一个 int —— 热路径上不碰字符串、不碰 prefs。
 extern int AevonGripSystemOverlayBlocked(void);
+/* V0.3.26（AevonHomeLooseV326）：桌面判定 —— 返回 1 = 前台无 App（桌面 / 锁屏外的空前台）。
+ * 读的是 Swift 侧已缓存的 `currentForegroundBundleID`，热路径上只是一次内存读。 */
+extern int AevonGripHomeScreenNow(void);
 /// V0.3.16（AevonOwnLiftV316）：自建腿抬手回调 —— 召唤成功后这根手指的**终点**。
 /// 第三个参数：0 = touchesEnded（正常抬手），1 = touchesCancelled（被系统摘链）。
 extern void AevonGripOwnLift(double x, double y, int32_t cancelled);
@@ -1055,6 +1058,47 @@ static void AevonOwnPassCount(const char *kind, int bucket, NSString *detail) {
     if (_ownStrict) {
         double adx = fabs((double)dx);
         double ady = fabs((double)dy);
+        /* V0.3.26（AevonHomeLooseV326 / AevonNoMidPassV326，用户 Aevon(99) #3
+         * 「桌面呼盘不容易触发，总是误触桌面翻页」）。
+         *
+         * 两个实测事实（Aevon(99)，6 分钟 132 次右缘落指）：
+         *   · 成功 121 次的首帧角度中位 **13°**，失败 8 次是 20°~42°（中位 27°）；
+         *     L2 的锥是 `ady ≤ adx × 0.25`（14°），正好切在自然滑动分布的中位上 ——
+         *     一半的滑动被判「不够水平」，这就是「不容易触发」。
+         *   · 「翻页」不是没扣住，是**扣住后又半截还回去**：我们在 began 就
+         *     `delaysTouchesBegan` 扣住了手指，中途 `ownPass:` 时 UIKit 会把整段滑动
+         *     补投给 SpringBoard → 桌面翻页。Stheno 天然没这个坑（系统识别器
+         *     「要么整序列消费、要么整序列放行」）。
+         *
+         * 桌面单独一套判据（R2 + R3）：桌面上没有横向滚动内容可抢，只有翻页，
+         * 所以首帧横向占优就直接呼盘（取消锥角）；只有**明确纵向**才放行；
+         * 灰带一律扣到抬手，绝不半截补投。
+         * App 内保持原判据（14° 锥 + 允许放行）——那里右缘的斜滑可能是抽屉/进度条。 */
+        BOOL home = (AevonGripHomeScreenNow() != 0);
+        if (home) {
+            if (horizontal) {
+                [self ownSummonAtPoint:p];
+                return;
+            }
+            if (_ownMovedFrames == 1 && ady >= 12.0 && ady >= adx * 1.4) {
+                NSString *d = [NSString stringWithFormat:
+                               @"桌面·明确纵向 dx=%.0f dy=%.0f（落点离右缘 %.0fpt）"
+                               @"→ 放行（桌面上下滑/搜索）",
+                               dx, dy,
+                               [UIScreen mainScreen].bounds.size.width - _ownHit.x];
+                [self ownPass:"pass" bucket:AevonOwnPassStrict detail:d];
+                return;
+            }
+            /* 灰带：扣住。取消 0.28s 闸 —— 一旦真的滑过（≥2 帧），宁可吞到抬手，
+             * 也不在半截把手指还给系统（那一下就是翻页）。 */
+            if (_ownMovedFrames >= 2) {
+                [_ownBail invalidate];
+                _ownBail = nil;
+                return;
+            }
+            [self ownBailRearm];
+            return;
+        }
         if (horizontal && (ady <= 6.0 || ady <= adx * 0.25)) {
             [self ownSummonAtPoint:p];
             return;
@@ -2140,3 +2184,25 @@ __attribute__((used)) static const char AevonTermVelV325Marker[] = "AevonTermVel
  * 就是一张糊图，0.9s 后撤掉才是实时画面）。用户定档：整条停用。
  * 代价（已告知）：回桌面那 0.3~0.5s 窗内没有画面。 */
 __attribute__((used)) static const char AevonNoFreezeV325Marker[] = "AevonNoFreezeV325";
+
+/* V0.3.26（AevonTermFollowV326 / AevonTermWinVelV326）：底边关闭预备态改成「跟手 + 窗口测速」。
+ *
+ * Aevon(99) 实测 25 次长按成立只关掉 5 次（20%）。失败样本的速度清一色
+ * 83 / 104 / **125** pt/s（125 = 10pt ÷ 0.08s 的量化痕迹），而上移却有 260~404pt ——
+ * 两个独立病灶：① 测速只取最后一对采样，抬手前 30~80ms 一减速就判死；
+ * ② 长按成立后窗口一动不动，用户推 400pt 屏幕上什么都没发生。
+ * 现在：8 帧环形缓冲取 ≤100ms 首尾两点测速（与视图侧同源），窗口跟手上移 0.55 倍，
+ * 松手不过判据就弹回；出口从 1 条（24pt/260）扩到 3 条（+48pt/200、+120pt 大位移）。 */
+__attribute__((used)) static const char AevonTermFollowV326Marker[] = "AevonTermFollowV326";
+__attribute__((used)) static const char AevonTermWinVelV326Marker[] = "AevonTermWinVelV326";
+
+/* V0.3.26（AevonHomeLooseV326 / AevonNoMidPassV326）：桌面呼盘单独一套判据。
+ *
+ * Aevon(99) 6 分钟 132 次右缘落指：成功 121 次首帧角度中位 **13°**，
+ * 失败 8 次是 20°~42°（中位 27°）—— L2 的 14° 锥正好切在自然滑动分布的中位上。
+ * 而「误触桌面翻页」不是没扣住，是**扣住后又半截还回去**：began 已
+ * `delaysTouchesBegan` 扣住手指，中途 `ownPass:` 时 UIKit 把整段滑动补投给
+ * SpringBoard → 翻页。桌面没有横向滚动内容可抢，所以首帧横向占优即呼盘（取消锥角），
+ * 灰带一律扣到抬手，绝不半截补投。App 内保持原判据不变。 */
+__attribute__((used)) static const char AevonHomeLooseV326Marker[] = "AevonHomeLooseV326";
+__attribute__((used)) static const char AevonNoMidPassV326Marker[] = "AevonNoMidPassV326";
